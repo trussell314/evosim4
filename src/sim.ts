@@ -166,6 +166,14 @@ export interface World {
   species: Map<string, Species>;
   phylogenyEvents: PhylogenyEvent[];
   nextSpeciesLane: number;
+  // Cell color is keyed off genome distance from this "root" genome. The
+  // root is the genome of the latest seed cell -- the world's first cell,
+  // and reseed each time the population goes extinct. Distance 0 -> pure
+  // white; bigger distance -> a desaturated-to-saturated hash-hued color.
+  anchorGenome: Uint8Array;
+  // Brownian noise amplitude added to wave forcing. Helps prevent stuff
+  // from accumulating on one side of the world.
+  brownianAmp: number;
 }
 
 const ENERGY_PER_THRUST_SEC = 22;
@@ -268,9 +276,15 @@ export function createWorld(width: number, height: number): World {
     species: new Map(),
     phylogenyEvents: [],
     nextSpeciesLane: 0,
+    anchorGenome: new Uint8Array(0),
+    brownianAmp: 25,
   };
   seedParticles(world, Math.round(particleTarget * 0.9));
   const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
+  // First cell defines the root: paint it white and use its genome as the
+  // anchor every other cell colors against until the next extinction.
+  world.anchorGenome = new Uint8Array(first.genome);
+  first.color = genomeColor(first.genome, world.anchorGenome);
   world.creatures.push(first);
   noteCreatureBirth(world, first, undefined);
   return world;
@@ -534,7 +548,7 @@ function spawnExcretedParticle(c: Creature, world: World, material: MaterialId, 
     return;
   }
   const density = MATERIALS[material].density;
-  const pr = Math.max(1.5, Math.sqrt(m / (density * Math.PI)));
+  const pr = Math.max(1.5, radiusForMass(m, density));
   const angle = Math.random() * Math.PI * 2;
   const ejectV = 25;
   world.particles.push({
@@ -549,17 +563,58 @@ function spawnExcretedParticle(c: Creature, world: World, material: MaterialId, 
   });
 }
 
-export function genomeColor(genome: Uint8Array): string {
+// Levenshtein edit distance between two genomes. Bounded by the larger of
+// the two lengths. Genomes are <= 256 bytes so the O(n*m) cost is fine.
+export function genomeDistance(a: Uint8Array, b: Uint8Array): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = new Int32Array(n + 1);
+  const cur = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const sub = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + sub);
+    }
+    prev.set(cur);
+  }
+  return prev[n];
+}
+
+// Cell color. With no anchor, uses a deterministic hash-based hue at fixed
+// saturation/lightness. With an anchor, an exact-match genome paints white
+// and the color fades toward the hash hue as edit distance grows.
+const COLOR_SAT_FULL = 60;
+const COLOR_LIGHT_FULL = 62;
+const COLOR_DIST_FULL = 24;
+
+export function genomeColor(genome: Uint8Array, anchor?: Uint8Array): string {
   let h = 5381 >>> 0;
   for (let i = 0; i < genome.length; i++) {
     h = ((h * 33) ^ genome[i]) >>> 0;
   }
   const hue = h % 360;
-  return `hsl(${hue}, 60%, 62%)`;
+  if (!anchor) {
+    return `hsl(${hue}, ${COLOR_SAT_FULL}%, ${COLOR_LIGHT_FULL}%)`;
+  }
+  const d = Math.min(1, genomeDistance(genome, anchor) / COLOR_DIST_FULL);
+  const sat = COLOR_SAT_FULL * d;
+  const light = 100 - (100 - COLOR_LIGHT_FULL) * d;
+  return `hsl(${hue}, ${sat.toFixed(1)}%, ${light.toFixed(1)}%)`;
 }
 
+// Particle mass = density * (4/3) * pi * r^3. Particles are spheres; the
+// circle we render is the equatorial cross-section. Same convention as cells.
 function mass(p: Particle): number {
-  return MATERIALS[p.material].density * Math.PI * p.r * p.r;
+  return MATERIALS[p.material].density * (4 / 3) * Math.PI * p.r * p.r * p.r;
+}
+
+// Inverse: given a target mass and material density, what sphere radius
+// does it correspond to?
+function radiusForMass(m: number, density: number): number {
+  return Math.cbrt((3 * m) / (4 * Math.PI * density));
 }
 
 export function step(world: World, dt: number): void {
@@ -574,6 +629,10 @@ export function step(world: World, dt: number): void {
     const y = world.height * (0.1 + 0.6 * Math.random());
     const z = world.depth * 0.5;
     const seed = makeCreature(x, y, z);
+    // Reset the color anchor for the new lineage so descendants color
+    // relative to this new "Adam".
+    world.anchorGenome = new Uint8Array(seed.genome);
+    seed.color = genomeColor(seed.genome, world.anchorGenome);
     world.creatures.push(seed);
     world.extinctionCount++;
     noteCreatureBirth(world, seed, undefined);
@@ -604,18 +663,26 @@ function applyForces(world: World, dt: number): void {
   const kL = (2 * Math.PI) / world.swellLength;
   const wL = (2 * Math.PI) / world.swellPeriod;
 
+  const bAmp = world.brownianAmp;
   const integrate = (
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
     density: number,
   ) => {
     const ay = world.gravity * (1 - 1 / density);
+    // Surface ripple travels right; deeper swell travels left. The
+    // counter-traveling pair stops particles from accumulating against
+    // one wall the way a single right-moving wave train did.
     const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-o.y / world.surfaceDecay);
-    const swell   = world.swellAmp   * Math.sin(kL * o.x - wL * world.t) * Math.exp(-o.y / world.swellDecay);
+    const swell   = world.swellAmp   * Math.sin(kL * o.x + wL * world.t) * Math.exp(-o.y / world.swellDecay);
     const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-o.y / world.swellDecay);
-    const ax = surface + swell;
+    // Per-tick zero-mean noise to break up any residual coherent drift.
+    const noiseX = bAmp * (Math.random() - 0.5) * 2;
+    const noiseY = bAmp * (Math.random() - 0.5) * 2;
+    const ax = surface + swell + noiseX;
+    const ayTot = ay + noiseY;
     const dragScale = o.r / DRAG_REF_R;
     o.vx += (ax - world.drag * dragScale * o.vx) * dt;
-    o.vy += (ay - world.drag * dragScale * o.vy) * dt;
+    o.vy += (ayTot - world.drag * dragScale * o.vy) * dt;
     o.vz += (az - world.drag * dragScale * o.vz) * dt;
     o.x += o.vx * dt;
     o.y += o.vy * dt;
@@ -817,10 +884,10 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
     const density = MATERIALS[matId].density;
     while (remaining > 0.5) {
       let r = 2 + Math.random() * 2;
-      let mp = density * Math.PI * r * r;
+      let mp = density * (4 / 3) * Math.PI * r * r * r;
       if (mp > remaining) {
-        r = Math.max(DEATH_RELEASE_R_MIN, Math.sqrt(remaining / (density * Math.PI)));
-        mp = density * Math.PI * r * r;
+        r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(remaining, density));
+        mp = density * (4 / 3) * Math.PI * r * r * r;
       }
       world.particles.push({
         x: c.x + (Math.random() - 0.5) * 6,
@@ -886,7 +953,7 @@ function tryReproduce(parent: Creature, world: World): void {
     thrustAccel: parent.thrustAccel,
     genome: childGenome,
     vm: newVMState(),
-    color: genomeColor(childGenome),
+    color: genomeColor(childGenome, world.anchorGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
     reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
   };

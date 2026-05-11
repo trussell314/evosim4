@@ -40,6 +40,8 @@ function quietWorld(): World {
     species: new Map(),
     phylogenyEvents: [],
     nextSpeciesLane: 0,
+    anchorGenome: new Uint8Array(0),
+    brownianAmp: 0,
   };
 }
 
@@ -567,7 +569,8 @@ describe("creature: ingestion (basic)", () => {
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
-    expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * Math.PI * 9, 5);
+    // Particles are 3D spheres; ingested mass = density * (4/3) * pi * r^3.
+    expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * (4 / 3) * Math.PI * 27, 5);
   });
 });
 
@@ -945,7 +948,7 @@ describe("creature: death by starvation", () => {
     let m = 0;
     for (const p of w.particles) {
       if (before.has(p)) continue;
-      if (p.material === "clay") m += MATERIALS.clay.density * Math.PI * p.r * p.r;
+      if (p.material === "clay") m += MATERIALS.clay.density * (4 / 3) * Math.PI * p.r * p.r * p.r;
     }
     expect(m).toBeGreaterThanOrEqual(99);
     expect(m).toBeLessThan(110);
