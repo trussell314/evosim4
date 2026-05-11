@@ -12,7 +12,6 @@ let nextSample = sampleEverySec;
 let births = 0;
 let deaths = 0;
 let prevPop = 1;
-let extinctsPrev = w.extinctionCount;
 
 for (let i = 0; i < totalSec * 60; i++) {
   step(w, dt);
