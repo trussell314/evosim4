@@ -276,13 +276,37 @@ const RING_GAP = 1;
 const RING_SPACING = 3;
 const RING_WIDTH = 2;
 
+// Inner white outline sits at radius (r + WHITE_OFFSET) with line width 2,
+// so its 2px width spans r..r+2 -- fully on the outside of the cell fill,
+// touching the cell edge with no gap. The outer selection ring sits further
+// out at (r + OUTER_RING_OFFSET) with line width 2, leaving a 2px gap
+// between the inner white and the outer ring.
+const SELECT_INNER_OFFSET = 1;
+const SELECT_OUTER_OFFSET = 5;
+
+function strokeCellOutline(
+  cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
+): void {
+  if (selected) {
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    tracedWobblyBody(cx, cy, r + SELECT_INNER_OFFSET, t, phase);
+    ctx.stroke();
+    tracedWobblyBody(cx, cy, r + SELECT_OUTER_OFFSET, t, phase);
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle = "#0a1f1d";
+    ctx.lineWidth = 1.5;
+    tracedWobblyBody(cx, cy, r, t, phase);
+    ctx.stroke();
+  }
+}
+
 function drawCreature(c: Creature, selected: boolean): void {
   // Each cell has a stable random phase derived from its bornAt + position,
   // so its wobble pattern is its own instead of every cell pulsing in sync.
   const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
   const t = world.t;
-  ctx.strokeStyle = selected ? "#ffffff" : "#0a1f1d";
-  ctx.lineWidth = selected ? 2 : 1.5;
   if (c.division) {
     // Mitosis: render two overlapping wobbly bodies whose centers split
     // along the division axis as `progress` advances 0 -> 1.
@@ -292,14 +316,17 @@ function drawCreature(c: Creature, selected: boolean): void {
     const dy = Math.sin(c.division.axis) * sep * 0.5;
     ctx.fillStyle = c.color;
     tracedWobblyBody(c.x - dx, c.y - dy, c.r, t, phase);
-    ctx.fill(); ctx.stroke();
+    ctx.fill();
+    strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
     ctx.fillStyle = child.color;
     tracedWobblyBody(c.x + dx, c.y + dy, child.r, t, phase + 1.7);
-    ctx.fill(); ctx.stroke();
+    ctx.fill();
+    strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
   } else {
     ctx.fillStyle = c.color;
     tracedWobblyBody(c.x, c.y, c.r, t, phase);
-    ctx.fill(); ctx.stroke();
+    ctx.fill();
+    strokeCellOutline(c.x, c.y, c.r, selected, t, phase);
   }
 
   // Engulfed prey: render each inside the predator, clustered around the
