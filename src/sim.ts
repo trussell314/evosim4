@@ -296,9 +296,9 @@ const AEROBIC_VMAX = 8;     // glucose-mass consumed per sec per cell at saturat
 const FERMENT_VMAX = 1.5;
 const BETAOX_VMAX = 4;      // fatty-acid mass per sec
 const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
-const CHLORO_SYNTH_VMAX = 0.05;
-const ENZYME_SYNTH_VMAX = 0.1;
-const BIOMASS_GROW_VMAX = 0.2;
+const CHLORO_SYNTH_VMAX = 0.2;
+const ENZYME_SYNTH_VMAX = 0.4;
+const BIOMASS_GROW_VMAX = 0.8;
 
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
 // cell dumps the excess back to the world as particles (mass-conserving).
