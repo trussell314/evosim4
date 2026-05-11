@@ -245,6 +245,15 @@ const DEATH_RELEASE_SCATTER = 30;
 // the chase to its first organic particle.
 const THRUST_MASS_REF = 200;
 
+// Mitosis initiation cost. Charged unconditionally at the start of every
+// REPRODUCE attempt, success or failure. This is the "natural" rate limit
+// on spamming REPRODUCE: a cell that fires the op every tick without the
+// biomass to back it up bleeds ATP and starves itself. The per-mass term
+// reflects that splitting a big cell takes more reorganization than a small
+// one.
+const REPRODUCE_ATTEMPT_ATP_BASE = 2;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.02;
+
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
 const LIGHT_DECAY = 250;
@@ -336,7 +345,7 @@ export function createWorld(width: number, height: number): World {
 export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
   for (let i = 0; i < n; i++) {
-    const r = 2 + Math.random() * 4;
+    const r = 1 + Math.random() * 1.5;
     world.particles.push({
       x: Math.random() * world.width,
       y: Math.random() * world.height * 0.85,
@@ -733,7 +742,7 @@ function replenishParticles(world: World, dt: number): void {
   let toSpawn = Math.floor(expected);
   if (Math.random() < expected - toSpawn) toSpawn++;
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
-    const r = 2 + Math.random() * 4;
+    const r = 1 + Math.random() * 1.5;
     world.particles.push({
       x: Math.random() * world.width,
       y: 0,
@@ -1106,10 +1115,12 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
 }
 
 function tryReproduce(parent: Creature, world: World): void {
-  // No artificial cooldown: the genome decides when to call REPRODUCE. The
-  // build-block molecule cost paid below is the only gate; a cell that hits
-  // REPRODUCE every tick rate-limits itself naturally by burning its build
-  // pool faster than catabolism + biosynthesis can refill it.
+  // Initiating mitosis costs ATP whether the attempt succeeds or not.
+  // This is the rate-limit on REPRODUCE: a cell can't fire it every tick
+  // without paying for the failed cycles, so spamming the op starves the
+  // cell instead of being free.
+  spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent));
+
   if (world.creatures.length >= MAX_CREATURES) return;
   const childGenome = mutateGenome(parent.genome);
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
