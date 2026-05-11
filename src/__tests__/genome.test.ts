@@ -18,14 +18,13 @@ import {
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
-  dx: number[]; dy: number[]; dist: number[];
+  gradX: number[]; gradY: number[];
   creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
   light: number;
 }> = {}): VMSensors {
   return {
-    dx: new Float32Array(overrides.dx ?? [0, 0, 0, 0, 0, 0]),
-    dy: new Float32Array(overrides.dy ?? [0, 0, 0, 0, 0, 0]),
-    dist: new Float32Array(overrides.dist ?? [0, 0, 0, 0, 0, 0]),
+    gradX: new Float32Array(overrides.gradX ?? [0, 0, 0, 0, 0, 0]),
+    gradY: new Float32Array(overrides.gradY ?? [0, 0, 0, 0, 0, 0]),
     creatureDx: overrides.creatureDx ?? 0,
     creatureDy: overrides.creatureDy ?? 0,
     creatureDist: overrides.creatureDist ?? 0,
@@ -177,13 +176,12 @@ describe("VM control flow", () => {
 });
 
 describe("VM sensors", () => {
-  it("SENSE_DX/DY/DIST read by material index", () => {
-    expect(exec([OP.SENSE_DX, 3, OP.HALT], { sensors: makeSensors({ dx: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
-    expect(exec([OP.SENSE_DY, 5, OP.HALT], { sensors: makeSensors({ dy: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([60]);
-    expect(exec([OP.SENSE_DIST, 2, OP.HALT], { sensors: makeSensors({ dist: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([30]);
+  it("SENSE_GRAD_X/Y read by material index", () => {
+    expect(exec([OP.SENSE_GRAD_X, 3, OP.HALT], { sensors: makeSensors({ gradX: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
+    expect(exec([OP.SENSE_GRAD_Y, 5, OP.HALT], { sensors: makeSensors({ gradY: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([60]);
   });
   it("sensor operand wraps via modulo", () => {
-    expect(exec([OP.SENSE_DX, 8, OP.HALT], { sensors: makeSensors({ dx: [11, 12, 13, 14, 15, 16] }) }).state.stack).toEqual([13]);
+    expect(exec([OP.SENSE_GRAD_X, 8, OP.HALT], { sensors: makeSensors({ gradX: [11, 12, 13, 14, 15, 16] }) }).state.stack).toEqual([13]);
   });
   it("SELF_ENERGY", () => {
     expect(exec([OP.SELF_ENERGY, OP.HALT], { self: makeSelf({ energy: 77 }) }).state.stack).toEqual([77]);
@@ -293,12 +291,12 @@ describe("disassemble", () => {
   });
   it("renders material operand by name when provided", () => {
     const names = ["rock", "sand", "clay", "organic", "lipid", "gas"];
-    const text = disassemble(new Uint8Array([OP.SENSE_DX, 3, OP.EXCRETE, 7, OP.HALT]), names);
-    expect(text).toContain("sense_dx organic");
+    const text = disassemble(new Uint8Array([OP.SENSE_GRAD_X, 3, OP.EXCRETE, 7, OP.HALT]), names);
+    expect(text).toContain("sense_grad_x organic");
     expect(text).toContain("excrete sand");
   });
   it("renders material operand by index without names", () => {
-    expect(disassemble(new Uint8Array([OP.SENSE_DX, 2, OP.HALT]))).toContain("sense_dx 2");
+    expect(disassemble(new Uint8Array([OP.SENSE_GRAD_X, 2, OP.HALT]))).toContain("sense_grad_x 2");
   });
   it("renders unknown bytes as db 0xNN", () => {
     expect(disassemble(new Uint8Array([0x7A]))).toContain("db 0x7a");
@@ -369,7 +367,7 @@ describe("makeDefaultGenome", () => {
   });
   it("contains the starter behavior bytes", () => {
     const g = makeDefaultGenome();
-    expect(g[0]).toBe(OP.SENSE_DX);
+    expect(g[0]).toBe(OP.SENSE_GRAD_X);
     expect(g[1]).toBe(3);
     expect(g[g.length - 1]).toBe(OP.HALT);
     expect(Array.from(g)).toContain(OP.THRUST);

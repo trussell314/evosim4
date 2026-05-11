@@ -878,9 +878,8 @@ function applyForces(world: World, dt: number): void {
 }
 
 const VM_SENSORS: VMSensors = {
-  dx: new Float32Array(6),
-  dy: new Float32Array(6),
-  dist: new Float32Array(6),
+  gradX: new Float32Array(6),
+  gradY: new Float32Array(6),
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
 };
@@ -892,7 +891,6 @@ const VM_SELF: VMSelf = {
   glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
 };
 const VM_OUT: VMOutputs = newOutputs();
-const SENSOR_BEST_SQ = new Float32Array(6);
 
 function updateCreatures(world: World, dt: number): void {
   const n = world.creatures.length;
@@ -1349,23 +1347,24 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
 function populateSensors(c: Creature, world: World): void {
   const range = c.senseRange;
   const rangeSq = range * range;
+  // Per-material food gradient: signed pull vector summed over every visible
+  // particle of that material. Each contribution is range * (dx, dy) / dsq,
+  // so a particle at the edge of sense range contributes a unit vector, one
+  // at half-range contributes ~2x, etc. The scaling keeps magnitudes in a
+  // useful range for THRUST (which clamps to thrustAccel ~ 70).
   for (let i = 0; i < 6; i++) {
-    VM_SENSORS.dx[i] = 0;
-    VM_SENSORS.dy[i] = 0;
-    VM_SENSORS.dist[i] = range;
-    SENSOR_BEST_SQ[i] = rangeSq;
+    VM_SENSORS.gradX[i] = 0;
+    VM_SENSORS.gradY[i] = 0;
   }
   for (const p of world.particles) {
-    const idx = MATERIAL_IDS.indexOf(p.material);
     const dx = p.x - c.x;
     const dy = p.y - c.y;
     const dsq = dx * dx + dy * dy;
-    if (dsq < SENSOR_BEST_SQ[idx]) {
-      SENSOR_BEST_SQ[idx] = dsq;
-      VM_SENSORS.dx[idx] = dx;
-      VM_SENSORS.dy[idx] = dy;
-      VM_SENSORS.dist[idx] = Math.sqrt(dsq);
-    }
+    if (dsq >= rangeSq || dsq < 1) continue;
+    const idx = MATERIAL_IDS.indexOf(p.material);
+    const w = range / dsq;
+    VM_SENSORS.gradX[idx] += dx * w;
+    VM_SENSORS.gradY[idx] += dy * w;
   }
   VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY);
   VM_SENSORS.creatureDx = 0;

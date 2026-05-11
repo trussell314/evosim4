@@ -31,9 +31,8 @@ export const OP = {
   JZ:            0x31,
   JNZ:           0x32,
 
-  SENSE_DX:      0x40,
-  SENSE_DY:      0x41,
-  SENSE_DIST:    0x42,
+  SENSE_GRAD_X:  0x40,
+  SENSE_GRAD_Y:  0x41,
   SELF_ENERGY:   0x43,
   SELF_RESERVE:  0x44,
   SELF_VX:       0x45,
@@ -67,9 +66,8 @@ OPERANDS[OP.PUSH8] = 1;
 OPERANDS[OP.JMP] = 1;
 OPERANDS[OP.JZ] = 1;
 OPERANDS[OP.JNZ] = 1;
-OPERANDS[OP.SENSE_DX] = 1;
-OPERANDS[OP.SENSE_DY] = 1;
-OPERANDS[OP.SENSE_DIST] = 1;
+OPERANDS[OP.SENSE_GRAD_X] = 1;
+OPERANDS[OP.SENSE_GRAD_Y] = 1;
 OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
 
@@ -78,7 +76,7 @@ const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 
 const MATERIAL_OPERAND = new Set<number>([
-  OP.SENSE_DX, OP.SENSE_DY, OP.SENSE_DIST, OP.SELF_RESERVE, OP.EXCRETE,
+  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SELF_RESERVE, OP.EXCRETE,
 ]);
 
 const STACK_MAX = 32;
@@ -95,9 +93,11 @@ export function newVMState(): VMState {
 }
 
 export interface VMSensors {
-  dx: Float32Array;
-  dy: Float32Array;
-  dist: Float32Array;
+  // Per-material food gradient: signed inverse-square-weighted pull vector
+  // toward every visible particle of that material. Bigger magnitude where
+  // food is denser or closer; sign points toward the cluster centroid.
+  gradX: Float32Array;
+  gradY: Float32Array;
   creatureDx: number;
   creatureDy: number;
   creatureDist: number;
@@ -207,9 +207,8 @@ export function runTick(
       case OP.JZ:  { const rel = i8(readOperand()); if (pop() === 0) state.pc += rel; break; }
       case OP.JNZ: { const rel = i8(readOperand()); if (pop() !== 0) state.pc += rel; break; }
 
-      case OP.SENSE_DX:    { const idx = m6(readOperand()); push(sensors.dx[idx]); break; }
-      case OP.SENSE_DY:    { const idx = m6(readOperand()); push(sensors.dy[idx]); break; }
-      case OP.SENSE_DIST:  { const idx = m6(readOperand()); push(sensors.dist[idx]); break; }
+      case OP.SENSE_GRAD_X:{ const idx = m6(readOperand()); push(sensors.gradX[idx]); break; }
+      case OP.SENSE_GRAD_Y:{ const idx = m6(readOperand()); push(sensors.gradY[idx]); break; }
       case OP.SELF_ENERGY: push(self.energy); break;
       case OP.SELF_RESERVE:{ const idx = m6(readOperand()); push(self.reserve[idx]); break; }
       case OP.SELF_VX:     push(self.vx); break;
@@ -282,14 +281,15 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
-// Default genome: chase the nearest organic particle and try to fission
-// when ATP clears a low gate. tryReproduce charges a non-trivial ATP fee
-// per attempt (even on failure), so the gate exists mainly to keep that
-// fee from siphoning the cell back to zero every tick.
+// Default genome: swim up the organic food gradient (toward the richest
+// direction, weighted by every nearby particle) and try to fission when
+// ATP clears a low gate. tryReproduce charges a non-trivial ATP fee per
+// attempt (even on failure), so the gate exists mainly to keep that fee
+// from siphoning the cell back to zero every tick.
 //
-//   sense_dx organic
-//   sense_dy organic
-//   thrust                 ; accelerate toward food
+//   sense_grad_x organic
+//   sense_grad_y organic
+//   thrust                 ; accelerate up the food gradient
 //   self_energy            ; push ATP
 //   push8 8                ; threshold
 //   gt                     ; ATP > 8 ?
@@ -298,8 +298,8 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   halt
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
-    OP.SENSE_DX, 3,
-    OP.SENSE_DY, 3,
+    OP.SENSE_GRAD_X, 3,
+    OP.SENSE_GRAD_Y, 3,
     OP.THRUST,
     OP.SELF_ENERGY,
     OP.PUSH8, 8,
