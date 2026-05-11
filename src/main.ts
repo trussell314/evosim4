@@ -321,7 +321,11 @@ function describeBiology(c: Creature): string {
     ? `tries fission ~every ${(2.0).toFixed(1)}s`
     : "no REPRODUCE op (sterile)";
 
-  return `${tags.join("/")} | ${pathwayStr} | ${repro}`;
+  // One item per line, with a small leading indent so it visually groups
+  // under the "bio:" label. Tight on mobile screens.
+  return `\n  type:    ${tags.join("/")}\n` +
+         `  burns:   ${pathwayStr}\n` +
+         `  repro:   ${repro}`;
 }
 
 function updateInspector(): void {
