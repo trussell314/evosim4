@@ -55,6 +55,13 @@ export interface Particle {
   vx: number; vy: number; vz: number;
   r: number;
   material: MaterialId;
+  // Molecule-tagged particles bypass catabolism: when ingested, their
+  // contents are deposited straight into the cell's molecule pool. This
+  // is how death-released corpses and auto-excreted CO2 / waste preserve
+  // their actual chemistry instead of collapsing to a generic material.
+  // World-seeded and VM-EXCRETE-spawned particles leave this undefined
+  // and behave as plain bulk material (catabolize via CATAB_FRACTIONS).
+  molecules?: Molecules;
 }
 
 export interface Creature {
@@ -596,16 +603,30 @@ function autoExcrete(c: Creature, world: World): void {
   if (c.molecules.co2 > CO2_EXCRETE_THRESHOLD) {
     const amt = c.molecules.co2 - EXCRETE_FLOOR;
     c.molecules.co2 = EXCRETE_FLOOR;
-    if (!overFlow) spawnExcretedParticle(c, world, "gas", amt);
+    if (!overFlow) {
+      const mol = emptyMolecules();
+      mol.co2 = amt;
+      spawnExcretedParticle(c, world, "gas", amt, mol);
+    }
   }
   if (c.molecules.waste > WASTE_EXCRETE_THRESHOLD) {
     const amt = c.molecules.waste - EXCRETE_FLOOR;
     c.molecules.waste = EXCRETE_FLOOR;
-    if (!overFlow) spawnExcretedParticle(c, world, "organic", amt);
+    if (!overFlow) {
+      const mol = emptyMolecules();
+      mol.waste = amt;
+      spawnExcretedParticle(c, world, "organic", amt, mol);
+    }
   }
 }
 
-function spawnExcretedParticle(c: Creature, world: World, material: MaterialId, m: number): void {
+function spawnExcretedParticle(
+  c: Creature,
+  world: World,
+  material: MaterialId,
+  m: number,
+  molecules?: Molecules,
+): void {
   if (m < EXCRETE_MIN_AMOUNT) {
     // Round-off; just drop it on the floor of the cell (lose to environment).
     return;
@@ -623,6 +644,7 @@ function spawnExcretedParticle(c: Creature, world: World, material: MaterialId, 
     vz: (Math.random() - 0.5) * 10,
     r: pr,
     material,
+    molecules,
   });
 }
 
@@ -925,7 +947,14 @@ function updateCreatures(world: World, dt: number): void {
           const dy = p.y - c.y;
           const dz = p.z - c.z;
           if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
-            c.reserves[p.material] += mass(p);
+            if (p.molecules) {
+              // Molecule-tagged particle: contents go straight into the
+              // cell's molecule pool, bypassing catabolism. This is corpse
+              // / excretion food -- already digested.
+              for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
+            } else {
+              c.reserves[p.material] += mass(p);
+            }
             spendATP(c, INGEST_ENERGY_COST);
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / Math.max(INGEST_REF_R, c.r));
             world.particles.splice(i, 1);
@@ -967,22 +996,32 @@ function updateCreatures(world: World, dt: number): void {
   for (const r of released) world.creatures.push(r);
 }
 
-function releaseReservesAsParticles(c: Creature, world: World): void {
-  // On death the cell's entire contents return to the environment. Reserves
-  // dump as their own material; molecules map to the closest material
-  // (organics back to organic, gases to gas, minerals to sand).
-  const per: Record<MaterialId, number> = {
-    rock: 0, sand: 0, clay: 0, organic: 0, lipid: 0, gas: 0,
-  };
-  for (const id of MATERIAL_IDS) per[id] += c.reserves[id];
-  const m = c.molecules;
-  per.organic += m.glucose + m.fattyAcid + m.aminoAcid + m.biomass
-               + m.chlorophyll + m.enzyme + m.waste + m.adp + c.energy;
-  per.gas += m.o2 + m.co2;
-  per.sand += m.minerals;
+// Which world material best represents each molecule when it leaves a
+// cell as a particle. Picked by density / chemical role so the visual
+// behavior matches: fatty acid floats (lipid), gases float harder (gas),
+// minerals sink (sand), the rest of the biochemistry is organic.
+function moleculeBucket(k: keyof Molecules): MaterialId {
+  if (k === "o2" || k === "co2") return "gas";
+  if (k === "minerals") return "sand";
+  if (k === "fattyAcid") return "lipid";
+  return "organic";
+}
 
+function releaseReservesAsParticles(c: Creature, world: World): void {
+  // On death the cell's entire contents return to the environment.
+  //
+  // Bulk reserves are released as plain material particles -- they're the
+  // cell's undigested food pile, so they catabolize like world-seeded food
+  // when re-eaten.
+  //
+  // The molecule pool is released as molecule-tagged particles, grouped by
+  // their natural material bucket. Each particle in a bucket carries a
+  // proportional slice of that bucket's molecules. When another cell eats
+  // one of these, the molecules go straight into its molecule pool --
+  // preserving the dead cell's actual chemistry (a fat-rich corpse gives
+  // fatty acid back, a glucose-rich one gives glucose, etc.).
   for (const matId of MATERIAL_IDS) {
-    let remaining = per[matId];
+    let remaining = c.reserves[matId];
     if (remaining < 0.5) continue;
     const density = MATERIALS[matId].density;
     while (remaining > 0.5) {
@@ -1001,6 +1040,63 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
         vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
         r,
         material: matId,
+      });
+      remaining -= mp;
+    }
+  }
+
+  // Group molecules by their natural bucket. ATP loses its terminal
+  // phosphate on death, so we lump c.energy into the adp pool.
+  const bucketContents: Record<MaterialId, Molecules> = {
+    rock: emptyMolecules(),
+    sand: emptyMolecules(),
+    clay: emptyMolecules(),
+    organic: emptyMolecules(),
+    lipid: emptyMolecules(),
+    gas: emptyMolecules(),
+  };
+  const bucketTotal: Record<MaterialId, number> = {
+    rock: 0, sand: 0, clay: 0, organic: 0, lipid: 0, gas: 0,
+  };
+  for (const k of MOLECULE_IDS) {
+    const v = c.molecules[k];
+    if (v <= 0) continue;
+    const b = moleculeBucket(k);
+    bucketContents[b][k] += v;
+    bucketTotal[b] += v;
+  }
+  if (c.energy > 0) {
+    bucketContents.organic.adp += c.energy;
+    bucketTotal.organic += c.energy;
+  }
+
+  for (const matId of MATERIAL_IDS) {
+    const total = bucketTotal[matId];
+    if (total < 0.5) continue;
+    const density = MATERIALS[matId].density;
+    let remaining = total;
+    let usedFrac = 0;
+    while (remaining > 0.5) {
+      let r = 2 + Math.random() * 2;
+      let mp = density * (4 / 3) * Math.PI * r * r * r;
+      if (mp > remaining) {
+        r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(remaining, density));
+        mp = density * (4 / 3) * Math.PI * r * r * r;
+      }
+      const frac = Math.min(1 - usedFrac, mp / total);
+      usedFrac += frac;
+      const pMol = emptyMolecules();
+      for (const k of MOLECULE_IDS) pMol[k] = bucketContents[matId][k] * frac;
+      world.particles.push({
+        x: c.x + (Math.random() - 0.5) * 6,
+        y: c.y + (Math.random() - 0.5) * 6,
+        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
+        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
+        r,
+        material: matId,
+        molecules: pMol,
       });
       remaining -= mp;
     }
