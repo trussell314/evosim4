@@ -60,6 +60,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     ingestCooldown: 0,
     bornAt: 0,
     speciesKey: "",
+    division: null,
     contents: [],
   };
   return { ...base, ...overrides };

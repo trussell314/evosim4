@@ -84,6 +84,10 @@ export interface Creature {
   // genomeKey at birth -- frozen for life so species accounting (alive
   // counts, phylogeny) survives any in-life somatic mutations.
   speciesKey: string;
+  // When non-null the cell is in the middle of fissioning. The child has
+  // already been built and paid for; we animate the separation here, and
+  // commit the child into world.creatures when progress reaches 1.
+  division: { progress: number; axis: number; child: Creature } | null;
   // Cells this creature has swallowed whole (OP.ENGULF). They sit inert in
   // a vacuole inside the predator: no VM, no physics, no chemistry. Their
   // mass still counts toward the predator's total mass (and radius).
@@ -446,6 +450,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     ingestCooldown: 0,
     bornAt: 0,
     speciesKey: genomeKey(genome),
+    division: null,
     contents: [],
   };
   updateCreatureRadius(c);
@@ -961,6 +966,10 @@ function updateCreatures(world: World, dt: number): void {
 
     if (VM_OUT.reproduce) tryReproduce(c, world);
 
+    // Advance any in-flight fission. When progress hits 1, the stashed
+    // daughter is committed into world.creatures.
+    advanceDivision(c, world, dt);
+
     let ax = VM_OUT.thrustX;
     let ay = VM_OUT.thrustY;
     const mag = Math.sqrt(ax * ax + ay * ay);
@@ -1218,6 +1227,9 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
 }
 
 function tryReproduce(parent: Creature, world: World): void {
+  // Can't start a new division while one is already in flight.
+  if (parent.division) return;
+
   // Initiating mitosis costs ATP whether the attempt succeeds or not.
   // This is the rate-limit on REPRODUCE: a cell can't fire it every tick
   // without paying for the failed cycles, so spamming the op starves the
@@ -1286,11 +1298,43 @@ function tryReproduce(parent: Creature, world: World): void {
     ingestCooldown: INGEST_COOLDOWN_SEC,
     bornAt: world.t,
     speciesKey: genomeKey(childGenome),
+    division: null,
     contents: [],
   };
   updateCreatureRadius(child);
+
+  // Don't commit the child to the world yet -- stash it in the parent's
+  // division state and animate the separation. advanceDivision() will
+  // push the child into world.creatures when the visual completes.
+  parent.division = {
+    progress: 0,
+    axis: angle,
+    child,
+  };
+}
+
+// Mitosis takes about a second to play out visually. The child has already
+// been built and paid for inside tryReproduce; we just spread the visible
+// transition over time.
+const DIVISION_DURATION_SEC = 1.0;
+
+function advanceDivision(c: Creature, world: World, dt: number): void {
+  if (!c.division) return;
+  c.division.progress += dt / DIVISION_DURATION_SEC;
+  if (c.division.progress < 1) return;
+  const child = c.division.child;
+  const ang = c.division.axis;
+  c.division = null;
+  // Drop the daughter at the current separation point. Recomputing from
+  // the parent's live position keeps the visual in sync even if the
+  // parent drifted during the second-long animation.
+  const offset = (c.r + child.r) * 1.1;
+  child.x = c.x + Math.cos(ang) * offset;
+  child.y = c.y + Math.sin(ang) * offset;
+  child.vx = c.vx;
+  child.vy = c.vy;
   world.creatures.push(child);
-  noteCreatureBirth(world, child, parent.speciesKey);
+  noteCreatureBirth(world, child, c.speciesKey);
 }
 
 function populateSensors(c: Creature, world: World): void {

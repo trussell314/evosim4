@@ -277,13 +277,30 @@ const RING_SPACING = 3;
 const RING_WIDTH = 2;
 
 function drawCreature(c: Creature, selected: boolean): void {
-  ctx.fillStyle = c.color;
-  ctx.beginPath();
-  ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-  ctx.fill();
+  // Each cell has a stable random phase derived from its bornAt + position,
+  // so its wobble pattern is its own instead of every cell pulsing in sync.
+  const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
+  const t = world.t;
   ctx.strokeStyle = selected ? "#ffffff" : "#0a1f1d";
   ctx.lineWidth = selected ? 2 : 1.5;
-  ctx.stroke();
+  if (c.division) {
+    // Mitosis: render two overlapping wobbly bodies whose centers split
+    // along the division axis as `progress` advances 0 -> 1.
+    const child = c.division.child;
+    const sep = c.division.progress * (c.r + child.r);
+    const dx = Math.cos(c.division.axis) * sep * 0.5;
+    const dy = Math.sin(c.division.axis) * sep * 0.5;
+    ctx.fillStyle = c.color;
+    tracedWobblyBody(c.x - dx, c.y - dy, c.r, t, phase);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = child.color;
+    tracedWobblyBody(c.x + dx, c.y + dy, child.r, t, phase + 1.7);
+    ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillStyle = c.color;
+    tracedWobblyBody(c.x, c.y, c.r, t, phase);
+    ctx.fill(); ctx.stroke();
+  }
 
   // Engulfed prey: render each inside the predator, clustered around the
   // center. Their barrier is intact, so they're drawn with their own color
@@ -311,6 +328,27 @@ function drawCreature(c: Creature, selected: boolean): void {
 
   const ingestFrac = 1 - Math.min(1, c.ingestCooldown / 0.7);
   drawRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea");
+}
+
+// Trace a wobbly closed path around (cx, cy). Caller is responsible for
+// fill() / stroke() so the same path can be both filled and outlined. The
+// wobble combines two sine harmonics over angle, modulated by time, plus
+// a per-cell phase so cells don't all pulse together.
+const WOBBLE_SEGMENTS = 14;
+function tracedWobblyBody(cx: number, cy: number, r: number, t: number, phase: number): void {
+  ctx.beginPath();
+  for (let i = 0; i <= WOBBLE_SEGMENTS; i++) {
+    const a = (i / WOBBLE_SEGMENTS) * Math.PI * 2;
+    const wob =
+      1 +
+      0.05 * Math.sin(t * 1.7 + phase + a * 3) +
+      0.03 * Math.sin(t * 0.9 + phase * 1.3 + a * 5);
+    const rr = r * wob;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
 }
 
 function drawRing(cx: number, cy: number, r: number, frac: number, color: string): void {
