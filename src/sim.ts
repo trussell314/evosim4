@@ -204,6 +204,12 @@ export interface World {
   updraftAmp: number;
   updraftLength: number;
   updraftPeriod: number;
+  // Y-coordinate of the water surface. The band y = 0..surfaceY is
+  // atmosphere; cells stay submerged below it; gas particles that drift
+  // up past it escape to the atmosphere. Aeration drops fresh O2-rich
+  // gas particles in just below the surface at a steady rate.
+  surfaceY: number;
+  aerationRate: number;
   restitution: number;
   xWallRestitution: number;
   zWallRestitution: number;
@@ -346,6 +352,16 @@ const EXCRETE_ATP_PER_MASS = 0.05;
 // potato." Damage mass goes into waste (oxidative byproducts).
 const TOX_DAMAGE_PER_EXCESS_PER_SEC = 0.05;
 
+// Surface of the water sits 5% of the world height below the top. The
+// band above is atmosphere where cells can't go and gas particles escape.
+const SURFACE_Y_FRAC = 0.05;
+// Aeration: per-pixel-of-surface-length, expected gas bubbles per second.
+// Each bubble carries O2 and falls into the water; cells can ingest or
+// it eventually rises back out (or gets ingested by a hungry cell).
+const AERATION_PER_PX = 0.005;
+const AERATION_O2_PER_BUBBLE = 4;
+const AERATION_BUBBLE_DROP_SPEED = 14;
+
 export function createWorld(width: number, height: number): World {
   const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
   const world: World = {
@@ -363,6 +379,8 @@ export function createWorld(width: number, height: number): World {
     swellAmp: 22, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
     zStirAmp: 9,
     updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
+    surfaceY: height * SURFACE_Y_FRAC,
+    aerationRate: width * AERATION_PER_PX,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
     species: new Map(),
@@ -387,9 +405,11 @@ export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
   for (let i = 0; i < n; i++) {
     const r = 1 + Math.random() * 1.5;
+    // Spawn below the surface so the initial state matches the wall.
+    const yRange = (world.height - world.surfaceY) * 0.85;
     world.particles.push({
       x: Math.random() * world.width,
-      y: Math.random() * world.height * 0.85,
+      y: world.surfaceY + Math.random() * yRange,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
@@ -813,6 +833,7 @@ export function step(world: World, dt: number): void {
   updateCreatures(world, dt);
   resolveCollisions(world);
   applyWalls(world);
+  aerate(world, dt);
   replenishParticles(world, dt);
   if (world.creatures.length === 0) {
     const x = world.width * (0.1 + 0.8 * Math.random());
@@ -839,11 +860,41 @@ function replenishParticles(world: World, dt: number): void {
     const r = 1 + Math.random() * 1.5;
     world.particles.push({
       x: Math.random() * world.width,
-      y: 0,
+      y: world.surfaceY + r,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       material: pickMaterial(),
+    });
+  }
+}
+
+// Aeration: at the water surface, fresh gas particles tagged with O2
+// drop in. They start with a downward velocity (so they don't escape
+// instantly back through the same surface they entered through) and
+// carry molecule-level O2 -- cells that ingest them get straight O2 in
+// their molecule pool, just like other molecule-tagged particles.
+function aerate(world: World, dt: number): void {
+  if (world.particles.length >= world.particleTarget) return;
+  const expected = world.aerationRate * dt;
+  let n = Math.floor(expected);
+  if (Math.random() < expected - n) n++;
+  for (let i = 0; i < n && world.particles.length < world.particleTarget; i++) {
+    const r = 1 + Math.random() * 0.8;
+    const mol = emptyMolecules();
+    mol.o2 = AERATION_O2_PER_BUBBLE;
+    world.particles.push({
+      x: Math.random() * world.width,
+      // Just below the surface so the wall-escape pass doesn't immediately
+      // strip the new bubble.
+      y: world.surfaceY + r + 1,
+      z: r + Math.random() * (world.depth - 2 * r),
+      vx: (Math.random() - 0.5) * 4,
+      vy: AERATION_BUBBLE_DROP_SPEED,
+      vz: (Math.random() - 0.5) * 4,
+      r,
+      material: "gas",
+      molecules: mol,
     });
   }
 }
@@ -865,9 +916,10 @@ function applyForces(world: World, dt: number): void {
     // Surface ripple travels right; deeper swell travels left. The
     // counter-traveling pair stops particles from accumulating against
     // one wall the way a single right-moving wave train did.
-    const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-o.y / world.surfaceDecay);
-    const swell   = world.swellAmp   * Math.sin(kL * o.x + wL * world.t) * Math.exp(-o.y / world.swellDecay);
-    const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-o.y / world.swellDecay);
+    const depth = Math.max(0, o.y - world.surfaceY);
+    const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-depth / world.surfaceDecay);
+    const swell   = world.swellAmp   * Math.sin(kL * o.x + wL * world.t) * Math.exp(-depth / world.swellDecay);
+    const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
     // Vertical mixing: gentle up/down currents that vary with x and time.
     // Negative ay = upward push, positive = downward. Full water column.
     const updraft = -world.updraftAmp * Math.sin(kU * o.x + wU * world.t);
@@ -1583,6 +1635,14 @@ function resolvePair(ps: Particle[], i: number, j: number, e: number): void {
 }
 
 function applyWalls(world: World): void {
+  // Gas particles that drift up past the water surface escape to the
+  // atmosphere -- splice them out instead of clamping.
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    const p = world.particles[i];
+    if (p.material === "gas" && p.y - p.r < world.surfaceY) {
+      world.particles.splice(i, 1);
+    }
+  }
   const wallEach = (
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
   ): void => {
@@ -1597,7 +1657,10 @@ function applyWalls(world: World): void {
       o.y = world.height * 0.5; o.vy = 0;
     } else {
       if (o.y + o.r > world.height) { o.y = world.height - o.r; if (o.vy > 0) o.vy = 0; }
-      if (o.y - o.r < 0) { o.y = o.r; if (o.vy < 0) o.vy = 0; }
+      // Non-gas objects (creatures, solid particles) clamp at the water
+      // surface. Gas escape is handled above.
+      const top = world.surfaceY + o.r;
+      if (o.y < top) { o.y = top; if (o.vy < 0) o.vy = 0; }
     }
     if (o.r * 2 >= world.depth) {
       o.z = world.depth * 0.5; o.vz = 0;

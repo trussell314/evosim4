@@ -43,6 +43,8 @@ function quietWorld(): World {
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
     zStirAmp: 0,
     updraftAmp: 0, updraftLength: 400, updraftPeriod: 16,
+    surfaceY: 0,
+    aerationRate: 0,
     restitution: 0.2,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -1270,6 +1272,56 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     step(w, 1 / 60);
     expect(w.particles.includes(target)).toBe(true);
     expect(c.reserves.rock).toBe(0);
+  });
+});
+
+describe("aeration & surface escape", () => {
+  it("gas particle above the surface escapes", () => {
+    const w = quietWorld();
+    w.surfaceY = 50;
+    w.particles.push({ x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "gas" });
+    step(w, 0.001);
+    expect(w.particles.length).toBe(0);
+  });
+  it("non-gas particle above the surface is clamped, not escaped", () => {
+    const w = quietWorld();
+    w.surfaceY = 50;
+    w.particles.push({ x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+    step(w, 0.001);
+    expect(w.particles.length).toBe(1);
+    expect(w.particles[0].y).toBeGreaterThanOrEqual(w.surfaceY);
+  });
+  it("creature clamps at the water surface", () => {
+    const w = quietWorld();
+    w.surfaceY = 50;
+    const c = makeCreature({ x: 400, y: 20, vy: -100, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    w.creatures.push(c);
+    step(w, 0.1);
+    expect(w.creatures.length).toBe(1);
+    expect(c.y).toBeGreaterThanOrEqual(w.surfaceY);
+  });
+  it("aerationRate spawns gas particles below the surface", () => {
+    const w = quietWorld();
+    w.surfaceY = 50;
+    w.aerationRate = 500; // burst, easy to observe
+    const n0 = w.particles.length;
+    step(w, 0.05);
+    const gas = w.particles.filter((p) => p.material === "gas");
+    expect(w.particles.length).toBeGreaterThan(n0);
+    expect(gas.length).toBeGreaterThan(0);
+    for (const p of gas) {
+      expect(p.y).toBeGreaterThanOrEqual(w.surfaceY);
+      // Bubbles carry O2.
+      expect(p.molecules?.o2 ?? 0).toBeGreaterThan(0);
+    }
+  });
+  it("aerationRate=0 spawns no bubbles", () => {
+    const w = quietWorld();
+    w.surfaceY = 50;
+    w.aerationRate = 0;
+    const n0 = w.particles.length;
+    step(w, 0.5);
+    expect(w.particles.length).toBe(n0);
   });
 });
 

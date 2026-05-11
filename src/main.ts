@@ -69,6 +69,9 @@ function resize(): void {
   // never overlaps swimming cells. The world's bottom wall sits at
   // world.height; the strip renders in (world.height .. innerHeight).
   world.height = Math.max(100, h - PHYLO_STRIP_H);
+  // Keep the water surface tracking the resized world.
+  world.surfaceY = world.height * 0.05;
+  world.aerationRate = world.width * 0.005;
 }
 resize();
 window.addEventListener("resize", resize);
@@ -130,12 +133,23 @@ for (const matId of MATERIAL_IDS_ORDERED) {
 }
 
 function render(): void {
-  const { width, height, depth } = world;
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
+  const { width, height, depth, surfaceY } = world;
+  // Atmosphere band above the water.
+  ctx.fillStyle = "#10212d";
+  ctx.fillRect(0, 0, width, surfaceY);
+  // Water column.
+  const grad = ctx.createLinearGradient(0, surfaceY, 0, height);
   grad.addColorStop(0, "#0e2a3a");
   grad.addColorStop(1, "#061520");
   ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, surfaceY, width, height - surfaceY);
+  // Surface line.
+  ctx.strokeStyle = "rgba(140, 200, 230, 0.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, surfaceY + 0.5);
+  ctx.lineTo(width, surfaceY + 0.5);
+  ctx.stroke();
 
   for (const b of BUCKETS) b.length = 0;
   for (const p of world.particles) {
