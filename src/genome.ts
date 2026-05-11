@@ -333,7 +333,7 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   thrust                 ; accelerate up the food gradient
 //   ingest organic         ; absorb only organic particles this tick
 //   self_biomass           ; push biomass pool
-//   push8 12               ; minimum to afford fission cost
+//   push8 14               ; minimum to afford 2x fission cost
 //   gt                     ; biomass > 12 ?
 //   self_energy            ; push ATP
 //   push8 3                ; minimum ATP
@@ -349,7 +349,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.THRUST,
     OP.INGEST, 3,
     OP.SELF_BIOMASS,
-    OP.PUSH8, 12,
+    OP.PUSH8, 14,
     OP.GT,
     OP.SELF_ENERGY,
     OP.PUSH8, 3,

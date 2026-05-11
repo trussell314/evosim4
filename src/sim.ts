@@ -1422,34 +1422,27 @@ function tryReproduce(parent: Creature, world: World): void {
   const childGenome = mutateGenome(parent.genome);
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
   // Reserves are bulk-food, not the substrate cells build themselves out of.
+  // Both daughters need a full copy, so require parent has 2x the cost.
   const cost = genomeMoleculeCost(childGenome, MASS_PER_GENOME_BYTE);
   for (const k of BUILD_KEYS) {
-    if (parent.molecules[k] < cost[k]) return;
+    if (parent.molecules[k] < 2 * cost[k]) return;
   }
+  // Symmetric fission: every build-block, every other molecule, every
+  // reserve, and ATP split 50/50 between parent and child. No preferential
+  // cost transfer -- the asymmetric old version starved the parent down
+  // to (initial - cost) / 2 biomass, just above the autolyze floor, so
+  // freshly fissioned parents tended to die within seconds.
   const childMolecules = emptyMolecules();
-  for (const k of BUILD_KEYS) {
-    parent.molecules[k] -= cost[k];
-    childMolecules[k] = cost[k];
-  }
-  // Split the remaining reserves and the molecular pool 50/50 with the
-  // child so it can metabolize from birth.
   const childReserves = emptyReserves();
-  for (const id of MATERIAL_IDS) {
-    const half = parent.reserves[id] * 0.5;
-    parent.reserves[id] -= half;
-    childReserves[id] = half;
-  }
   for (const mk of MOLECULE_IDS) {
-    if ((BUILD_KEYS as readonly string[]).includes(mk)) continue;
     const half = parent.molecules[mk] * 0.5;
     parent.molecules[mk] -= half;
     childMolecules[mk] = half;
   }
-  // Also share what's left of the build-blocks post-cost.
-  for (const k of BUILD_KEYS) {
-    const half = parent.molecules[k] * 0.5;
-    parent.molecules[k] -= half;
-    childMolecules[k] += half;
+  for (const id of MATERIAL_IDS) {
+    const half = parent.reserves[id] * 0.5;
+    parent.reserves[id] -= half;
+    childReserves[id] = half;
   }
   const energyGift = parent.energy * 0.5;
   parent.energy -= energyGift;
