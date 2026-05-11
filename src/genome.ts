@@ -44,6 +44,11 @@ export const OP = {
   SELF_RESERVE:  0x44,
   SELF_VX:       0x45,
   SELF_VY:       0x46,
+  SENSE_CRE_DX:  0x47,
+  SENSE_CRE_DY:  0x48,
+  SENSE_CRE_DIST:0x49,
+  SENSE_CRE_MASS:0x4A,
+  SELF_MASS:     0x4B,
 
   // Actuators.
   THRUST:        0x50,
@@ -86,16 +91,22 @@ export function newVMState(): VMState {
 }
 
 export interface VMSensors {
-  dx: Float32Array;    // length 6, per material index
+  dx: Float32Array;        // length 6, per material index
   dy: Float32Array;
   dist: Float32Array;
+  // Nearest other creature (scalar; senseRange if none in range).
+  creatureDx: number;
+  creatureDy: number;
+  creatureDist: number;
+  creatureMass: number;
 }
 
 export interface VMSelf {
   energy: number;
   vx: number;
   vy: number;
-  reserve: Float32Array;  // length 6
+  reserve: Float32Array;   // length 6
+  mass: number;            // total reserves mass
 }
 
 export interface VMOutputs {
@@ -182,6 +193,11 @@ export function runTick(
       case OP.SELF_RESERVE:{ const idx = m6(readOperand()); push(self.reserve[idx]); break; }
       case OP.SELF_VX:     push(self.vx); break;
       case OP.SELF_VY:     push(self.vy); break;
+      case OP.SENSE_CRE_DX:   push(sensors.creatureDx); break;
+      case OP.SENSE_CRE_DY:   push(sensors.creatureDy); break;
+      case OP.SENSE_CRE_DIST: push(sensors.creatureDist); break;
+      case OP.SENSE_CRE_MASS: push(sensors.creatureMass); break;
+      case OP.SELF_MASS:      push(self.mass); break;
 
       case OP.THRUST: {
         const ay = pop();

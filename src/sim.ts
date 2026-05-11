@@ -27,7 +27,7 @@ export type MaterialId =
 
 export interface Material {
   id: MaterialId;
-  density: number;  // relative to water
+  density: number;
   color: string;
 }
 
@@ -62,16 +62,16 @@ export interface Creature {
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   r: number;
-  density: number;                          // baseline cell density (≈1 = neutral)
-  reserves: Record<MaterialId, number>;     // mass per material, in same units as particle mass
-  energy: number;                           // abstract energy units
-  senseRange: number;                       // px
-  thrustAccel: number;                      // px/s^2 max self-applied accel
+  density: number;
+  reserves: Record<MaterialId, number>;
+  energy: number;
+  senseRange: number;
+  thrustAccel: number;
   genome: Uint8Array;
   vm: VMState;
-  color: string;                            // cached, hashed from genome (visual lineage)
-  ingestCooldown: number;                   // seconds until next particle can be absorbed
-  reproduceCooldown: number;                // seconds until next fission allowed
+  color: string;
+  ingestCooldown: number;
+  reproduceCooldown: number;
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -83,58 +83,51 @@ export interface World {
   t: number;
   particles: Particle[];
   creatures: Creature[];
-
-  // Forcing.
   gravity: number;
   drag: number;
-
   surfaceAmp: number;
   surfaceLength: number;
   surfacePeriod: number;
   surfaceDecay: number;
-
   swellAmp: number;
   swellLength: number;
   swellPeriod: number;
   swellDecay: number;
-
   zStirAmp: number;
-
-  // Collision response (between particles).
   restitution: number;
   xWallRestitution: number;
   zWallRestitution: number;
   collisionIters: number;
 }
 
-// Metabolism & movement constants (hand-tuned for first creature).
-const METABOLIZE_RATE = 5;            // mass of organic burned per second
-const ENERGY_PER_MASS = 12;           // energy yielded per unit mass burned
-const ENERGY_PER_THRUST_SEC = 22;     // energy cost per second at full thrust
-const ENERGY_PER_INSTRUCTION = 0.02;  // per-op cost of running the genome
-const VM_INSTR_BUDGET = 32;           // instructions per tick
+// Metabolism & movement.
+const METABOLIZE_RATE = 5;
+const ENERGY_PER_MASS = 12;
+const ENERGY_PER_THRUST_SEC = 22;
+const ENERGY_PER_INSTRUCTION = 0.02;
+const VM_INSTR_BUDGET = 32;
 
 // Reproduction & ecology.
 const MASS_PER_GENOME_BYTE = 3;
 const PARTICLE_TARGET = 550;
-const PARTICLE_SPAWN_RATE = 30;       // per second (when below target)
+const PARTICLE_SPAWN_RATE = 30;
 const MAX_CREATURES = 80;
-const REPRODUCE_COOLDOWN_SEC = 2;     // biological recovery between fissions
+const REPRODUCE_COOLDOWN_SEC = 2;
 
-// Ingestion. Each successful absorption costs energy and locks the cell out
-// of ingesting again for a short cooldown -- prevents cells from sweeping
-// through food without paying anything.
+// Ingestion.
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.35;
 
-// Death. Cells pay a baseline metabolic drain every tick (just being alive
-// costs something). A cell dies when it can no longer fuel itself: energy
-// at zero AND no organic reserve left to metabolize. On death, the cell's
-// remaining reserves are released back into the world as particles --
-// matter is conserved (approximately, modulo the minimum particle radius).
-const BASE_METABOLIC_DRAIN = 0.5;     // energy / second, always
-const DEATH_RELEASE_R_MIN = 1.2;      // smallest released particle radius
-const DEATH_RELEASE_SCATTER = 30;     // px/s scatter velocity scale
+// Predation. A cell whose total stored mass exceeds another's by this ratio
+// can engulf it on overlap. Eating a whole cell costs the per-event energy
+// like a particle but locks the eater out of further ingestion for longer.
+const PREDATION_MASS_RATIO = 1.5;
+const PREDATION_COOLDOWN_SEC = 0.7;
+
+// Death.
+const BASE_METABOLIC_DRAIN = 0.5;
+const DEATH_RELEASE_R_MIN = 1.2;
+const DEATH_RELEASE_SCATTER = 30;
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -145,19 +138,15 @@ export function createWorld(width: number, height: number): World {
     creatures: [],
     gravity: 220,
     drag: 0.6,
-
     surfaceAmp: 130,
     surfaceLength: 240,
     surfacePeriod: 2.4,
     surfaceDecay: 120,
-
     swellAmp: 22,
     swellLength: 820,
     swellPeriod: 8.5,
     swellDecay: 520,
-
     zStirAmp: 9,
-
     restitution: 0.15,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -176,9 +165,7 @@ export function seedParticles(world: World, n: number): void {
       x: Math.random() * world.width,
       y: Math.random() * world.height * 0.85,
       z: r + Math.random() * (world.depth - 2 * r),
-      vx: 0,
-      vy: 0,
-      vz: (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       material: pickMaterial(),
     });
@@ -224,8 +211,6 @@ function makeCreature(x: number, y: number, z: number): Creature {
   };
 }
 
-// Stable color from genome bytes. Mutations shift it by a small amount per
-// changed byte, so a lineage clusters in hue.
 export function genomeColor(genome: Uint8Array): string {
   let h = 5381 >>> 0;
   for (let i = 0; i < genome.length; i++) {
@@ -259,9 +244,7 @@ function replenishParticles(world: World, dt: number): void {
       x: Math.random() * world.width,
       y: 0,
       z: r + Math.random() * (world.depth - 2 * r),
-      vx: 0,
-      vy: 0,
-      vz: (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       material: pickMaterial(),
     });
@@ -279,20 +262,10 @@ function applyForces(world: World, dt: number): void {
     density: number,
   ) => {
     const ay = world.gravity * (1 - 1 / density);
-    const surface =
-      world.surfaceAmp *
-      Math.sin(kS * o.x - wS * world.t) *
-      Math.exp(-o.y / world.surfaceDecay);
-    const swell =
-      world.swellAmp *
-      Math.sin(kL * o.x - wL * world.t) *
-      Math.exp(-o.y / world.swellDecay);
-    const az =
-      world.zStirAmp *
-      Math.sin(wL * world.t + kL * o.x + 1.0) *
-      Math.exp(-o.y / world.swellDecay);
+    const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-o.y / world.surfaceDecay);
+    const swell   = world.swellAmp   * Math.sin(kL * o.x - wL * world.t) * Math.exp(-o.y / world.swellDecay);
+    const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-o.y / world.swellDecay);
     const ax = surface + swell;
-
     o.vx += (ax - world.drag * o.vx) * dt;
     o.vy += (ay - world.drag * o.vy) * dt;
     o.vz += (az - world.drag * o.vz) * dt;
@@ -305,54 +278,52 @@ function applyForces(world: World, dt: number): void {
   for (const c of world.creatures) integrate(c, c.density);
 }
 
-// Reusable buffers for VM I/O so we don't allocate per tick.
+// Reusable VM buffers.
 const VM_SENSORS: VMSensors = {
   dx: new Float32Array(6),
   dy: new Float32Array(6),
   dist: new Float32Array(6),
+  creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
 };
 const VM_SELF: VMSelf = {
   energy: 0, vx: 0, vy: 0,
   reserve: new Float32Array(6),
+  mass: 0,
 };
 const VM_OUT: VMOutputs = newOutputs();
 const SENSOR_BEST_SQ = new Float32Array(6);
 
 function updateCreatures(world: World, dt: number): void {
-  // Snapshot length: children spawned this tick don't act until next tick.
-  // Without this a child can reproduce on the same tick it was born, which
-  // cascades and breaks matter/energy conservation per cell.
   const n = world.creatures.length;
   const dead: number[] = [];
+  const eaten = new Set<number>();
   for (let cIdx = 0; cIdx < n; cIdx++) {
+    if (eaten.has(cIdx)) continue;
     const c = world.creatures[cIdx];
 
-    // Baseline metabolic drain. Always paid, regardless of activity.
     c.energy -= BASE_METABOLIC_DRAIN * dt;
 
-    // Metabolize organic into energy.
     const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
     c.reserves.organic -= burn;
     c.energy += burn * ENERGY_PER_MASS;
 
-    // Build per-material nearest-particle sensor readings. These stand in for
-    // proper physical sensors (photon / chemical / pressure) until those land.
     populateSensors(c, world);
 
-    // Build self readings.
     VM_SELF.energy = c.energy;
     VM_SELF.vx = c.vx;
     VM_SELF.vy = c.vy;
-    for (let i = 0; i < 6; i++) VM_SELF.reserve[i] = c.reserves[MATERIAL_IDS[i]];
+    let selfMass = 0;
+    for (let i = 0; i < 6; i++) {
+      VM_SELF.reserve[i] = c.reserves[MATERIAL_IDS[i]];
+      selfMass += VM_SELF.reserve[i];
+    }
+    VM_SELF.mass = selfMass;
 
-    // Run the genome.
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
     c.energy -= VM_OUT.instructions * ENERGY_PER_INSTRUCTION;
 
     if (VM_OUT.reproduce) tryReproduce(c, world);
 
-    // Apply thrust intent, clamped to thrustAccel magnitude. Energy cost
-    // scales with the fraction of full thrust actually used.
     let ax = VM_OUT.thrustX;
     let ay = VM_OUT.thrustY;
     const mag = Math.sqrt(ax * ax + ay * ay);
@@ -368,7 +339,6 @@ function updateCreatures(world: World, dt: number): void {
     }
     if (c.energy < 0) c.energy = 0;
 
-    // Tick down cooldowns.
     if (c.ingestCooldown > 0) {
       c.ingestCooldown = Math.max(0, c.ingestCooldown - dt);
     }
@@ -376,36 +346,59 @@ function updateCreatures(world: World, dt: number): void {
       c.reproduceCooldown = Math.max(0, c.reproduceCooldown - dt);
     }
 
-    // At most one ingestion per cooldown window, and only if the cell can pay
-    // the per-event energy cost.
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
-      for (let i = world.particles.length - 1; i >= 0; i--) {
-        const p = world.particles[i];
-        const dx = p.x - c.x;
-        const dy = p.y - c.y;
-        const dz = p.z - c.z;
-        if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
-          c.reserves[p.material] += mass(p);
-          c.energy -= INGEST_ENERGY_COST;
-          c.ingestCooldown = INGEST_COOLDOWN_SEC;
-          world.particles.splice(i, 1);
-          break;
+      let ingested = false;
+      // Try eating a smaller-than-me cell first (predation).
+      const myMass = creatureTotalMass(c);
+      for (let j = 0; j < n; j++) {
+        if (j === cIdx || eaten.has(j)) continue;
+        const other = world.creatures[j];
+        const dx = other.x - c.x;
+        const dy = other.y - c.y;
+        const dz = other.z - c.z;
+        const minD = c.r + other.r;
+        if (dx * dx + dy * dy + dz * dz >= minD * minD) continue;
+        const otherMass = creatureTotalMass(other);
+        if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
+        for (let k = 0; k < 6; k++) {
+          c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
+        }
+        c.energy += other.energy;
+        c.energy -= INGEST_ENERGY_COST;
+        c.ingestCooldown = PREDATION_COOLDOWN_SEC;
+        eaten.add(j);
+        ingested = true;
+        break;
+      }
+      if (!ingested) {
+        for (let i = world.particles.length - 1; i >= 0; i--) {
+          const p = world.particles[i];
+          const dx = p.x - c.x;
+          const dy = p.y - c.y;
+          const dz = p.z - c.z;
+          if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
+            c.reserves[p.material] += mass(p);
+            c.energy -= INGEST_ENERGY_COST;
+            c.ingestCooldown = INGEST_COOLDOWN_SEC;
+            world.particles.splice(i, 1);
+            break;
+          }
         }
       }
     }
 
-    // Starvation: no energy AND no organic to burn. Cell can't fuel itself
-    // and dies. Reserves get released as particles (matter conservation).
     if (c.energy <= 0 && c.reserves.organic < 0.5) {
       dead.push(cIdx);
     }
   }
 
-  // Remove dead cells in reverse-index order so earlier indices stay valid.
-  for (let i = dead.length - 1; i >= 0; i--) {
-    const idx = dead[i];
-    releaseReservesAsParticles(world.creatures[idx], world);
-    world.creatures.splice(idx, 1);
+  const removed: { idx: number; spill: boolean }[] = [];
+  for (const idx of dead) removed.push({ idx, spill: true });
+  for (const idx of eaten) removed.push({ idx, spill: false });
+  removed.sort((a, b) => b.idx - a.idx);
+  for (const r of removed) {
+    if (r.spill) releaseReservesAsParticles(world.creatures[r.idx], world);
+    world.creatures.splice(r.idx, 1);
   }
 }
 
@@ -416,8 +409,6 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
     if (remaining < 0.5) continue;
     const density = MATERIALS[matId].density;
     while (remaining > 0.5) {
-      // Aim for a typical particle radius (2-4) for chunky release, fitting
-      // the final particle to the leftover mass.
       let r = 2 + Math.random() * 2;
       let m = density * Math.PI * r * r;
       if (m > remaining) {
@@ -442,19 +433,16 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
 function tryReproduce(parent: Creature, world: World): void {
   if (parent.reproduceCooldown > 0) return;
   if (world.creatures.length >= MAX_CREATURES) return;
-  // Mutate first so cost matches the child's actual genome.
   const childGenome = mutateGenome(parent.genome);
   const cost = genomeMaterialCost(childGenome, MASS_PER_GENOME_BYTE);
   for (let i = 0; i < 6; i++) {
     if (parent.reserves[MATERIAL_IDS[i]] < cost[i]) return;
   }
-  // Transfer construction material parent -> child body.
   const childReserves = emptyReserves();
   for (let i = 0; i < 6; i++) {
     parent.reserves[MATERIAL_IDS[i]] -= cost[i];
     childReserves[MATERIAL_IDS[i]] = cost[i];
   }
-  // Endowment: half of parent's remaining organic, half its energy.
   const orgGift = parent.reserves.organic * 0.5;
   parent.reserves.organic -= orgGift;
   childReserves.organic += orgGift;
@@ -467,9 +455,7 @@ function tryReproduce(parent: Creature, world: World): void {
     x: parent.x + Math.cos(angle) * offset,
     y: parent.y + Math.sin(angle) * offset,
     z: parent.z,
-    vx: parent.vx,
-    vy: parent.vy,
-    vz: parent.vz,
+    vx: parent.vx, vy: parent.vy, vz: parent.vz,
     r: parent.r,
     density: parent.density,
     reserves: childReserves,
@@ -507,6 +493,30 @@ function populateSensors(c: Creature, world: World): void {
       VM_SENSORS.dist[idx] = Math.sqrt(dsq);
     }
   }
+  VM_SENSORS.creatureDx = 0;
+  VM_SENSORS.creatureDy = 0;
+  VM_SENSORS.creatureDist = range;
+  VM_SENSORS.creatureMass = 0;
+  let bestCreatureSq = rangeSq;
+  for (const other of world.creatures) {
+    if (other === c) continue;
+    const dx = other.x - c.x;
+    const dy = other.y - c.y;
+    const dsq = dx * dx + dy * dy;
+    if (dsq < bestCreatureSq) {
+      bestCreatureSq = dsq;
+      VM_SENSORS.creatureDx = dx;
+      VM_SENSORS.creatureDy = dy;
+      VM_SENSORS.creatureDist = Math.sqrt(dsq);
+      VM_SENSORS.creatureMass = creatureTotalMass(other);
+    }
+  }
+}
+
+function creatureTotalMass(c: Creature): number {
+  let m = 0;
+  for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
+  return m;
 }
 
 function resolveCollisions(world: World): void {
