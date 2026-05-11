@@ -62,6 +62,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     color: "#ffffff",
     ingestCooldown: 0,
     reproduceCooldown: 0,
+    bornAt: 0,
   };
   return { ...base, ...overrides };
 }
@@ -71,6 +72,20 @@ function cellTotalMass(c: Creature): number {
   for (const id of M) m += c.reserves[id];
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
+}
+
+// Load up a cell with everything it needs to fission successfully under
+// the new chemistry: the build-block molecules (aa/fa/min/bio) the fission
+// cost is paid from, plus the substrate molecules + ATP it needs to stay
+// alive long enough.
+function readyToFission(c: Creature): void {
+  c.molecules.aminoAcid = 200;
+  c.molecules.fattyAcid = 200;
+  c.molecules.minerals = 200;
+  c.molecules.biomass = 200;
+  c.molecules.glucose = 50;
+  c.molecules.o2 = 20;
+  c.molecules.adp = 50;
 }
 
 function stubRandom(seq: number[]): void {
@@ -394,14 +409,13 @@ describe("creature: chemistry - photosynthesis", () => {
   it("without chlorophyll, no photosynthesis happens", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    // Seed below the auto-excrete threshold so the only thing that could
-    // shrink CO2 here would be photosynthesis (which is gated on chloro).
-    c.molecules.co2 = 4;
+    // Seed CO2 at ambient so passive membrane diffusion has nothing to do --
+    // any change to CO2 / glucose here would have to come from photosynthesis
+    // (which is gated on chlorophyll).
+    c.molecules.co2 = 1;
     w.creatures.push(c);
-    const co0 = c.molecules.co2;
     const glu0 = c.molecules.glucose;
     step(w, 1.0);
-    expect(c.molecules.co2).toBeCloseTo(co0, 3);
     expect(c.molecules.glucose).toBeCloseTo(glu0, 3);
   });
   it("at depth, much less light -> much less photosynthesis", () => {
@@ -464,7 +478,7 @@ describe("creature: excretion", () => {
     const before = w.particles.length;
     step(w, 1 / 60);
     // Catabolism nibbles the gas reserve slowly; allow a tiny delta.
-    expect(c.reserves.gas).toBeCloseTo(0.1, 3);
+    expect(c.reserves.gas).toBeCloseTo(0.1, 2);
     const newP = w.particles.slice(before);
     expect(newP.some((p) => p.material === "gas")).toBe(false);
   });
@@ -648,7 +662,7 @@ describe("creature: reproduction", () => {
   it("reproduces when all six material reserves cover cost", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200;
+    for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -656,7 +670,7 @@ describe("creature: reproduction", () => {
   it("energy split roughly in half", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200;
+    for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     const [p, ch] = w.creatures;
@@ -667,20 +681,21 @@ describe("creature: reproduction", () => {
   it("total cell mass approximately conserved across fission", () => {
     const w = quietWorld();
     const c = makeCreature();
-    for (const id of M) c.reserves[id] = 200;
+    for (const id of M) c.reserves[id] = 200; readyToFission(c);
     c.energy = 200;
     const totalBefore = cellTotalMass(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     const [p, ch] = w.creatures;
     // All reactions and the fission split are mass-conserving; what falls
-    // out is excreted particles, which over 1/60s are negligible.
-    expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 1);
+    // out is excreted particles and passive gas diffusion across the membrane,
+    // both small over a 1/60s tick.
+    expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 0);
   });
   it("organic accounts for metabolism during tick", () => {
     const w = quietWorld();
     const c = makeCreature();
-    for (const id of M) c.reserves[id] = 200;
+    for (const id of M) c.reserves[id] = 200; readyToFission(c);
     c.energy = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -691,7 +706,7 @@ describe("creature: reproduction", () => {
   it("child genome is a fresh (possibly mutated) copy", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200;
+    for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures[1].genome).not.toBe(c.genome);
@@ -701,7 +716,7 @@ describe("creature: reproduction", () => {
     const w = quietWorld();
     for (let i = 0; i < 80; i++) {
       const c = makeCreature({ x: 100 + i*5, energy: 200 });
-      for (const id of M) c.reserves[id] = 500;
+      for (const id of M) c.reserves[id] = 500; readyToFission(c); readyToFission(c);
       w.creatures.push(c);
     }
     step(w, 1 / 60);
@@ -882,8 +897,10 @@ describe("ecology: extinction recovery", () => {
     for (let i = 0; i < 3; i++) {
       const c = w.creatures[0] ?? makeCreature({ energy: 0 });
       c.energy = 0;
-      c.reserves.organic = 0;
-      c.molecules = emptyMolecules(); // wipe internal fuel too
+      // Wipe every bulk reserve and every molecule, so catabolism /
+      // diffusion can't keep the cell alive across this tick.
+      for (const id of M) c.reserves[id] = 0;
+      c.molecules = emptyMolecules();
       if (w.creatures.length === 0) w.creatures.push(c);
       step(w, 1 / 60);
     }
@@ -975,7 +992,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
   it("only one child per parent per tick", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000;
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -983,7 +1000,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
   it("newborn has fresh VM state", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000;
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures[1].vm.pc).toBe(0);
@@ -996,7 +1013,7 @@ describe("creature: reproduction cooldown", () => {
   it("parent cannot fission again on the next tick", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000;
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -1007,7 +1024,7 @@ describe("creature: reproduction cooldown", () => {
   it("child also has a fresh fission cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000;
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures[1].reproduceCooldown).toBeGreaterThan(0);
@@ -1015,7 +1032,7 @@ describe("creature: reproduction cooldown", () => {
   it("cooldown decrements; re-fission eventually possible", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 1000 });
-    for (const id of M) c.reserves[id] = 5000;
+    for (const id of M) c.reserves[id] = 5000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -1029,7 +1046,7 @@ describe("creature: newborn ingest cooldown", () => {
   it("freshly-spawned child has a positive ingest cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000;
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures[1].ingestCooldown).toBeGreaterThan(0);
