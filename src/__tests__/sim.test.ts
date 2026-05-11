@@ -715,13 +715,13 @@ describe("creature: reproduction", () => {
   });
   it("respects MAX_CREATURES cap", () => {
     const w = quietWorld();
-    for (let i = 0; i < 80; i++) {
-      const c = makeCreature({ x: 100 + i*5, energy: 200 });
+    for (let i = 0; i < 400; i++) {
+      const c = makeCreature({ x: 100 + (i % 80) * 5, y: 100 + Math.floor(i / 80) * 5, energy: 200 });
       for (const id of M) c.reserves[id] = 500; readyToFission(c); readyToFission(c);
       w.creatures.push(c);
     }
     step(w, 1 / 60);
-    expect(w.creatures.length).toBe(80);
+    expect(w.creatures.length).toBe(400);
   });
 });
 
@@ -1227,6 +1227,6 @@ describe("default creature behavior (integration)", () => {
     for (const id of M) if (id !== "organic") c.reserves[id] = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
-    expect(w.creatures.length).toBe(1);
+    expect(w.creatures.length).toBe(400);
   });
 });
