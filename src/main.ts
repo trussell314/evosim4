@@ -1,19 +1,40 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, type Particle, type Creature } from "./sim";
-import { disassemble } from "./genome";
+import { disassemble, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
 root.appendChild(canvas);
 const ctx = canvas.getContext("2d")!;
 
+// HUD: a wrapper holding a minimize button and the inspector pre. Click the
+// button to collapse to just the button; click again to expand.
+const hud = document.createElement("div");
+hud.style.cssText =
+  "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
+  "border-radius:4px;font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "max-height:80vh;overflow:hidden;";
+const hudBar = document.createElement("div");
+hudBar.style.cssText =
+  "display:flex;justify-content:flex-end;padding:2px 4px;cursor:pointer;" +
+  "user-select:none;color:#9ee;";
+const hudToggle = document.createElement("span");
+hudToggle.textContent = "[–]"; // [-]
+hudToggle.style.cssText = "padding:0 4px;";
+hudBar.appendChild(hudToggle);
 const inspector = document.createElement("pre");
 inspector.style.cssText =
-  "position:fixed;top:8px;left:8px;margin:0;padding:6px 9px;" +
-  "color:#9ee;background:rgba(0,0,0,.45);border-radius:4px;" +
-  "font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;" +
-  "pointer-events:none;white-space:pre;max-height:60vh;overflow:hidden;";
-root.appendChild(inspector);
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;";
+hud.appendChild(hudBar);
+hud.appendChild(inspector);
+root.appendChild(hud);
+
+let hudMinimized = false;
+hudBar.addEventListener("click", () => {
+  hudMinimized = !hudMinimized;
+  inspector.style.display = hudMinimized ? "none" : "";
+  hudToggle.textContent = hudMinimized ? "[+]" : "[–]";
+});
 
 const world = createWorld(window.innerWidth, window.innerHeight);
 
@@ -211,6 +232,26 @@ function drawCreature(c: Creature, selected: boolean): void {
   ctx.lineWidth = selected ? 2 : 1.5;
   ctx.stroke();
 
+  // Engulfed prey: render each inside the predator, clustered around the
+  // center. Their barrier is intact, so they're drawn with their own color
+  // and a thin outline -- visually distinct from absorbed-mass coloring.
+  if (c.contents.length > 0) {
+    const innerR = Math.min(c.r * 0.45, 6);
+    for (let i = 0; i < c.contents.length; i++) {
+      const angle = (i / Math.max(1, c.contents.length)) * Math.PI * 2;
+      const offR = c.contents.length === 1 ? 0 : c.r * 0.35;
+      const ix = c.x + Math.cos(angle) * offR;
+      const iy = c.y + Math.sin(angle) * offR;
+      ctx.fillStyle = c.contents[i].color;
+      ctx.beginPath();
+      ctx.arc(ix, iy, innerR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
   const energyFrac = Math.min(1, Math.max(0, c.energy / 200));
   drawRing(c.x, c.y, c.r + RING_GAP, energyFrac,
            energyFrac > 0.3 ? "#a6f0c8" : "#e8a07e");
@@ -229,6 +270,58 @@ function drawRing(cx: number, cy: number, r: number, frac: number, color: string
   ctx.beginPath();
   ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
   ctx.stroke();
+}
+
+// Format seconds as "1h02m" / "12m04s" / "47.3s" so age is readable across
+// the wide range a long-running simulation can produce.
+function formatAge(sec: number): string {
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec - m * 60);
+    return `${m}m${s.toString().padStart(2, "0")}s`;
+  }
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec - h * 3600) / 60);
+  return `${h}h${m.toString().padStart(2, "0")}m`;
+}
+
+// Best-effort plain-English summary of a cell, inferred from genome ops it
+// contains and its current molecule pool. Not a simulation; just a readable
+// hint for the watcher.
+function describeBiology(c: Creature): string {
+  const ops = new Set<number>();
+  for (let i = 0; i < c.genome.length; i++) ops.add(c.genome[i]);
+  const m = c.molecules;
+
+  // Trophic mode: photosynthesizer (chlorophyll-bearing) vs predator
+  // (PREDATE op) vs heterotroph (the default — eats organic particles).
+  const tags: string[] = [];
+  if (m.chlorophyll > 1 || ops.has(OP.PHOTOSYNTH)) tags.push("photosynth");
+  if (ops.has(OP.PREDATE)) tags.push("predator");
+  if (ops.has(OP.ENGULF)) tags.push("engulfer");
+  // Default sensory + thrust → motile chaser of organic food.
+  const chases =
+    ops.has(OP.THRUST) &&
+    (ops.has(OP.SENSE_DX) || ops.has(OP.SENSE_DY) || ops.has(OP.SENSE_CRE_DX));
+  if (chases && tags.length === 0) tags.push("heterotroph");
+  if (!chases && tags.length === 0) tags.push("drifter");
+
+  // Energy pathway currently running, judged from molecule snapshot.
+  const pathways: string[] = [];
+  if (m.glucose > 0.5 && m.o2 > 0.5) pathways.push("aerobic resp");
+  else if (m.glucose > 0.5) pathways.push("fermentation");
+  if (m.fattyAcid > 0.5 && m.o2 > 0.5) pathways.push("beta-ox");
+  if (m.chlorophyll > 0.5 && m.co2 > 0.5) pathways.push("photo");
+  const pathwayStr = pathways.length ? pathways.join("+") : "starving";
+
+  // Reproductive cadence: a function of cooldown only; the genome decides
+  // when to call REPRODUCE, but cost + cooldown ultimately pace it.
+  const repro = ops.has(OP.REPRODUCE)
+    ? `tries fission ~every ${(2.0).toFixed(1)}s`
+    : "no REPRODUCE op (sterile)";
+
+  return `${tags.join("/")} | ${pathwayStr} | ${repro}`;
 }
 
 function updateInspector(): void {
@@ -252,9 +345,11 @@ function updateInspector(): void {
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
   const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
+  const age = formatAge(Math.max(0, world.t - c.bornAt));
   inspector.textContent =
     `pop=${world.creatures.length}  parts=${world.particles.length}/${world.particleTarget}  extinct=${world.extinctionCount}  (click a cell)\n` +
-    `pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
+    `bio: ${describeBiology(c)}\n` +
+    `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
     `ingestCD=${c.ingestCooldown.toFixed(2)}s  reproCD=${c.reproduceCooldown.toFixed(2)}s\n` +
@@ -262,6 +357,7 @@ function updateInspector(): void {
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} bio=${fmt(m.biomass)}\n` +
     `stomach: ${reserves}\n` +
+    (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
     "—\n" +
     activeDisasm;
