@@ -344,10 +344,9 @@ const CHLORO_DECAY_PER_SEC = 0.005;
 const MIN_VIABLE_BIOMASS = 0.5;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
-// is effectively stable; an old cell accumulates DNA damage rapidly. At
-// age 30s the chance per second is ~9e-3 (~1 mutation per 110s); at 100s
-// it's ~0.1/s; at 300s the genome is rewriting every couple seconds.
-const SOMATIC_MUTATION_AGE_COEF = 1e-5;
+// is effectively stable; an old cell accumulates DNA damage gradually.
+// At age 60s: ~7e-3/s (1 mutation per ~140s); 100s: ~0.02/s; 300s: ~0.18/s.
+const SOMATIC_MUTATION_AGE_COEF = 2e-6;
 
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
 // cell dumps the excess back to the world as particles (mass-conserving).
