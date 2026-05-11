@@ -43,6 +43,8 @@ function makeSelf(overrides: Partial<{
     vy: overrides.vy ?? 0,
     reserve: new Float32Array(overrides.reserve ?? [0, 0, 0, 0, 0, 0]),
     mass: overrides.mass ?? 0,
+    biomass: 0, age: 0,
+    glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
   };
 }
 

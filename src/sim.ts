@@ -888,6 +888,8 @@ const VM_SELF: VMSelf = {
   energy: 0, vx: 0, vy: 0,
   reserve: new Float32Array(6),
   mass: 0,
+  biomass: 0, age: 0,
+  glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
 };
 const VM_OUT: VMOutputs = newOutputs();
 const SENSOR_BEST_SQ = new Float32Array(6);
@@ -960,6 +962,13 @@ function updateCreatures(world: World, dt: number): void {
       selfMass += VM_SELF.reserve[i];
     }
     VM_SELF.mass = selfMass;
+    VM_SELF.biomass = c.molecules.biomass;
+    VM_SELF.age = world.t - c.bornAt;
+    VM_SELF.glucose = c.molecules.glucose;
+    VM_SELF.o2 = c.molecules.o2;
+    VM_SELF.fattyAcid = c.molecules.fattyAcid;
+    VM_SELF.aminoAcid = c.molecules.aminoAcid;
+    VM_SELF.waste = c.molecules.waste;
 
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
     spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);

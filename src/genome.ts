@@ -6,6 +6,8 @@ export const OP = {
   POP:           0x02,
   DUP:           0x03,
   SWAP:          0x04,
+  OVER:          0x05,
+  ROT:           0x06,
 
   ADD:           0x10,
   SUB:           0x11,
@@ -15,10 +17,15 @@ export const OP = {
   ABS:           0x15,
   MIN:           0x16,
   MAX:           0x17,
+  MOD:           0x18,
+  SIGN:          0x19,
 
   LT:            0x20,
   GT:            0x21,
   EQ:            0x22,
+  NOT:           0x23,
+  AND:           0x24,
+  OR:            0x25,
 
   JMP:           0x30,
   JZ:            0x31,
@@ -37,12 +44,20 @@ export const OP = {
   SENSE_CRE_MASS:0x4A,
   SELF_MASS:     0x4B,
   SENSE_LIGHT:   0x4C,
+  SELF_BIOMASS:  0x4D,
+  SELF_AGE:      0x4E,
+  SELF_GLUCOSE:  0x4F,
 
   THRUST:        0x50,
   EXCRETE:       0x51,
   REPRODUCE:     0x52,
   PREDATE:       0x53,   // ingest: absorb prey immediately into own reserves
   ENGULF:        0x55,   // swallow whole: prey persists alive in vacuole
+
+  SELF_O2:       0x56,
+  SELF_FATTY:    0x57,
+  SELF_AMINO:    0x58,
+  SELF_WASTE:    0x59,
 
   HALT:          0xFF,
 } as const;
@@ -57,6 +72,7 @@ OPERANDS[OP.SENSE_DY] = 1;
 OPERANDS[OP.SENSE_DIST] = 1;
 OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
+
 
 const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
@@ -95,6 +111,13 @@ export interface VMSelf {
   vy: number;
   reserve: Float32Array;
   mass: number;
+  biomass: number;
+  age: number;
+  glucose: number;
+  o2: number;
+  fattyAcid: number;
+  aminoAcid: number;
+  waste: number;
 }
 
 export interface VMOutputs {
@@ -159,6 +182,8 @@ export function runTick(
       case OP.POP: pop(); break;
       case OP.DUP: { const x = pop(); push(x); push(x); break; }
       case OP.SWAP: { const a = pop(); const b = pop(); push(a); push(b); break; }
+      case OP.OVER: { const b = pop(); const a = pop(); push(a); push(b); push(a); break; }
+      case OP.ROT:  { const c = pop(); const b = pop(); const a = pop(); push(b); push(c); push(a); break; }
 
       case OP.ADD: { const b = pop(); const a = pop(); push(a + b); break; }
       case OP.SUB: { const b = pop(); const a = pop(); push(a - b); break; }
@@ -168,10 +193,15 @@ export function runTick(
       case OP.ABS: push(Math.abs(pop())); break;
       case OP.MIN: { const b = pop(); const a = pop(); push(Math.min(a, b)); break; }
       case OP.MAX: { const b = pop(); const a = pop(); push(Math.max(a, b)); break; }
+      case OP.MOD: { const b = pop(); const a = pop(); push(b !== 0 ? a - Math.floor(a / b) * b : 0); break; }
+      case OP.SIGN: { const a = pop(); push(a > 0 ? 1 : a < 0 ? -1 : 0); break; }
 
       case OP.LT: { const b = pop(); const a = pop(); push(a < b ? 1 : 0); break; }
       case OP.GT: { const b = pop(); const a = pop(); push(a > b ? 1 : 0); break; }
       case OP.EQ: { const b = pop(); const a = pop(); push(a === b ? 1 : 0); break; }
+      case OP.NOT: push(pop() === 0 ? 1 : 0); break;
+      case OP.AND: { const b = pop(); const a = pop(); push(a !== 0 && b !== 0 ? 1 : 0); break; }
+      case OP.OR:  { const b = pop(); const a = pop(); push(a !== 0 || b !== 0 ? 1 : 0); break; }
 
       case OP.JMP: { const rel = i8(readOperand()); state.pc += rel; break; }
       case OP.JZ:  { const rel = i8(readOperand()); if (pop() === 0) state.pc += rel; break; }
@@ -190,6 +220,13 @@ export function runTick(
       case OP.SENSE_CRE_MASS: push(sensors.creatureMass); break;
       case OP.SELF_MASS:      push(self.mass); break;
       case OP.SENSE_LIGHT:    push(sensors.light); break;
+      case OP.SELF_BIOMASS:   push(self.biomass); break;
+      case OP.SELF_AGE:       push(self.age); break;
+      case OP.SELF_GLUCOSE:   push(self.glucose); break;
+      case OP.SELF_O2:        push(self.o2); break;
+      case OP.SELF_FATTY:     push(self.fattyAcid); break;
+      case OP.SELF_AMINO:     push(self.aminoAcid); break;
+      case OP.SELF_WASTE:     push(self.waste); break;
 
       case OP.THRUST: {
         const ay = pop();
