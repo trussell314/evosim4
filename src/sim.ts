@@ -14,7 +14,6 @@ import {
   runTick,
   makeDefaultGenome,
   mutateGenome,
-  genomeMaterialCost,
 } from "./genome";
 
 export type MaterialId =
@@ -73,6 +72,8 @@ export interface Creature {
   color: string;
   ingestCooldown: number;
   reproduceCooldown: number;
+  // world.t at the moment this creature was created. Age = world.t - bornAt.
+  bornAt: number;
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -106,6 +107,26 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
   "o2", "co2", "minerals", "biomass", "waste",
 ];
+
+// Building-block molecules: the substrates a cell actually consumes to
+// synthesize a copy of itself. Genome bytes are charged per-byte against
+// one of these four; bytes % 4 picks which.
+const BUILD_KEYS: ReadonlyArray<keyof Molecules> = [
+  "aminoAcid", "fattyAcid", "minerals", "biomass",
+];
+
+export function genomeMoleculeCost(genome: Uint8Array, massPerByte: number): Record<keyof Molecules, number> {
+  const cost = {
+    adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
+    chlorophyll: 0, enzyme: 0, o2: 0, co2: 0,
+    minerals: 0, biomass: 0, waste: 0,
+  };
+  for (let i = 0; i < genome.length; i++) {
+    const k = BUILD_KEYS[genome[i] % BUILD_KEYS.length];
+    cost[k] += massPerByte;
+  }
+  return cost;
+}
 
 export function emptyMolecules(): Molecules {
   return {
@@ -222,11 +243,21 @@ const MIN_CREATURE_R = 4;
 
 // ----- chemistry constants -----
 //
-// Catabolism rate (per-material breakdown into molecules). Mass per second
-// at the cell. Mass fractions in CATAB_FRACTIONS must sum to 1 per row so
-// material -> molecules conversion is mass-conserving.
-const CATAB_RATE_PER_MASS = 0.6;
-const CATAB_KM = 4;
+// Catabolism rate: how fast undigested reserves break down into named
+// molecules per second per unit cell surface (r/MIN_CREATURE_R). Mass
+// fractions in CATAB_FRACTIONS must sum to 1 per row so material ->
+// molecules conversion is mass-conserving.
+const CATAB_VMAX_PER_R = 4;   // mass / sec per (r / MIN_R) surface ratio at saturation
+const CATAB_KM = 6;
+
+// Passive O2 (and CO2) exchange with the surrounding water. Real cells
+// dissolve oxygen across their membrane; without this our cells starve
+// because the default genome only seeks organic particles and never builds
+// up enough internal O2 to power aerobic respiration.
+const O2_DIFFUSION_PER_R = 2;     // mass/sec at saturation
+const O2_AMBIENT = 12;             // assumed dissolved-O2 concentration cells diffuse toward
+const CO2_OFFGAS_PER_R = 1.5;     // mass/sec; CO2 leaks out of cells (down its gradient)
+const CO2_AMBIENT = 1;
 
 type Catab = Partial<Molecules>;
 const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
@@ -281,6 +312,7 @@ export function createWorld(width: number, height: number): World {
   };
   seedParticles(world, Math.round(particleTarget * 0.9));
   const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
+  first.bornAt = 0;
   // First cell defines the root: paint it white and use its genome as the
   // anchor every other cell colors against until the next extinction.
   world.anchorGenome = new Uint8Array(first.genome);
@@ -324,11 +356,22 @@ function emptyReserves(): Record<MaterialId, number> {
 
 function makeCreature(x: number, y: number, z: number): Creature {
   const reserves = emptyReserves();
+  // Seed reserves across all materials so the cell can pay the per-byte
+  // fission cost (genomeMaterialCost is spread across all 6 materials)
+  // without first having to ingest one particle of every type. Without
+  // this, a cell can ingest organic until its reproduce-threshold is met
+  // but still fail to fission because (say) reserves.sand is still 0.
+  reserves.rock = 4;
+  reserves.sand = 15;
+  reserves.clay = 12;
+  reserves.organic = 30;
+  reserves.lipid = 12;
+  reserves.gas = 6;
   const molecules = emptyMolecules();
   // Starter cell ships with a working metabolism: enough ATP to live, a
   // matched ADP pool, some glucose and O2 to run respiration, a little
   // amino-acid / minerals / fatty-acid for biosynthesis and movement,
-  // and biomass to give it physical body. No undigested food yet.
+  // and biomass to give it physical body.
   molecules.adp = 50;
   molecules.glucose = 10;
   molecules.fattyAcid = 5;
@@ -352,6 +395,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     color: genomeColor(genome),
     ingestCooldown: 0,
     reproduceCooldown: 0,
+    bornAt: 0,
   };
   updateCreatureRadius(c);
   return c;
@@ -425,10 +469,11 @@ function sat(x: number, km: number = KM_DEFAULT): number {
 // Convert undigested reserves into named molecules. Mass-conserving:
 // each row of CATAB_FRACTIONS sums to 1.
 function catabolize(c: Creature, dt: number): void {
+  const surface = c.r / MIN_CREATURE_R;
   for (const id of MATERIAL_IDS) {
     const avail = c.reserves[id];
     if (avail <= 0) continue;
-    const rate = CATAB_RATE_PER_MASS * sat(avail, CATAB_KM);
+    const rate = CATAB_VMAX_PER_R * surface * sat(avail, CATAB_KM);
     const amt = Math.min(rate * dt, avail);
     if (amt <= 0) continue;
     c.reserves[id] = avail - amt;
@@ -437,6 +482,20 @@ function catabolize(c: Creature, dt: number): void {
       const key = k as keyof Molecules;
       c.molecules[key] += amt * (frac[key] as number);
     }
+  }
+}
+
+// Passive diffusion of O2 and CO2 across the cell membrane. Both flow down
+// their concentration gradient between the cell and the surrounding water,
+// with rate proportional to surface area. This is how dissolved gases
+// equilibrate in real cells -- the genome doesn't have to plan for it.
+function diffuseGases(c: Creature, dt: number): void {
+  const surface = c.r / MIN_CREATURE_R;
+  const o2Grad = O2_AMBIENT - c.molecules.o2;
+  c.molecules.o2 += O2_DIFFUSION_PER_R * surface * o2Grad * dt * 0.1;
+  const co2Grad = c.molecules.co2 - CO2_AMBIENT;
+  if (co2Grad > 0) {
+    c.molecules.co2 -= CO2_OFFGAS_PER_R * surface * co2Grad * dt * 0.1;
   }
 }
 
@@ -528,17 +587,19 @@ function biosynthesize(
 }
 
 function autoExcrete(c: Creature, world: World): void {
-  // CO2 vented as gas particles.
+  // Bound the world's particle count: if we're already at or above the
+  // target, the excess CO2 / waste dissolves into the environment and is
+  // lost (mass leaves the cell either way, but no new particle).
+  const overFlow = world.particles.length >= world.particleTarget;
   if (c.molecules.co2 > CO2_EXCRETE_THRESHOLD) {
     const amt = c.molecules.co2 - EXCRETE_FLOOR;
     c.molecules.co2 = EXCRETE_FLOOR;
-    spawnExcretedParticle(c, world, "gas", amt);
+    if (!overFlow) spawnExcretedParticle(c, world, "gas", amt);
   }
-  // Toxic waste vented as organic particles (decomposer-friendly).
   if (c.molecules.waste > WASTE_EXCRETE_THRESHOLD) {
     const amt = c.molecules.waste - EXCRETE_FLOOR;
     c.molecules.waste = EXCRETE_FLOOR;
-    spawnExcretedParticle(c, world, "organic", amt);
+    if (!overFlow) spawnExcretedParticle(c, world, "organic", amt);
   }
 }
 
@@ -629,6 +690,7 @@ export function step(world: World, dt: number): void {
     const y = world.height * (0.1 + 0.6 * Math.random());
     const z = world.depth * 0.5;
     const seed = makeCreature(x, y, z);
+    seed.bornAt = world.t;
     // Reset the color anchor for the new lineage so descendants color
     // relative to this new "Adam".
     world.anchorGenome = new Uint8Array(seed.genome);
@@ -724,6 +786,9 @@ function updateCreatures(world: World, dt: number): void {
 
     // Bulk -> molecules.
     catabolize(c, dt);
+
+    // Passive gas exchange with the surrounding water.
+    diffuseGases(c, dt);
 
     // Energy production. All three pathways may run in parallel; rates
     // self-balance via substrate availability (Michaelis-Menten).
@@ -908,25 +973,36 @@ function tryReproduce(parent: Creature, world: World): void {
   if (parent.reproduceCooldown > 0) return;
   if (world.creatures.length >= MAX_CREATURES) return;
   const childGenome = mutateGenome(parent.genome);
-  const cost = genomeMaterialCost(childGenome, MASS_PER_GENOME_BYTE);
-  for (let i = 0; i < 6; i++) {
-    if (parent.reserves[MATERIAL_IDS[i]] < cost[i]) return;
+  // Genome cost is paid in building-block molecules (aa / fa / min / bio).
+  // Reserves are bulk-food, not the substrate cells build themselves out of.
+  const cost = genomeMoleculeCost(childGenome, MASS_PER_GENOME_BYTE);
+  for (const k of BUILD_KEYS) {
+    if (parent.molecules[k] < cost[k]) return;
   }
-  const childReserves = emptyReserves();
-  for (let i = 0; i < 6; i++) {
-    parent.reserves[MATERIAL_IDS[i]] -= cost[i];
-    childReserves[MATERIAL_IDS[i]] = cost[i];
+  const childMolecules = emptyMolecules();
+  for (const k of BUILD_KEYS) {
+    parent.molecules[k] -= cost[k];
+    childMolecules[k] = cost[k];
   }
   // Split the remaining reserves and the molecular pool 50/50 with the
   // child so it can metabolize from birth.
-  const orgGift = parent.reserves.organic * 0.5;
-  parent.reserves.organic -= orgGift;
-  childReserves.organic += orgGift;
-  const childMolecules = emptyMolecules();
+  const childReserves = emptyReserves();
+  for (const id of MATERIAL_IDS) {
+    const half = parent.reserves[id] * 0.5;
+    parent.reserves[id] -= half;
+    childReserves[id] = half;
+  }
   for (const mk of MOLECULE_IDS) {
+    if ((BUILD_KEYS as readonly string[]).includes(mk)) continue;
     const half = parent.molecules[mk] * 0.5;
     parent.molecules[mk] -= half;
     childMolecules[mk] = half;
+  }
+  // Also share what's left of the build-blocks post-cost.
+  for (const k of BUILD_KEYS) {
+    const half = parent.molecules[k] * 0.5;
+    parent.molecules[k] -= half;
+    childMolecules[k] += half;
   }
   const energyGift = parent.energy * 0.5;
   parent.energy -= energyGift;
@@ -956,6 +1032,7 @@ function tryReproduce(parent: Creature, world: World): void {
     color: genomeColor(childGenome, world.anchorGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
     reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
+    bornAt: world.t,
   };
   updateCreatureRadius(child);
   parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
