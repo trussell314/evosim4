@@ -74,6 +74,10 @@ export interface Creature {
   reproduceCooldown: number;
   // world.t at the moment this creature was created. Age = world.t - bornAt.
   bornAt: number;
+  // Cells this creature has swallowed whole (OP.ENGULF). They sit inert in
+  // a vacuole inside the predator: no VM, no physics, no chemistry. Their
+  // mass still counts toward the predator's total mass (and radius).
+  contents: Creature[];
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -396,6 +400,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     ingestCooldown: 0,
     reproduceCooldown: 0,
     bornAt: 0,
+    contents: [],
   };
   updateCreatureRadius(c);
   return c;
@@ -862,7 +867,10 @@ function updateCreatures(world: World, dt: number): void {
 
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
       let ingested = false;
-      if (VM_OUT.predate) {
+      if (VM_OUT.engulf) {
+        // Swallow whole: prey is moved into our vacuole alive, mass-and-all.
+        // It's removed from world.creatures (added to `eaten`) but persists
+        // inside `c.contents`. We pay the same per-mass cost as predation.
         const myMass = creatureTotalMass(c);
         for (let j = 0; j < n; j++) {
           if (j === cIdx || eaten.has(j)) continue;
@@ -876,7 +884,30 @@ function updateCreatures(world: World, dt: number): void {
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
           if (c.energy < cost) continue;
-          // Engulf: take everything the prey was carrying.
+          c.contents.push(other);
+          spendATP(c, cost);
+          c.ingestCooldown = PREDATION_COOLDOWN_SEC;
+          eaten.add(j);
+          ingested = true;
+          break;
+        }
+      }
+      if (!ingested && VM_OUT.predate) {
+        const myMass = creatureTotalMass(c);
+        for (let j = 0; j < n; j++) {
+          if (j === cIdx || eaten.has(j)) continue;
+          const other = world.creatures[j];
+          const dx = other.x - c.x;
+          const dy = other.y - c.y;
+          const dz = other.z - c.z;
+          const minD = c.r + other.r;
+          if (dx * dx + dy * dy + dz * dz >= minD * minD) continue;
+          const otherMass = creatureTotalMass(other);
+          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
+          const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
+          if (c.energy < cost) continue;
+          // Ingest: take everything the prey was carrying, including anything
+          // its own vacuole still held.
           for (let k = 0; k < 6; k++) {
             c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
           }
@@ -884,6 +915,8 @@ function updateCreatures(world: World, dt: number): void {
             c.molecules[mk] += other.molecules[mk];
           }
           c.energy += other.energy;
+          for (const inner of other.contents) c.contents.push(inner);
+          other.contents.length = 0;
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(j);
@@ -921,12 +954,23 @@ function updateCreatures(world: World, dt: number): void {
   for (const idx of dead) removed.push({ idx, spill: true });
   for (const idx of eaten) removed.push({ idx, spill: false });
   removed.sort((a, b) => b.idx - a.idx);
+  const released: Creature[] = [];
   for (const r of removed) {
     const victim = world.creatures[r.idx];
+    // Spill the vacuole: held cells are alive and break out at the host's
+    // position when the host dies or is ingested by something larger.
+    for (const inner of victim.contents) {
+      inner.x = victim.x + (Math.random() - 0.5) * Math.max(2, victim.r);
+      inner.y = victim.y + (Math.random() - 0.5) * Math.max(2, victim.r);
+      inner.z = victim.z;
+      released.push(inner);
+    }
+    victim.contents.length = 0;
     if (r.spill) releaseReservesAsParticles(victim, world);
     noteCreatureDeath(world, victim);
     world.creatures.splice(r.idx, 1);
   }
+  for (const r of released) world.creatures.push(r);
 }
 
 function releaseReservesAsParticles(c: Creature, world: World): void {
@@ -1033,6 +1077,7 @@ function tryReproduce(parent: Creature, world: World): void {
     ingestCooldown: INGEST_COOLDOWN_SEC,
     reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
     bornAt: world.t,
+    contents: [],
   };
   updateCreatureRadius(child);
   parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
@@ -1084,6 +1129,17 @@ function populateSensors(c: Creature, world: World): void {
 
 function creatureTotalMass(c: Creature): number {
   let m = c.energy; // ATP is a real molecule and contributes to mass.
+  for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
+  for (const k of MOLECULE_IDS) m += c.molecules[k];
+  // Engulfed prey lives in our vacuole; its mass still occupies our volume.
+  for (const inner of c.contents) m += creatureSelfMass(inner);
+  return m;
+}
+
+// Mass of a single cell excluding its contents -- used to avoid recursion
+// when summing up an engulfed prey's contribution to its container's mass.
+function creatureSelfMass(c: Creature): number {
+  let m = c.energy;
   for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
