@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, type Particle, type Creature } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -150,17 +150,9 @@ function tempToColor(T: number): string {
   return `rgb(${r},${g},${b2})`;
 }
 
-// Sample N points along the surface and trace its wavy line. The wave
-// uses the same surfaceLength / surfacePeriod as the physics force, but
-// at a much smaller visual amplitude -- the physics amplitude would be a
-// 130-pixel-tall sloshing mess.
-const SURFACE_VIS_AMPLITUDE = 7;
+// Sample the wavy surface at intervals; sim.surfaceYAt is the shared
+// source of truth so the rendered line matches the physical wall.
 const SURFACE_VIS_STEP = 6;
-function surfaceYAt(x: number): number {
-  const kS = (2 * Math.PI) / (world.surfaceLength || 1);
-  const wS = (2 * Math.PI) / (world.surfacePeriod || 1);
-  return world.surfaceY + SURFACE_VIS_AMPLITUDE * Math.sin(kS * x - wS * world.t);
-}
 
 function render(): void {
   const { width, height, depth, surfaceY } = world;
@@ -172,8 +164,8 @@ function render(): void {
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(width, 0);
-  ctx.lineTo(width, surfaceYAt(width));
-  for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
+  ctx.lineTo(width, surfaceYAt(world,width));
+  for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
   ctx.closePath();
   ctx.fill();
 
@@ -183,8 +175,8 @@ function render(): void {
   grad.addColorStop(1, tCool);
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.moveTo(0, surfaceYAt(0));
-  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
+  ctx.moveTo(0, surfaceYAt(world,0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
   ctx.lineTo(width, height);
   ctx.lineTo(0, height);
   ctx.closePath();
@@ -194,8 +186,8 @@ function render(): void {
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, surfaceYAt(0));
-  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
+  ctx.moveTo(0, surfaceYAt(world,0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
   ctx.stroke();
 
   for (const b of BUCKETS) b.length = 0;

@@ -209,6 +209,10 @@ export interface World {
   // up past it escape to the atmosphere. Aeration drops fresh O2-rich
   // gas particles in just below the surface at a steady rate.
   surfaceY: number;
+  // Visible / physical vertical amplitude of the surface wave. The wall
+  // and the renderer both use this so lipids (which float to the surface)
+  // never appear above the rendered water line.
+  surfaceWaveAmp: number;
   aerationRate: number;
   // Water temperature profile. The surface is warmer (sunlight), the
   // bottom is colder. Horizontal patches drift slowly via tempPatch*,
@@ -379,6 +383,15 @@ const TEMP_Q10 = 2;
 const TEMP_MULT_MIN = 0.25;
 const TEMP_MULT_MAX = 4.0;
 
+// Wavy surface position at a given x. Physics wall and renderer both
+// call this so lipids float up to exactly the visible water line instead
+// of clamping at a flat reference and poking above the wave.
+export function surfaceYAt(world: World, x: number): number {
+  const kS = (2 * Math.PI) / world.surfaceLength;
+  const wS = (2 * Math.PI) / world.surfacePeriod;
+  return world.surfaceY + world.surfaceWaveAmp * Math.sin(kS * x - wS * world.t);
+}
+
 export function temperatureAt(world: World, x: number, y: number): number {
   const span = Math.max(1, world.height - world.surfaceY);
   const depth = Math.max(0, Math.min(1, (y - world.surfaceY) / span));
@@ -412,6 +425,7 @@ export function createWorld(width: number, height: number): World {
     zStirAmp: 9,
     updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
     surfaceY: height * SURFACE_Y_FRAC,
+    surfaceWaveAmp: 7,
     aerationRate: width * AERATION_PER_PX,
     tempSurface: 28,
     tempBottom: 12,
@@ -1682,11 +1696,11 @@ function resolvePair(ps: Particle[], i: number, j: number, e: number): void {
 }
 
 function applyWalls(world: World): void {
-  // Gas particles that drift up past the water surface escape to the
-  // atmosphere -- splice them out instead of clamping.
+  // Gas particles that drift up past the (wavy) water surface escape to
+  // the atmosphere -- splice them out instead of clamping.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const p = world.particles[i];
-    if (p.material === "gas" && p.y - p.r < world.surfaceY) {
+    if (p.material === "gas" && p.y - p.r < surfaceYAt(world, p.x)) {
       world.particles.splice(i, 1);
     }
   }
@@ -1704,9 +1718,10 @@ function applyWalls(world: World): void {
       o.y = world.height * 0.5; o.vy = 0;
     } else {
       if (o.y + o.r > world.height) { o.y = world.height - o.r; if (o.vy > 0) o.vy = 0; }
-      // Non-gas objects (creatures, solid particles) clamp at the water
-      // surface. Gas escape is handled above.
-      const top = world.surfaceY + o.r;
+      // Non-gas objects (creatures, solid particles) clamp at the wavy
+      // surface so floating lipids ride the wave instead of poking above
+      // the visible water line. Gas escape is handled above.
+      const top = surfaceYAt(world, o.x) + o.r;
       if (o.y < top) { o.y = top; if (o.vy < 0) o.vy = 0; }
     }
     if (o.r * 2 >= world.depth) {

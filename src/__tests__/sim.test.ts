@@ -45,6 +45,7 @@ function quietWorld(): World {
     zStirAmp: 0,
     updraftAmp: 0, updraftLength: 400, updraftPeriod: 16,
     surfaceY: 0,
+    surfaceWaveAmp: 0,
     aerationRate: 0,
     tempSurface: 20, tempBottom: 20, tempPatchAmp: 0,
     tempPatchLength: 400, tempPatchPeriod: 40,
