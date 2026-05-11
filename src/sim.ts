@@ -100,31 +100,24 @@ export interface World {
   collisionIters: number;
 }
 
-// Metabolism & movement.
 const METABOLIZE_RATE = 5;
 const ENERGY_PER_MASS = 12;
 const ENERGY_PER_THRUST_SEC = 22;
 const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
 
-// Reproduction & ecology.
 const MASS_PER_GENOME_BYTE = 3;
 const PARTICLE_TARGET = 550;
 const PARTICLE_SPAWN_RATE = 30;
 const MAX_CREATURES = 80;
 const REPRODUCE_COOLDOWN_SEC = 2;
 
-// Ingestion.
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.35;
 
-// Predation. A cell whose total stored mass exceeds another's by this ratio
-// can engulf it on overlap. Eating a whole cell costs the per-event energy
-// like a particle but locks the eater out of further ingestion for longer.
 const PREDATION_MASS_RATIO = 1.5;
 const PREDATION_COOLDOWN_SEC = 0.7;
 
-// Death.
 const BASE_METABOLIC_DRAIN = 0.5;
 const DEATH_RELEASE_R_MIN = 1.2;
 const DEATH_RELEASE_SCATTER = 30;
@@ -278,7 +271,6 @@ function applyForces(world: World, dt: number): void {
   for (const c of world.creatures) integrate(c, c.density);
 }
 
-// Reusable VM buffers.
 const VM_SENSORS: VMSensors = {
   dx: new Float32Array(6),
   dy: new Float32Array(6),
@@ -348,7 +340,6 @@ function updateCreatures(world: World, dt: number): void {
 
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
       let ingested = false;
-      // Try eating a smaller-than-me cell first (predation).
       const myMass = creatureTotalMass(c);
       for (let j = 0; j < n; j++) {
         if (j === cIdx || eaten.has(j)) continue;
@@ -519,57 +510,124 @@ function creatureTotalMass(c: Creature): number {
   return m;
 }
 
+// Cell size for spatial hashing. Spawn radius caps at 6, so the largest
+// sum-of-radii any two particles can have is 12; that's the upper bound for
+// "potentially colliding". Smaller cells would miss pairs.
+const GRID_CELL_SIZE = 12;
+
+const COLLISION_BUCKETS: number[][] = [];
+let COLLISION_MASS = new Float64Array(0);
+
 function resolveCollisions(world: World): void {
   const ps = world.particles;
   const n = ps.length;
+  if (n < 2) return;
   const e = world.restitution;
+  const cellSize = GRID_CELL_SIZE;
+  const cols = Math.max(1, Math.ceil(world.width / cellSize));
+  const rows = Math.max(1, Math.ceil(world.height / cellSize));
+  const cellCount = cols * rows;
+
+  while (COLLISION_BUCKETS.length < cellCount) COLLISION_BUCKETS.push([]);
+  if (COLLISION_MASS.length < n) COLLISION_MASS = new Float64Array(n * 2);
+
+  for (let i = 0; i < n; i++) COLLISION_MASS[i] = mass(ps[i]);
+
   for (let pass = 0; pass < world.collisionIters; pass++) {
-    for (let i = 0; i < n; i++) {
-      const a = ps[i];
-      const ma = mass(a);
-      for (let j = i + 1; j < n; j++) {
-        const b = ps[j];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dz = b.z - a.z;
-        const minDist = a.r + b.r;
-        const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq >= minDist * minDist) continue;
-        let dist = Math.sqrt(distSq);
-        if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; }
-        const nx = dx / dist;
-        const ny = dy / dist;
-        const nz = dz / dist;
-        const overlap = minDist - dist;
-        const mb = mass(b);
-        const total = ma + mb;
-        const corrA = overlap * (mb / total);
-        const corrB = overlap * (ma / total);
-        a.x -= nx * corrA;
-        a.y -= ny * corrA;
-        a.z -= nz * corrA;
-        b.x += nx * corrB;
-        b.y += ny * corrB;
-        b.z += nz * corrB;
-        const rvx = b.vx - a.vx;
-        const rvy = b.vy - a.vy;
-        const rvz = b.vz - a.vz;
-        const vN = rvx * nx + rvy * ny + rvz * nz;
-        if (vN < 0) {
-          const j_imp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
-          const ix = nx * j_imp;
-          const iy = ny * j_imp;
-          const iz = nz * j_imp;
-          a.vx -= ix / ma;
-          a.vy -= iy / ma;
-          a.vz -= iz / ma;
-          b.vx += ix / mb;
-          b.vy += iy / mb;
-          b.vz += iz / mb;
+    for (let i = 0; i < cellCount; i++) COLLISION_BUCKETS[i].length = 0;
+    for (let pi = 0; pi < n; pi++) {
+      const p = ps[pi];
+      let cx = Math.floor(p.x / cellSize);
+      let cy = Math.floor(p.y / cellSize);
+      if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+      if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
+      COLLISION_BUCKETS[cy * cols + cx].push(pi);
+    }
+
+    // Row-major pass over cells. For each cell, check pairs within it plus
+    // pairs against four "forward" neighbors: (cx+1, cy), (cx-1, cy+1),
+    // (cx, cy+1), (cx+1, cy+1). Each adjacent pair is visited exactly once.
+    for (let cy = 0; cy < rows; cy++) {
+      for (let cx = 0; cx < cols; cx++) {
+        const cell = COLLISION_BUCKETS[cy * cols + cx];
+        const cl = cell.length;
+        if (cl === 0) continue;
+
+        for (let i = 0; i < cl; i++) {
+          const ai = cell[i];
+          for (let j = i + 1; j < cl; j++) {
+            resolvePair(ps, ai, cell[j], e);
+          }
         }
+
+        checkNeighborPairs(ps, cell, cx + 1, cy,     cols, rows, e);
+        checkNeighborPairs(ps, cell, cx - 1, cy + 1, cols, rows, e);
+        checkNeighborPairs(ps, cell, cx,     cy + 1, cols, rows, e);
+        checkNeighborPairs(ps, cell, cx + 1, cy + 1, cols, rows, e);
       }
     }
   }
+}
+
+function checkNeighborPairs(
+  ps: Particle[], cell: number[],
+  nx: number, ny: number, cols: number, rows: number,
+  e: number,
+): void {
+  if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return;
+  const nb = COLLISION_BUCKETS[ny * cols + nx];
+  const nl = nb.length;
+  if (nl === 0) return;
+  const cl = cell.length;
+  for (let i = 0; i < cl; i++) {
+    const ai = cell[i];
+    for (let j = 0; j < nl; j++) {
+      resolvePair(ps, ai, nb[j], e);
+    }
+  }
+}
+
+function resolvePair(ps: Particle[], i: number, j: number, e: number): void {
+  const a = ps[i];
+  const b = ps[j];
+  let dx = b.x - a.x;
+  let dy = b.y - a.y;
+  let dz = b.z - a.z;
+  const minDist = a.r + b.r;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq >= minDist * minDist) return;
+  let dist = Math.sqrt(distSq);
+  if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; }
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const nz = dz / dist;
+  const overlap = minDist - dist;
+  const ma = COLLISION_MASS[i];
+  const mb = COLLISION_MASS[j];
+  const total = ma + mb;
+  const corrA = overlap * (mb / total);
+  const corrB = overlap * (ma / total);
+  a.x -= nx * corrA;
+  a.y -= ny * corrA;
+  a.z -= nz * corrA;
+  b.x += nx * corrB;
+  b.y += ny * corrB;
+  b.z += nz * corrB;
+  const rvx = b.vx - a.vx;
+  const rvy = b.vy - a.vy;
+  const rvz = b.vz - a.vz;
+  const vN = rvx * nx + rvy * ny + rvz * nz;
+  if (vN >= 0) return;
+  const jImp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
+  const ix = nx * jImp;
+  const iy = ny * jImp;
+  const iz = nz * jImp;
+  a.vx -= ix / ma;
+  a.vy -= iy / ma;
+  a.vz -= iz / ma;
+  b.vx += ix / mb;
+  b.vy += iy / mb;
+  b.vz += iz / mb;
 }
 
 function applyWalls(world: World): void {
