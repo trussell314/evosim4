@@ -239,7 +239,7 @@ export interface World {
   brownianAmp: number;
 }
 
-const ENERGY_PER_THRUST_SEC = 10;
+const ENERGY_PER_THRUST_SEC = 5;
 const ENERGY_PER_INSTRUCTION = 0.01;
 const VM_INSTR_BUDGET = 32;
 
