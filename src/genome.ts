@@ -1,13 +1,82 @@
-// Stack-based bytecode VM for creature genomes.
-//
-// Sensor model: VMSensors has six material slots (one per MaterialId) carrying
-// dx/dy/dist to the nearest particle of each kind, plus the nearest other
-// creature's dx/dy/dist/mass and ambient light. Self exposes energy, vx, vy,
-// per-material reserves, and total stored mass.
-//
-// Outputs accumulate into a VMOutputs struct each tick: thrust vector,
-// excretion request per material, and three intent flags (reproduce, predate,
-// photosynth). The sim consumes those, debits energy, and applies effects.
+// Stack-based bytecode VM that drives creature behavior.
+
+export const OP = {
+  NOP:           0x00,
+  PUSH8:         0x01,
+  POP:           0x02,
+  DUP:           0x03,
+  SWAP:          0x04,
+
+  ADD:           0x10,
+  SUB:           0x11,
+  MUL:           0x12,
+  DIV:           0x13,
+  NEG:           0x14,
+  ABS:           0x15,
+  MIN:           0x16,
+  MAX:           0x17,
+
+  LT:            0x20,
+  GT:            0x21,
+  EQ:            0x22,
+
+  JMP:           0x30,
+  JZ:            0x31,
+  JNZ:           0x32,
+
+  SENSE_DX:      0x40,
+  SENSE_DY:      0x41,
+  SENSE_DIST:    0x42,
+  SELF_ENERGY:   0x43,
+  SELF_RESERVE:  0x44,
+  SELF_VX:       0x45,
+  SELF_VY:       0x46,
+  SENSE_CRE_DX:  0x47,
+  SENSE_CRE_DY:  0x48,
+  SENSE_CRE_DIST:0x49,
+  SENSE_CRE_MASS:0x4A,
+  SELF_MASS:     0x4B,
+  SENSE_LIGHT:   0x4C,
+
+  THRUST:        0x50,
+  EXCRETE:       0x51,
+  REPRODUCE:     0x52,
+  PREDATE:       0x53,
+  PHOTOSYNTH:    0x54,
+
+  HALT:          0xFF,
+} as const;
+
+const OPERANDS = new Uint8Array(256);
+OPERANDS[OP.PUSH8] = 1;
+OPERANDS[OP.JMP] = 1;
+OPERANDS[OP.JZ] = 1;
+OPERANDS[OP.JNZ] = 1;
+OPERANDS[OP.SENSE_DX] = 1;
+OPERANDS[OP.SENSE_DY] = 1;
+OPERANDS[OP.SENSE_DIST] = 1;
+OPERANDS[OP.SELF_RESERVE] = 1;
+OPERANDS[OP.EXCRETE] = 1;
+
+const NAME_BY_OP: Record<number, string> = {};
+for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
+
+const MATERIAL_OPERAND = new Set<number>([
+  OP.SENSE_DX, OP.SENSE_DY, OP.SENSE_DIST, OP.SELF_RESERVE, OP.EXCRETE,
+]);
+
+const STACK_MAX = 32;
+const i8 = (b: number): number => (b > 127 ? b - 256 : b);
+const m6 = (b: number): number => b % 6;
+
+export interface VMState {
+  pc: number;
+  stack: number[];
+}
+
+export function newVMState(): VMState {
+  return { pc: 0, stack: [] };
+}
 
 export interface VMSensors {
   dx: Float32Array;
@@ -38,78 +107,13 @@ export interface VMOutputs {
   instructions: number;
 }
 
-export const OP = {
-  HALT:          0x00,
-  NOP:           0x01,
-  PUSH8:         0x10,
-  POP:           0x11,
-  DUP:           0x12,
-  SWAP:          0x13,
-  ADD:           0x20,
-  SUB:           0x21,
-  MUL:           0x22,
-  DIV:           0x23,
-  NEG:           0x24,
-  ABS:           0x25,
-  MIN:           0x26,
-  MAX:           0x27,
-  EQ:            0x30,
-  NE:            0x31,
-  LT:            0x32,
-  GT:            0x33,
-  JMP:           0x40,
-  JZ:            0x41,
-  JNZ:           0x42,
-  SENSE_DX:      0x48,
-  SENSE_DY:      0x49,
-  SENSE_DIST:    0x4A,
-  SENSE_VEL:     0x4B,
-  SENSE_LIGHT:   0x4C,
-  SENSE_CDX:     0x4D,
-  SENSE_CDY:     0x4E,
-  SENSE_CDIST:   0x4F,
-  SENSE_CMASS:   0x50,
-  THRUST:        0x51,
-  REPRODUCE:     0x52,
-  PREDATE:       0x53,
-  PHOTOSYNTH:    0x54,
-  EXCRETE:       0x60,
-  SELF_ENERGY:   0x70,
-  SELF_VX:       0x71,
-  SELF_VY:       0x72,
-  SELF_RESERVE:  0x73,
-  SELF_MASS:     0x74,
-} as const;
-
-export type OpCode = typeof OP[keyof typeof OP];
-
-export interface VMState {
-  pc: number;
-  stack: number[];
-}
-
-export function newVMState(): VMState {
-  return { pc: 0, stack: [] };
-}
-
 export function newOutputs(): VMOutputs {
   return {
-    thrustX: 0,
-    thrustY: 0,
+    thrustX: 0, thrustY: 0,
     excrete: new Float32Array(6),
-    reproduce: false,
-    predate: false,
-    photosynth: false,
+    reproduce: false, predate: false, photosynth: false,
     instructions: 0,
   };
-}
-
-function signExtend8(b: number): number {
-  return b < 128 ? b : b - 256;
-}
-
-function pop(stack: number[]): number {
-  return stack.length > 0 ? (stack.pop() as number) : 0;
 }
 
 export function runTick(
@@ -122,147 +126,116 @@ export function runTick(
 ): void {
   out.thrustX = 0;
   out.thrustY = 0;
+  out.excrete.fill(0);
   out.reproduce = false;
   out.predate = false;
   out.photosynth = false;
-  for (let i = 0; i < 6; i++) out.excrete[i] = 0;
   out.instructions = 0;
-
-  if (genome.length === 0) return;
+  const L = genome.length;
+  if (L === 0) return;
 
   const stack = state.stack;
-  let pc = state.pc;
-  if (pc >= genome.length) pc = 0;
+  const push = (v: number): void => {
+    if (!Number.isFinite(v)) v = 0;
+    if (stack.length >= STACK_MAX) stack.shift();
+    stack.push(v);
+  };
+  const pop = (): number => (stack.length ? (stack.pop() as number) : 0);
+  const readOperand = (): number => {
+    const b = genome[state.pc % L];
+    state.pc++;
+    return b;
+  };
 
-  let steps = 0;
-  while (steps < budget) {
-    if (pc >= genome.length) pc = 0;
-    const op = genome[pc++];
-    steps++;
+  for (let n = 0; n < budget; n++) {
+    state.pc = ((state.pc % L) + L) % L;
+    const op = genome[state.pc];
+    state.pc++;
+    out.instructions++;
 
     switch (op) {
-      case OP.HALT: out.instructions = steps; state.pc = pc; return;
-      case OP.NOP:  break;
-      case OP.PUSH8: {
-        const b = pc < genome.length ? genome[pc++] : 0;
-        stack.push(signExtend8(b));
-        break;
-      }
-      case OP.POP: pop(stack); break;
-      case OP.DUP: {
-        const v = stack.length > 0 ? stack[stack.length - 1] : 0;
-        stack.push(v);
-        break;
-      }
-      case OP.SWAP: {
-        if (stack.length >= 2) {
-          const a = stack[stack.length - 1];
-          stack[stack.length - 1] = stack[stack.length - 2];
-          stack[stack.length - 2] = a;
-        }
-        break;
-      }
-      case OP.ADD: { const b = pop(stack), a = pop(stack); stack.push(a + b); break; }
-      case OP.SUB: { const b = pop(stack), a = pop(stack); stack.push(a - b); break; }
-      case OP.MUL: { const b = pop(stack), a = pop(stack); stack.push(a * b); break; }
-      case OP.DIV: { const b = pop(stack), a = pop(stack); stack.push(b === 0 ? 0 : a / b); break; }
-      case OP.NEG: { const a = pop(stack); stack.push(-a); break; }
-      case OP.ABS: { const a = pop(stack); stack.push(Math.abs(a)); break; }
-      case OP.MIN: { const b = pop(stack), a = pop(stack); stack.push(Math.min(a, b)); break; }
-      case OP.MAX: { const b = pop(stack), a = pop(stack); stack.push(Math.max(a, b)); break; }
-      case OP.EQ:  { const b = pop(stack), a = pop(stack); stack.push(a === b ? 1 : 0); break; }
-      case OP.NE:  { const b = pop(stack), a = pop(stack); stack.push(a !== b ? 1 : 0); break; }
-      case OP.LT:  { const b = pop(stack), a = pop(stack); stack.push(a < b ? 1 : 0); break; }
-      case OP.GT:  { const b = pop(stack), a = pop(stack); stack.push(a > b ? 1 : 0); break; }
-      case OP.JMP: {
-        const off = pc < genome.length ? signExtend8(genome[pc++]) : 0;
-        pc += off;
-        if (pc < 0) pc = 0;
-        break;
-      }
-      case OP.JZ: {
-        const off = pc < genome.length ? signExtend8(genome[pc++]) : 0;
-        const v = pop(stack);
-        if (v === 0) { pc += off; if (pc < 0) pc = 0; }
-        break;
-      }
-      case OP.JNZ: {
-        const off = pc < genome.length ? signExtend8(genome[pc++]) : 0;
-        const v = pop(stack);
-        if (v !== 0) { pc += off; if (pc < 0) pc = 0; }
-        break;
-      }
-      case OP.SENSE_DX: { const i = (pc < genome.length ? genome[pc++] : 0) % 6; stack.push(sensors.dx[i]); break; }
-      case OP.SENSE_DY: { const i = (pc < genome.length ? genome[pc++] : 0) % 6; stack.push(sensors.dy[i]); break; }
-      case OP.SENSE_DIST: { const i = (pc < genome.length ? genome[pc++] : 0) % 6; stack.push(sensors.dist[i]); break; }
-      case OP.SENSE_VEL: { stack.push(Math.sqrt(self.vx * self.vx + self.vy * self.vy)); break; }
-      case OP.SENSE_LIGHT: { stack.push(sensors.light); break; }
-      case OP.SENSE_CDX:   { stack.push(sensors.creatureDx); break; }
-      case OP.SENSE_CDY:   { stack.push(sensors.creatureDy); break; }
-      case OP.SENSE_CDIST: { stack.push(sensors.creatureDist); break; }
-      case OP.SENSE_CMASS: { stack.push(sensors.creatureMass); break; }
+      case OP.NOP: break;
+      case OP.PUSH8: push(i8(readOperand())); break;
+      case OP.POP: pop(); break;
+      case OP.DUP: { const x = pop(); push(x); push(x); break; }
+      case OP.SWAP: { const a = pop(); const b = pop(); push(a); push(b); break; }
+
+      case OP.ADD: { const b = pop(); const a = pop(); push(a + b); break; }
+      case OP.SUB: { const b = pop(); const a = pop(); push(a - b); break; }
+      case OP.MUL: { const b = pop(); const a = pop(); push(a * b); break; }
+      case OP.DIV: { const b = pop(); const a = pop(); push(b !== 0 ? a / b : 0); break; }
+      case OP.NEG: push(-pop()); break;
+      case OP.ABS: push(Math.abs(pop())); break;
+      case OP.MIN: { const b = pop(); const a = pop(); push(Math.min(a, b)); break; }
+      case OP.MAX: { const b = pop(); const a = pop(); push(Math.max(a, b)); break; }
+
+      case OP.LT: { const b = pop(); const a = pop(); push(a < b ? 1 : 0); break; }
+      case OP.GT: { const b = pop(); const a = pop(); push(a > b ? 1 : 0); break; }
+      case OP.EQ: { const b = pop(); const a = pop(); push(a === b ? 1 : 0); break; }
+
+      case OP.JMP: { const rel = i8(readOperand()); state.pc += rel; break; }
+      case OP.JZ:  { const rel = i8(readOperand()); if (pop() === 0) state.pc += rel; break; }
+      case OP.JNZ: { const rel = i8(readOperand()); if (pop() !== 0) state.pc += rel; break; }
+
+      case OP.SENSE_DX:    { const idx = m6(readOperand()); push(sensors.dx[idx]); break; }
+      case OP.SENSE_DY:    { const idx = m6(readOperand()); push(sensors.dy[idx]); break; }
+      case OP.SENSE_DIST:  { const idx = m6(readOperand()); push(sensors.dist[idx]); break; }
+      case OP.SELF_ENERGY: push(self.energy); break;
+      case OP.SELF_RESERVE:{ const idx = m6(readOperand()); push(self.reserve[idx]); break; }
+      case OP.SELF_VX:     push(self.vx); break;
+      case OP.SELF_VY:     push(self.vy); break;
+      case OP.SENSE_CRE_DX:   push(sensors.creatureDx); break;
+      case OP.SENSE_CRE_DY:   push(sensors.creatureDy); break;
+      case OP.SENSE_CRE_DIST: push(sensors.creatureDist); break;
+      case OP.SENSE_CRE_MASS: push(sensors.creatureMass); break;
+      case OP.SELF_MASS:      push(self.mass); break;
+      case OP.SENSE_LIGHT:    push(sensors.light); break;
+
       case OP.THRUST: {
-        const ty = pop(stack);
-        const tx = pop(stack);
-        out.thrustX += tx;
-        out.thrustY += ty;
+        const ay = pop();
+        const ax = pop();
+        out.thrustX += ax;
+        out.thrustY += ay;
+        break;
+      }
+      case OP.EXCRETE: {
+        const idx = m6(readOperand());
+        const amt = Math.max(0, pop());
+        out.excrete[idx] += amt;
         break;
       }
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
       case OP.PHOTOSYNTH: out.photosynth = true; break;
-      case OP.EXCRETE: {
-        const idx = (pc < genome.length ? genome[pc++] : 0) % 6;
-        const amount = pop(stack);
-        if (amount > 0) out.excrete[idx] += amount;
-        break;
-      }
-      case OP.SELF_ENERGY: stack.push(self.energy); break;
-      case OP.SELF_VX:     stack.push(self.vx); break;
-      case OP.SELF_VY:     stack.push(self.vy); break;
-      case OP.SELF_RESERVE: {
-        const i = (pc < genome.length ? genome[pc++] : 0) % 6;
-        stack.push(self.reserve[i]);
-        break;
-      }
-      case OP.SELF_MASS: stack.push(self.mass); break;
-      default: /* unknown opcode: noop */ break;
+      case OP.HALT:
+        return;
+
+      default: break;
     }
-
-    if (stack.length > 64) stack.splice(0, stack.length - 64);
   }
-
-  out.instructions = steps;
-  state.pc = pc;
 }
 
-export function disassemble(genome: Uint8Array, materialIds: readonly string[]): string {
+export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<string>): string {
   const lines: string[] = [];
-  const opName: Record<number, string> = {};
-  for (const [k, v] of Object.entries(OP)) opName[v as number] = k;
   let i = 0;
   while (i < genome.length) {
     const op = genome[i];
-    const name = opName[op] ?? `?0x${op.toString(16)}`;
-    let operandLen = 0;
-    if (op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ) operandLen = 1;
-    if (op === OP.SENSE_DX || op === OP.SENSE_DY || op === OP.SENSE_DIST ||
-        op === OP.EXCRETE || op === OP.SELF_RESERVE) operandLen = 1;
-    let s = i.toString().padStart(3, " ") + "  " + name;
-    if (operandLen === 1 && i + 1 < genome.length) {
-      const b = genome[i + 1];
-      if (op === OP.PUSH8) s += " " + signExtend8(b);
-      else if (op === OP.JMP || op === OP.JZ || op === OP.JNZ) s += " " + signExtend8(b);
-      else if (op === OP.SENSE_DX || op === OP.SENSE_DY || op === OP.SENSE_DIST ||
-               op === OP.EXCRETE || op === OP.SELF_RESERVE) {
-        s += " " + (materialIds[b % 6] ?? `?${b % 6}`);
-      } else {
-        s += " " + b;
+    const name = NAME_BY_OP[op];
+    const operandLen = OPERANDS[op];
+    let s = i.toString(16).padStart(4, "0") + ": ";
+    if (name) {
+      s += name.toLowerCase();
+      if (operandLen === 1 && i + 1 < genome.length) {
+        const arg = genome[i + 1];
+        if (op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ) {
+          s += " " + i8(arg);
+        } else if (MATERIAL_OPERAND.has(op)) {
+          const idx = m6(arg);
+          s += " " + (materialNames ? materialNames[idx] : idx);
+        } else {
+          s += " " + arg;
+        }
       }
-    } else if (op === OP.HALT) {
-      // no operand
-    } else if (operandLen === 0) {
-      // no operand
     } else {
       s += "db 0x" + op.toString(16).padStart(2, "0");
     }
