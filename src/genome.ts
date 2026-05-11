@@ -323,18 +323,23 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 
 // Default genome: swim up the organic food gradient (toward the richest
 // direction, weighted by every nearby particle) and try to fission when
-// ATP clears a low gate. tryReproduce charges a non-trivial ATP fee per
-// attempt (even on failure), so the gate exists mainly to keep that fee
-// from siphoning the cell back to zero every tick.
+// BOTH biomass and ATP clear minimum thresholds. The build-block cost
+// of fission is paid in biomass (and other molecules); ATP is just the
+// per-attempt tax. Checking biomass first saves wasted attempts when
+// the cell hasn't accumulated enough to make a viable daughter.
 //
 //   sense_grad_x organic
 //   sense_grad_y organic
 //   thrust                 ; accelerate up the food gradient
 //   ingest organic         ; absorb only organic particles this tick
+//   self_biomass           ; push biomass pool
+//   push8 12               ; minimum to afford fission cost
+//   gt                     ; biomass > 12 ?
 //   self_energy            ; push ATP
-//   push8 3                ; threshold
+//   push8 3                ; minimum ATP
 //   gt                     ; ATP > 3 ?
-//   jz +1                  ; if not, skip REPRODUCE
+//   and                    ; need both
+//   jz +1                  ; if either fails, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
 export function makeDefaultGenome(): Uint8Array {
@@ -343,9 +348,13 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,
     OP.INGEST, 3,
+    OP.SELF_BIOMASS,
+    OP.PUSH8, 12,
+    OP.GT,
     OP.SELF_ENERGY,
     OP.PUSH8, 3,
     OP.GT,
+    OP.AND,
     OP.JZ, 1,
     OP.REPRODUCE,
     OP.HALT,
