@@ -1035,6 +1035,60 @@ describe("creature: death by starvation", () => {
       expect(Math.abs(p.y - 300)).toBeLessThan(20);
     }
   });
+  it("dead cell's molecules survive as molecule-tagged particles", () => {
+    const w = quietWorld();
+    const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
+    // Strip every fuel source so noFuel() returns true and the cell dies.
+    for (const id of M) c.reserves[id] = 0;
+    c.molecules = emptyMolecules();
+    // Then load up the non-fuel molecules that should survive into corpse
+    // particles. biomass+enzyme are organic-bucket; minerals are sand-bucket.
+    c.molecules.biomass = 50;
+    c.molecules.enzyme = 20;
+    c.molecules.minerals = 30;
+    const before = new Set(w.particles);
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    const fresh = w.particles.filter((p) => !before.has(p));
+    let bio = 0, enz = 0, min = 0;
+    for (const p of fresh) {
+      if (!p.molecules) continue;
+      bio += p.molecules.biomass;
+      enz += p.molecules.enzyme;
+      min += p.molecules.minerals;
+    }
+    expect(bio).toBeGreaterThan(48);
+    expect(bio).toBeLessThan(52);
+    expect(enz).toBeGreaterThan(18);
+    expect(enz).toBeLessThan(22);
+    expect(min).toBeGreaterThan(28);
+    expect(min).toBeLessThan(32);
+    // Bucketing: minerals went into sand-bucket particles, not generic
+    // organic; that's the whole point of preserving identity.
+    const sandMin = fresh
+      .filter((p) => p.material === "sand" && p.molecules)
+      .reduce((s, p) => s + p.molecules!.minerals, 0);
+    expect(sandMin).toBeGreaterThan(28);
+  });
+  it("ingesting a molecule-tagged particle deposits into the cell's molecules", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    w.creatures.push(eater);
+    const gluBefore = eater.molecules.glucose;
+    const orgReserveBefore = eater.reserves.organic;
+    const mol = emptyMolecules();
+    mol.glucose = 12;
+    w.particles.push({
+      x: eater.x, y: eater.y, z: eater.z,
+      vx: 0, vy: 0, vz: 0,
+      r: 3, material: "organic",
+      molecules: mol,
+    });
+    step(w, 0.001);
+    expect(eater.molecules.glucose).toBeCloseTo(gluBefore + 12, 5);
+    expect(eater.reserves.organic).toBeCloseTo(orgReserveBefore, 5);
+  });
 });
 
 describe("creature: reproduction does not cascade within a single tick", () => {
@@ -1078,8 +1132,6 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     parent.molecules.biomass = 2000;
     parent.energy = 200;
     step(w, 1 / 60);
-    // At minimum the parent fissioned again -> 3 cells. The child may also
-    // have fissioned (its inherited build-block share is usually plenty).
     expect(w.creatures.length).toBeGreaterThanOrEqual(3);
   });
   it("fission fails the next tick when build-blocks are depleted", () => {
