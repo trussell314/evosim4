@@ -207,7 +207,7 @@ export interface World {
   brownianAmp: number;
 }
 
-const ENERGY_PER_THRUST_SEC = 22;
+const ENERGY_PER_THRUST_SEC = 10;
 const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
 
@@ -292,7 +292,7 @@ const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
 const KM_DEFAULT = 1;
-const AEROBIC_VMAX = 8;     // glucose-mass consumed per sec per cell at saturation
+const AEROBIC_VMAX = 16;    // glucose-mass consumed per sec per cell at saturation
 const FERMENT_VMAX = 1.5;
 const BETAOX_VMAX = 1.5;    // fatty-acid mass per sec; tame so fa survives for biosynth
 const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
