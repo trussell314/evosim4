@@ -13,6 +13,8 @@ import {
   newOutputs,
   runTick,
   makeDefaultGenome,
+  mutateGenome,
+  genomeMaterialCost,
 } from "./genome";
 
 export type MaterialId =
@@ -67,6 +69,7 @@ export interface Creature {
   thrustAccel: number;                      // px/s^2 max self-applied accel
   genome: Uint8Array;
   vm: VMState;
+  color: string;                            // cached, hashed from genome (visual lineage)
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -107,6 +110,12 @@ const ENERGY_PER_MASS = 12;           // energy yielded per unit mass burned
 const ENERGY_PER_THRUST_SEC = 22;     // energy cost per second at full thrust
 const ENERGY_PER_INSTRUCTION = 0.005; // VM bookkeeping cost
 const VM_INSTR_BUDGET = 32;           // instructions per tick
+
+// Reproduction & ecology.
+const MASS_PER_GENOME_BYTE = 3;
+const PARTICLE_TARGET = 550;
+const PARTICLE_SPAWN_RATE = 30;       // per second (when below target)
+const MAX_CREATURES = 80;
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -177,6 +186,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
   const reserves = emptyReserves();
   reserves.organic = 40;
   reserves.lipid = 10;
+  const genome = makeDefaultGenome();
   return {
     x, y, z,
     vx: 0, vy: 0, vz: 0,
@@ -186,9 +196,21 @@ function makeCreature(x: number, y: number, z: number): Creature {
     energy: 120,
     senseRange: 200,
     thrustAccel: 70,
-    genome: makeDefaultGenome(),
+    genome,
     vm: newVMState(),
+    color: genomeColor(genome),
   };
+}
+
+// Stable color from genome bytes. Mutations shift it by a small amount per
+// changed byte, so a lineage clusters in hue.
+export function genomeColor(genome: Uint8Array): string {
+  let h = 5381 >>> 0;
+  for (let i = 0; i < genome.length; i++) {
+    h = ((h * 33) ^ genome[i]) >>> 0;
+  }
+  const hue = h % 360;
+  return `hsl(${hue}, 60%, 62%)`;
 }
 
 function mass(p: Particle): number {
@@ -201,6 +223,27 @@ export function step(world: World, dt: number): void {
   updateCreatures(world, dt);
   resolveCollisions(world);
   applyWalls(world);
+  replenishParticles(world, dt);
+}
+
+function replenishParticles(world: World, dt: number): void {
+  if (world.particles.length >= PARTICLE_TARGET) return;
+  const expected = PARTICLE_SPAWN_RATE * dt;
+  let toSpawn = Math.floor(expected);
+  if (Math.random() < expected - toSpawn) toSpawn++;
+  for (let i = 0; i < toSpawn && world.particles.length < PARTICLE_TARGET; i++) {
+    const r = 2 + Math.random() * 4;
+    world.particles.push({
+      x: Math.random() * world.width,
+      y: 0,
+      z: r + Math.random() * (world.depth - 2 * r),
+      vx: 0,
+      vy: 0,
+      vz: (Math.random() - 0.5) * 20,
+      r,
+      material: pickMaterial(),
+    });
+  }
 }
 
 function applyForces(world: World, dt: number): void {
@@ -274,6 +317,8 @@ function updateCreatures(world: World, dt: number): void {
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
     c.energy -= VM_OUT.instructions * ENERGY_PER_INSTRUCTION;
 
+    if (VM_OUT.reproduce) tryReproduce(c, world);
+
     // Apply thrust intent, clamped to thrustAccel magnitude. Energy cost
     // scales with the fraction of full thrust actually used.
     let ax = VM_OUT.thrustX;
@@ -303,6 +348,49 @@ function updateCreatures(world: World, dt: number): void {
       }
     }
   }
+}
+
+function tryReproduce(parent: Creature, world: World): void {
+  if (world.creatures.length >= MAX_CREATURES) return;
+  // Mutate first so cost matches the child's actual genome.
+  const childGenome = mutateGenome(parent.genome);
+  const cost = genomeMaterialCost(childGenome, MASS_PER_GENOME_BYTE);
+  for (let i = 0; i < 6; i++) {
+    if (parent.reserves[MATERIAL_IDS[i]] < cost[i]) return;
+  }
+  // Transfer construction material parent -> child body.
+  const childReserves = emptyReserves();
+  for (let i = 0; i < 6; i++) {
+    parent.reserves[MATERIAL_IDS[i]] -= cost[i];
+    childReserves[MATERIAL_IDS[i]] = cost[i];
+  }
+  // Endowment: half of parent's remaining organic, half its energy.
+  const orgGift = parent.reserves.organic * 0.5;
+  parent.reserves.organic -= orgGift;
+  childReserves.organic += orgGift;
+  const energyGift = parent.energy * 0.5;
+  parent.energy -= energyGift;
+
+  const angle = Math.random() * Math.PI * 2;
+  const offset = parent.r * 2.1;
+  const child: Creature = {
+    x: parent.x + Math.cos(angle) * offset,
+    y: parent.y + Math.sin(angle) * offset,
+    z: parent.z,
+    vx: parent.vx,
+    vy: parent.vy,
+    vz: parent.vz,
+    r: parent.r,
+    density: parent.density,
+    reserves: childReserves,
+    energy: energyGift,
+    senseRange: parent.senseRange,
+    thrustAccel: parent.thrustAccel,
+    genome: childGenome,
+    vm: newVMState(),
+    color: genomeColor(childGenome),
+  };
+  world.creatures.push(child);
 }
 
 function populateSensors(c: Creature, world: World): void {

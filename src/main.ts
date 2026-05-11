@@ -16,7 +16,14 @@ inspector.style.cssText =
 root.appendChild(inspector);
 
 const world = createWorld(window.innerWidth, window.innerHeight);
-const baseDisasm = disassemble(world.creatures[0].genome, MATERIAL_IDS_ORDERED);
+
+let selectedIdx = 0;
+let activeDisasm = "";
+function refreshActiveDisasm(): void {
+  const c = world.creatures[selectedIdx];
+  activeDisasm = c ? disassemble(c.genome, MATERIAL_IDS_ORDERED) : "";
+}
+refreshActiveDisasm();
 
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -32,6 +39,26 @@ function resize(): void {
 }
 resize();
 window.addEventListener("resize", resize);
+
+canvas.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  let best = -1;
+  let bestSq = Infinity;
+  for (let i = 0; i < world.creatures.length; i++) {
+    const c = world.creatures[i];
+    const dx = c.x - x;
+    const dy = c.y - y;
+    const d = dx * dx + dy * dy;
+    const reach = (c.r + 8) * (c.r + 8);
+    if (d < bestSq && d < reach) { bestSq = d; best = i; }
+  }
+  if (best >= 0) {
+    selectedIdx = best;
+    refreshActiveDisasm();
+  }
+});
 
 const N_BUCKETS = 4;
 const BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
@@ -64,17 +91,19 @@ function render(): void {
   ctx.filter = "none";
   ctx.globalAlpha = 1;
 
-  for (const c of world.creatures) drawCreature(c);
+  for (let i = 0; i < world.creatures.length; i++) {
+    drawCreature(world.creatures[i], i === selectedIdx);
+  }
 }
 
-function drawCreature(c: Creature): void {
-  ctx.fillStyle = "#4ec9b0";
+function drawCreature(c: Creature, selected: boolean): void {
+  ctx.fillStyle = c.color;
   ctx.beginPath();
   ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "#0a1f1d";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = selected ? "#ffffff" : "#0a1f1d";
+  ctx.lineWidth = selected ? 2 : 1.5;
   ctx.stroke();
 
   // Energy ring: arc length proportional to energy (clamped at 200 = full).
@@ -87,17 +116,25 @@ function drawCreature(c: Creature): void {
 }
 
 function updateInspector(): void {
-  const c = world.creatures[0];
-  if (!c) { inspector.textContent = ""; return; }
+  if (selectedIdx >= world.creatures.length) {
+    selectedIdx = 0;
+    refreshActiveDisasm();
+  }
+  const c = world.creatures[selectedIdx];
+  if (!c) {
+    inspector.textContent = `pop=0  particles=${world.particles.length}`;
+    return;
+  }
   const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
   const reserves = MATERIAL_IDS_ORDERED
     .map((id) => `${id.slice(0, 3)}=${c.reserves[id].toFixed(0)}`)
     .join(" ");
   inspector.textContent =
+    `pop=${world.creatures.length}  particles=${world.particles.length}  (click a cell)\n` +
     `E=${c.energy.toFixed(0)}  ${reserves}\n` +
-    `pc=${c.vm.pc}  stack=[${stackStr}]\n` +
+    `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
     "—\n" +
-    baseDisasm;
+    activeDisasm;
 }
 
 let last = performance.now();

@@ -48,6 +48,7 @@ export const OP = {
   // Actuators.
   THRUST:        0x50,
   EXCRETE:       0x51,
+  REPRODUCE:     0x52,
 
   HALT:          0xFF,
 } as const;
@@ -101,6 +102,7 @@ export interface VMOutputs {
   thrustX: number;            // accumulated requested accel (px/s^2)
   thrustY: number;
   excrete: Float32Array;      // length 6, requested mass per material idx
+  reproduce: boolean;         // VM raised at least one REPRODUCE this tick
   instructions: number;       // number actually executed this tick
 }
 
@@ -109,6 +111,7 @@ export function newOutputs(): VMOutputs {
     thrustX: 0,
     thrustY: 0,
     excrete: new Float32Array(6),
+    reproduce: false,
     instructions: 0,
   };
 }
@@ -124,6 +127,7 @@ export function runTick(
   out.thrustX = 0;
   out.thrustY = 0;
   out.excrete.fill(0);
+  out.reproduce = false;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -192,6 +196,9 @@ export function runTick(
         out.excrete[idx] += amt;
         break;
       }
+      case OP.REPRODUCE:
+        out.reproduce = true;
+        break;
       case OP.HALT:
         return;
 
@@ -232,11 +239,16 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
-// Hand-written starter: thrust toward nearest organic particle each tick.
+// Hand-written starter: chase nearest organic; reproduce once well-fed.
 //
-//   sense_dx organic    ; push dx
-//   sense_dy organic    ; push dy
-//   thrust              ; pop ay, ax -> apply
+//   sense_dx organic        ; dx
+//   sense_dy organic        ; dy
+//   thrust                  ; pop ay,ax -> apply
+//   self_reserve organic    ; push organic reserve
+//   push8 60                ; threshold
+//   gt                      ; reserve > 60 ?
+//   jz +1                   ; if not, skip next byte
+//   reproduce               ; spawn child (no-op if can't afford)
 //   halt
 //
 // organic = MATERIAL_IDS index 3.
@@ -245,6 +257,51 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_DX, 3,
     OP.SENSE_DY, 3,
     OP.THRUST,
+    OP.SELF_RESERVE, 3,
+    OP.PUSH8, 60,
+    OP.GT,
+    OP.JZ, 1,
+    OP.REPRODUCE,
     OP.HALT,
   ]);
+}
+
+// Material cost of carrying a genome. Each byte is "encoded for" the material
+// at index (byte % 6), at `massPerByte` mass units per byte. This is what a
+// child cell has to be physically constructed out of when it's born.
+export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Float32Array {
+  const cost = new Float32Array(6);
+  for (let i = 0; i < genome.length; i++) {
+    cost[genome[i] % 6] += massPerByte;
+  }
+  return cost;
+}
+
+// Noisy copy. Each existing byte may be deleted, preceded by an insertion,
+// and/or point-mutated independently. There's also a chance of trailing
+// insertion. Bounded so runaway insertion can't blow up forever.
+const P_POINT  = 0.02;
+const P_INSERT = 0.005;
+const P_DELETE = 0.005;
+const MAX_GENOME_BYTES = 256;
+
+export function mutateGenome(
+  genome: Uint8Array,
+  rng: () => number = Math.random,
+): Uint8Array {
+  const out: number[] = [];
+  for (let i = 0; i < genome.length; i++) {
+    if (rng() < P_DELETE) continue;
+    if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
+      out.push(Math.floor(rng() * 256));
+    }
+    let b = genome[i];
+    if (rng() < P_POINT) b = Math.floor(rng() * 256);
+    if (out.length < MAX_GENOME_BYTES) out.push(b);
+  }
+  if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
+    out.push(Math.floor(rng() * 256));
+  }
+  if (out.length === 0) return makeDefaultGenome();
+  return new Uint8Array(out);
 }
