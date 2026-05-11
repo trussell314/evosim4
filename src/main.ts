@@ -258,9 +258,6 @@ function drawCreature(c: Creature, selected: boolean): void {
 
   const ingestFrac = 1 - Math.min(1, c.ingestCooldown / 0.7);
   drawRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea");
-
-  const reproFrac = 1 - Math.min(1, c.reproduceCooldown / 2.0);
-  drawRing(c.x, c.y, c.r + RING_GAP + 2 * RING_SPACING, reproFrac, "#c890f5");
 }
 
 function drawRing(cx: number, cy: number, r: number, frac: number, color: string): void {
@@ -315,10 +312,11 @@ function describeBiology(c: Creature): string {
   if (m.chlorophyll > 0.5 && m.co2 > 0.5) pathways.push("photo");
   const pathwayStr = pathways.length ? pathways.join("+") : "starving";
 
-  // Reproductive cadence: a function of cooldown only; the genome decides
-  // when to call REPRODUCE, but cost + cooldown ultimately pace it.
+  // Reproductive intent: just whether the genome ever calls REPRODUCE. There
+  // is no artificial cooldown -- successful fission is gated only by the
+  // build-block molecule cost, so cadence is up to the genome + chemistry.
   const repro = ops.has(OP.REPRODUCE)
-    ? `tries fission ~every ${(2.0).toFixed(1)}s`
+    ? "calls REPRODUCE (gated by build-block cost)"
     : "no REPRODUCE op (sterile)";
 
   // One item per line, with a small leading indent so it visually groups
@@ -356,7 +354,7 @@ function updateInspector(): void {
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
-    `ingestCD=${c.ingestCooldown.toFixed(2)}s  reproCD=${c.reproduceCooldown.toFixed(2)}s\n` +
+    `ingestCD=${c.ingestCooldown.toFixed(2)}s\n` +
     `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} bio=${fmt(m.biomass)}\n` +
