@@ -284,7 +284,7 @@ const THRUST_MASS_REF = 200;
 // reflects that splitting a big cell takes more reorganization than a small
 // one.
 const REPRODUCE_ATTEMPT_ATP_BASE = 2;
-const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.05;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
