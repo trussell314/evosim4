@@ -64,6 +64,7 @@ export const OP = {
   SENSE_HEAD_X:  0x5C,
   SENSE_HEAD_Y:  0x5D,
   INGEST:        0x5E,   // absorb a particle in radius (was implicit before)
+  SENSE_TEMP:    0x5F,   // local water temperature
 
   HALT:          0xFF,
 } as const;
@@ -116,6 +117,8 @@ export interface VMSensors {
   // Current normalized velocity. Unit vector when moving, (0,0) at rest.
   headX: number;
   headY: number;
+  // Local water temperature at the cell's position. Roughly 12..28 °C.
+  temp: number;
   creatureDx: number;
   creatureDy: number;
   creatureDist: number;
@@ -255,6 +258,7 @@ export function runTick(
       case OP.SENSE_WALL_Y:   push(sensors.wallY); break;
       case OP.SENSE_HEAD_X:   push(sensors.headX); break;
       case OP.SENSE_HEAD_Y:   push(sensors.headY); break;
+      case OP.SENSE_TEMP:     push(sensors.temp); break;
 
       case OP.THRUST: {
         const ay = pop();

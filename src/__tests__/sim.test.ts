@@ -18,6 +18,7 @@ import {
   emptyMolecules,
   advanceDivision,
   DIVISION_DURATION_SEC,
+  temperatureAt,
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState } from "../genome";
 
@@ -45,6 +46,8 @@ function quietWorld(): World {
     updraftAmp: 0, updraftLength: 400, updraftPeriod: 16,
     surfaceY: 0,
     aerationRate: 0,
+    tempSurface: 20, tempBottom: 20, tempPatchAmp: 0,
+    tempPatchLength: 400, tempPatchPeriod: 40,
     restitution: 0.2,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -1272,6 +1275,51 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     step(w, 1 / 60);
     expect(w.particles.includes(target)).toBe(true);
     expect(c.reserves.rock).toBe(0);
+  });
+});
+
+describe("temperature gradient", () => {
+  it("surface is warm, bottom is cold", () => {
+    const w = quietWorld();
+    w.surfaceY = 30;
+    w.tempSurface = 28; w.tempBottom = 12; w.tempPatchAmp = 0;
+    const tSurf = temperatureAt(w, 400, w.surfaceY);
+    const tBot = temperatureAt(w, 400, w.height);
+    expect(tSurf).toBeCloseTo(28, 5);
+    expect(tBot).toBeCloseTo(12, 5);
+    expect(tSurf).toBeGreaterThan(tBot);
+  });
+  it("temperature interpolates linearly with depth", () => {
+    const w = quietWorld();
+    w.surfaceY = 0;
+    w.tempSurface = 30; w.tempBottom = 10; w.tempPatchAmp = 0;
+    const tMid = temperatureAt(w, 400, w.height / 2);
+    expect(tMid).toBeCloseTo(20, 5);
+  });
+  it("horizontal patches shift the local temp", () => {
+    const w = quietWorld();
+    w.surfaceY = 0;
+    w.tempSurface = 20; w.tempBottom = 20; w.tempPatchAmp = 5;
+    w.tempPatchLength = 200; w.tempPatchPeriod = 100;
+    // At x=0, t=0 -> sin(0)=0 -> base 20.
+    expect(temperatureAt(w, 0, 300)).toBeCloseTo(20, 5);
+    // At x=50, t=0 -> sin(pi/2)=1 -> base + 5.
+    expect(temperatureAt(w, 50, 300)).toBeCloseTo(25, 5);
+  });
+  it("warmer water speeds up aerobic respiration (Q10)", () => {
+    function run(temp: number): number {
+      const w = quietWorld();
+      w.surfaceY = 0;
+      w.tempSurface = temp; w.tempBottom = temp; w.tempPatchAmp = 0;
+      const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+      c.molecules.glucose = 50; c.molecules.o2 = 50; c.molecules.adp = 100;
+      w.creatures.push(c);
+      step(w, 0.5);
+      return c.energy;
+    }
+    const eCold = run(12);
+    const eWarm = run(28);
+    expect(eWarm).toBeGreaterThan(eCold * 1.5);
   });
 });
 

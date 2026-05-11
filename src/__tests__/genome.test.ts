@@ -19,7 +19,7 @@ import {
 
 function makeSensors(overrides: Partial<{
   gradX: number[]; gradY: number[]; density: number[];
-  wallX: number; wallY: number; headX: number; headY: number;
+  wallX: number; wallY: number; headX: number; headY: number; temp: number;
   creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
   light: number;
 }> = {}): VMSensors {
@@ -31,6 +31,7 @@ function makeSensors(overrides: Partial<{
     wallY: overrides.wallY ?? 0,
     headX: overrides.headX ?? 0,
     headY: overrides.headY ?? 0,
+    temp: overrides.temp ?? 0,
     creatureDx: overrides.creatureDx ?? 0,
     creatureDy: overrides.creatureDy ?? 0,
     creatureDist: overrides.creatureDist ?? 0,
@@ -219,6 +220,9 @@ describe("VM sensors", () => {
   });
   it("SENSE_HEAD_X / HEAD_Y", () => {
     expect(exec([OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y, OP.HALT], { sensors: makeSensors({ headX: 0.6, headY: -0.8 }) }).state.stack).toEqual([0.6, -0.8]);
+  });
+  it("SENSE_TEMP pushes local water temperature", () => {
+    expect(exec([OP.SENSE_TEMP, OP.HALT], { sensors: makeSensors({ temp: 22.5 }) }).state.stack).toEqual([22.5]);
   });
 });
 

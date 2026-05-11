@@ -210,6 +210,14 @@ export interface World {
   // gas particles in just below the surface at a steady rate.
   surfaceY: number;
   aerationRate: number;
+  // Water temperature profile. The surface is warmer (sunlight), the
+  // bottom is colder. Horizontal patches drift slowly via tempPatch*,
+  // standing in for thermal convection without simulating it.
+  tempSurface: number;
+  tempBottom: number;
+  tempPatchAmp: number;
+  tempPatchLength: number;
+  tempPatchPeriod: number;
   restitution: number;
   xWallRestitution: number;
   zWallRestitution: number;
@@ -362,6 +370,30 @@ const AERATION_PER_PX = 0.005;
 const AERATION_O2_PER_BUBBLE = 4;
 const AERATION_BUBBLE_DROP_SPEED = 14;
 
+// Temperature chemistry: enzyme-catalyzed reactions and idle metabolism
+// scale with temperature via Q10 -- every 10°C, rates double. T_REF is
+// the "neutral" temperature where the multiplier is 1.0. Clamped so that
+// extreme temps don't blow up or zero out the simulation.
+const TEMP_REF = 20;
+const TEMP_Q10 = 2;
+const TEMP_MULT_MIN = 0.25;
+const TEMP_MULT_MAX = 4.0;
+
+export function temperatureAt(world: World, x: number, y: number): number {
+  const span = Math.max(1, world.height - world.surfaceY);
+  const depth = Math.max(0, Math.min(1, (y - world.surfaceY) / span));
+  const base = world.tempSurface + (world.tempBottom - world.tempSurface) * depth;
+  const kT = (2 * Math.PI) / world.tempPatchLength;
+  const wT = (2 * Math.PI) / world.tempPatchPeriod;
+  const patch = world.tempPatchAmp * Math.sin(kT * x + wT * world.t);
+  return base + patch;
+}
+
+function tempMult(T: number): number {
+  const m = Math.pow(TEMP_Q10, (T - TEMP_REF) / 10);
+  return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
+}
+
 export function createWorld(width: number, height: number): World {
   const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
   const world: World = {
@@ -381,6 +413,11 @@ export function createWorld(width: number, height: number): World {
     updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
     surfaceY: height * SURFACE_Y_FRAC,
     aerationRate: width * AERATION_PER_PX,
+    tempSurface: 28,
+    tempBottom: 12,
+    tempPatchAmp: 3,
+    tempPatchLength: 360,
+    tempPatchPeriod: 38,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
     species: new Map(),
@@ -947,6 +984,7 @@ const VM_SENSORS: VMSensors = {
   density: new Float32Array(6),
   wallX: 0, wallY: 0,
   headX: 0, headY: 0,
+  temp: 0,
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
 };
@@ -969,33 +1007,41 @@ function updateCreatures(world: World, dt: number): void {
 
     updateCreatureRadius(c);
 
-    // Cost of being alive. ATP turns into ADP, mass conserved.
-    const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dt;
+    // Temperature multiplies every enzyme-catalyzed rate (and the matching
+    // idle drain) -- warm cells run hot; cold cells slow down. Q10 = 2.
+    const localTemp = temperatureAt(world, c.x, c.y);
+    const km = tempMult(localTemp);
+    const dtT = dt * km;
+
+    // Cost of being alive. ATP turns into ADP, mass conserved. Drain
+    // scales with temperature like the rest of metabolism.
+    const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
     spendATP(c, idleDrain);
 
     // Bulk -> molecules.
-    catabolize(c, dt);
+    catabolize(c, dtT);
 
-    // Passive gas exchange with the surrounding water.
+    // Passive gas exchange with the surrounding water. Diffusion is
+    // physical, not enzymatic -- left at the base dt.
     diffuseGases(c, dt);
 
     // Energy production. All three pathways may run in parallel; rates
     // self-balance via substrate availability (Michaelis-Menten).
-    aerobicRespire(c, dt);
-    ferment(c, dt);
-    betaOxidize(c, dt);
+    aerobicRespire(c, dtT);
+    ferment(c, dtT);
+    betaOxidize(c, dtT);
 
     // Carbon fixation if the cell has chlorophyll and reaches light.
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY);
-    photosynthesize(c, dt, ambientLight);
+    photosynthesize(c, dtT, ambientLight);
 
     // Cell builds its own catalysts and structure as substrates allow.
-    biosynthesize(c, dt, CHLORO_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "chlorophyll");
-    biosynthesize(c, dt, ENZYME_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "enzyme");
+    biosynthesize(c, dtT, CHLORO_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "chlorophyll");
+    biosynthesize(c, dtT, ENZYME_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "enzyme");
     // Biomass is mostly protein (aa); the lipid fraction is structural
     // membrane only. Old 0.7/0.3 mix made fa the limiting reagent because
     // it competes with beta-oxidation for the same scarce pool.
-    biosynthesize(c, dt, BIOMASS_GROW_VMAX, 0.9, "aminoAcid", 0.1, "fattyAcid", "biomass");
+    biosynthesize(c, dtT, BIOMASS_GROW_VMAX, 0.9, "aminoAcid", 0.1, "fattyAcid", "biomass");
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
@@ -1469,6 +1515,7 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.headY = 0;
   }
   VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY);
+  VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
   VM_SENSORS.creatureDx = 0;
   VM_SENSORS.creatureDy = 0;
   VM_SENSORS.creatureDist = range;

@@ -132,23 +132,70 @@ for (const matId of MATERIAL_IDS_ORDERED) {
   TINTED_COLORS[matId] = DEPTH_TINTS.map((t) => blendToward(base, t));
 }
 
+// Map water temperature (°C) to a tint. Warm = lighter cyan, cool = deep
+// dark blue. Chosen so 20°C lands near the original water palette.
+function tempToColor(T: number): string {
+  // 12°C -> "#041420", 20°C -> "#0e2a3a", 28°C -> "#3a6e8c". Linear lerp
+  // in RGB between three anchor colors.
+  const cold = [4, 20, 32];
+  const mid  = [14, 42, 58];
+  const warm = [58, 110, 140];
+  let a, b, t;
+  if (T <= 20) { a = cold; b = mid;  t = Math.max(0, (T - 12) / 8); }
+  else         { a = mid;  b = warm; t = Math.min(1, (T - 20) / 8); }
+  const lerp = (x: number, y: number) => Math.round(x + (y - x) * t);
+  const r = lerp(a[0], b[0]);
+  const g = lerp(a[1], b[1]);
+  const b2 = lerp(a[2], b[2]);
+  return `rgb(${r},${g},${b2})`;
+}
+
+// Sample N points along the surface and trace its wavy line. The wave
+// uses the same surfaceLength / surfacePeriod as the physics force, but
+// at a much smaller visual amplitude -- the physics amplitude would be a
+// 130-pixel-tall sloshing mess.
+const SURFACE_VIS_AMPLITUDE = 7;
+const SURFACE_VIS_STEP = 6;
+function surfaceYAt(x: number): number {
+  const kS = (2 * Math.PI) / (world.surfaceLength || 1);
+  const wS = (2 * Math.PI) / (world.surfacePeriod || 1);
+  return world.surfaceY + SURFACE_VIS_AMPLITUDE * Math.sin(kS * x - wS * world.t);
+}
+
 function render(): void {
   const { width, height, depth, surfaceY } = world;
-  // Atmosphere band above the water.
-  ctx.fillStyle = "#10212d";
-  ctx.fillRect(0, 0, width, surfaceY);
-  // Water column.
+  const tWarm = tempToColor(world.tempSurface);
+  const tCool = tempToColor(world.tempBottom);
+
+  // Atmosphere band -- fill above the wavy surface line.
+  ctx.fillStyle = "#0a1620";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(width, 0);
+  ctx.lineTo(width, surfaceYAt(width));
+  for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
+  ctx.closePath();
+  ctx.fill();
+
+  // Water column -- fill below the wavy surface line.
   const grad = ctx.createLinearGradient(0, surfaceY, 0, height);
-  grad.addColorStop(0, "#0e2a3a");
-  grad.addColorStop(1, "#061520");
+  grad.addColorStop(0, tWarm);
+  grad.addColorStop(1, tCool);
   ctx.fillStyle = grad;
-  ctx.fillRect(0, surfaceY, width, height - surfaceY);
-  // Surface line.
-  ctx.strokeStyle = "rgba(140, 200, 230, 0.35)";
+  ctx.beginPath();
+  ctx.moveTo(0, surfaceYAt(0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
+  ctx.lineTo(width, height);
+  ctx.lineTo(0, height);
+  ctx.closePath();
+  ctx.fill();
+
+  // Highlight along the surface line.
+  ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, surfaceY + 0.5);
-  ctx.lineTo(width, surfaceY + 0.5);
+  ctx.moveTo(0, surfaceYAt(0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(x));
   ctx.stroke();
 
   for (const b of BUCKETS) b.length = 0;
@@ -293,9 +340,13 @@ function drawPhylogeny(): void {
   );
 }
 
-const RING_GAP = 1;
-const RING_SPACING = 3;
-const RING_WIDTH = 2;
+// Energy and ingest rings sit immediately outside the cell body --
+// energy stroke centered at r + 0.75, ingest at r + 2.25. With line
+// width 1.5 they butt up flush against the membrane with no visible
+// water-gap.
+const RING_GAP = 0.75;
+const RING_SPACING = 1.5;
+const RING_WIDTH = 1.5;
 
 // Selected cells get a 2px white ring at (r + SELECT_RING_OFFSET) with a
 // visible gap between it and the cell body. No inner ring -- the cell
