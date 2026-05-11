@@ -1,7 +1,9 @@
 // Pure simulation. No DOM access.
 //
 // Units: pixels for length, seconds for time.
-// Water density is the reference (= 1). Material densities are relative.
+// World is "basically 2D" — a thin z-slice (a few mm at our scale) so
+// particles can shift back/forth in depth and occasionally pass each
+// other in z. Water density is the reference (= 1).
 
 export type MaterialId =
   | "rock"
@@ -26,7 +28,6 @@ export const MATERIALS: Record<MaterialId, Material> = {
   gas:     { id: "gas",     density: 0.2, color: "#cfe2ff" },
 };
 
-// Spawn weights. Heavier sediment-formers dominate so a dirt layer is visible.
 const SEED_WEIGHTS: Array<[MaterialId, number]> = [
   ["rock",    1.0],
   ["sand",    3.0],
@@ -37,8 +38,8 @@ const SEED_WEIGHTS: Array<[MaterialId, number]> = [
 ];
 
 export interface Particle {
-  x: number; y: number;
-  vx: number; vy: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
   r: number;
   material: MaterialId;
 }
@@ -46,34 +47,58 @@ export interface Particle {
 export interface World {
   width: number;
   height: number;
+  depth: number;            // thin z-slice extent
   t: number;
   particles: Particle[];
 
   // Forcing.
-  gravity: number;        // px/s^2, downward
-  drag: number;           // 1/s, linear drag on velocity
-  waveAmplitude: number;  // px/s^2 peak horizontal accel at surface
-  waveLength: number;     // px
-  wavePeriod: number;     // s
-  waveDecay: number;      // px, depth at which surface forcing falls to 1/e
+  gravity: number;          // px/s^2, downward (+y)
+  drag: number;             // 1/s, linear drag
+
+  // Surface chop: small wavelength, short period, decays fast with depth.
+  surfaceAmp: number;
+  surfaceLength: number;
+  surfacePeriod: number;
+  surfaceDecay: number;
+
+  // Slow swell: long wavelength, long period, reaches deep but gently.
+  swellAmp: number;
+  swellLength: number;
+  swellPeriod: number;
+  swellDecay: number;
+
+  // Mild z-stirring tied to swell phase.
+  zStirAmp: number;
 
   // Collision response.
-  restitution: number;    // 0 = sticky, 1 = perfectly elastic
-  collisionIters: number; // relaxation passes per step
+  restitution: number;
+  zWallRestitution: number; // bounce off front/back walls
+  collisionIters: number;
 }
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
     width, height,
+    depth: 24,
     t: 0,
     particles: [],
     gravity: 220,
     drag: 0.6,
-    waveAmplitude: 110,
-    waveLength: 240,
-    wavePeriod: 2.6,
-    waveDecay: 180,
+
+    surfaceAmp: 130,
+    surfaceLength: 240,
+    surfacePeriod: 2.4,
+    surfaceDecay: 120,
+
+    swellAmp: 22,
+    swellLength: 820,
+    swellPeriod: 8.5,
+    swellDecay: 520,
+
+    zStirAmp: 9,
+
     restitution: 0.15,
+    zWallRestitution: 0.6,
     collisionIters: 2,
   };
   seed(world, 500);
@@ -83,12 +108,15 @@ export function createWorld(width: number, height: number): World {
 export function seed(world: World, n: number): void {
   world.particles.length = 0;
   for (let i = 0; i < n; i++) {
+    const r = 2 + Math.random() * 4;
     world.particles.push({
       x: Math.random() * world.width,
       y: Math.random() * world.height * 0.85,
+      z: r + Math.random() * (world.depth - 2 * r),
       vx: 0,
       vy: 0,
-      r: 2 + Math.random() * 4,
+      vz: (Math.random() - 0.5) * 20,
+      r,
       material: pickMaterial(),
     });
   }
@@ -106,33 +134,49 @@ function pickMaterial(): MaterialId {
 }
 
 function mass(p: Particle): number {
+  // Thin slice: treat particles as flat disks; mass ~ density * area.
   return MATERIALS[p.material].density * Math.PI * p.r * p.r;
 }
 
 export function step(world: World, dt: number): void {
   world.t += dt;
-  const k = (2 * Math.PI) / world.waveLength;
-  const omega = (2 * Math.PI) / world.wavePeriod;
+  const kS = (2 * Math.PI) / world.surfaceLength;
+  const wS = (2 * Math.PI) / world.surfacePeriod;
+  const kL = (2 * Math.PI) / world.swellLength;
+  const wL = (2 * Math.PI) / world.swellPeriod;
 
   // Forces + integration.
   for (const p of world.particles) {
     const density = MATERIALS[p.material].density;
     const ay = world.gravity * (1 - 1 / density);
-    const ax =
-      world.waveAmplitude *
-      Math.sin(k * p.x - omega * world.t) *
-      Math.exp(-p.y / world.waveDecay);
+
+    const surface =
+      world.surfaceAmp *
+      Math.sin(kS * p.x - wS * world.t) *
+      Math.exp(-p.y / world.surfaceDecay);
+    const swell =
+      world.swellAmp *
+      Math.sin(kL * p.x - wL * world.t) *
+      Math.exp(-p.y / world.swellDecay);
+    const ax = surface + swell;
+
+    // Mild z forcing so depth motion doesn't fully damp out.
+    const az =
+      world.zStirAmp *
+      Math.sin(wL * world.t + kL * p.x + 1.0) *
+      Math.exp(-p.y / world.swellDecay);
 
     p.vx += (ax - world.drag * p.vx) * dt;
     p.vy += (ay - world.drag * p.vy) * dt;
+    p.vz += (az - world.drag * p.vz) * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+    p.z += p.vz * dt;
   }
 
-  // Pair collisions: position correction + impulse, relaxed over a few passes.
   resolveCollisions(world);
 
-  // Walls (after collisions so nothing escapes).
+  // Walls.
   for (const p of world.particles) {
     if (p.y + p.r > world.height) {
       p.y = world.height - p.r;
@@ -142,8 +186,17 @@ export function step(world: World, dt: number): void {
       p.y = p.r;
       if (p.vy < 0) p.vy = 0;
     }
+    // x wraps.
     if (p.x < 0) p.x += world.width;
     else if (p.x >= world.width) p.x -= world.width;
+    // z reflects (front/back glass walls).
+    if (p.z < p.r) {
+      p.z = p.r;
+      if (p.vz < 0) p.vz = -p.vz * world.zWallRestitution;
+    } else if (p.z > world.depth - p.r) {
+      p.z = world.depth - p.r;
+      if (p.vz > 0) p.vz = -p.vz * world.zWallRestitution;
+    }
   }
 }
 
@@ -159,13 +212,15 @@ function resolveCollisions(world: World): void {
         const b = ps[j];
         let dx = b.x - a.x;
         let dy = b.y - a.y;
+        let dz = b.z - a.z;
         const minDist = a.r + b.r;
-        const distSq = dx * dx + dy * dy;
+        const distSq = dx * dx + dy * dy + dz * dz;
         if (distSq >= minDist * minDist) continue;
         let dist = Math.sqrt(distSq);
-        if (dist < 1e-6) { dx = 1; dy = 0; dist = 1; }
+        if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; }
         const nx = dx / dist;
         const ny = dy / dist;
+        const nz = dz / dist;
         const overlap = minDist - dist;
         const mb = mass(b);
         const total = ma + mb;
@@ -173,19 +228,25 @@ function resolveCollisions(world: World): void {
         const corrB = overlap * (ma / total);
         a.x -= nx * corrA;
         a.y -= ny * corrA;
+        a.z -= nz * corrA;
         b.x += nx * corrB;
         b.y += ny * corrB;
+        b.z += nz * corrB;
         const rvx = b.vx - a.vx;
         const rvy = b.vy - a.vy;
-        const vN = rvx * nx + rvy * ny;
+        const rvz = b.vz - a.vz;
+        const vN = rvx * nx + rvy * ny + rvz * nz;
         if (vN < 0) {
           const j_imp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
           const ix = nx * j_imp;
           const iy = ny * j_imp;
+          const iz = nz * j_imp;
           a.vx -= ix / ma;
           a.vy -= iy / ma;
+          a.vz -= iz / ma;
           b.vx += ix / mb;
           b.vy += iy / mb;
+          b.vz += iz / mb;
         }
       }
     }
