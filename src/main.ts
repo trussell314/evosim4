@@ -1,12 +1,22 @@
 import "./style.css";
-import { createWorld, MATERIALS, step, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, step, type Particle, type Creature } from "./sim";
+import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
 root.appendChild(canvas);
 const ctx = canvas.getContext("2d")!;
 
+const inspector = document.createElement("pre");
+inspector.style.cssText =
+  "position:fixed;top:8px;left:8px;margin:0;padding:6px 9px;" +
+  "color:#9ee;background:rgba(0,0,0,.45);border-radius:4px;" +
+  "font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "pointer-events:none;white-space:pre;max-height:60vh;overflow:hidden;";
+root.appendChild(inspector);
+
 const world = createWorld(window.innerWidth, window.innerHeight);
+const baseDisasm = disassemble(world.creatures[0].genome, MATERIAL_IDS_ORDERED);
 
 function resize(): void {
   const dpr = window.devicePixelRatio || 1;
@@ -76,12 +86,27 @@ function drawCreature(c: Creature): void {
   ctx.stroke();
 }
 
+function updateInspector(): void {
+  const c = world.creatures[0];
+  if (!c) { inspector.textContent = ""; return; }
+  const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
+  const reserves = MATERIAL_IDS_ORDERED
+    .map((id) => `${id.slice(0, 3)}=${c.reserves[id].toFixed(0)}`)
+    .join(" ");
+  inspector.textContent =
+    `E=${c.energy.toFixed(0)}  ${reserves}\n` +
+    `pc=${c.vm.pc}  stack=[${stackStr}]\n` +
+    "—\n" +
+    baseDisasm;
+}
+
 let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   step(world, dt);
   render();
+  updateInspector();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

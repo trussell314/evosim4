@@ -4,6 +4,17 @@
 // World is "basically 2D" — a thin z-slice so particles can shift back/forth
 // in depth and occasionally pass each other in z. Water density = 1.
 
+import {
+  type VMState,
+  type VMSensors,
+  type VMSelf,
+  type VMOutputs,
+  newVMState,
+  newOutputs,
+  runTick,
+  makeDefaultGenome,
+} from "./genome";
+
 export type MaterialId =
   | "rock"
   | "sand"
@@ -54,7 +65,11 @@ export interface Creature {
   energy: number;                           // abstract energy units
   senseRange: number;                       // px
   thrustAccel: number;                      // px/s^2 max self-applied accel
+  genome: Uint8Array;
+  vm: VMState;
 }
+
+export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
 
 export interface World {
   width: number;
@@ -87,10 +102,11 @@ export interface World {
 }
 
 // Metabolism & movement constants (hand-tuned for first creature).
-const METABOLIZE_RATE = 5;       // mass of organic burned per second
-const ENERGY_PER_MASS = 12;      // energy yielded per unit mass burned
-const ENERGY_PER_THRUST_SEC = 22; // energy cost per second at full thrust
-const EDIBLE: ReadonlyArray<MaterialId> = ["organic", "lipid"];
+const METABOLIZE_RATE = 5;            // mass of organic burned per second
+const ENERGY_PER_MASS = 12;           // energy yielded per unit mass burned
+const ENERGY_PER_THRUST_SEC = 22;     // energy cost per second at full thrust
+const ENERGY_PER_INSTRUCTION = 0.005; // VM bookkeeping cost
+const VM_INSTR_BUDGET = 32;           // instructions per tick
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -170,6 +186,8 @@ function makeCreature(x: number, y: number, z: number): Creature {
     energy: 120,
     senseRange: 200,
     thrustAccel: 70,
+    genome: makeDefaultGenome(),
+    vm: newVMState(),
   };
 }
 
@@ -222,6 +240,19 @@ function applyForces(world: World, dt: number): void {
   for (const c of world.creatures) integrate(c, c.density);
 }
 
+// Reusable buffers for VM I/O so we don't allocate per tick.
+const VM_SENSORS: VMSensors = {
+  dx: new Float32Array(6),
+  dy: new Float32Array(6),
+  dist: new Float32Array(6),
+};
+const VM_SELF: VMSelf = {
+  energy: 0, vx: 0, vy: 0,
+  reserve: new Float32Array(6),
+};
+const VM_OUT: VMOutputs = newOutputs();
+const SENSOR_BEST_SQ = new Float32Array(6);
+
 function updateCreatures(world: World, dt: number): void {
   for (const c of world.creatures) {
     // Metabolize organic into energy.
@@ -229,19 +260,36 @@ function updateCreatures(world: World, dt: number): void {
     c.reserves.organic -= burn;
     c.energy += burn * ENERGY_PER_MASS;
 
-    // Sense + thrust toward nearest edible particle.
-    const target = nearestEdible(c, world);
-    if (target && c.energy > 0) {
-      const dx = target.x - c.x;
-      const dy = target.y - c.y;
-      const dz = target.z - c.z;
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      c.vx += (dx / d) * c.thrustAccel * dt;
-      c.vy += (dy / d) * c.thrustAccel * dt;
-      c.vz += (dz / d) * c.thrustAccel * dt;
-      c.energy -= ENERGY_PER_THRUST_SEC * dt;
-      if (c.energy < 0) c.energy = 0;
+    // Build per-material nearest-particle sensor readings. These stand in for
+    // proper physical sensors (photon / chemical / pressure) until those land.
+    populateSensors(c, world);
+
+    // Build self readings.
+    VM_SELF.energy = c.energy;
+    VM_SELF.vx = c.vx;
+    VM_SELF.vy = c.vy;
+    for (let i = 0; i < 6; i++) VM_SELF.reserve[i] = c.reserves[MATERIAL_IDS[i]];
+
+    // Run the genome.
+    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
+    c.energy -= VM_OUT.instructions * ENERGY_PER_INSTRUCTION;
+
+    // Apply thrust intent, clamped to thrustAccel magnitude. Energy cost
+    // scales with the fraction of full thrust actually used.
+    let ax = VM_OUT.thrustX;
+    let ay = VM_OUT.thrustY;
+    const mag = Math.sqrt(ax * ax + ay * ay);
+    if (mag > c.thrustAccel) {
+      const k = c.thrustAccel / mag;
+      ax *= k; ay *= k;
     }
+    const usedFrac = Math.min(1, mag / c.thrustAccel);
+    if (c.energy > 0 && usedFrac > 0) {
+      c.vx += ax * dt;
+      c.vy += ay * dt;
+      c.energy -= usedFrac * ENERGY_PER_THRUST_SEC * dt;
+    }
+    if (c.energy < 0) c.energy = 0;
 
     // Ingest any particle whose center is inside the cell.
     for (let i = world.particles.length - 1; i >= 0; i--) {
@@ -257,18 +305,27 @@ function updateCreatures(world: World, dt: number): void {
   }
 }
 
-function nearestEdible(c: Creature, world: World): Particle | null {
-  let best: Particle | null = null;
-  let bestSq = c.senseRange * c.senseRange;
+function populateSensors(c: Creature, world: World): void {
+  const range = c.senseRange;
+  const rangeSq = range * range;
+  for (let i = 0; i < 6; i++) {
+    VM_SENSORS.dx[i] = 0;
+    VM_SENSORS.dy[i] = 0;
+    VM_SENSORS.dist[i] = range;
+    SENSOR_BEST_SQ[i] = rangeSq;
+  }
   for (const p of world.particles) {
-    if (!EDIBLE.includes(p.material)) continue;
+    const idx = MATERIAL_IDS.indexOf(p.material);
     const dx = p.x - c.x;
     const dy = p.y - c.y;
-    const dz = p.z - c.z;
-    const d = dx * dx + dy * dy + dz * dz;
-    if (d < bestSq) { bestSq = d; best = p; }
+    const dsq = dx * dx + dy * dy;
+    if (dsq < SENSOR_BEST_SQ[idx]) {
+      SENSOR_BEST_SQ[idx] = dsq;
+      VM_SENSORS.dx[idx] = dx;
+      VM_SENSORS.dy[idx] = dy;
+      VM_SENSORS.dist[idx] = Math.sqrt(dsq);
+    }
   }
-  return best;
 }
 
 function resolveCollisions(world: World): void {
