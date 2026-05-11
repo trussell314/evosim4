@@ -331,7 +331,8 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   sense_grad_x organic
 //   sense_grad_y organic
 //   thrust                 ; accelerate up the food gradient
-//   ingest organic         ; absorb only organic particles this tick
+//   ingest organic         ; opt in to organic particles (food)
+//   ingest clay            ; opt in to clay (minerals for biosynth + fission)
 //   self_biomass           ; push biomass pool
 //   push8 14               ; minimum to afford 2x fission cost
 //   gt                     ; biomass > 12 ?
@@ -348,6 +349,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,
     OP.INGEST, 3,
+    OP.INGEST, 2,
     OP.SELF_BIOMASS,
     OP.PUSH8, 14,
     OP.GT,

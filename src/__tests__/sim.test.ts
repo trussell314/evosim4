@@ -360,7 +360,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const w = quietWorld();
     const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
     const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    big.reserves.rock = 3000;
+    big.reserves.rock = 15000;
     w.creatures.push(small, big);
     step(w, 1.0);
     const drainSmall = 100 - small.energy;
