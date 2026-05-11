@@ -212,7 +212,7 @@ const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
 
 const MASS_PER_GENOME_BYTE = 3;
-const PARTICLE_DENSITY_PER_AREA = 11000 / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = 16500 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 const MAX_CREATURES = 400;
 
@@ -300,11 +300,31 @@ const CHLORO_SYNTH_VMAX = 0.2;
 const ENZYME_SYNTH_VMAX = 0.4;
 const BIOMASS_GROW_VMAX = 0.8;
 
+// Maintenance: structural molecules turn over even when the cell isn't
+// reproducing. Each tick a small fraction of biomass / enzyme / chloro
+// degrades back into the substrates it was synthesized from -- no ATP
+// recovered, but mass-conserving. A cell that stops biosynthesizing
+// (because it has no ATP) bleeds structure and eventually drops below
+// MIN_VIABLE_BIOMASS, at which point it autolyzes.
+const BIOMASS_DECAY_PER_SEC = 0.005;
+const ENZYME_DECAY_PER_SEC = 0.005;
+const CHLORO_DECAY_PER_SEC = 0.005;
+const MIN_VIABLE_BIOMASS = 0.5;
+
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
 // cell dumps the excess back to the world as particles (mass-conserving).
+// Pumping costs ATP -- a stalled cell can't flush toxins, and the
+// resulting waste/CO2 buildup eats biomass (see TOX_*).
 const CO2_EXCRETE_THRESHOLD = 6;
 const WASTE_EXCRETE_THRESHOLD = 3;
 const EXCRETE_FLOOR = 1;
+const EXCRETE_ATP_PER_MASS = 0.05;
+
+// Above the excrete thresholds, waste / CO2 accumulation actively damages
+// biomass. This is the second pressure (alongside maintenance decay) that
+// makes "metabolically stalled" mean "dying" rather than "immortal couch
+// potato." Damage mass goes into waste (oxidative byproducts).
+const TOX_DAMAGE_PER_EXCESS_PER_SEC = 0.05;
 
 export function createWorld(width: number, height: number): World {
   const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
@@ -612,23 +632,74 @@ function autoExcrete(c: Creature, world: World): void {
   // lost (mass leaves the cell either way, but no new particle).
   const overFlow = world.particles.length >= world.particleTarget;
   if (c.molecules.co2 > CO2_EXCRETE_THRESHOLD) {
-    const amt = c.molecules.co2 - EXCRETE_FLOOR;
-    c.molecules.co2 = EXCRETE_FLOOR;
-    if (!overFlow) {
-      const mol = emptyMolecules();
-      mol.co2 = amt;
-      spawnExcretedParticle(c, world, "gas", amt, mol);
+    const want = c.molecules.co2 - EXCRETE_FLOOR;
+    // Active transport: pumping costs ATP. A stalled cell can't pay,
+    // so co2 stays inside and starts damaging biomass via toxify().
+    const affordable = Math.min(want, c.energy / EXCRETE_ATP_PER_MASS);
+    if (affordable > 0) {
+      spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
+      c.molecules.co2 -= affordable;
+      if (!overFlow) {
+        const mol = emptyMolecules();
+        mol.co2 = affordable;
+        spawnExcretedParticle(c, world, "gas", affordable, mol);
+      }
     }
   }
   if (c.molecules.waste > WASTE_EXCRETE_THRESHOLD) {
-    const amt = c.molecules.waste - EXCRETE_FLOOR;
-    c.molecules.waste = EXCRETE_FLOOR;
-    if (!overFlow) {
-      const mol = emptyMolecules();
-      mol.waste = amt;
-      spawnExcretedParticle(c, world, "organic", amt, mol);
+    const want = c.molecules.waste - EXCRETE_FLOOR;
+    const affordable = Math.min(want, c.energy / EXCRETE_ATP_PER_MASS);
+    if (affordable > 0) {
+      spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
+      c.molecules.waste -= affordable;
+      if (!overFlow) {
+        const mol = emptyMolecules();
+        mol.waste = affordable;
+        spawnExcretedParticle(c, world, "organic", affordable, mol);
+      }
     }
   }
+}
+
+// Structural turnover: biomass / enzyme / chloro decay continuously, mass
+// returning to the substrates they were synthesized from. The cell must
+// keep biosynthesizing to maintain its body. Decay never recovers ATP --
+// the energy that went into building these molecules is gone.
+function maintenanceDecay(c: Creature, dt: number): void {
+  const m = c.molecules;
+  if (m.biomass > 0) {
+    const lost = m.biomass * BIOMASS_DECAY_PER_SEC * dt;
+    m.biomass -= lost;
+    m.aminoAcid += 0.9 * lost;
+    m.fattyAcid += 0.1 * lost;
+  }
+  if (m.enzyme > 0) {
+    const lost = m.enzyme * ENZYME_DECAY_PER_SEC * dt;
+    m.enzyme -= lost;
+    m.aminoAcid += 0.5 * lost;
+    m.minerals += 0.5 * lost;
+  }
+  if (m.chlorophyll > 0) {
+    const lost = m.chlorophyll * CHLORO_DECAY_PER_SEC * dt;
+    m.chlorophyll -= lost;
+    m.aminoAcid += 0.5 * lost;
+    m.minerals += 0.5 * lost;
+  }
+}
+
+// Oxidative damage from accumulated waste / CO2. Above the excretion
+// thresholds, biomass is converted directly to waste at a rate scaling
+// with the excess. Net effect: a cell that can pay the excretion ATP
+// cost stays clean; one that can't suffers proportional damage.
+function toxify(c: Creature, dt: number): void {
+  const m = c.molecules;
+  let excess = 0;
+  if (m.co2 > CO2_EXCRETE_THRESHOLD) excess += m.co2 - CO2_EXCRETE_THRESHOLD;
+  if (m.waste > WASTE_EXCRETE_THRESHOLD) excess += m.waste - WASTE_EXCRETE_THRESHOLD;
+  if (excess <= 0 || m.biomass <= 0) return;
+  const damage = Math.min(m.biomass, excess * TOX_DAMAGE_PER_EXCESS_PER_SEC * dt);
+  m.biomass -= damage;
+  m.waste += damage;
 }
 
 function spawnExcretedParticle(
@@ -843,8 +914,15 @@ function updateCreatures(world: World, dt: number): void {
     // it competes with beta-oxidation for the same scarce pool.
     biosynthesize(c, dt, BIOMASS_GROW_VMAX, 0.9, "aminoAcid", 0.1, "fattyAcid", "biomass");
 
-    // Vent CO2 / waste back to the world if accumulating.
+    // Structural pools turn over even when nothing else is happening.
+    maintenanceDecay(c, dt);
+
+    // Vent CO2 / waste back to the world if accumulating. Costs ATP, so a
+    // stalled cell will fail to flush and start accumulating toxins.
     autoExcrete(c, world);
+
+    // Toxic damage from any waste / CO2 the cell couldn't pump out.
+    toxify(c, dt);
 
     populateSensors(c, world);
 
@@ -980,9 +1058,11 @@ function updateCreatures(world: World, dt: number): void {
 
     updateCreatureRadius(c);
 
-    // Death: no ATP and no way to make more (no fuel in either reserves
-    // or already-broken-down molecule pool).
-    if (c.energy <= 0 && noFuel(c)) {
+    // Death conditions:
+    //  1. Starvation: no ATP and no fuel anywhere to rebuild it.
+    //  2. Autolysis: biomass has decayed below the viable minimum (the
+    //     cell can no longer hold itself together as a cell).
+    if ((c.energy <= 0 && noFuel(c)) || c.molecules.biomass < MIN_VIABLE_BIOMASS) {
       dead.push(cIdx);
     }
   }
