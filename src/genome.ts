@@ -245,32 +245,27 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
-// Default genome: chase the nearest organic particle and reproduce only
-// when ATP is high enough to make fission sensible. The build-block cost
-// for fission is the real gate, but checking ATP first avoids burning the
-// REPRODUCE call (and the matching VM-instruction ATP overhead) on every
-// tick when the cell clearly isn't well-fed.
+// Default genome: chase the nearest organic particle and try to fission
+// when ATP clears a low gate. tryReproduce charges a non-trivial ATP fee
+// per attempt (even on failure), so the gate exists mainly to keep that
+// fee from siphoning the cell back to zero every tick.
 //
 //   sense_dx organic
 //   sense_dy organic
 //   thrust                 ; accelerate toward food
 //   self_energy            ; push ATP
-//   push8 40               ; threshold
-//   gt                     ; ATP > 40 ?
+//   push8 15               ; threshold
+//   gt                     ; ATP > 15 ?
 //   jz +1                  ; if not, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
-//
-// Threshold of 40 sits just above the starter ATP of 30: a feeding cell
-// crosses it within a few seconds, after which the build-block molecule
-// cost inside tryReproduce becomes the real gate.
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_DX, 3,
     OP.SENSE_DY, 3,
     OP.THRUST,
     OP.SELF_ENERGY,
-    OP.PUSH8, 40,
+    OP.PUSH8, 15,
     OP.GT,
     OP.JZ, 1,
     OP.REPRODUCE,

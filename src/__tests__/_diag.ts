@@ -6,7 +6,7 @@ const seed = w.creatures[0];
 console.log(`t=0  pop=${w.creatures.length}  parts=${w.particles.length}  seedR=${seed.r.toFixed(1)}  ATP=${seed.energy.toFixed(1)}`);
 
 const dt = 1 / 60;
-const totalSec = 90;
+const totalSec = 60;
 const sampleEverySec = 5;
 let nextSample = sampleEverySec;
 let births = 0;
