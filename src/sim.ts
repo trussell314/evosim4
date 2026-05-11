@@ -1,9 +1,8 @@
 // Pure simulation. No DOM access.
 //
 // Units: pixels for length, seconds for time.
-// World is "basically 2D" — a thin z-slice (a few mm at our scale) so
-// particles can shift back/forth in depth and occasionally pass each
-// other in z. Water density is the reference (= 1).
+// World is "basically 2D" — a thin z-slice so particles can shift back/forth
+// in depth and occasionally pass each other in z. Water density = 1.
 
 export type MaterialId =
   | "rock"
@@ -32,10 +31,12 @@ const SEED_WEIGHTS: Array<[MaterialId, number]> = [
   ["rock",    1.0],
   ["sand",    3.0],
   ["clay",    3.0],
-  ["organic", 2.0],
+  ["organic", 3.5],
   ["lipid",   1.5],
   ["gas",     0.5],
 ];
+
+const MATERIAL_IDS = Object.keys(MATERIALS) as MaterialId[];
 
 export interface Particle {
   x: number; y: number; z: number;
@@ -44,37 +45,52 @@ export interface Particle {
   material: MaterialId;
 }
 
+export interface Creature {
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  r: number;
+  density: number;                          // baseline cell density (≈1 = neutral)
+  reserves: Record<MaterialId, number>;     // mass per material, in same units as particle mass
+  energy: number;                           // abstract energy units
+  senseRange: number;                       // px
+  thrustAccel: number;                      // px/s^2 max self-applied accel
+}
+
 export interface World {
   width: number;
   height: number;
-  depth: number;            // thin z-slice extent
+  depth: number;
   t: number;
   particles: Particle[];
+  creatures: Creature[];
 
   // Forcing.
-  gravity: number;          // px/s^2, downward (+y)
-  drag: number;             // 1/s, linear drag
+  gravity: number;
+  drag: number;
 
-  // Surface chop: small wavelength, short period, decays fast with depth.
   surfaceAmp: number;
   surfaceLength: number;
   surfacePeriod: number;
   surfaceDecay: number;
 
-  // Slow swell: long wavelength, long period, reaches deep but gently.
   swellAmp: number;
   swellLength: number;
   swellPeriod: number;
   swellDecay: number;
 
-  // Mild z-stirring tied to swell phase.
   zStirAmp: number;
 
-  // Collision response.
+  // Collision response (between particles).
   restitution: number;
-  zWallRestitution: number; // bounce off front/back walls
+  zWallRestitution: number;
   collisionIters: number;
 }
+
+// Metabolism & movement constants (hand-tuned for first creature).
+const METABOLIZE_RATE = 5;       // mass of organic burned per second
+const ENERGY_PER_MASS = 12;      // energy yielded per unit mass burned
+const ENERGY_PER_THRUST_SEC = 22; // energy cost per second at full thrust
+const EDIBLE: ReadonlyArray<MaterialId> = ["organic", "lipid"];
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -82,6 +98,7 @@ export function createWorld(width: number, height: number): World {
     depth: 24,
     t: 0,
     particles: [],
+    creatures: [],
     gravity: 220,
     drag: 0.6,
 
@@ -101,11 +118,12 @@ export function createWorld(width: number, height: number): World {
     zWallRestitution: 0.6,
     collisionIters: 2,
   };
-  seed(world, 500);
+  seedParticles(world, 500);
+  world.creatures.push(makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5));
   return world;
 }
 
-export function seed(world: World, n: number): void {
+export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
   for (let i = 0; i < n; i++) {
     const r = 2 + Math.random() * 4;
@@ -133,71 +151,124 @@ function pickMaterial(): MaterialId {
   return SEED_WEIGHTS[SEED_WEIGHTS.length - 1][0];
 }
 
+function emptyReserves(): Record<MaterialId, number> {
+  const r = {} as Record<MaterialId, number>;
+  for (const id of MATERIAL_IDS) r[id] = 0;
+  return r;
+}
+
+function makeCreature(x: number, y: number, z: number): Creature {
+  const reserves = emptyReserves();
+  reserves.organic = 40;
+  reserves.lipid = 10;
+  return {
+    x, y, z,
+    vx: 0, vy: 0, vz: 0,
+    r: 9,
+    density: 1.0,
+    reserves,
+    energy: 120,
+    senseRange: 200,
+    thrustAccel: 70,
+  };
+}
+
 function mass(p: Particle): number {
-  // Thin slice: treat particles as flat disks; mass ~ density * area.
   return MATERIALS[p.material].density * Math.PI * p.r * p.r;
 }
 
 export function step(world: World, dt: number): void {
   world.t += dt;
+  applyForces(world, dt);
+  updateCreatures(world, dt);
+  resolveCollisions(world);
+  applyWalls(world);
+}
+
+function applyForces(world: World, dt: number): void {
   const kS = (2 * Math.PI) / world.surfaceLength;
   const wS = (2 * Math.PI) / world.surfacePeriod;
   const kL = (2 * Math.PI) / world.swellLength;
   const wL = (2 * Math.PI) / world.swellPeriod;
 
-  // Forces + integration.
-  for (const p of world.particles) {
-    const density = MATERIALS[p.material].density;
+  const integrate = (
+    o: { x: number; y: number; z: number; vx: number; vy: number; vz: number },
+    density: number,
+  ) => {
     const ay = world.gravity * (1 - 1 / density);
-
     const surface =
       world.surfaceAmp *
-      Math.sin(kS * p.x - wS * world.t) *
-      Math.exp(-p.y / world.surfaceDecay);
+      Math.sin(kS * o.x - wS * world.t) *
+      Math.exp(-o.y / world.surfaceDecay);
     const swell =
       world.swellAmp *
-      Math.sin(kL * p.x - wL * world.t) *
-      Math.exp(-p.y / world.swellDecay);
-    const ax = surface + swell;
-
-    // Mild z forcing so depth motion doesn't fully damp out.
+      Math.sin(kL * o.x - wL * world.t) *
+      Math.exp(-o.y / world.swellDecay);
     const az =
       world.zStirAmp *
-      Math.sin(wL * world.t + kL * p.x + 1.0) *
-      Math.exp(-p.y / world.swellDecay);
+      Math.sin(wL * world.t + kL * o.x + 1.0) *
+      Math.exp(-o.y / world.swellDecay);
+    const ax = surface + swell;
 
-    p.vx += (ax - world.drag * p.vx) * dt;
-    p.vy += (ay - world.drag * p.vy) * dt;
-    p.vz += (az - world.drag * p.vz) * dt;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.z += p.vz * dt;
+    o.vx += (ax - world.drag * o.vx) * dt;
+    o.vy += (ay - world.drag * o.vy) * dt;
+    o.vz += (az - world.drag * o.vz) * dt;
+    o.x += o.vx * dt;
+    o.y += o.vy * dt;
+    o.z += o.vz * dt;
+  };
+
+  for (const p of world.particles) integrate(p, MATERIALS[p.material].density);
+  for (const c of world.creatures) integrate(c, c.density);
+}
+
+function updateCreatures(world: World, dt: number): void {
+  for (const c of world.creatures) {
+    // Metabolize organic into energy.
+    const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
+    c.reserves.organic -= burn;
+    c.energy += burn * ENERGY_PER_MASS;
+
+    // Sense + thrust toward nearest edible particle.
+    const target = nearestEdible(c, world);
+    if (target && c.energy > 0) {
+      const dx = target.x - c.x;
+      const dy = target.y - c.y;
+      const dz = target.z - c.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      c.vx += (dx / d) * c.thrustAccel * dt;
+      c.vy += (dy / d) * c.thrustAccel * dt;
+      c.vz += (dz / d) * c.thrustAccel * dt;
+      c.energy -= ENERGY_PER_THRUST_SEC * dt;
+      if (c.energy < 0) c.energy = 0;
+    }
+
+    // Ingest any particle whose center is inside the cell.
+    for (let i = world.particles.length - 1; i >= 0; i--) {
+      const p = world.particles[i];
+      const dx = p.x - c.x;
+      const dy = p.y - c.y;
+      const dz = p.z - c.z;
+      if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
+        c.reserves[p.material] += mass(p);
+        world.particles.splice(i, 1);
+      }
+    }
   }
+}
 
-  resolveCollisions(world);
-
-  // Walls.
+function nearestEdible(c: Creature, world: World): Particle | null {
+  let best: Particle | null = null;
+  let bestSq = c.senseRange * c.senseRange;
   for (const p of world.particles) {
-    if (p.y + p.r > world.height) {
-      p.y = world.height - p.r;
-      if (p.vy > 0) p.vy = 0;
-    }
-    if (p.y - p.r < 0) {
-      p.y = p.r;
-      if (p.vy < 0) p.vy = 0;
-    }
-    // x wraps.
-    if (p.x < 0) p.x += world.width;
-    else if (p.x >= world.width) p.x -= world.width;
-    // z reflects (front/back glass walls).
-    if (p.z < p.r) {
-      p.z = p.r;
-      if (p.vz < 0) p.vz = -p.vz * world.zWallRestitution;
-    } else if (p.z > world.depth - p.r) {
-      p.z = world.depth - p.r;
-      if (p.vz > 0) p.vz = -p.vz * world.zWallRestitution;
-    }
+    if (!EDIBLE.includes(p.material)) continue;
+    const dx = p.x - c.x;
+    const dy = p.y - c.y;
+    const dz = p.z - c.z;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < bestSq) { bestSq = d; best = p; }
   }
+  return best;
 }
 
 function resolveCollisions(world: World): void {
@@ -251,4 +322,30 @@ function resolveCollisions(world: World): void {
       }
     }
   }
+}
+
+function applyWalls(world: World): void {
+  const wallEach = (
+    o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
+  ): void => {
+    if (o.y + o.r > world.height) {
+      o.y = world.height - o.r;
+      if (o.vy > 0) o.vy = 0;
+    }
+    if (o.y - o.r < 0) {
+      o.y = o.r;
+      if (o.vy < 0) o.vy = 0;
+    }
+    if (o.x < 0) o.x += world.width;
+    else if (o.x >= world.width) o.x -= world.width;
+    if (o.z < o.r) {
+      o.z = o.r;
+      if (o.vz < 0) o.vz = -o.vz * world.zWallRestitution;
+    } else if (o.z > world.depth - o.r) {
+      o.z = world.depth - o.r;
+      if (o.vz > 0) o.vz = -o.vz * world.zWallRestitution;
+    }
+  };
+  for (const p of world.particles) wallEach(p);
+  for (const c of world.creatures) wallEach(c);
 }

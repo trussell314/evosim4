@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, step, type Particle } from "./sim";
+import { createWorld, MATERIALS, step, type Particle, type Creature } from "./sim";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -23,9 +23,6 @@ function resize(): void {
 resize();
 window.addEventListener("resize", resize);
 
-// Depth-of-field: bucket particles by z, draw back-to-front with
-// progressively more blur and a touch less opacity. z=0 is the
-// "front pane", z=depth is "back pane".
 const N_BUCKETS = 4;
 const BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
 const BLURS = [0, 1.0, 1.8, 2.6];
@@ -44,7 +41,6 @@ function render(): void {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
     BUCKETS[Math.floor(t * N_BUCKETS)].push(p);
   }
-
   for (let i = N_BUCKETS - 1; i >= 0; i--) {
     ctx.filter = BLURS[i] === 0 ? "none" : `blur(${BLURS[i]}px)`;
     ctx.globalAlpha = ALPHAS[i];
@@ -57,6 +53,27 @@ function render(): void {
   }
   ctx.filter = "none";
   ctx.globalAlpha = 1;
+
+  for (const c of world.creatures) drawCreature(c);
+}
+
+function drawCreature(c: Creature): void {
+  ctx.fillStyle = "#4ec9b0";
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "#0a1f1d";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Energy ring: arc length proportional to energy (clamped at 200 = full).
+  const frac = Math.min(1, Math.max(0, c.energy / 200));
+  ctx.strokeStyle = frac > 0.3 ? "#a6f0c8" : "#e8a07e";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, c.r + 3, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+  ctx.stroke();
 }
 
 let last = performance.now();
