@@ -110,7 +110,7 @@ const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
 
 const MASS_PER_GENOME_BYTE = 3;
-const PARTICLE_DENSITY_PER_AREA = 22000 / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = 11000 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 const MAX_CREATURES = 80;
 const REPRODUCE_COOLDOWN_SEC = 2;
@@ -607,8 +607,14 @@ function creatureTotalMass(c: Creature): number {
 }
 
 export function updateCreatureRadius(c: Creature): void {
+  // Treat stored mass as a sphere's volume (water-density convention), then
+  // render its equatorial cross-section. So mass = (4/3) pi R^3, giving
+  // R = cbrt(3 m / (4 pi)). The on-screen disk's area is pi R^2.
+  // This means doubling mass only grows radius by 2^(1/3) ~= 1.26, so the
+  // surface-area-vs-volume penalty kicks in much harder than under the old
+  // disk-area formula.
   const m = creatureTotalMass(c);
-  c.r = Math.max(MIN_CREATURE_R, Math.sqrt(m / Math.PI));
+  c.r = Math.max(MIN_CREATURE_R, Math.cbrt((3 * m) / (4 * Math.PI)));
 }
 
 const GRID_CELL_SIZE = 12;

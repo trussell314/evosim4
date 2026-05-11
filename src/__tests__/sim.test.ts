@@ -305,7 +305,10 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
 
     const wB = quietWorld();
     const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
-    cb.reserves.rock = 800;
+    // Under spherical-volume sizing, R = cbrt(3 m / 4 pi), so we need a
+    // larger mass than the old disk-area formula required to get a clearly
+    // bigger cell.
+    cb.reserves.rock = 4000;
     wB.creatures.push(cb);
     wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(wB, 0.001);
