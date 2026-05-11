@@ -245,17 +245,31 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
-// Default genome under the new chemistry: chase organic particles and try
-// to reproduce every tick. The fission cost (paid in amino-acid / fatty-acid
-// / minerals / biomass molecules, NOT in a single reserve threshold) is
-// gated inside tryReproduce, so the genome doesn't need an explicit check.
-// Reproduce-cooldown handles spacing.
+// Default genome: chase the nearest organic particle and reproduce only
+// when ATP is high enough to make fission sensible. The build-block cost
+// for fission is the real gate, but checking ATP first avoids burning the
+// REPRODUCE call (and the matching VM-instruction ATP overhead) on every
+// tick when the cell clearly isn't well-fed.
+//
+//   sense_dx organic
+//   sense_dy organic
+//   thrust                 ; accelerate toward food
+//   self_energy            ; push ATP
+//   push8 80               ; threshold
+//   gt                     ; ATP > 80 ?
+//   jz +1                  ; if not, skip REPRODUCE
+//   reproduce              ; try to fission
+//   halt
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
-    OP.SENSE_DX, 3,    // dx to nearest organic particle
-    OP.SENSE_DY, 3,    // dy to nearest organic particle
-    OP.THRUST,         // accelerate toward it
-    OP.REPRODUCE,      // try to fission this tick (gated internally)
+    OP.SENSE_DX, 3,
+    OP.SENSE_DY, 3,
+    OP.THRUST,
+    OP.SELF_ENERGY,
+    OP.PUSH8, 80,
+    OP.GT,
+    OP.JZ, 1,
+    OP.REPRODUCE,
     OP.HALT,
   ]);
 }
