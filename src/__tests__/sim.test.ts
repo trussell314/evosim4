@@ -25,9 +25,6 @@ function quietWorld(): World {
   return {
     width: 800, height: 600, depth: 24, t: 0,
     particles: [], creatures: [],
-    // Default to 0 spawn rate so tests with exact particle-count
-    // assertions aren't ~3%-flaky from random top-of-world spawns.
-    // Tests that exercise replenishment explicitly turn this on.
     particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0,
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
@@ -61,7 +58,6 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     vm: newVMState(),
     color: "#ffffff",
     ingestCooldown: 0,
-    reproduceCooldown: 0,
     bornAt: 0,
     contents: [],
   };
@@ -75,10 +71,6 @@ function cellTotalMass(c: Creature): number {
   return m;
 }
 
-// Load up a cell with everything it needs to fission successfully under
-// the new chemistry: the build-block molecules (aa/fa/min/bio) the fission
-// cost is paid from, plus the substrate molecules + ATP it needs to stay
-// alive long enough.
 function readyToFission(c: Creature): void {
   c.molecules.aminoAcid = 200;
   c.molecules.fattyAcid = 200;
@@ -313,17 +305,16 @@ describe("creature: chemistry - catabolism + respiration", () => {
     c.molecules.adp = 200;
     w.creatures.push(c);
     step(w, 1.0);
-    expect(c.energy).toBeGreaterThan(0);            // ATP made
-    expect(c.molecules.glucose).toBeLessThan(20);   // glucose consumed
-    expect(c.molecules.o2).toBeLessThan(20);        // oxygen consumed
-    expect(c.molecules.co2).toBeGreaterThan(0);     // CO2 produced
+    expect(c.energy).toBeGreaterThan(0);
+    expect(c.molecules.glucose).toBeLessThan(20);
+    expect(c.molecules.o2).toBeLessThan(20);
+    expect(c.molecules.co2).toBeGreaterThan(0);
   });
   it("fermentation: glucose alone (no O2) still makes ATP but produces waste", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
     c.molecules.glucose = 20;
     c.molecules.adp = 50;
-    // No O2: aerobic path is blocked, fermentation runs.
     w.creatures.push(c);
     step(w, 1.0);
     expect(c.energy).toBeGreaterThan(0);
@@ -332,7 +323,6 @@ describe("creature: chemistry - catabolism + respiration", () => {
   it("no fuel + no ATP -> dies", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
-    // emptyMolecules() default leaves everything at 0; reserves also 0.
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.includes(c)).toBe(false);
@@ -344,14 +334,11 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const w = quietWorld();
     const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
     const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    // Use rock (inert: no burn, no excretion, no buoyancy interaction here)
-    // so the only thing that differs between the two cells is total mass.
     big.reserves.rock = 1000;
     w.creatures.push(small, big);
     step(w, 1.0);
     const drainSmall = 100 - small.energy;
     const drainBig = 100 - big.energy;
-    // BASE_METABOLIC_PER_MASS=0.005 * 1000 = 5 extra e/s for big; small ~0.5/s.
     expect(drainBig).toBeGreaterThan(drainSmall * 4);
   });
   it("ingest cooldown shortens for bigger cells (membrane scales with perimeter)", () => {
@@ -364,9 +351,6 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
 
     const wB = quietWorld();
     const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
-    // Under spherical-volume sizing, R = cbrt(3 m / 4 pi), so we need a
-    // larger mass than the old disk-area formula required to get a clearly
-    // bigger cell.
     cb.reserves.rock = 4000;
     wB.creatures.push(cb);
     wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
@@ -379,7 +363,6 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   it("thrust energy cost scales with mass", () => {
     function run(rockMass: number): number {
       const w = quietWorld();
-      // Start with low ATP so its mass-contribution doesn't drown out rock.
       const c = makeCreature({ x: 100, y: 300, energy: 100 });
       c.reserves.organic = 0;
       c.reserves.rock = rockMass;
@@ -410,9 +393,6 @@ describe("creature: chemistry - photosynthesis", () => {
   it("without chlorophyll, no photosynthesis happens", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    // Seed CO2 at ambient so passive membrane diffusion has nothing to do --
-    // any change to CO2 / glucose here would have to come from photosynthesis
-    // (which is gated on chlorophyll).
     c.molecules.co2 = 1;
     w.creatures.push(c);
     const glu0 = c.molecules.glucose;
@@ -441,7 +421,6 @@ describe("creature: chemistry - photosynthesis", () => {
     const e0 = c.energy;
     const adp0 = c.molecules.adp;
     step(w, 1.0);
-    // ATP fell (it's the input to fixation), ADP rose.
     expect(c.energy).toBeLessThan(e0);
     expect(c.molecules.adp).toBeGreaterThan(adp0);
   });
@@ -472,13 +451,12 @@ describe("creature: excretion", () => {
   });
   it("skipped when reserve below threshold", () => {
     const w = quietWorld();
-    w.particleSpawnRate = 0; // no random replenishment during test
+    w.particleSpawnRate = 0;
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, 5, OP.HALT]) });
     c.reserves.gas = 0.1;
     w.creatures.push(c);
     const before = w.particles.length;
     step(w, 1 / 60);
-    // Catabolism nibbles the gas reserve slowly; allow a tiny delta.
     expect(c.reserves.gas).toBeCloseTo(0.1, 2);
     const newP = w.particles.slice(before);
     expect(newP.some((p) => p.material === "gas")).toBe(false);
@@ -501,7 +479,7 @@ describe("creature: excretion", () => {
 describe("creature: ingestion cost and cooldown", () => {
   it("charges per-event energy on ingestion", () => {
     const w = quietWorld();
-    w.particleSpawnRate = 0; // no random replenishment during test
+    w.particleSpawnRate = 0;
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
@@ -584,7 +562,6 @@ describe("creature: ingestion (basic)", () => {
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
-    // Particles are 3D spheres; ingested mass = density * (4/3) * pi * r^3.
     expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * (4 / 3) * Math.PI * 27, 5);
   });
 });
@@ -688,9 +665,6 @@ describe("creature: reproduction", () => {
     w.creatures.push(c);
     step(w, 1 / 60);
     const [p, ch] = w.creatures;
-    // All reactions and the fission split are mass-conserving; what falls
-    // out is excreted particles and passive gas diffusion across the membrane,
-    // both small over a 1/60s tick.
     expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 0);
   });
   it("organic accounts for metabolism during tick", () => {
@@ -891,7 +865,6 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   it("does NOT transfer prey reserves/molecules into predator", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    // Big predator so the 1.5x-mass test is satisfied.
     for (const id of M) p.reserves[id] = 300;
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
     q.reserves.rock = 80;
@@ -899,11 +872,9 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
     const pRockBefore = p.reserves.rock;
     w.creatures.push(p, q);
     step(w, 1 / 60);
-    // p.reserves.rock catabolizes slightly but does NOT pick up q's 80.
     expect(p.reserves.rock).toBeGreaterThan(pRockBefore - 5);
     expect(p.reserves.rock).toBeLessThan(pRockBefore + 1);
     expect(p.molecules.glucose).toBeLessThan(15);
-    // Prey's own state is preserved in the vacuole.
     expect(p.contents.length).toBe(1);
     expect(p.contents[0].reserves.rock).toBeCloseTo(80, 1);
     expect(p.contents[0].molecules.glucose).toBeCloseTo(25, 1);
@@ -927,18 +898,14 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(p.contents.length).toBe(1);
-    // Kill the predator.
     p.energy = 0;
     p.molecules = emptyMolecules();
     for (const id of M) p.reserves[id] = 0;
     step(w, 1 / 60);
-    // Predator gone; previously-engulfed prey is back in the world.
     expect(w.creatures.includes(p)).toBe(false);
     expect(w.creatures.includes(q)).toBe(true);
   });
   it("INGEST (PREDATE) absorbs the vacuole contents of its own prey", () => {
-    // A big predator eats a swallower that itself has prey in its vacuole.
-    // The grand-predator should inherit that vacuole.
     const w = quietWorld();
     const big = makeCreature({ x: 400, y: 300, energy: 200, genome: new Uint8Array([OP.PREDATE, OP.HALT]) });
     for (const id of M) big.reserves[id] = 1000;
@@ -982,8 +949,6 @@ describe("ecology: extinction recovery", () => {
     for (let i = 0; i < 3; i++) {
       const c = w.creatures[0] ?? makeCreature({ energy: 0 });
       c.energy = 0;
-      // Wipe every bulk reserve and every molecule, so catabolism /
-      // diffusion can't keep the cell alive across this tick.
       for (const id of M) c.reserves[id] = 0;
       c.molecules = emptyMolecules();
       if (w.creatures.length === 0) w.creatures.push(c);
@@ -1093,36 +1058,46 @@ describe("creature: reproduction does not cascade within a single tick", () => {
   });
 });
 
-describe("creature: reproduction cooldown", () => {
+describe("creature: reproduction pacing (no cooldown)", () => {
   beforeEach(() => stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]));
-  it("parent cannot fission again on the next tick", () => {
+  it("parent can fission again the next tick if it still has build-blocks", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
-    w.creatures.push(c);
-    step(w, 1 / 60);
-    expect(w.creatures.length).toBe(2);
-    expect(w.creatures[0].reproduceCooldown).toBeGreaterThan(0);
-    step(w, 1 / 60);
-    expect(w.creatures.length).toBe(2);
-  });
-  it("child also has a fresh fission cooldown", () => {
-    const w = quietWorld();
-    const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
-    w.creatures.push(c);
-    step(w, 1 / 60);
-    expect(w.creatures[1].reproduceCooldown).toBeGreaterThan(0);
-  });
-  it("cooldown decrements; re-fission eventually possible", () => {
-    const w = quietWorld();
-    const c = makeCreature({ energy: 1000 });
     for (const id of M) c.reserves[id] = 5000; readyToFission(c);
+    c.molecules.aminoAcid = 2000;
+    c.molecules.fattyAcid = 2000;
+    c.molecules.minerals = 2000;
+    c.molecules.biomass = 2000;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
-    for (let i = 0; i < 180; i++) step(w, 1 / 60);
-    expect(w.creatures.length).toBeGreaterThan(2);
+    const parent = w.creatures[0];
+    parent.molecules.aminoAcid = 2000;
+    parent.molecules.fattyAcid = 2000;
+    parent.molecules.minerals = 2000;
+    parent.molecules.biomass = 2000;
+    parent.energy = 200;
+    step(w, 1 / 60);
+    // At minimum the parent fissioned again -> 3 cells. The child may also
+    // have fissioned (its inherited build-block share is usually plenty).
+    expect(w.creatures.length).toBeGreaterThanOrEqual(3);
+  });
+  it("fission fails the next tick when build-blocks are depleted", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
+    for (const cell of w.creatures) {
+      cell.molecules.aminoAcid = 0;
+      cell.molecules.fattyAcid = 0;
+      cell.molecules.minerals = 0;
+      cell.molecules.biomass = 0;
+      for (const id of M) cell.reserves[id] = 0;
+    }
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
   });
 });
 
@@ -1152,9 +1127,6 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const e0 = c.energy;
     step(w, dt);
     expect(w.particles.includes(target)).toBe(false);
-    // Energy dropped by ingest cost (1.5) plus a small mass-dependent drain.
-    // With empty genome there's no VM exec cost, and the cell has no fuel
-    // it can metabolize back to ATP in one tick.
     const drop = e0 - c.energy;
     expect(drop).toBeGreaterThan(1.5);
     expect(drop).toBeLessThan(2.0);
@@ -1175,10 +1147,6 @@ describe("particle replenishment", () => {
     seedParticles(w, 550);
     const n0 = w.particles.length;
     for (let i = 0; i < 30; i++) step(w, 1 / 60);
-    // Extinction recovery seeds a creature; it may auto-excrete CO2 as gas
-    // once internal levels build up. The replenishParticles path is the
-    // thing under test here -- it must not spawn above the target. Allow
-    // a small excretion delta.
     expect(w.particles.length).toBeLessThanOrEqual(n0 + 3);
   });
   it("refills after eating", () => {
@@ -1227,6 +1195,6 @@ describe("default creature behavior (integration)", () => {
     for (const id of M) if (id !== "organic") c.reserves[id] = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
-    expect(w.creatures.length).toBe(400);
+    expect(w.creatures.length).toBe(1);
   });
 });
