@@ -71,6 +71,7 @@ export interface Creature {
   vm: VMState;
   color: string;                            // cached, hashed from genome (visual lineage)
   ingestCooldown: number;                   // seconds until next particle can be absorbed
+  reproduceCooldown: number;                // seconds until next fission allowed
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -118,12 +119,22 @@ const MASS_PER_GENOME_BYTE = 3;
 const PARTICLE_TARGET = 550;
 const PARTICLE_SPAWN_RATE = 30;       // per second (when below target)
 const MAX_CREATURES = 80;
+const REPRODUCE_COOLDOWN_SEC = 2;     // biological recovery between fissions
 
 // Ingestion. Each successful absorption costs energy and locks the cell out
 // of ingesting again for a short cooldown -- prevents cells from sweeping
 // through food without paying anything.
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.35;
+
+// Death. Cells pay a baseline metabolic drain every tick (just being alive
+// costs something). A cell dies when it can no longer fuel itself: energy
+// at zero AND no organic reserve left to metabolize. On death, the cell's
+// remaining reserves are released back into the world as particles --
+// matter is conserved (approximately, modulo the minimum particle radius).
+const BASE_METABOLIC_DRAIN = 0.5;     // energy / second, always
+const DEATH_RELEASE_R_MIN = 1.2;      // smallest released particle radius
+const DEATH_RELEASE_SCATTER = 30;     // px/s scatter velocity scale
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -209,6 +220,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     vm: newVMState(),
     color: genomeColor(genome),
     ingestCooldown: 0,
+    reproduceCooldown: 0,
   };
 }
 
@@ -311,8 +323,13 @@ function updateCreatures(world: World, dt: number): void {
   // Without this a child can reproduce on the same tick it was born, which
   // cascades and breaks matter/energy conservation per cell.
   const n = world.creatures.length;
+  const dead: number[] = [];
   for (let cIdx = 0; cIdx < n; cIdx++) {
     const c = world.creatures[cIdx];
+
+    // Baseline metabolic drain. Always paid, regardless of activity.
+    c.energy -= BASE_METABOLIC_DRAIN * dt;
+
     // Metabolize organic into energy.
     const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
     c.reserves.organic -= burn;
@@ -351,9 +368,12 @@ function updateCreatures(world: World, dt: number): void {
     }
     if (c.energy < 0) c.energy = 0;
 
-    // Tick down the ingest cooldown.
+    // Tick down cooldowns.
     if (c.ingestCooldown > 0) {
       c.ingestCooldown = Math.max(0, c.ingestCooldown - dt);
+    }
+    if (c.reproduceCooldown > 0) {
+      c.reproduceCooldown = Math.max(0, c.reproduceCooldown - dt);
     }
 
     // At most one ingestion per cooldown window, and only if the cell can pay
@@ -373,10 +393,54 @@ function updateCreatures(world: World, dt: number): void {
         }
       }
     }
+
+    // Starvation: no energy AND no organic to burn. Cell can't fuel itself
+    // and dies. Reserves get released as particles (matter conservation).
+    if (c.energy <= 0 && c.reserves.organic < 0.5) {
+      dead.push(cIdx);
+    }
+  }
+
+  // Remove dead cells in reverse-index order so earlier indices stay valid.
+  for (let i = dead.length - 1; i >= 0; i--) {
+    const idx = dead[i];
+    releaseReservesAsParticles(world.creatures[idx], world);
+    world.creatures.splice(idx, 1);
+  }
+}
+
+function releaseReservesAsParticles(c: Creature, world: World): void {
+  for (let i = 0; i < 6; i++) {
+    const matId = MATERIAL_IDS[i];
+    let remaining = c.reserves[matId];
+    if (remaining < 0.5) continue;
+    const density = MATERIALS[matId].density;
+    while (remaining > 0.5) {
+      // Aim for a typical particle radius (2-4) for chunky release, fitting
+      // the final particle to the leftover mass.
+      let r = 2 + Math.random() * 2;
+      let m = density * Math.PI * r * r;
+      if (m > remaining) {
+        r = Math.max(DEATH_RELEASE_R_MIN, Math.sqrt(remaining / (density * Math.PI)));
+        m = density * Math.PI * r * r;
+      }
+      world.particles.push({
+        x: c.x + (Math.random() - 0.5) * 6,
+        y: c.y + (Math.random() - 0.5) * 6,
+        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
+        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
+        r,
+        material: matId,
+      });
+      remaining -= m;
+    }
   }
 }
 
 function tryReproduce(parent: Creature, world: World): void {
+  if (parent.reproduceCooldown > 0) return;
   if (world.creatures.length >= MAX_CREATURES) return;
   // Mutate first so cost matches the child's actual genome.
   const childGenome = mutateGenome(parent.genome);
@@ -416,7 +480,9 @@ function tryReproduce(parent: Creature, world: World): void {
     vm: newVMState(),
     color: genomeColor(childGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
+    reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
   };
+  parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
   world.creatures.push(child);
 }
 
