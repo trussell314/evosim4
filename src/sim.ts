@@ -238,10 +238,12 @@ const BASE_METABOLIC_PER_MASS = 0.005;
 const DEATH_RELEASE_R_MIN = 1.2;
 const DEATH_RELEASE_SCATTER = 30;
 
-// Thrust energy scaling. THRUST_MASS_REF=50 ~= the starting cell mass
-// (organic=40 + lipid=10), so a fresh cell's thrust cost matches the prior
-// flat rate; bigger cells pay linearly more to move themselves through fluid.
-const THRUST_MASS_REF = 50;
+// Thrust energy scaling. Starter cell mass is ~224 (reserves + molecules +
+// ATP), so THRUST_MASS_REF=200 keeps the starter near the no-penalty line
+// and only large grown cells pay the surface-area-vs-volume tax. With the
+// old THRUST_MASS_REF=50 the starter paid ~4.5x and bankrupted itself on
+// the chase to its first organic particle.
+const THRUST_MASS_REF = 200;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
