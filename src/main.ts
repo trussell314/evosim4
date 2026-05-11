@@ -332,24 +332,16 @@ function drawPhylogeny(): void {
   );
 }
 
-// Selected cells get a 2px white ring at (r + SELECT_RING_OFFSET) with a
-// visible gap between it and the cell body. No inner ring -- the cell
-// keeps its normal dark outline so the gap reads clearly.
-const SELECT_RING_OFFSET = 4;
-
+// Every cell wears a thin white outline on its wobbly body. Selected
+// cells get a thicker version of the same line so selection reads as
+// "the same cell, just emphasized."
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
 ): void {
-  ctx.strokeStyle = "#0a1f1d";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = selected ? 3 : 1;
   tracedWobblyBody(cx, cy, r, t, phase);
   ctx.stroke();
-  if (selected) {
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    tracedWobblyBody(cx, cy, r + SELECT_RING_OFFSET, t, phase);
-    ctx.stroke();
-  }
 }
 
 function drawCreature(c: Creature, selected: boolean): void {
