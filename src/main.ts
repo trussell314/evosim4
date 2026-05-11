@@ -26,9 +26,13 @@ function refreshActiveDisasm(): void {
 refreshActiveDisasm();
 
 function resize(): void {
+  // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
+  // dimensions but doesn't fire window.resize on iOS Safari, so the canvas
+  // can be smaller than the visible area after zooming out.
+  const vv = window.visualViewport;
   const dpr = window.devicePixelRatio || 1;
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const w = vv ? vv.width : window.innerWidth;
+  const h = vv ? vv.height : window.innerHeight;
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
   canvas.width = Math.floor(w * dpr);
@@ -39,6 +43,10 @@ function resize(): void {
 }
 resize();
 window.addEventListener("resize", resize);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", resize);
+  window.visualViewport.addEventListener("scroll", resize);
+}
 
 canvas.addEventListener("click", (e) => {
   const rect = canvas.getBoundingClientRect();
