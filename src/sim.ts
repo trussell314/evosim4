@@ -240,7 +240,7 @@ export interface World {
 }
 
 const ENERGY_PER_THRUST_SEC = 10;
-const ENERGY_PER_INSTRUCTION = 0.02;
+const ENERGY_PER_INSTRUCTION = 0.01;
 const VM_INSTR_BUDGET = 32;
 
 const MASS_PER_GENOME_BYTE = 1.5;

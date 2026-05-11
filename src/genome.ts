@@ -327,8 +327,8 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   thrust                 ; accelerate up the food gradient
 //   ingest                 ; absorb any particle in radius this tick
 //   self_energy            ; push ATP
-//   push8 8                ; threshold
-//   gt                     ; ATP > 8 ?
+//   push8 3                ; threshold
+//   gt                     ; ATP > 3 ?
 //   jz +1                  ; if not, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
@@ -339,7 +339,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.THRUST,
     OP.INGEST,
     OP.SELF_ENERGY,
-    OP.PUSH8, 8,
+    OP.PUSH8, 3,
     OP.GT,
     OP.JZ, 1,
     OP.REPRODUCE,
