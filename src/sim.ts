@@ -211,7 +211,7 @@ const ENERGY_PER_THRUST_SEC = 10;
 const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
 
-const MASS_PER_GENOME_BYTE = 3;
+const MASS_PER_GENOME_BYTE = 1.5;
 const PARTICLE_DENSITY_PER_AREA = 16500 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 const MAX_CREATURES = 400;
@@ -252,7 +252,7 @@ const THRUST_MASS_REF = 200;
 // reflects that splitting a big cell takes more reorganization than a small
 // one.
 const REPRODUCE_ATTEMPT_ATP_BASE = 2;
-const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.02;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.

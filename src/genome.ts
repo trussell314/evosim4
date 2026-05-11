@@ -254,8 +254,8 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   sense_dy organic
 //   thrust                 ; accelerate toward food
 //   self_energy            ; push ATP
-//   push8 15               ; threshold
-//   gt                     ; ATP > 15 ?
+//   push8 8                ; threshold
+//   gt                     ; ATP > 8 ?
 //   jz +1                  ; if not, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
@@ -265,7 +265,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_DY, 3,
     OP.THRUST,
     OP.SELF_ENERGY,
-    OP.PUSH8, 15,
+    OP.PUSH8, 8,
     OP.GT,
     OP.JZ, 1,
     OP.REPRODUCE,
