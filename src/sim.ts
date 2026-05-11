@@ -240,7 +240,7 @@ export interface World {
 }
 
 const ENERGY_PER_THRUST_SEC = 5;
-const ENERGY_PER_INSTRUCTION = 0.01;
+const ENERGY_PER_INSTRUCTION = 0.005;
 const VM_INSTR_BUDGET = 32;
 
 const MASS_PER_GENOME_BYTE = 1.5;
@@ -299,7 +299,7 @@ const MIN_CREATURE_R = 4;
 // molecules per second per unit cell surface (r/MIN_CREATURE_R). Mass
 // fractions in CATAB_FRACTIONS must sum to 1 per row so material ->
 // molecules conversion is mass-conserving.
-const CATAB_VMAX_PER_R = 4;   // mass / sec per (r / MIN_R) surface ratio at saturation
+const CATAB_VMAX_PER_R = 6;   // mass / sec per (r / MIN_R) surface ratio at saturation
 const CATAB_KM = 6;
 
 // Passive O2 (and CO2) exchange with the surrounding water. Real cells
