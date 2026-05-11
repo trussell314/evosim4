@@ -122,6 +122,11 @@ const BASE_METABOLIC_DRAIN = 0.5;
 const DEATH_RELEASE_R_MIN = 1.2;
 const DEATH_RELEASE_SCATTER = 30;
 
+// Cell sizing. Area scales with total stored mass (2D cross-section of
+// "volume"). r = sqrt(mass / pi), clamped below to keep newly-stripped cells
+// visible. No upper cap -- huge cells should look huge.
+const MIN_CREATURE_R = 4;
+
 export function createWorld(width: number, height: number): World {
   const world: World = {
     width, height,
@@ -138,8 +143,8 @@ export function createWorld(width: number, height: number): World {
     swellAmp: 22,
     swellLength: 820,
     swellPeriod: 8.5,
-    swellDecay: 520,
     zStirAmp: 9,
+    swellDecay: 520,
     restitution: 0.15,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -187,10 +192,10 @@ function makeCreature(x: number, y: number, z: number): Creature {
   reserves.organic = 40;
   reserves.lipid = 10;
   const genome = makeDefaultGenome();
-  return {
+  const c: Creature = {
     x, y, z,
     vx: 0, vy: 0, vz: 0,
-    r: 9,
+    r: MIN_CREATURE_R,
     density: 1.0,
     reserves,
     energy: 120,
@@ -202,6 +207,8 @@ function makeCreature(x: number, y: number, z: number): Creature {
     ingestCooldown: 0,
     reproduceCooldown: 0,
   };
+  updateCreatureRadius(c);
+  return c;
 }
 
 export function genomeColor(genome: Uint8Array): string {
@@ -293,6 +300,10 @@ function updateCreatures(world: World, dt: number): void {
     if (eaten.has(cIdx)) continue;
     const c = world.creatures[cIdx];
 
+    // Refresh radius from current reserves at the start of the tick so that
+    // predation overlap checks see the cell's actual size. Cheap (one sqrt).
+    updateCreatureRadius(c);
+
     c.energy -= BASE_METABOLIC_DRAIN * dt;
 
     const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
@@ -340,6 +351,7 @@ function updateCreatures(world: World, dt: number): void {
 
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
       let ingested = false;
+      // Try eating a smaller-than-me cell first (predation).
       const myMass = creatureTotalMass(c);
       for (let j = 0; j < n; j++) {
         if (j === cIdx || eaten.has(j)) continue;
@@ -377,6 +389,9 @@ function updateCreatures(world: World, dt: number): void {
         }
       }
     }
+
+    // Refresh radius from current total mass (area = mass).
+    updateCreatureRadius(c);
 
     if (c.energy <= 0 && c.reserves.organic < 0.5) {
       dead.push(cIdx);
@@ -440,14 +455,25 @@ function tryReproduce(parent: Creature, world: World): void {
   const energyGift = parent.energy * 0.5;
   parent.energy -= energyGift;
 
+  // Refresh parent's radius BEFORE positioning the child so the child is
+  // placed outside the parent's current body. Otherwise a freshly-built
+  // cell with bypassed updateCreatureRadius could spawn a child inside
+  // itself and engulf it next tick.
+  updateCreatureRadius(parent);
+
   const angle = Math.random() * Math.PI * 2;
-  const offset = parent.r * 2.1;
+  // Position child at parent.r + child.r so they don't overlap on birth.
+  const childMassEstimate = childReserves.organic + childReserves.rock +
+    childReserves.sand + childReserves.clay +
+    childReserves.lipid + childReserves.gas;
+  const childRGuess = Math.max(MIN_CREATURE_R, Math.sqrt(childMassEstimate / Math.PI));
+  const offset = (parent.r + childRGuess) * 1.1;
   const child: Creature = {
     x: parent.x + Math.cos(angle) * offset,
     y: parent.y + Math.sin(angle) * offset,
     z: parent.z,
     vx: parent.vx, vy: parent.vy, vz: parent.vz,
-    r: parent.r,
+    r: MIN_CREATURE_R,
     density: parent.density,
     reserves: childReserves,
     energy: energyGift,
@@ -459,6 +485,7 @@ function tryReproduce(parent: Creature, world: World): void {
     ingestCooldown: INGEST_COOLDOWN_SEC,
     reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
   };
+  updateCreatureRadius(child);
   parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
   world.creatures.push(child);
 }
@@ -510,6 +537,14 @@ function creatureTotalMass(c: Creature): number {
   return m;
 }
 
+// Cell visual size derives from total stored mass: area = mass (assuming
+// effective density ~1), so r = sqrt(mass / pi). Floor at MIN_CREATURE_R so
+// freshly-spawned cells stay visible.
+export function updateCreatureRadius(c: Creature): void {
+  const m = creatureTotalMass(c);
+  c.r = Math.max(MIN_CREATURE_R, Math.sqrt(m / Math.PI));
+}
+
 // Cell size for spatial hashing. Spawn radius caps at 6, so the largest
 // sum-of-radii any two particles can have is 12; that's the upper bound for
 // "potentially colliding". Smaller cells would miss pairs.
@@ -544,9 +579,6 @@ function resolveCollisions(world: World): void {
       COLLISION_BUCKETS[cy * cols + cx].push(pi);
     }
 
-    // Row-major pass over cells. For each cell, check pairs within it plus
-    // pairs against four "forward" neighbors: (cx+1, cy), (cx-1, cy+1),
-    // (cx, cy+1), (cx+1, cy+1). Each adjacent pair is visited exactly once.
     for (let cy = 0; cy < rows; cy++) {
       for (let cx = 0; cx < cols; cx++) {
         const cell = COLLISION_BUCKETS[cy * cols + cx];
@@ -634,22 +666,37 @@ function applyWalls(world: World): void {
   const wallEach = (
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
   ): void => {
-    if (o.y + o.r > world.height) {
-      o.y = world.height - o.r;
-      if (o.vy > 0) o.vy = 0;
-    }
-    if (o.y - o.r < 0) {
-      o.y = o.r;
-      if (o.vy < 0) o.vy = 0;
-    }
-    if (o.x < o.r) {
+    // X.
+    if (o.r * 2 >= world.width) {
+      o.x = world.width * 0.5;
+      o.vx = 0;
+    } else if (o.x < o.r) {
       o.x = o.r;
       if (o.vx < 0) o.vx = -o.vx * world.xWallRestitution;
     } else if (o.x > world.width - o.r) {
       o.x = world.width - o.r;
       if (o.vx > 0) o.vx = -o.vx * world.xWallRestitution;
     }
-    if (o.z < o.r) {
+    // Y. Floor and ceiling clamp without bouncing.
+    if (o.r * 2 >= world.height) {
+      o.y = world.height * 0.5;
+      o.vy = 0;
+    } else {
+      if (o.y + o.r > world.height) {
+        o.y = world.height - o.r;
+        if (o.vy > 0) o.vy = 0;
+      }
+      if (o.y - o.r < 0) {
+        o.y = o.r;
+        if (o.vy < 0) o.vy = 0;
+      }
+    }
+    // Z. Particles fit easily; creatures may exceed the z slab when they're
+    // huge -- center them.
+    if (o.r * 2 >= world.depth) {
+      o.z = world.depth * 0.5;
+      o.vz = 0;
+    } else if (o.z < o.r) {
       o.z = o.r;
       if (o.vz < 0) o.vz = -o.vz * world.zWallRestitution;
     } else if (o.z > world.depth - o.r) {

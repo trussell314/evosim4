@@ -96,22 +96,43 @@ function render(): void {
   }
 }
 
+// Rings drawn around each cell. Each ring is a partial arc at a different
+// radius offset. Inner-to-outer: energy, ingest-readiness, reproduce-readiness.
+const RING_GAP = 3;       // px between cell edge and innermost ring
+const RING_SPACING = 3;   // px between successive rings
+const RING_WIDTH = 2;
+
 function drawCreature(c: Creature, selected: boolean): void {
+  // Body.
   ctx.fillStyle = c.color;
   ctx.beginPath();
   ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
   ctx.fill();
-
   ctx.strokeStyle = selected ? "#ffffff" : "#0a1f1d";
   ctx.lineWidth = selected ? 2 : 1.5;
   ctx.stroke();
 
-  // Energy ring: arc length proportional to energy (clamped at 200 = full).
-  const frac = Math.min(1, Math.max(0, c.energy / 200));
-  ctx.strokeStyle = frac > 0.3 ? "#a6f0c8" : "#e8a07e";
-  ctx.lineWidth = 2;
+  // Ring 0: energy (cap at 200 = full ring).
+  const energyFrac = Math.min(1, Math.max(0, c.energy / 200));
+  drawRing(c.x, c.y, c.r + RING_GAP, energyFrac,
+           energyFrac > 0.3 ? "#a6f0c8" : "#e8a07e");
+
+  // Ring 1: ingest readiness (full = ready, drains during cooldown).
+  // Use the longer of the two ingest cooldowns (predation, 0.7s) as scale.
+  const ingestFrac = 1 - Math.min(1, c.ingestCooldown / 0.7);
+  drawRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea");
+
+  // Ring 2: reproduce readiness (full = ready).
+  const reproFrac = 1 - Math.min(1, c.reproduceCooldown / 2.0);
+  drawRing(c.x, c.y, c.r + RING_GAP + 2 * RING_SPACING, reproFrac, "#c890f5");
+}
+
+function drawRing(cx: number, cy: number, r: number, frac: number, color: string): void {
+  if (frac <= 0) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = RING_WIDTH;
   ctx.beginPath();
-  ctx.arc(c.x, c.y, c.r + 3, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+  ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
   ctx.stroke();
 }
 
@@ -125,13 +146,19 @@ function updateInspector(): void {
     inspector.textContent = `pop=0  particles=${world.particles.length}`;
     return;
   }
-  const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
+  let mass = 0;
+  for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
   const reserves = MATERIAL_IDS_ORDERED
     .map((id) => `${id.slice(0, 3)}=${c.reserves[id].toFixed(0)}`)
     .join(" ");
+  const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
   inspector.textContent =
     `pop=${world.creatures.length}  particles=${world.particles.length}  (click a cell)\n` +
-    `E=${c.energy.toFixed(0)}  ${reserves}\n` +
+    `pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
+    `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
+    `r=${c.r.toFixed(1)}  mass=${mass.toFixed(0)}  E=${c.energy.toFixed(0)}\n` +
+    `ingestCD=${c.ingestCooldown.toFixed(2)}s  reproCD=${c.reproduceCooldown.toFixed(2)}s\n` +
+    `${reserves}\n` +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
     "—\n" +
     activeDisasm;
