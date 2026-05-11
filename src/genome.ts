@@ -245,16 +245,17 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
+// Default genome under the new chemistry: chase organic particles and try
+// to reproduce every tick. The fission cost (paid in amino-acid / fatty-acid
+// / minerals / biomass molecules, NOT in a single reserve threshold) is
+// gated inside tryReproduce, so the genome doesn't need an explicit check.
+// Reproduce-cooldown handles spacing.
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
-    OP.SENSE_DX, 3,
-    OP.SENSE_DY, 3,
-    OP.THRUST,
-    OP.SELF_RESERVE, 3,
-    OP.PUSH8, 45,
-    OP.GT,
-    OP.JZ, 1,
-    OP.REPRODUCE,
+    OP.SENSE_DX, 3,    // dx to nearest organic particle
+    OP.SENSE_DY, 3,    // dy to nearest organic particle
+    OP.THRUST,         // accelerate toward it
+    OP.REPRODUCE,      // try to fission this tick (gated internally)
     OP.HALT,
   ]);
 }
