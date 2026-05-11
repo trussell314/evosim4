@@ -249,7 +249,7 @@ const PARTICLE_SPAWN_RATIO = 90 / 550;
 const MAX_CREATURES = 400;
 
 const INGEST_ENERGY_COST = 1.5;
-const INGEST_COOLDOWN_SEC = 0.35;
+const INGEST_COOLDOWN_SEC = 0.7;
 // Ingestion is rate-limited by membrane area: a bigger cell has more surface
 // through which to absorb, so its post-ingest cooldown shrinks proportionally
 // (cooldown / (r / INGEST_REF_R)). Below INGEST_REF_R the cooldown stays at
