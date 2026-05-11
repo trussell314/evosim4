@@ -297,7 +297,7 @@ function describeBiology(c: Creature): string {
   // Trophic mode: photosynthesizer (chlorophyll-bearing) vs predator
   // (PREDATE op) vs heterotroph (the default — eats organic particles).
   const tags: string[] = [];
-  if (m.chlorophyll > 1 || ops.has(OP.PHOTOSYNTH)) tags.push("photosynth");
+  if (m.chlorophyll > 1) tags.push("photosynth");
   if (ops.has(OP.PREDATE)) tags.push("predator");
   if (ops.has(OP.ENGULF)) tags.push("engulfer");
   // Default sensory + thrust → motile chaser of organic food.

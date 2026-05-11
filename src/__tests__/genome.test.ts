@@ -230,9 +230,6 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, OP.HALT]).out.predate).toBe(true);
   });
-  it("PHOTOSYNTH flag", () => {
-    expect(exec([OP.PHOTOSYNTH, OP.HALT]).out.photosynth).toBe(true);
-  });
   it("output reset between runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();

@@ -36,6 +36,18 @@ The simulation is built to support that goal:
 
 ## To-do (eventually)
 
+- **Metabolism in the genome.** Today the genome only controls
+  movement and the `REPRODUCE` / `PREDATE` / `ENGULF` / `EXCRETE`
+  triggers. Every metabolic reaction (catabolism, aerobic /
+  fermentation / beta-oxidation, photosynthesis, biosynthesis of
+  chlorophyll / enzymes / biomass, gas diffusion, auto-excretion of
+  CO2 / waste) runs the same way for every cell regardless of its
+  genome. That means &ldquo;evolution&rdquo; can only meaningfully select on
+  behavior, not biochemistry. Add ops that let a cell bias a pathway
+  each tick &mdash; e.g. an op that takes a stack-popped fraction and
+  scales the next tick&rsquo;s aerobic rate, ops that invest ATP into
+  chlorophyll vs enzyme vs biomass synthesis, etc. Then strategy
+  trade-offs (burn now vs build infrastructure) become evolvable.
 - **Temperature as a modeled attribute.** Heat as a byproduct of
   metabolism and sunlight, diffusing out of frame. Reaction rates
   should respond to local temperature so this isn&rsquo;t just decor &mdash;

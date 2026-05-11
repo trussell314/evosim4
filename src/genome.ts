@@ -42,7 +42,6 @@ export const OP = {
   EXCRETE:       0x51,
   REPRODUCE:     0x52,
   PREDATE:       0x53,   // ingest: absorb prey immediately into own reserves
-  PHOTOSYNTH:    0x54,
   ENGULF:        0x55,   // swallow whole: prey persists alive in vacuole
 
   HALT:          0xFF,
@@ -104,7 +103,6 @@ export interface VMOutputs {
   excrete: Float32Array;
   reproduce: boolean;
   predate: boolean;
-  photosynth: boolean;
   engulf: boolean;
   instructions: number;
 }
@@ -113,7 +111,7 @@ export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0,
     excrete: new Float32Array(6),
-    reproduce: false, predate: false, photosynth: false, engulf: false,
+    reproduce: false, predate: false, engulf: false,
     instructions: 0,
   };
 }
@@ -131,7 +129,6 @@ export function runTick(
   out.excrete.fill(0);
   out.reproduce = false;
   out.predate = false;
-  out.photosynth = false;
   out.engulf = false;
   out.instructions = 0;
   const L = genome.length;
@@ -209,7 +206,6 @@ export function runTick(
       }
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
-      case OP.PHOTOSYNTH: out.photosynth = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
       case OP.HALT:
         return;
