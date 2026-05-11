@@ -124,11 +124,26 @@ const PREDATION_COOLDOWN_SEC = 0.7;
 const PREDATION_ENERGY_BASE = 5;
 const PREDATION_ENERGY_PER_MASS = 0.1;
 
+// Baseline metabolism: a small flat "cost of being alive" plus a per-mass
+// component. Big cells must keep more chemistry running and starve faster
+// when idle. A r=4 cell pays ~0.5 e/s; a r=20 (~mass 1250) cell pays ~7 e/s.
 const BASE_METABOLIC_DRAIN = 0.5;
+const BASE_METABOLIC_PER_MASS = 0.005;
 const DEATH_RELEASE_R_MIN = 1.2;
 const DEATH_RELEASE_SCATTER = 30;
 
+// Thrust energy scaling. THRUST_MASS_REF=50 ~= the starting cell mass
+// (organic=40 + lipid=10), so a fresh cell's thrust cost matches the prior
+// flat rate; bigger cells pay linearly more to move themselves through fluid.
+const THRUST_MASS_REF = 50;
+
+// Photosynthesis: rate scales with cell perimeter (light absorption is a
+// surface phenomenon). Reference radius PHOTOSYNTH_REF_R makes a small cell's
+// rate match the previous flat constant; bigger cells absorb more total but
+// their *per-mass* rate falls as the surface-to-volume ratio shrinks. This
+// is the surface-area-vs-volume cost of getting big.
 const PHOTOSYNTH_RATE = 3;
+const PHOTOSYNTH_REF_R = 4;
 const LIGHT_DECAY = 250;
 
 const DRAG_REF_R = 4;
@@ -313,7 +328,8 @@ function updateCreatures(world: World, dt: number): void {
     const c = world.creatures[cIdx];
 
     updateCreatureRadius(c);
-    c.energy -= BASE_METABOLIC_DRAIN * dt;
+    // Baseline drain scales with total stored mass so big cells aren't free.
+    c.energy -= (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dt;
 
     const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
     c.reserves.organic -= burn;
@@ -348,13 +364,19 @@ function updateCreatures(world: World, dt: number): void {
     if (c.energy > 0 && usedFrac > 0) {
       c.vx += ax * dt;
       c.vy += ay * dt;
-      c.energy -= usedFrac * ENERGY_PER_THRUST_SEC * dt;
+      // Thrust energy scales linearly with mass -- pushing a heavier cell
+      // through fluid takes more work.
+      const massScale = Math.max(1, creatureTotalMass(c) / THRUST_MASS_REF);
+      c.energy -= usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt;
     }
     if (c.energy < 0) c.energy = 0;
 
     if (VM_OUT.photosynth && c.reserves.gas > 0) {
       const light = Math.exp(-c.y / LIGHT_DECAY);
-      const massPossible = PHOTOSYNTH_RATE * light * dt;
+      // Photosynthesis is a surface phenomenon: rate scales with perimeter
+      // (linear in r). Bigger cells absorb more total light but less per
+      // unit mass, since mass grows quadratically with r in 2D.
+      const massPossible = PHOTOSYNTH_RATE * (c.r / PHOTOSYNTH_REF_R) * light * dt;
       const massActual = Math.min(massPossible, c.reserves.gas);
       if (massActual > 0) {
         c.reserves.gas -= massActual;

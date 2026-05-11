@@ -280,6 +280,39 @@ describe("creature: metabolism", () => {
   });
 });
 
+describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
+  it("baseline metabolic drain is higher for cells with more stored mass", () => {
+    const w = quietWorld();
+    const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    // Use rock (inert: no burn, no excretion, no buoyancy interaction here)
+    // so the only thing that differs between the two cells is total mass.
+    big.reserves.rock = 1000;
+    w.creatures.push(small, big);
+    step(w, 1.0);
+    const drainSmall = 100 - small.energy;
+    const drainBig = 100 - big.energy;
+    // BASE_METABOLIC_PER_MASS=0.005 * 1000 = 5 extra e/s for big; small ~0.5/s.
+    expect(drainBig).toBeGreaterThan(drainSmall * 4);
+  });
+  it("thrust energy cost scales with mass", () => {
+    function run(rockMass: number): number {
+      const w = quietWorld();
+      const c = makeCreature({ x: 100, y: 300, energy: 1000 });
+      c.reserves.organic = 0;
+      c.reserves.rock = rockMass;
+      w.creatures.push(c);
+      w.particles.push({ x: 600, y: 300, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+      const e0 = c.energy;
+      step(w, 0.2);
+      return e0 - c.energy;
+    }
+    const drainSmall = run(0);
+    const drainBig = run(2000); // massScale = max(1, 2000/50) = 40
+    expect(drainBig).toBeGreaterThan(drainSmall * 5);
+  });
+});
+
 describe("creature: photosynthesis", () => {
   const photoGenome = () => new Uint8Array([OP.PHOTOSYNTH, OP.HALT]);
   it("PHOTOSYNTH converts gas to organic", () => {
@@ -290,6 +323,19 @@ describe("creature: photosynthesis", () => {
     step(w, 1.0);
     expect(c.reserves.gas).toBeLessThan(30);
     expect(c.reserves.organic).toBeGreaterThan(0);
+  });
+  it("bigger cells absorb more total light (rate scales with perimeter)", () => {
+    const wS = quietWorld(), wB = quietWorld();
+    const small = makeCreature({ x: 400, y: 10, energy: 1000, genome: photoGenome() });
+    const big = makeCreature({ x: 400, y: 10, energy: 1000, genome: photoGenome() });
+    small.reserves.gas = 200;
+    big.reserves.gas = 200;
+    // Push big's radius up via inert mass so r/PHOTOSYNTH_REF_R >> 1.
+    big.reserves.rock = 1200;
+    wS.creatures.push(small);
+    wB.creatures.push(big);
+    step(wS, 1.0); step(wB, 1.0);
+    expect(big.reserves.organic).toBeGreaterThan(small.reserves.organic * 1.5);
   });
   it("surface light produces more conversion than depth", () => {
     const wS = quietWorld();
