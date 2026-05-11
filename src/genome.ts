@@ -33,6 +33,7 @@ export const OP = {
 
   SENSE_GRAD_X:  0x40,
   SENSE_GRAD_Y:  0x41,
+  SENSE_DENSITY: 0x42,
   SELF_ENERGY:   0x43,
   SELF_RESERVE:  0x44,
   SELF_VX:       0x45,
@@ -51,12 +52,17 @@ export const OP = {
   EXCRETE:       0x51,
   REPRODUCE:     0x52,
   PREDATE:       0x53,   // ingest: absorb prey immediately into own reserves
+  TURN:          0x54,   // pop angle delta, rotate the cell's velocity
   ENGULF:        0x55,   // swallow whole: prey persists alive in vacuole
 
   SELF_O2:       0x56,
   SELF_FATTY:    0x57,
   SELF_AMINO:    0x58,
   SELF_WASTE:    0x59,
+  SENSE_WALL_X:  0x5A,
+  SENSE_WALL_Y:  0x5B,
+  SENSE_HEAD_X:  0x5C,
+  SENSE_HEAD_Y:  0x5D,
 
   HALT:          0xFF,
 } as const;
@@ -68,6 +74,7 @@ OPERANDS[OP.JZ] = 1;
 OPERANDS[OP.JNZ] = 1;
 OPERANDS[OP.SENSE_GRAD_X] = 1;
 OPERANDS[OP.SENSE_GRAD_Y] = 1;
+OPERANDS[OP.SENSE_DENSITY] = 1;
 OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
 
@@ -76,7 +83,7 @@ const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 
 const MATERIAL_OPERAND = new Set<number>([
-  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SELF_RESERVE, OP.EXCRETE,
+  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY, OP.SELF_RESERVE, OP.EXCRETE,
 ]);
 
 const STACK_MAX = 32;
@@ -98,6 +105,16 @@ export interface VMSensors {
   // food is denser or closer; sign points toward the cluster centroid.
   gradX: Float32Array;
   gradY: Float32Array;
+  // Per-material count of particles within sense range. Tells the cell
+  // whether it's in a rich pocket or a desert.
+  density: Float32Array;
+  // Push-from-wall vector. Magnitude grows as the cell approaches an edge;
+  // sign points away from the closer wall on each axis. Zero in the middle.
+  wallX: number;
+  wallY: number;
+  // Current normalized velocity. Unit vector when moving, (0,0) at rest.
+  headX: number;
+  headY: number;
   creatureDx: number;
   creatureDy: number;
   creatureDist: number;
@@ -123,6 +140,9 @@ export interface VMSelf {
 export interface VMOutputs {
   thrustX: number;
   thrustY: number;
+  // Accumulated angle delta (radians) for any TURN ops this tick. The sim
+  // applies this after the VM runs by rotating the cell's velocity vector.
+  turn: number;
   excrete: Float32Array;
   reproduce: boolean;
   predate: boolean;
@@ -132,7 +152,7 @@ export interface VMOutputs {
 
 export function newOutputs(): VMOutputs {
   return {
-    thrustX: 0, thrustY: 0,
+    thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
     reproduce: false, predate: false, engulf: false,
     instructions: 0,
@@ -149,6 +169,7 @@ export function runTick(
 ): void {
   out.thrustX = 0;
   out.thrustY = 0;
+  out.turn = 0;
   out.excrete.fill(0);
   out.reproduce = false;
   out.predate = false;
@@ -209,6 +230,7 @@ export function runTick(
 
       case OP.SENSE_GRAD_X:{ const idx = m6(readOperand()); push(sensors.gradX[idx]); break; }
       case OP.SENSE_GRAD_Y:{ const idx = m6(readOperand()); push(sensors.gradY[idx]); break; }
+      case OP.SENSE_DENSITY:{ const idx = m6(readOperand()); push(sensors.density[idx]); break; }
       case OP.SELF_ENERGY: push(self.energy); break;
       case OP.SELF_RESERVE:{ const idx = m6(readOperand()); push(self.reserve[idx]); break; }
       case OP.SELF_VX:     push(self.vx); break;
@@ -226,6 +248,10 @@ export function runTick(
       case OP.SELF_FATTY:     push(self.fattyAcid); break;
       case OP.SELF_AMINO:     push(self.aminoAcid); break;
       case OP.SELF_WASTE:     push(self.waste); break;
+      case OP.SENSE_WALL_X:   push(sensors.wallX); break;
+      case OP.SENSE_WALL_Y:   push(sensors.wallY); break;
+      case OP.SENSE_HEAD_X:   push(sensors.headX); break;
+      case OP.SENSE_HEAD_Y:   push(sensors.headY); break;
 
       case OP.THRUST: {
         const ay = pop();
@@ -243,6 +269,7 @@ export function runTick(
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
+      case OP.TURN:       out.turn      += pop(); break;
       case OP.HALT:
         return;
 

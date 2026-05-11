@@ -198,6 +198,12 @@ export interface World {
   swellPeriod: number;
   swellDecay: number;
   zStirAmp: number;
+  // Vertical mixing: a slowly drifting sine field of up/down currents.
+  // Half the world rises while the other half sinks, and the pattern
+  // shifts over time so no column is permanently a downdraft.
+  updraftAmp: number;
+  updraftLength: number;
+  updraftPeriod: number;
   restitution: number;
   xWallRestitution: number;
   zWallRestitution: number;
@@ -356,6 +362,7 @@ export function createWorld(width: number, height: number): World {
     surfaceAmp: 130, surfaceLength: 240, surfacePeriod: 2.4, surfaceDecay: 120,
     swellAmp: 22, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
     zStirAmp: 9,
+    updraftAmp: 18, updraftLength: 360, updraftPeriod: 16,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
     species: new Map(),
@@ -846,6 +853,8 @@ function applyForces(world: World, dt: number): void {
   const wS = (2 * Math.PI) / world.surfacePeriod;
   const kL = (2 * Math.PI) / world.swellLength;
   const wL = (2 * Math.PI) / world.swellPeriod;
+  const kU = (2 * Math.PI) / world.updraftLength;
+  const wU = (2 * Math.PI) / world.updraftPeriod;
 
   const bAmp = world.brownianAmp;
   const integrate = (
@@ -859,11 +868,14 @@ function applyForces(world: World, dt: number): void {
     const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-o.y / world.surfaceDecay);
     const swell   = world.swellAmp   * Math.sin(kL * o.x + wL * world.t) * Math.exp(-o.y / world.swellDecay);
     const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-o.y / world.swellDecay);
+    // Vertical mixing: gentle up/down currents that vary with x and time.
+    // Negative ay = upward push, positive = downward. Full water column.
+    const updraft = -world.updraftAmp * Math.sin(kU * o.x + wU * world.t);
     // Per-tick zero-mean noise to break up any residual coherent drift.
     const noiseX = bAmp * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * (Math.random() - 0.5) * 2;
     const ax = surface + swell + noiseX;
-    const ayTot = ay + noiseY;
+    const ayTot = ay + updraft + noiseY;
     const dragScale = o.r / DRAG_REF_R;
     o.vx += (ax - world.drag * dragScale * o.vx) * dt;
     o.vy += (ayTot - world.drag * dragScale * o.vy) * dt;
@@ -880,6 +892,9 @@ function applyForces(world: World, dt: number): void {
 const VM_SENSORS: VMSensors = {
   gradX: new Float32Array(6),
   gradY: new Float32Array(6),
+  density: new Float32Array(6),
+  wallX: 0, wallY: 0,
+  headX: 0, headY: 0,
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
 };
@@ -970,6 +985,17 @@ function updateCreatures(world: World, dt: number): void {
 
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
     spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
+
+    // TURN: rotate the cell's velocity by the accumulated angle delta.
+    // Cheap; only does the trig when the genome actually issued a turn.
+    if (VM_OUT.turn !== 0) {
+      const cos = Math.cos(VM_OUT.turn);
+      const sin = Math.sin(VM_OUT.turn);
+      const nvx = c.vx * cos - c.vy * sin;
+      const nvy = c.vx * sin + c.vy * cos;
+      c.vx = nvx;
+      c.vy = nvy;
+    }
 
     if (VM_OUT.reproduce) tryReproduce(c, world);
 
@@ -1355,6 +1381,7 @@ function populateSensors(c: Creature, world: World): void {
   for (let i = 0; i < 6; i++) {
     VM_SENSORS.gradX[i] = 0;
     VM_SENSORS.gradY[i] = 0;
+    VM_SENSORS.density[i] = 0;
   }
   for (const p of world.particles) {
     const dx = p.x - c.x;
@@ -1365,6 +1392,25 @@ function populateSensors(c: Creature, world: World): void {
     const w = range / dsq;
     VM_SENSORS.gradX[idx] += dx * w;
     VM_SENSORS.gradY[idx] += dy * w;
+    VM_SENSORS.density[idx]++;
+  }
+  // Push-from-wall vector: range * (1/distLeft - 1/distRight). Magnitude
+  // ~unit when the cell is at sense range from one wall and far from the
+  // opposite one; 0 at the midpoint.
+  const distLeft   = Math.max(1, c.x);
+  const distRight  = Math.max(1, world.width - c.x);
+  const distTop    = Math.max(1, c.y);
+  const distBottom = Math.max(1, world.height - c.y);
+  VM_SENSORS.wallX = range * (1 / distLeft - 1 / distRight);
+  VM_SENSORS.wallY = range * (1 / distTop  - 1 / distBottom);
+  // Normalized heading: unit vector when moving, zero at rest.
+  const speed = Math.sqrt(c.vx * c.vx + c.vy * c.vy);
+  if (speed > 0.01) {
+    VM_SENSORS.headX = c.vx / speed;
+    VM_SENSORS.headY = c.vy / speed;
+  } else {
+    VM_SENSORS.headX = 0;
+    VM_SENSORS.headY = 0;
   }
   VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY);
   VM_SENSORS.creatureDx = 0;

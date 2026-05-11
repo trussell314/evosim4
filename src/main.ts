@@ -46,6 +46,11 @@ function refreshActiveDisasm(): void {
 }
 refreshActiveDisasm();
 
+// Height of the phylogeny strip rendered below the world. The world's
+// bottom wall sits PHYLO_STRIP_H pixels above the canvas bottom so cells
+// never overlap the timeline.
+const PHYLO_STRIP_H = 70;
+
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
   // dimensions but doesn't fire window.resize on iOS Safari, so the canvas
@@ -60,7 +65,10 @@ function resize(): void {
   canvas.height = Math.floor(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   world.width = w;
-  world.height = h;
+  // Reserve the bottom PHYLO_STRIP_H px for the phylogeny timeline so it
+  // never overlaps swimming cells. The world's bottom wall sits at
+  // world.height; the strip renders in (world.height .. innerHeight).
+  world.height = Math.max(100, h - PHYLO_STRIP_H);
 }
 resize();
 window.addEventListener("resize", resize);
@@ -155,11 +163,10 @@ function render(): void {
   drawPhylogeny();
 }
 
-const PHYLO_STRIP_H = 70;
-
 function drawPhylogeny(): void {
   const stripH = PHYLO_STRIP_H;
-  const stripY = world.height - stripH;
+  // World ends at world.height; strip sits in the canvas band below that.
+  const stripY = world.height;
   const w = world.width;
 
   // Semi-opaque panel so the strip is legible over particles drawn underneath.
@@ -344,11 +351,11 @@ function drawCreature(c: Creature, selected: boolean): void {
   }
 
   const energyFrac = Math.min(1, Math.max(0, c.energy / 200));
-  drawRing(c.x, c.y, c.r + RING_GAP, energyFrac,
-           energyFrac > 0.3 ? "#a6f0c8" : "#e8a07e");
+  drawWobblyRing(c.x, c.y, c.r + RING_GAP, energyFrac,
+           energyFrac > 0.3 ? "#a6f0c8" : "#e8a07e", t, phase);
 
   const ingestFrac = 1 - Math.min(1, c.ingestCooldown / 0.7);
-  drawRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea");
+  drawWobblyRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea", t, phase);
 }
 
 // Trace a wobbly closed path around (cx, cy). Caller is responsible for
@@ -372,12 +379,31 @@ function tracedWobblyBody(cx: number, cy: number, r: number, t: number, phase: n
   ctx.closePath();
 }
 
-function drawRing(cx: number, cy: number, r: number, frac: number, color: string): void {
+// Partial wobbly arc that tracks the cell's membrane wobble in sync, so
+// the ring sits flush against the cell edge instead of cutting across the
+// wobble peaks (which used to produce a visible gap-and-bulge pattern).
+function drawWobblyRing(
+  cx: number, cy: number, r: number, frac: number, color: string,
+  t: number, phase: number,
+): void {
   if (frac <= 0) return;
   ctx.strokeStyle = color;
   ctx.lineWidth = RING_WIDTH;
+  const fracSegs = Math.max(1, Math.round(WOBBLE_SEGMENTS * frac));
+  const total = WOBBLE_SEGMENTS;
   ctx.beginPath();
-  ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+  for (let i = 0; i <= fracSegs; i++) {
+    const aProgress = (i / total) * Math.PI * 2;
+    const a = -Math.PI / 2 + aProgress;
+    const wob =
+      1 +
+      0.05 * Math.sin(t * 1.7 + phase + a * 3) +
+      0.03 * Math.sin(t * 0.9 + phase * 1.3 + a * 5);
+    const rr = r * wob;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
   ctx.stroke();
 }
 

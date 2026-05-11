@@ -18,13 +18,19 @@ import {
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
-  gradX: number[]; gradY: number[];
+  gradX: number[]; gradY: number[]; density: number[];
+  wallX: number; wallY: number; headX: number; headY: number;
   creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
   light: number;
 }> = {}): VMSensors {
   return {
     gradX: new Float32Array(overrides.gradX ?? [0, 0, 0, 0, 0, 0]),
     gradY: new Float32Array(overrides.gradY ?? [0, 0, 0, 0, 0, 0]),
+    density: new Float32Array(overrides.density ?? [0, 0, 0, 0, 0, 0]),
+    wallX: overrides.wallX ?? 0,
+    wallY: overrides.wallY ?? 0,
+    headX: overrides.headX ?? 0,
+    headY: overrides.headY ?? 0,
     creatureDx: overrides.creatureDx ?? 0,
     creatureDy: overrides.creatureDy ?? 0,
     creatureDist: overrides.creatureDist ?? 0,
@@ -202,6 +208,18 @@ describe("VM sensors", () => {
   it("SENSE_LIGHT", () => {
     expect(exec([OP.SENSE_LIGHT, OP.HALT], { sensors: makeSensors({ light: 0.73 }) }).state.stack).toEqual([0.73]);
   });
+  it("SENSE_DENSITY reads count by material index", () => {
+    expect(exec([OP.SENSE_DENSITY, 3, OP.HALT], { sensors: makeSensors({ density: [1, 2, 3, 4, 5, 6] }) }).state.stack).toEqual([4]);
+  });
+  it("SENSE_DENSITY operand wraps via modulo", () => {
+    expect(exec([OP.SENSE_DENSITY, 7, OP.HALT], { sensors: makeSensors({ density: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([20]);
+  });
+  it("SENSE_WALL_X / WALL_Y", () => {
+    expect(exec([OP.SENSE_WALL_X, OP.SENSE_WALL_Y, OP.HALT], { sensors: makeSensors({ wallX: -0.7, wallY: 0.3 }) }).state.stack).toEqual([-0.7, 0.3]);
+  });
+  it("SENSE_HEAD_X / HEAD_Y", () => {
+    expect(exec([OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y, OP.HALT], { sensors: makeSensors({ headX: 0.6, headY: -0.8 }) }).state.stack).toEqual([0.6, -0.8]);
+  });
 });
 
 describe("VM actuators", () => {
@@ -230,6 +248,15 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, OP.HALT]).out.predate).toBe(true);
   });
+  it("TURN accumulates angle delta from the stack", () => {
+    expect(exec([OP.PUSH8, 1, OP.TURN, OP.HALT]).out.turn).toBe(1);
+  });
+  it("multiple TURNs sum", () => {
+    expect(exec([OP.PUSH8, 2, OP.TURN, OP.PUSH8, 3, OP.TURN, OP.HALT]).out.turn).toBe(5);
+  });
+  it("TURN with no stack value pops 0 (no rotation)", () => {
+    expect(exec([OP.TURN, OP.HALT]).out.turn).toBe(0);
+  });
   it("output reset between runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();
@@ -239,6 +266,7 @@ describe("VM actuators", () => {
     expect(out.reproduce).toBe(false);
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
+    expect(out.turn).toBe(0);
     expect(Array.from(out.excrete)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });

@@ -42,6 +42,7 @@ function quietWorld(): World {
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
     zStirAmp: 0,
+    updraftAmp: 0, updraftLength: 400, updraftPeriod: 16,
     restitution: 0.2,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -621,6 +622,32 @@ describe("creature: VM execution cost", () => {
     w2.creatures.push(c2);
     step(w2, 1 / 60);
     expect(50 - c2.energy).toBeGreaterThan(50 - c1.energy);
+  });
+});
+
+describe("creature: TURN rotates velocity", () => {
+  it("PUSH8 + TURN rotates the cell's velocity vector", () => {
+    const w = quietWorld();
+    // Push 1 radian and TURN. Cell starts moving +x at 10; after rotation
+    // by ~57 degrees, most of the speed should end up in +y.
+    const c = makeCreature({
+      x: 400, y: 300, vx: 10, vy: 0, energy: 100,
+      genome: new Uint8Array([OP.PUSH8, 1, OP.TURN, OP.HALT]),
+    });
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(c.vy).toBeGreaterThan(5);
+    expect(c.vx).toBeLessThan(10);
+  });
+  it("no TURN op means no rotation", () => {
+    const w = quietWorld();
+    const c = makeCreature({
+      x: 400, y: 300, vx: 10, vy: 0, energy: 100,
+      genome: new Uint8Array([OP.HALT]),
+    });
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(c.vy).toBeCloseTo(0, 4);
   });
 });
 
