@@ -332,14 +332,6 @@ function drawPhylogeny(): void {
   );
 }
 
-// Energy and ingest rings sit immediately outside the cell body --
-// energy stroke centered at r + 0.75, ingest at r + 2.25. With line
-// width 1.5 they butt up flush against the membrane with no visible
-// water-gap.
-const RING_GAP = 0.75;
-const RING_SPACING = 1.5;
-const RING_WIDTH = 1.5;
-
 // Selected cells get a 2px white ring at (r + SELECT_RING_OFFSET) with a
 // visible gap between it and the cell body. No inner ring -- the cell
 // keeps its normal dark outline so the gap reads clearly.
@@ -407,12 +399,6 @@ function drawCreature(c: Creature, selected: boolean): void {
     }
   }
 
-  const energyFrac = Math.min(1, Math.max(0, c.energy / 200));
-  drawWobblyRing(c.x, c.y, c.r + RING_GAP, energyFrac,
-           energyFrac > 0.3 ? "#a6f0c8" : "#e8a07e", t, phase);
-
-  const ingestFrac = 1 - Math.min(1, c.ingestCooldown / 0.7);
-  drawWobblyRing(c.x, c.y, c.r + RING_GAP + RING_SPACING, ingestFrac, "#7fb8ea", t, phase);
 }
 
 // Trace a wobbly closed path around (cx, cy). Caller is responsible for
@@ -434,34 +420,6 @@ function tracedWobblyBody(cx: number, cy: number, r: number, t: number, phase: n
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.closePath();
-}
-
-// Partial wobbly arc that tracks the cell's membrane wobble in sync, so
-// the ring sits flush against the cell edge instead of cutting across the
-// wobble peaks (which used to produce a visible gap-and-bulge pattern).
-function drawWobblyRing(
-  cx: number, cy: number, r: number, frac: number, color: string,
-  t: number, phase: number,
-): void {
-  if (frac <= 0) return;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = RING_WIDTH;
-  const fracSegs = Math.max(1, Math.round(WOBBLE_SEGMENTS * frac));
-  const total = WOBBLE_SEGMENTS;
-  ctx.beginPath();
-  for (let i = 0; i <= fracSegs; i++) {
-    const aProgress = (i / total) * Math.PI * 2;
-    const a = -Math.PI / 2 + aProgress;
-    const wob =
-      1 +
-      0.05 * Math.sin(t * 1.7 + phase + a * 3) +
-      0.03 * Math.sin(t * 0.9 + phase * 1.3 + a * 5);
-    const rr = r * wob;
-    const x = cx + Math.cos(a) * rr;
-    const y = cy + Math.sin(a) * rr;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
 }
 
 // Format seconds as "1h02m" / "12m04s" / "47.3s" so age is readable across
