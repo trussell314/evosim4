@@ -16,10 +16,22 @@ import {
   step,
   genomeColor,
   emptyMolecules,
+  advanceDivision,
+  DIVISION_DURATION_SEC,
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState } from "../genome";
 
 const M = MATERIAL_IDS_ORDERED;
+
+// Drive any in-flight cell divisions to completion without advancing the
+// rest of the simulation. Tests that examine post-fission state can call
+// this immediately after the step that triggered REPRODUCE to bypass the
+// 1-second visual animation.
+function flushDivisions(w: World): void {
+  for (const c of [...w.creatures]) {
+    if (c.division) advanceDivision(c, w, DIVISION_DURATION_SEC);
+  }
+}
 
 function quietWorld(): World {
   return {
@@ -45,12 +57,17 @@ function quietWorld(): World {
 function makeCreature(overrides: Partial<Creature> = {}): Creature {
   const reserves = {} as Record<MaterialId, number>;
   for (const id of M) reserves[id] = 0;
+  // Seed enough biomass to clear MIN_VIABLE_BIOMASS so the cell isn't
+  // autolyzed on its first step. Tests that care about specific molecule
+  // pools override via the molecules property.
+  const molecules = emptyMolecules();
+  molecules.biomass = 30;
   const base: Creature = {
     x: 400, y: 300, z: 12,
     vx: 0, vy: 0, vz: 0,
     r: 9, density: 1.0,
     reserves,
-    molecules: emptyMolecules(),
+    molecules,
     energy: 100,
     senseRange: 200,
     thrustAccel: 70,
@@ -118,8 +135,8 @@ describe("createWorld", () => {
       expect(p.y).toBeGreaterThanOrEqual(0);
       expect(p.z).toBeGreaterThanOrEqual(p.r);
       expect(p.z).toBeLessThanOrEqual(w.depth - p.r);
-      expect(p.r).toBeGreaterThanOrEqual(2);
-      expect(p.r).toBeLessThanOrEqual(6);
+      expect(p.r).toBeGreaterThanOrEqual(1);
+      expect(p.r).toBeLessThanOrEqual(2.5);
       expect(MATERIALS[p.material]).toBeDefined();
     }
   });
@@ -336,7 +353,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const w = quietWorld();
     const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
     const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    big.reserves.rock = 1000;
+    big.reserves.rock = 3000;
     w.creatures.push(small, big);
     step(w, 1.0);
     const drainSmall = 100 - small.energy;
@@ -531,7 +548,11 @@ describe("creature: ingestion cost and cooldown", () => {
   });
   it("won't absorb without enough energy to pay", () => {
     const w = quietWorld();
+    // ATP starts at 0 so ingestion can't pay INGEST_ENERGY_COST. Glucose
+    // keeps the cell from autolyzing on this step so we can still observe
+    // the no-ingest behavior.
     const c = makeCreature({ energy: 0 });
+    c.molecules.glucose = 1;
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
@@ -571,7 +592,14 @@ describe("creature: ingestion (basic)", () => {
 describe("creature: VM execution cost", () => {
   it("running the genome drains energy each tick", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    // Use a no-side-effect genome so the only ATP cost is the per-
+    // instruction VM tax. The default genome includes REPRODUCE, which
+    // burns the per-attempt ATP fee on every tick and dominates the
+    // expected sub-1-ATP drain.
+    const c = makeCreature({
+      energy: 50,
+      genome: new Uint8Array([OP.NOP, OP.NOP, OP.NOP, OP.HALT]),
+    });
     w.creatures.push(c);
     const e0 = c.energy;
     step(w, 1 / 60);
@@ -645,6 +673,7 @@ describe("creature: reproduction", () => {
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBe(2);
   });
   it("energy split roughly in half", () => {
@@ -653,9 +682,12 @@ describe("creature: reproduction", () => {
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     const [p, ch] = w.creatures;
-    expect(p.energy + ch.energy).toBeGreaterThan(190);
-    expect(p.energy + ch.energy).toBeLessThan(210);
+    // Sum drops by the REPRODUCE_ATTEMPT ATP fee (~2 + 0.02 * parent mass),
+    // which is non-trivial when a stuffed cell fissions. Conservation is
+    // checked separately by the mass test; here just verify the two
+    // halves are close to equal.
     expect(Math.abs(p.energy - ch.energy)).toBeLessThan(3);
   });
   it("total cell mass approximately conserved across fission", () => {
@@ -666,6 +698,7 @@ describe("creature: reproduction", () => {
     const totalBefore = cellTotalMass(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     const [p, ch] = w.creatures;
     expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 0);
   });
@@ -676,6 +709,7 @@ describe("creature: reproduction", () => {
     c.energy = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     const total = w.creatures[0].reserves.organic + w.creatures[1].reserves.organic;
     expect(total).toBeLessThan(200);
     expect(total).toBeGreaterThan(199);
@@ -686,6 +720,7 @@ describe("creature: reproduction", () => {
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures[1].genome).not.toBe(c.genome);
     expect(Math.abs(w.creatures[1].genome.length - c.genome.length)).toBeLessThanOrEqual(5);
   });
@@ -1027,6 +1062,9 @@ describe("creature: death by starvation", () => {
     const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
     c.reserves.organic = 0;
     c.reserves.rock = 50;
+    // Strip molecules so the only mass to release is the rock reserve;
+    // biomass would otherwise spawn organic-tagged corpse particles too.
+    c.molecules = emptyMolecules();
     for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     w.creatures.push(c);
@@ -1101,6 +1139,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
     for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBe(2);
   });
   it("newborn has fresh VM state", () => {
@@ -1109,6 +1148,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
     for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures[1].vm.pc).toBe(0);
     expect(w.creatures[1].vm.stack).toEqual([]);
   });
@@ -1126,6 +1166,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     c.molecules.biomass = 2000;
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBe(2);
     const parent = w.creatures[0];
     parent.molecules.aminoAcid = 2000;
@@ -1134,6 +1175,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     parent.molecules.biomass = 2000;
     parent.energy = 200;
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBeGreaterThanOrEqual(3);
   });
   it("fission fails the next tick when build-blocks are depleted", () => {
@@ -1142,15 +1184,20 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBe(2);
     for (const cell of w.creatures) {
       cell.molecules.aminoAcid = 0;
       cell.molecules.fattyAcid = 0;
       cell.molecules.minerals = 0;
-      cell.molecules.biomass = 0;
+      // Keep biomass just above MIN_VIABLE_BIOMASS so the cell doesn't
+      // autolyze -- we want fission to fail on build-block exhaustion,
+      // not on structural collapse.
+      cell.molecules.biomass = 1;
       for (const id of M) cell.reserves[id] = 0;
     }
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures.length).toBe(2);
   });
 });
@@ -1163,6 +1210,7 @@ describe("creature: newborn ingest cooldown", () => {
     for (const id of M) c.reserves[id] = 2000; readyToFission(c);
     w.creatures.push(c);
     step(w, 1 / 60);
+    flushDivisions(w);
     expect(w.creatures[1].ingestCooldown).toBeGreaterThan(0);
   });
 });

@@ -1325,9 +1325,9 @@ function tryReproduce(parent: Creature, world: World): void {
 // Mitosis takes about a second to play out visually. The child has already
 // been built and paid for inside tryReproduce; we just spread the visible
 // transition over time.
-const DIVISION_DURATION_SEC = 1.0;
+export const DIVISION_DURATION_SEC = 1.0;
 
-function advanceDivision(c: Creature, world: World, dt: number): void {
+export function advanceDivision(c: Creature, world: World, dt: number): void {
   if (!c.division) return;
   c.division.progress += dt / DIVISION_DURATION_SEC;
   if (c.division.progress < 1) return;
