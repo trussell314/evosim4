@@ -1,6 +1,6 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, type Particle, type Creature } from "./sim";
-import { disassemble, OP } from "./genome";
+import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -337,48 +337,6 @@ function formatAge(sec: number): string {
 }
 
 // Best-effort plain-English summary of a cell, inferred from genome ops it
-// contains and its current molecule pool. Not a simulation; just a readable
-// hint for the watcher.
-function describeBiology(c: Creature): string {
-  const ops = new Set<number>();
-  for (let i = 0; i < c.genome.length; i++) ops.add(c.genome[i]);
-  const m = c.molecules;
-
-  // Trophic mode: photosynthesizer (chlorophyll-bearing) vs predator
-  // (PREDATE op) vs heterotroph (the default — eats organic particles).
-  const tags: string[] = [];
-  if (m.chlorophyll > 1) tags.push("photosynth");
-  if (ops.has(OP.PREDATE)) tags.push("predator");
-  if (ops.has(OP.ENGULF)) tags.push("engulfer");
-  // Default sensory + thrust → motile chaser of organic food.
-  const chases =
-    ops.has(OP.THRUST) &&
-    (ops.has(OP.SENSE_DX) || ops.has(OP.SENSE_DY) || ops.has(OP.SENSE_CRE_DX));
-  if (chases && tags.length === 0) tags.push("heterotroph");
-  if (!chases && tags.length === 0) tags.push("drifter");
-
-  // Energy pathway currently running, judged from molecule snapshot.
-  const pathways: string[] = [];
-  if (m.glucose > 0.5 && m.o2 > 0.5) pathways.push("aerobic resp");
-  else if (m.glucose > 0.5) pathways.push("fermentation");
-  if (m.fattyAcid > 0.5 && m.o2 > 0.5) pathways.push("beta-ox");
-  if (m.chlorophyll > 0.5 && m.co2 > 0.5) pathways.push("photo");
-  const pathwayStr = pathways.length ? pathways.join("+") : "starving";
-
-  // Reproductive intent: just whether the genome ever calls REPRODUCE. There
-  // is no artificial cooldown -- successful fission is gated only by the
-  // build-block molecule cost, so cadence is up to the genome + chemistry.
-  const repro = ops.has(OP.REPRODUCE)
-    ? "calls REPRODUCE (gated by build-block cost)"
-    : "no REPRODUCE op (sterile)";
-
-  // One item per line, with a small leading indent so it visually groups
-  // under the "bio:" label. Tight on mobile screens.
-  return `\n  type:    ${tags.join("/")}\n` +
-         `  burns:   ${pathwayStr}\n` +
-         `  repro:   ${repro}`;
-}
-
 function updateInspector(): void {
   if (selectedIdx >= world.creatures.length) {
     selectedIdx = 0;
@@ -403,7 +361,6 @@ function updateInspector(): void {
   const age = formatAge(Math.max(0, world.t - c.bornAt));
   inspector.textContent =
     `pop=${world.creatures.length}  parts=${world.particles.length}/${world.particleTarget}  extinct=${world.extinctionCount}  (click a cell)\n` +
-    `bio: ${describeBiology(c)}\n` +
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
