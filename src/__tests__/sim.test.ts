@@ -32,6 +32,9 @@ function quietWorld(): World {
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
     collisionIters: 1,
+    species: new Map(),
+    phylogenyEvents: [],
+    nextSpeciesLane: 0,
   };
 }
 
@@ -101,6 +104,16 @@ describe("createWorld", () => {
     seedParticles(w, 10);
     seedParticles(w, 5);
     expect(w.particles.length).toBe(5);
+  });
+
+  it("registers the initial creature's species", () => {
+    const w = createWorld(800, 600);
+    expect(w.species.size).toBe(1);
+    const sp = Array.from(w.species.values())[0];
+    expect(sp.alive).toBe(1);
+    expect(sp.firstSeen).toBe(0);
+    expect(sp.parents.size).toBe(0);
+    expect(w.phylogenyEvents.length).toBe(0);
   });
 });
 
@@ -503,9 +516,10 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
-    w.particles.push({ x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
+    const target = { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" as const };
+    w.particles.push(target);
     step(w, 0.001);
-    expect(w.particles.length).toBe(0);
+    expect(w.particles.includes(target)).toBe(false);
     expect(c.reserves.lipid).toBeGreaterThan(0);
   });
   it("does not absorb particles outside the cell", () => {

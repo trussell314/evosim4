@@ -76,6 +76,29 @@ export interface Creature {
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
 
+// Phylogeny: a "species" is a unique exact genome. We track when each first
+// appeared, when its population last changed, who its parents (other genome
+// keys that have produced it) are, and the events that bridged ancestors to
+// it. A divergence is when a new genome key is born from an existing one;
+// a convergence is when an already-known genome key is re-instantiated by
+// a parent that has never produced it before.
+export interface Species {
+  key: string;
+  color: string;
+  firstSeen: number;
+  lastSeen: number;
+  alive: number;
+  parents: Set<string>;
+  lane: number;
+}
+
+export interface PhylogenyEvent {
+  t: number;
+  from: string;
+  to: string;
+  convergence: boolean;
+}
+
 export interface World {
   width: number;
   height: number;
@@ -101,6 +124,9 @@ export interface World {
   xWallRestitution: number;
   zWallRestitution: number;
   collisionIters: number;
+  species: Map<string, Species>;
+  phylogenyEvents: PhylogenyEvent[];
+  nextSpeciesLane: number;
 }
 
 const METABOLIZE_RATE = 5;
@@ -172,9 +198,14 @@ export function createWorld(width: number, height: number): World {
     zStirAmp: 9,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
+    species: new Map(),
+    phylogenyEvents: [],
+    nextSpeciesLane: 0,
   };
   seedParticles(world, Math.round(particleTarget * 0.9));
-  world.creatures.push(makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5));
+  const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
+  world.creatures.push(first);
+  noteCreatureBirth(world, first, undefined);
   return world;
 }
 
@@ -234,6 +265,56 @@ function makeCreature(x: number, y: number, z: number): Creature {
   return c;
 }
 
+export function genomeKey(genome: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < genome.length; i++) {
+    const b = genome[i];
+    s += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  return s;
+}
+
+const PHYLO_EVENT_CAP = 2000;
+
+function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefined): void {
+  const key = genomeKey(c.genome);
+  let sp = world.species.get(key);
+  const wasNew = !sp;
+  if (!sp) {
+    sp = {
+      key,
+      color: c.color,
+      firstSeen: world.t,
+      lastSeen: world.t,
+      alive: 0,
+      parents: new Set<string>(),
+      lane: world.nextSpeciesLane++,
+    };
+    world.species.set(key, sp);
+  }
+  sp.lastSeen = world.t;
+  sp.alive++;
+  if (parentKey && parentKey !== key && !sp.parents.has(parentKey)) {
+    sp.parents.add(parentKey);
+    world.phylogenyEvents.push({
+      t: world.t,
+      from: parentKey,
+      to: key,
+      convergence: !wasNew,
+    });
+    if (world.phylogenyEvents.length > PHYLO_EVENT_CAP) {
+      world.phylogenyEvents.splice(0, world.phylogenyEvents.length - PHYLO_EVENT_CAP);
+    }
+  }
+}
+
+function noteCreatureDeath(world: World, c: Creature): void {
+  const sp = world.species.get(genomeKey(c.genome));
+  if (!sp) return;
+  sp.alive = Math.max(0, sp.alive - 1);
+  sp.lastSeen = world.t;
+}
+
 export function genomeColor(genome: Uint8Array): string {
   let h = 5381 >>> 0;
   for (let i = 0; i < genome.length; i++) {
@@ -258,8 +339,10 @@ export function step(world: World, dt: number): void {
     const x = world.width * (0.1 + 0.8 * Math.random());
     const y = world.height * (0.1 + 0.6 * Math.random());
     const z = world.depth * 0.5;
-    world.creatures.push(makeCreature(x, y, z));
+    const seed = makeCreature(x, y, z);
+    world.creatures.push(seed);
     world.extinctionCount++;
+    noteCreatureBirth(world, seed, undefined);
   }
 }
 
@@ -476,7 +559,9 @@ function updateCreatures(world: World, dt: number): void {
   for (const idx of eaten) removed.push({ idx, spill: false });
   removed.sort((a, b) => b.idx - a.idx);
   for (const r of removed) {
-    if (r.spill) releaseReservesAsParticles(world.creatures[r.idx], world);
+    const victim = world.creatures[r.idx];
+    if (r.spill) releaseReservesAsParticles(victim, world);
+    noteCreatureDeath(world, victim);
     world.creatures.splice(r.idx, 1);
   }
 }
@@ -556,6 +641,7 @@ function tryReproduce(parent: Creature, world: World): void {
   updateCreatureRadius(child);
   parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
   world.creatures.push(child);
+  noteCreatureBirth(world, child, genomeKey(parent.genome));
 }
 
 function populateSensors(c: Creature, world: World): void {

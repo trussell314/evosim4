@@ -102,6 +102,100 @@ function render(): void {
   for (let i = 0; i < world.creatures.length; i++) {
     drawCreature(world.creatures[i], i === selectedIdx);
   }
+
+  drawPhylogeny();
+}
+
+const PHYLO_STRIP_H = 70;
+const PHYLO_WINDOW_SEC = 120;
+
+function drawPhylogeny(): void {
+  const stripH = PHYLO_STRIP_H;
+  const stripY = world.height - stripH;
+  const w = world.width;
+
+  // Semi-opaque panel so the strip is legible over particles drawn underneath.
+  ctx.fillStyle = "rgba(4,16,24,0.78)";
+  ctx.fillRect(0, stripY, w, stripH);
+  ctx.strokeStyle = "#1a3340";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, stripY + 0.5);
+  ctx.lineTo(w, stripY + 0.5);
+  ctx.stroke();
+
+  const tNow = world.t;
+  const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
+  const span = Math.max(0.001, tNow - tMin);
+  const padTop = 14;
+  const padBot = 6;
+  const innerY = stripY + padTop;
+  const innerH = stripH - padTop - padBot;
+
+  // Pack visible species onto dense lanes so the strip isn't sparse.
+  const visible = [];
+  for (const sp of world.species.values()) {
+    if (sp.alive === 0 && sp.lastSeen < tMin) continue;
+    visible.push(sp);
+  }
+  visible.sort((a, b) => a.lane - b.lane);
+  const laneOf = new Map<number, number>();
+  visible.forEach((sp, i) => laneOf.set(sp.lane, i));
+  const laneCount = Math.max(1, visible.length);
+  const laneH = Math.min(4, innerH / laneCount);
+
+  const tx = (t: number): number => ((t - tMin) / span) * w;
+  const yOf = (origLane: number): number => {
+    const i = laneOf.get(origLane);
+    if (i === undefined) return innerY;
+    return innerY + (i + 0.5) * laneH;
+  };
+
+  // Species lifespans first.
+  for (const sp of visible) {
+    const tStart = Math.max(sp.firstSeen, tMin);
+    const tEnd = sp.alive > 0 ? tNow : sp.lastSeen;
+    if (tEnd < tMin) continue;
+    const x1 = tx(tStart);
+    const x2 = tx(tEnd);
+    const ly = yOf(sp.lane);
+    ctx.strokeStyle = sp.color;
+    ctx.globalAlpha = sp.alive > 0 ? 1 : 0.45;
+    ctx.lineWidth = sp.alive > 0 ? Math.max(1.5, laneH - 0.5) : 1;
+    ctx.beginPath();
+    ctx.moveTo(x1, ly);
+    ctx.lineTo(x2, ly);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Divergence / convergence connectors on top so they're visible.
+  for (const ev of world.phylogenyEvents) {
+    if (ev.t < tMin) continue;
+    const from = world.species.get(ev.from);
+    const to = world.species.get(ev.to);
+    if (!from || !to) continue;
+    if (!laneOf.has(from.lane) || !laneOf.has(to.lane)) continue;
+    const ex = tx(ev.t);
+    const y1 = yOf(from.lane);
+    const y2 = yOf(to.lane);
+    ctx.strokeStyle = ev.convergence ? "#f0c050" : "#9fc3d4";
+    ctx.globalAlpha = ev.convergence ? 0.9 : 0.55;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ex, y1);
+    ctx.lineTo(ex, y2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = "#7fb8c8";
+  ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  ctx.fillText(
+    `phylogeny  last ${PHYLO_WINDOW_SEC}s  ${visible.length} species  (yellow = convergence)`,
+    8,
+    stripY + 11,
+  );
 }
 
 const RING_GAP = 3;
