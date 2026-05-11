@@ -295,6 +295,25 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     // BASE_METABOLIC_PER_MASS=0.005 * 1000 = 5 extra e/s for big; small ~0.5/s.
     expect(drainBig).toBeGreaterThan(drainSmall * 4);
   });
+  it("ingest cooldown shortens for bigger cells (membrane scales with perimeter)", () => {
+    const wS = quietWorld();
+    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
+    wS.creatures.push(cs);
+    wS.particles.push({ x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    step(wS, 0.001);
+    const cdSmall = cs.ingestCooldown;
+
+    const wB = quietWorld();
+    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
+    cb.reserves.rock = 800;
+    wB.creatures.push(cb);
+    wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    step(wB, 0.001);
+    const cdBig = cb.ingestCooldown;
+
+    expect(cdBig).toBeLessThan(cdSmall * 0.5);
+    expect(cdSmall).toBeGreaterThan(0.3);
+  });
   it("thrust energy cost scales with mass", () => {
     function run(rockMass: number): number {
       const w = quietWorld();

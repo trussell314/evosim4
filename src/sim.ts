@@ -117,6 +117,11 @@ const REPRODUCE_COOLDOWN_SEC = 2;
 
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.35;
+// Ingestion is rate-limited by membrane area: a bigger cell has more surface
+// through which to absorb, so its post-ingest cooldown shrinks proportionally
+// (cooldown / (r / INGEST_REF_R)). Below INGEST_REF_R the cooldown stays at
+// the baseline so tiny cells aren't accidentally penalized.
+const INGEST_REF_R = 4;
 const EXCRETE_MIN_AMOUNT = 0.5;
 
 const PREDATION_MASS_RATIO = 1.5;
@@ -451,7 +456,7 @@ function updateCreatures(world: World, dt: number): void {
           if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
             c.reserves[p.material] += mass(p);
             c.energy -= INGEST_ENERGY_COST;
-            c.ingestCooldown = INGEST_COOLDOWN_SEC;
+            c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / Math.max(INGEST_REF_R, c.r));
             world.particles.splice(i, 1);
             break;
           }
