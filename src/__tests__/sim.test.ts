@@ -63,6 +63,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     ingestCooldown: 0,
     reproduceCooldown: 0,
     bornAt: 0,
+    contents: [],
   };
   return { ...base, ...overrides };
 }
@@ -866,6 +867,90 @@ describe("creature: predation (cell eats cell)", () => {
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.particles.filter((p) => !before.has(p)).length).toBe(0);
+  });
+});
+
+describe("creature: engulf (swallow whole, membrane intact)", () => {
+  beforeEach(() => stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]));
+  const inert = () => new Uint8Array([OP.HALT]);
+  const swallower = () => new Uint8Array([OP.ENGULF, OP.HALT]);
+
+  it("removes prey from world.creatures and parks it in predator.contents", () => {
+    const w = quietWorld();
+    const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
+    for (const id of M) p.reserves[id] = 200;
+    const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
+    for (const id of M) q.reserves[id] = 10;
+    w.creatures.push(p, q);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(1);
+    expect(w.creatures[0]).toBe(p);
+    expect(p.contents.length).toBe(1);
+    expect(p.contents[0]).toBe(q);
+  });
+  it("does NOT transfer prey reserves/molecules into predator", () => {
+    const w = quietWorld();
+    const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
+    // Big predator so the 1.5x-mass test is satisfied.
+    for (const id of M) p.reserves[id] = 300;
+    const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
+    q.reserves.rock = 80;
+    q.molecules.glucose = 25;
+    const pRockBefore = p.reserves.rock;
+    w.creatures.push(p, q);
+    step(w, 1 / 60);
+    // p.reserves.rock catabolizes slightly but does NOT pick up q's 80.
+    expect(p.reserves.rock).toBeGreaterThan(pRockBefore - 5);
+    expect(p.reserves.rock).toBeLessThan(pRockBefore + 1);
+    expect(p.molecules.glucose).toBeLessThan(15);
+    // Prey's own state is preserved in the vacuole.
+    expect(p.contents.length).toBe(1);
+    expect(p.contents[0].reserves.rock).toBeCloseTo(80, 1);
+    expect(p.contents[0].molecules.glucose).toBeCloseTo(25, 1);
+  });
+  it("engulfed prey still counts toward predator mass (vacuole occupies volume)", () => {
+    const w = quietWorld();
+    const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
+    p.reserves.rock = 200;
+    const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
+    q.reserves.rock = 50;
+    w.creatures.push(p, q);
+    step(w, 1 / 60);
+    expect(cellTotalMass(p) + cellTotalMass(p.contents[0])).toBeGreaterThan(390);
+  });
+  it("predator death releases vacuole contents back to the world", () => {
+    const w = quietWorld();
+    const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
+    for (const id of M) p.reserves[id] = 200;
+    const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
+    for (const id of M) q.reserves[id] = 10;
+    w.creatures.push(p, q);
+    step(w, 1 / 60);
+    expect(p.contents.length).toBe(1);
+    // Kill the predator.
+    p.energy = 0;
+    p.molecules = emptyMolecules();
+    for (const id of M) p.reserves[id] = 0;
+    step(w, 1 / 60);
+    // Predator gone; previously-engulfed prey is back in the world.
+    expect(w.creatures.includes(p)).toBe(false);
+    expect(w.creatures.includes(q)).toBe(true);
+  });
+  it("INGEST (PREDATE) absorbs the vacuole contents of its own prey", () => {
+    // A big predator eats a swallower that itself has prey in its vacuole.
+    // The grand-predator should inherit that vacuole.
+    const w = quietWorld();
+    const big = makeCreature({ x: 400, y: 300, energy: 200, genome: new Uint8Array([OP.PREDATE, OP.HALT]) });
+    for (const id of M) big.reserves[id] = 1000;
+    const mid = makeCreature({ x: 403, y: 300, energy: 50, genome: inert() });
+    for (const id of M) mid.reserves[id] = 30;
+    const small = makeCreature({ x: 410, y: 300, energy: 20, genome: inert() });
+    for (const id of M) small.reserves[id] = 5;
+    mid.contents.push(small);
+    w.creatures.push(big, mid);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(1);
+    expect(big.contents.includes(small)).toBe(true);
   });
 });
 
