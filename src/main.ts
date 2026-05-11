@@ -276,28 +276,22 @@ const RING_GAP = 1;
 const RING_SPACING = 3;
 const RING_WIDTH = 2;
 
-// Inner white outline sits at radius (r + WHITE_OFFSET) with line width 2,
-// so its 2px width spans r..r+2 -- fully on the outside of the cell fill,
-// touching the cell edge with no gap. The outer selection ring sits further
-// out at (r + OUTER_RING_OFFSET) with line width 2, leaving a 2px gap
-// between the inner white and the outer ring.
-const SELECT_INNER_OFFSET = 1;
-const SELECT_OUTER_OFFSET = 5;
+// Selected cells get a 2px white ring at (r + SELECT_RING_OFFSET) with a
+// visible gap between it and the cell body. No inner ring -- the cell
+// keeps its normal dark outline so the gap reads clearly.
+const SELECT_RING_OFFSET = 4;
 
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
 ): void {
+  ctx.strokeStyle = "#0a1f1d";
+  ctx.lineWidth = 1.5;
+  tracedWobblyBody(cx, cy, r, t, phase);
+  ctx.stroke();
   if (selected) {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
-    tracedWobblyBody(cx, cy, r + SELECT_INNER_OFFSET, t, phase);
-    ctx.stroke();
-    tracedWobblyBody(cx, cy, r + SELECT_OUTER_OFFSET, t, phase);
-    ctx.stroke();
-  } else {
-    ctx.strokeStyle = "#0a1f1d";
-    ctx.lineWidth = 1.5;
-    tracedWobblyBody(cx, cy, r, t, phase);
+    tracedWobblyBody(cx, cy, r + SELECT_RING_OFFSET, t, phase);
     ctx.stroke();
   }
 }
