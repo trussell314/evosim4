@@ -780,22 +780,30 @@ function autoExcrete(c: Creature, world: World): void {
 // returning to the substrates they were synthesized from. The cell must
 // keep biosynthesizing to maintain its body. Decay never recovers ATP --
 // the energy that went into building these molecules is gone.
+//
+// Decay rate scales up under metabolic stress. A well-fed cell with ATP
+// in hand sits at the baseline rate; a starving cell (ATP near zero) sees
+// up to ~5x decay because it can't run the maintenance reactions that
+// would normally replenish what's falling apart. This is the channel
+// that kills cells which have lost the ability to ingest -- they bleed
+// structure faster than their own catabolism can rebuild it.
 function maintenanceDecay(c: Creature, dt: number): void {
+  const stressMult = 1 + 4 * Math.max(0, 1 - c.energy / 8);
   const m = c.molecules;
   if (m.biomass > 0) {
-    const lost = m.biomass * BIOMASS_DECAY_PER_SEC * dt;
+    const lost = m.biomass * BIOMASS_DECAY_PER_SEC * stressMult * dt;
     m.biomass -= lost;
     m.aminoAcid += 0.9 * lost;
     m.fattyAcid += 0.1 * lost;
   }
   if (m.enzyme > 0) {
-    const lost = m.enzyme * ENZYME_DECAY_PER_SEC * dt;
+    const lost = m.enzyme * ENZYME_DECAY_PER_SEC * stressMult * dt;
     m.enzyme -= lost;
     m.aminoAcid += 0.5 * lost;
     m.minerals += 0.5 * lost;
   }
   if (m.chlorophyll > 0) {
-    const lost = m.chlorophyll * CHLORO_DECAY_PER_SEC * dt;
+    const lost = m.chlorophyll * CHLORO_DECAY_PER_SEC * stressMult * dt;
     m.chlorophyll -= lost;
     m.aminoAcid += 0.5 * lost;
     m.minerals += 0.5 * lost;
