@@ -1156,7 +1156,10 @@ function updateCreatures(world: World, dt: number): void {
       c.vx += ax * dt;
       c.vy += ay * dt;
       // Thrust ATP cost scales linearly with mass.
-      const massScale = Math.max(1, creatureTotalMass(c) / THRUST_MASS_REF);
+      // Thrust cost scales with cube root of mass instead of linearly --
+      // approximates Stokes drag (~r ∝ mass^(1/3)) so a 10x cell pays
+      // only ~2.15x more to move at the same speed, not 10x.
+      const massScale = Math.max(1, Math.cbrt(creatureTotalMass(c) / THRUST_MASS_REF));
       spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
 
