@@ -1,16 +1,4 @@
 // Stack-based bytecode VM that drives creature behavior.
-//
-// Design notes:
-//  - Every byte is "valid": unknown opcodes are NOPs, jumps wrap modulo the
-//    genome length, divide-by-zero gives 0, stack underflow gives 0. This is
-//    deliberate -- random mutations should always produce an executable (often
-//    nonsensical) program, the way real DNA does.
-//  - Each tick the VM gets an instruction budget and yields when it runs out
-//    (or hits HALT). PC + stack persist across ticks.
-//  - SENSE_* opcodes are placeholders for proper physical sensors (photon,
-//    chemical gradient, pressure). For now they query a precomputed
-//    nearest-neighbor table per material index. Replacing them is on the
-//    roadmap.
 
 export const OP = {
   NOP:           0x00,
@@ -36,7 +24,6 @@ export const OP = {
   JZ:            0x31,
   JNZ:           0x32,
 
-  // Sensors (placeholders -- will be regrounded in physical mechanisms).
   SENSE_DX:      0x40,
   SENSE_DY:      0x41,
   SENSE_DIST:    0x42,
@@ -49,11 +36,13 @@ export const OP = {
   SENSE_CRE_DIST:0x49,
   SENSE_CRE_MASS:0x4A,
   SELF_MASS:     0x4B,
+  SENSE_LIGHT:   0x4C,
 
-  // Actuators.
   THRUST:        0x50,
   EXCRETE:       0x51,
   REPRODUCE:     0x52,
+  PREDATE:       0x53,
+  PHOTOSYNTH:    0x54,
 
   HALT:          0xFF,
 } as const;
@@ -72,7 +61,6 @@ OPERANDS[OP.EXCRETE] = 1;
 const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 
-// Operands that index a material (0..5).
 const MATERIAL_OPERAND = new Set<number>([
   OP.SENSE_DX, OP.SENSE_DY, OP.SENSE_DIST, OP.SELF_RESERVE, OP.EXCRETE,
 ]);
@@ -91,38 +79,39 @@ export function newVMState(): VMState {
 }
 
 export interface VMSensors {
-  dx: Float32Array;        // length 6, per material index
+  dx: Float32Array;
   dy: Float32Array;
   dist: Float32Array;
-  // Nearest other creature (scalar; senseRange if none in range).
   creatureDx: number;
   creatureDy: number;
   creatureDist: number;
   creatureMass: number;
+  light: number;
 }
 
 export interface VMSelf {
   energy: number;
   vx: number;
   vy: number;
-  reserve: Float32Array;   // length 6
-  mass: number;            // total reserves mass
+  reserve: Float32Array;
+  mass: number;
 }
 
 export interface VMOutputs {
-  thrustX: number;            // accumulated requested accel (px/s^2)
+  thrustX: number;
   thrustY: number;
-  excrete: Float32Array;      // length 6, requested mass per material idx
-  reproduce: boolean;         // VM raised at least one REPRODUCE this tick
-  instructions: number;       // number actually executed this tick
+  excrete: Float32Array;
+  reproduce: boolean;
+  predate: boolean;
+  photosynth: boolean;
+  instructions: number;
 }
 
 export function newOutputs(): VMOutputs {
   return {
-    thrustX: 0,
-    thrustY: 0,
+    thrustX: 0, thrustY: 0,
     excrete: new Float32Array(6),
-    reproduce: false,
+    reproduce: false, predate: false, photosynth: false,
     instructions: 0,
   };
 }
@@ -139,6 +128,8 @@ export function runTick(
   out.thrustY = 0;
   out.excrete.fill(0);
   out.reproduce = false;
+  out.predate = false;
+  out.photosynth = false;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -198,6 +189,7 @@ export function runTick(
       case OP.SENSE_CRE_DIST: push(sensors.creatureDist); break;
       case OP.SENSE_CRE_MASS: push(sensors.creatureMass); break;
       case OP.SELF_MASS:      push(self.mass); break;
+      case OP.SENSE_LIGHT:    push(sensors.light); break;
 
       case OP.THRUST: {
         const ay = pop();
@@ -212,19 +204,17 @@ export function runTick(
         out.excrete[idx] += amt;
         break;
       }
-      case OP.REPRODUCE:
-        out.reproduce = true;
-        break;
+      case OP.REPRODUCE:  out.reproduce  = true; break;
+      case OP.PREDATE:    out.predate    = true; break;
+      case OP.PHOTOSYNTH: out.photosynth = true; break;
       case OP.HALT:
         return;
 
-      default: break; // unknown -> NOP
+      default: break;
     }
   }
 }
 
-// Human-readable dump for the inspector panel. Plain disassembly for now;
-// a structural decompiler (collapsing into nested control flow) can come later.
 export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<string>): string {
   const lines: string[] = [];
   let i = 0;
@@ -255,19 +245,6 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
   return lines.join("\n");
 }
 
-// Hand-written starter: chase nearest organic; reproduce once well-fed.
-//
-//   sense_dx organic        ; dx
-//   sense_dy organic        ; dy
-//   thrust                  ; pop ay,ax -> apply
-//   self_reserve organic    ; push organic reserve
-//   push8 60                ; threshold
-//   gt                      ; reserve > 60 ?
-//   jz +1                   ; if not, skip next byte
-//   reproduce               ; spawn child (no-op if can't afford)
-//   halt
-//
-// organic = MATERIAL_IDS index 3.
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_DX, 3,
@@ -282,9 +259,6 @@ export function makeDefaultGenome(): Uint8Array {
   ]);
 }
 
-// Material cost of carrying a genome. Each byte is "encoded for" the material
-// at index (byte % 6), at `massPerByte` mass units per byte. This is what a
-// child cell has to be physically constructed out of when it's born.
 export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Float32Array {
   const cost = new Float32Array(6);
   for (let i = 0; i < genome.length; i++) {
@@ -293,9 +267,6 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
   return cost;
 }
 
-// Noisy copy. Each existing byte may be deleted, preceded by an insertion,
-// and/or point-mutated independently. There's also a chance of trailing
-// insertion. Bounded so runaway insertion can't blow up forever.
 const P_POINT  = 0.02;
 const P_INSERT = 0.005;
 const P_DELETE = 0.005;
