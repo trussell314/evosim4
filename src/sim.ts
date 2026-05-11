@@ -14,6 +14,7 @@ import {
   runTick,
   makeDefaultGenome,
   mutateGenome,
+  somaticMutateOnce,
 } from "./genome";
 
 export type MaterialId =
@@ -80,6 +81,9 @@ export interface Creature {
   ingestCooldown: number;
   // world.t at the moment this creature was created. Age = world.t - bornAt.
   bornAt: number;
+  // genomeKey at birth -- frozen for life so species accounting (alive
+  // counts, phylogeny) survives any in-life somatic mutations.
+  speciesKey: string;
   // Cells this creature has swallowed whole (OP.ENGULF). They sit inert in
   // a vacuole inside the predator: no VM, no physics, no chemistry. Their
   // mass still counts toward the predator's total mass (and radius).
@@ -311,6 +315,12 @@ const ENZYME_DECAY_PER_SEC = 0.005;
 const CHLORO_DECAY_PER_SEC = 0.005;
 const MIN_VIABLE_BIOMASS = 0.5;
 
+// Somatic mutation rate scales quadratically with age (seconds). A newborn
+// is effectively stable; an old cell accumulates DNA damage rapidly. At
+// age 30s the chance per second is ~9e-3 (~1 mutation per 110s); at 100s
+// it's ~0.1/s; at 300s the genome is rewriting every couple seconds.
+const SOMATIC_MUTATION_AGE_COEF = 1e-5;
+
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
 // cell dumps the excess back to the world as particles (mass-conserving).
 // Pumping costs ATP -- a stalled cell can't flush toxins, and the
@@ -435,6 +445,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     color: genomeColor(genome),
     ingestCooldown: 0,
     bornAt: 0,
+    speciesKey: genomeKey(genome),
     contents: [],
   };
   updateCreatureRadius(c);
@@ -485,7 +496,7 @@ function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefi
 }
 
 function noteCreatureDeath(world: World, c: Creature): void {
-  const sp = world.species.get(genomeKey(c.genome));
+  const sp = world.species.get(c.speciesKey);
   if (!sp) return;
   sp.alive = Math.max(0, sp.alive - 1);
   sp.lastSeen = world.t;
@@ -924,6 +935,15 @@ function updateCreatures(world: World, dt: number): void {
     // Toxic damage from any waste / CO2 the cell couldn't pump out.
     toxify(c, dt);
 
+    // Somatic DNA damage: probability rises quadratically with age, so old
+    // cells slowly become genetic mosaics of their original self. Doesn't
+    // create a new species -- only inheritance does that.
+    const age = world.t - c.bornAt;
+    if (age > 0 && Math.random() < SOMATIC_MUTATION_AGE_COEF * age * age * dt) {
+      c.genome = somaticMutateOnce(c.genome);
+      c.color = genomeColor(c.genome, world.anchorGenome);
+    }
+
     populateSensors(c, world);
 
     VM_SELF.energy = c.energy;
@@ -1265,11 +1285,12 @@ function tryReproduce(parent: Creature, world: World): void {
     color: genomeColor(childGenome, world.anchorGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
     bornAt: world.t,
+    speciesKey: genomeKey(childGenome),
     contents: [],
   };
   updateCreatureRadius(child);
   world.creatures.push(child);
-  noteCreatureBirth(world, child, genomeKey(parent.genome));
+  noteCreatureBirth(world, child, parent.speciesKey);
 }
 
 function populateSensors(c: Creature, world: World): void {

@@ -59,6 +59,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     color: "#ffffff",
     ingestCooldown: 0,
     bornAt: 0,
+    speciesKey: "",
     contents: [],
   };
   return { ...base, ...overrides };

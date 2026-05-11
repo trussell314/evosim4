@@ -306,3 +306,37 @@ export function mutateGenome(
   if (out.length === 0) return makeDefaultGenome();
   return new Uint8Array(out);
 }
+
+// Single mutation event for somatic (in-life) damage. Unlike mutateGenome
+// (which runs once at fission across every byte), this applies exactly
+// one change: 70% point, 15% insertion, 15% deletion. Callers gate the
+// rate -- typically by age, so DNA damage accumulates as the cell lives.
+export function somaticMutateOnce(
+  genome: Uint8Array,
+  rng: () => number = Math.random,
+): Uint8Array {
+  if (genome.length === 0) return makeDefaultGenome();
+  const r = rng();
+  if (r < 0.7) {
+    const idx = Math.floor(rng() * genome.length);
+    const out = new Uint8Array(genome);
+    out[idx] = Math.floor(rng() * 256);
+    return out;
+  }
+  if (r < 0.85 && genome.length < MAX_GENOME_BYTES) {
+    const idx = Math.floor(rng() * (genome.length + 1));
+    const out = new Uint8Array(genome.length + 1);
+    out.set(genome.subarray(0, idx), 0);
+    out[idx] = Math.floor(rng() * 256);
+    out.set(genome.subarray(idx), idx + 1);
+    return out;
+  }
+  if (genome.length > 1) {
+    const idx = Math.floor(rng() * genome.length);
+    const out = new Uint8Array(genome.length - 1);
+    out.set(genome.subarray(0, idx), 0);
+    out.set(genome.subarray(idx + 1), idx);
+    return out;
+  }
+  return genome;
+}
