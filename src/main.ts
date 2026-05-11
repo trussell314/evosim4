@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, type Particle, type Creature } from "./sim";
 import { disassemble, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -128,7 +128,6 @@ function render(): void {
 }
 
 const PHYLO_STRIP_H = 70;
-const PHYLO_WINDOW_SEC = 120;
 
 function drawPhylogeny(): void {
   const stripH = PHYLO_STRIP_H;
@@ -146,43 +145,70 @@ function drawPhylogeny(): void {
   ctx.stroke();
 
   const tNow = world.t;
-  const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
+  const tMin = 0; // show full history; extinct lineages stay as fixed segments
   const span = Math.max(0.001, tNow - tMin);
   const padTop = 14;
   const padBot = 6;
   const innerY = stripY + padTop;
   const innerH = stripH - padTop - padBot;
 
-  // Pack visible species onto dense lanes so the strip isn't sparse.
-  const visible = [];
-  for (const sp of world.species.values()) {
-    if (sp.alive === 0 && sp.lastSeen < tMin) continue;
-    visible.push(sp);
-  }
+  // Every species ever seen. Stable order by creation lane so a single
+  // species keeps its vertical slot for its whole on-screen life.
+  const visible = Array.from(world.species.values());
   visible.sort((a, b) => a.lane - b.lane);
-  const laneOf = new Map<number, number>();
-  visible.forEach((sp, i) => laneOf.set(sp.lane, i));
-  const laneCount = Math.max(1, visible.length);
-  const laneH = Math.min(4, innerH / laneCount);
+
+  // Per-species live biomass. Extinct species sum to 0; living species sum
+  // each cell's molecules.biomass.
+  const bioByKey = new Map<string, number>();
+  for (const c of world.creatures) {
+    const key = genomeKey(c.genome);
+    bioByKey.set(key, (bioByKey.get(key) ?? 0) + c.molecules.biomass);
+  }
+  let maxBio = 0;
+  for (const sp of visible) {
+    const b = bioByKey.get(sp.key) ?? 0;
+    if (b > maxBio) maxBio = b;
+  }
+
+  // Slot heights: living species scale up to LIVE_H_MAX by biomass relative
+  // to the largest extant species; extinct species occupy a thin baseline
+  // slot so their lifespan segment stays visible. If the total exceeds the
+  // available innerH, scale everything down to fit.
+  const LIVE_H_MAX = 7;
+  const LIVE_H_MIN = 1.2;
+  const EXTINCT_H = 0.6;
+  const heights = visible.map((sp) => {
+    if (sp.alive <= 0) return EXTINCT_H;
+    const frac = maxBio > 0 ? (bioByKey.get(sp.key) ?? 0) / maxBio : 0;
+    return Math.max(LIVE_H_MIN, frac * LIVE_H_MAX);
+  });
+  const totalH = heights.reduce((a, b) => a + b, 0);
+  const scale = totalH > innerH ? innerH / totalH : 1;
+  for (let i = 0; i < heights.length; i++) heights[i] *= scale;
+
+  // Y center of each species' slot. Lane lookup map mirrors the sim's
+  // stable lane index so convergence/divergence connectors stay attached
+  // to the same vertical position frame to frame.
+  const yOfLane = new Map<number, number>();
+  let acc = innerY;
+  for (let i = 0; i < visible.length; i++) {
+    yOfLane.set(visible[i].lane, acc + heights[i] / 2);
+    acc += heights[i];
+  }
 
   const tx = (t: number): number => ((t - tMin) / span) * w;
-  const yOf = (origLane: number): number => {
-    const i = laneOf.get(origLane);
-    if (i === undefined) return innerY;
-    return innerY + (i + 0.5) * laneH;
-  };
 
-  // Species lifespans first.
-  for (const sp of visible) {
-    const tStart = Math.max(sp.firstSeen, tMin);
+  // Lifespan segments. Living species extend to tNow; extinct species end
+  // at lastSeen and stay put as a static segment.
+  for (let i = 0; i < visible.length; i++) {
+    const sp = visible[i];
     const tEnd = sp.alive > 0 ? tNow : sp.lastSeen;
-    if (tEnd < tMin) continue;
-    const x1 = tx(tStart);
+    const x1 = tx(sp.firstSeen);
     const x2 = tx(tEnd);
-    const ly = yOf(sp.lane);
+    const ly = yOfLane.get(sp.lane)!;
     ctx.strokeStyle = sp.color;
-    ctx.globalAlpha = sp.alive > 0 ? 1 : 0.45;
-    ctx.lineWidth = sp.alive > 0 ? Math.max(1.5, laneH - 0.5) : 1;
+    ctx.globalAlpha = sp.alive > 0 ? 1 : 0.5;
+    ctx.lineWidth = Math.max(0.5, heights[i] * 0.85);
     ctx.beginPath();
     ctx.moveTo(x1, ly);
     ctx.lineTo(x2, ly);
@@ -192,14 +218,13 @@ function drawPhylogeny(): void {
 
   // Divergence / convergence connectors on top so they're visible.
   for (const ev of world.phylogenyEvents) {
-    if (ev.t < tMin) continue;
     const from = world.species.get(ev.from);
     const to = world.species.get(ev.to);
     if (!from || !to) continue;
-    if (!laneOf.has(from.lane) || !laneOf.has(to.lane)) continue;
+    const y1 = yOfLane.get(from.lane);
+    const y2 = yOfLane.get(to.lane);
+    if (y1 === undefined || y2 === undefined) continue;
     const ex = tx(ev.t);
-    const y1 = yOf(from.lane);
-    const y2 = yOf(to.lane);
     ctx.strokeStyle = ev.convergence ? "#f0c050" : "#9fc3d4";
     ctx.globalAlpha = ev.convergence ? 0.9 : 0.55;
     ctx.lineWidth = 1;
@@ -213,7 +238,7 @@ function drawPhylogeny(): void {
   ctx.fillStyle = "#7fb8c8";
   ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
   ctx.fillText(
-    `phylogeny  last ${PHYLO_WINDOW_SEC}s  ${visible.length} species  (yellow = convergence)`,
+    `phylogeny  t=0..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)`,
     8,
     stripY + 11,
   );
