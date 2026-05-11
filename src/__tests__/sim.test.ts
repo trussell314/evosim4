@@ -51,6 +51,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     vm: newVMState(),
     color: "#ffffff",
     ingestCooldown: 0,
+    reproduceCooldown: 0,
   };
   return { ...base, ...overrides };
 }
@@ -144,7 +145,6 @@ describe("physics: drag", () => {
       x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic",
     });
     const v0 = w.particles[0].vx;
-    // Run for 3 seconds. v(t) ~ v0 * exp(-2*3) -> tiny.
     for (let i = 0; i < 180; i++) step(w, 1 / 60);
     const v1 = w.particles[0].vx;
     expect(Math.abs(v1)).toBeLessThan(Math.abs(v0) / 10);
@@ -188,9 +188,11 @@ describe("physics: walls", () => {
 
   it("creature bouncing off side walls (no toroidal sweep)", () => {
     const w = quietWorld();
-    const c = makeCreature({ x: 5, y: 100, vx: -100, energy: 0 });
+    const c = makeCreature({ x: 5, y: 100, vx: -100, energy: 50 });
+    c.reserves.organic = 50;
     w.creatures.push(c);
     step(w, 0.1);
+    expect(w.creatures.length).toBe(1);
     expect(c.x).toBeGreaterThanOrEqual(c.r - 1e-6);
     expect(c.x).toBeLessThan(w.width / 2);
     expect(c.x).toBeLessThan(50);
@@ -345,14 +347,18 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
+    const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
-      w.particles.push({
+      const p = {
         x: c.x + i * 0.5, y: c.y, z: c.z,
-        vx: 0, vy: 0, vz: 0, r: 2, material: "rock",
-      });
+        vx: 0, vy: 0, vz: 0, r: 2, material: "rock" as const,
+      };
+      w.particles.push(p);
+      targets.push(p);
     }
     step(w, 0.001);
-    expect(w.particles.length).toBe(4); // exactly one consumed
+    const remainingTargets = w.particles.filter((p) => targets.includes(p)).length;
+    expect(remainingTargets).toBe(4);
     expect(c.ingestCooldown).toBeGreaterThan(0);
   });
 
@@ -360,7 +366,6 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
-    // Saturate non-target pool so replenishment doesn't fire and skew the count.
     for (let i = 0; i < 550; i++) {
       w.particles.push({
         x: 50 + (i % 700), y: 10 + (i % 50), z: c.z,
@@ -637,6 +642,214 @@ describe("creature: reproduction", () => {
     }
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(80);
+  });
+});
+
+// ---------- death and resource release ----------
+
+describe("creature: death by starvation", () => {
+  it("a cell with no organic and no energy dies on the next tick", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 0 });
+    c.reserves.organic = 0;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(0);
+  });
+
+  it("a cell with organic to metabolize survives the baseline drain", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 0 });
+    c.reserves.organic = 50;
+    w.creatures.push(c);
+    for (let i = 0; i < 60; i++) step(w, 1 / 60);
+    expect(w.creatures.length).toBe(1);
+  });
+
+  it("baseline metabolic drain depletes energy even when idle", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 100 });
+    c.reserves.organic = 0;
+    w.creatures.push(c);
+    const e0 = c.energy;
+    step(w, 1 / 60);
+    expect(c.energy).toBeLessThan(e0);
+  });
+
+  it("on death, reserves are released as particles of matching materials", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 0 });
+    c.reserves.organic = 0;
+    c.reserves.rock = 50;
+    c.reserves.sand = 30;
+    c.reserves.gas = 20;
+    const particlesBefore = w.particles.length;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(0);
+    expect(w.particles.length).toBeGreaterThan(particlesBefore);
+    const released = w.particles.slice(particlesBefore);
+    const counts: Record<string, number> = { rock: 0, sand: 0, gas: 0 };
+    for (const p of released) {
+      if (p.material in counts) counts[p.material]++;
+    }
+    expect(counts.rock).toBeGreaterThan(0);
+    expect(counts.sand).toBeGreaterThan(0);
+    expect(counts.gas).toBeGreaterThan(0);
+  });
+
+  it("released particles approximately conserve mass (per material)", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 0 });
+    c.reserves.organic = 0;
+    c.reserves.clay = 100;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    let totalClayMass = 0;
+    for (const p of w.particles) {
+      if (p.material !== "clay") continue;
+      totalClayMass += MATERIALS.clay.density * Math.PI * p.r * p.r;
+    }
+    expect(totalClayMass).toBeGreaterThanOrEqual(100 - 1);
+    expect(totalClayMass).toBeLessThan(100 + 10);
+  });
+
+  it("released particles spawn near the dead cell", () => {
+    const w = quietWorld();
+    const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
+    c.reserves.organic = 0;
+    c.reserves.rock = 50;
+    for (let i = 0; i < 550; i++) {
+      w.particles.push({
+        x: 50 + (i % 700), y: 10 + (i % 50), z: c.z,
+        vx: 0, vy: 0, vz: 0, r: 2, material: "sand",
+      });
+    }
+    const before = new Set(w.particles);
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    const released = w.particles.filter((p) => !before.has(p));
+    for (const p of released) {
+      expect(p.material).toBe("rock");
+      expect(Math.abs(p.x - 400)).toBeLessThan(20);
+      expect(Math.abs(p.y - 300)).toBeLessThan(20);
+    }
+  });
+});
+
+// ---------- in-tick reproduction snapshot ----------
+
+describe("creature: reproduction does not cascade within a single tick", () => {
+  beforeEach(() => {
+    stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+  });
+
+  it("a single well-fed creature spawns at most one child per tick", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
+  });
+
+  it("a newborn child does not act on its birth tick", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    const child = w.creatures[1];
+    expect(child.vm.pc).toBe(0);
+    expect(child.vm.stack).toEqual([]);
+  });
+});
+
+// ---------- reproduction cooldown ----------
+
+describe("creature: reproduction cooldown", () => {
+  beforeEach(() => {
+    stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+  });
+
+  it("after reproducing, parent cannot fission again on the next tick", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
+    const parent = w.creatures[0];
+    expect(parent.reproduceCooldown).toBeGreaterThan(0);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
+  });
+
+  it("child also has a fresh fission cooldown", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    const child = w.creatures[1];
+    expect(child.reproduceCooldown).toBeGreaterThan(0);
+  });
+
+  it("cooldown decrements each tick and eventually allows re-fission", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 1000 });
+    for (const id of M) c.reserves[id] = 5000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    expect(w.creatures.length).toBe(2);
+    const startPop = w.creatures.length;
+    for (let i = 0; i < 180; i++) step(w, 1 / 60);
+    expect(w.creatures.length).toBeGreaterThan(startPop);
+  });
+});
+
+// ---------- newborn cooldown ----------
+
+describe("creature: newborn ingest cooldown", () => {
+  beforeEach(() => {
+    stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+  });
+
+  it("a freshly-spawned child has a positive ingest cooldown (can't eat immediately)", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 200 });
+    for (const id of M) c.reserves[id] = 2000;
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    const child = w.creatures[1];
+    expect(child.ingestCooldown).toBeGreaterThan(0);
+  });
+});
+
+// ---------- precise ingest cost ----------
+
+describe("creature: ingestion charges exactly the per-event energy cost", () => {
+  it("energy delta on ingestion accounts for VM + baseline + ingest cost", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 100 });
+    c.genome = new Uint8Array([]);
+    c.reserves.organic = 0;
+    w.creatures.push(c);
+    for (let i = 0; i < 550; i++) {
+      w.particles.push({
+        x: 50 + (i % 700), y: 10 + (i % 50), z: c.z,
+        vx: 0, vy: 0, vz: 0, r: 2, material: "sand",
+      });
+    }
+    const target = {
+      x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" as const,
+    };
+    w.particles.push(target);
+    const dt = 1 / 60;
+    step(w, dt);
+    expect(w.particles.includes(target)).toBe(false);
+    const expected = 100 - 0.5 * dt - 1.5;
+    expect(c.energy).toBeCloseTo(expected, 5);
   });
 });
 
