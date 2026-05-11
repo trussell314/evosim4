@@ -64,7 +64,8 @@ export interface Creature {
   r: number;
   density: number;
   reserves: Record<MaterialId, number>;
-  energy: number;
+  molecules: Molecules;
+  energy: number;       // ATP. Spent operations turn it into molecules.adp.
   senseRange: number;
   thrustAccel: number;
   genome: Uint8Array;
@@ -75,6 +76,44 @@ export interface Creature {
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
+
+// Per-cell molecular pool. ATP itself lives on the Creature as `energy`
+// (so existing code that talks about energy is talking about ATP); every
+// other named species in the chemistry lives here. All quantities are in
+// the same mass units as reserves, so reactions are mass-conserving and
+// cell volume is total mass.
+//
+// Reactions are catalyzed (cell-built) where biology requires it
+// (chlorophyll for carbon fixation; enzymes broadly); pathways gate on
+// substrate availability via Michaelis-Menten kinetics so they slow down
+// rather than cut off when reactants run low. Waste / CO2 build-up that
+// the cell can't process get auto-excreted as world particles.
+export interface Molecules {
+  adp: number;          // ATP's discharged form; energy spend goes here
+  glucose: number;      // primary fuel
+  fattyAcid: number;    // energy-dense secondary fuel
+  aminoAcid: number;    // building block
+  chlorophyll: number;  // cell-built catalyst, enables photosynthesis
+  enzyme: number;       // cell-built generic catalyst
+  o2: number;           // respiration substrate / photosynth product
+  co2: number;          // respiration product / photosynth substrate
+  minerals: number;     // mineral cofactor / structural input
+  biomass: number;      // structural; part of cell volume
+  waste: number;        // toxic byproduct of fermentation
+}
+
+export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
+  "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
+  "o2", "co2", "minerals", "biomass", "waste",
+];
+
+export function emptyMolecules(): Molecules {
+  return {
+    adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
+    chlorophyll: 0, enzyme: 0,
+    o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0,
+  };
+}
 
 // Phylogeny: a "species" is a unique exact genome. We track when each first
 // appeared, when its population last changed, who its parents (other genome
@@ -129,8 +168,6 @@ export interface World {
   nextSpeciesLane: number;
 }
 
-const METABOLIZE_RATE = 5;
-const ENERGY_PER_MASS = 12;
 const ENERGY_PER_THRUST_SEC = 22;
 const ENERGY_PER_INSTRUCTION = 0.02;
 const VM_INSTR_BUDGET = 32;
@@ -168,17 +205,47 @@ const DEATH_RELEASE_SCATTER = 30;
 // flat rate; bigger cells pay linearly more to move themselves through fluid.
 const THRUST_MASS_REF = 50;
 
-// Photosynthesis: rate scales with cell perimeter (light absorption is a
-// surface phenomenon). Reference radius PHOTOSYNTH_REF_R makes a small cell's
-// rate match the previous flat constant; bigger cells absorb more total but
-// their *per-mass* rate falls as the surface-to-volume ratio shrinks. This
-// is the surface-area-vs-volume cost of getting big.
-const PHOTOSYNTH_RATE = 3;
-const PHOTOSYNTH_REF_R = 4;
+// Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
+// Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
 const LIGHT_DECAY = 250;
 
 const DRAG_REF_R = 4;
 const MIN_CREATURE_R = 4;
+
+// ----- chemistry constants -----
+//
+// Catabolism rate (per-material breakdown into molecules). Mass per second
+// at the cell. Mass fractions in CATAB_FRACTIONS must sum to 1 per row so
+// material -> molecules conversion is mass-conserving.
+const CATAB_RATE_PER_MASS = 0.6;
+const CATAB_KM = 4;
+
+type Catab = Partial<Molecules>;
+const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
+  rock:    { minerals: 1.0 },
+  sand:    { minerals: 1.0 },
+  clay:    { minerals: 0.7, aminoAcid: 0.3 },
+  organic: { glucose: 0.5, aminoAcid: 0.3, fattyAcid: 0.2 },
+  lipid:   { fattyAcid: 0.7, aminoAcid: 0.3 },
+  gas:     { o2: 0.6, co2: 0.4 },
+};
+
+// Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
+// runs at most VMAX per second and gracefully slows as substrates deplete.
+const KM_DEFAULT = 1;
+const AEROBIC_VMAX = 8;     // glucose-mass consumed per sec per cell at saturation
+const FERMENT_VMAX = 1.5;
+const BETAOX_VMAX = 4;      // fatty-acid mass per sec
+const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
+const CHLORO_SYNTH_VMAX = 0.05;
+const ENZYME_SYNTH_VMAX = 0.1;
+const BIOMASS_GROW_VMAX = 0.2;
+
+// Auto-excretion: once internal CO2 / waste crosses these thresholds, the
+// cell dumps the excess back to the world as particles (mass-conserving).
+const CO2_EXCRETE_THRESHOLD = 6;
+const WASTE_EXCRETE_THRESHOLD = 3;
+const EXCRETE_FLOOR = 1;
 
 export function createWorld(width: number, height: number): World {
   const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
@@ -243,8 +310,18 @@ function emptyReserves(): Record<MaterialId, number> {
 
 function makeCreature(x: number, y: number, z: number): Creature {
   const reserves = emptyReserves();
-  reserves.organic = 40;
-  reserves.lipid = 10;
+  const molecules = emptyMolecules();
+  // Starter cell ships with a working metabolism: enough ATP to live, a
+  // matched ADP pool, some glucose and O2 to run respiration, a little
+  // amino-acid / minerals / fatty-acid for biosynthesis and movement,
+  // and biomass to give it physical body. No undigested food yet.
+  molecules.adp = 50;
+  molecules.glucose = 10;
+  molecules.fattyAcid = 5;
+  molecules.aminoAcid = 5;
+  molecules.o2 = 10;
+  molecules.minerals = 5;
+  molecules.biomass = 30;
   const genome = makeDefaultGenome();
   const c: Creature = {
     x, y, z,
@@ -252,7 +329,8 @@ function makeCreature(x: number, y: number, z: number): Creature {
     r: MIN_CREATURE_R,
     density: 1.0,
     reserves,
-    energy: 120,
+    molecules,
+    energy: 30,
     senseRange: 200,
     thrustAccel: 70,
     genome,
@@ -313,6 +391,162 @@ function noteCreatureDeath(world: World, c: Creature): void {
   if (!sp) return;
   sp.alive = Math.max(0, sp.alive - 1);
   sp.lastSeen = world.t;
+}
+
+// Charge an ATP cost. Caps at available ATP and routes the spent mass into
+// ADP so the cell can later re-charge it via respiration. Returns the amount
+// actually paid (which may be less than requested if the cell ran out).
+function spendATP(c: Creature, want: number): number {
+  if (want <= 0) return 0;
+  const got = Math.min(c.energy, want);
+  c.energy -= got;
+  c.molecules.adp += got;
+  return got;
+}
+
+function sat(x: number, km: number = KM_DEFAULT): number {
+  return x > 0 ? x / (x + km) : 0;
+}
+
+// Convert undigested reserves into named molecules. Mass-conserving:
+// each row of CATAB_FRACTIONS sums to 1.
+function catabolize(c: Creature, dt: number): void {
+  for (const id of MATERIAL_IDS) {
+    const avail = c.reserves[id];
+    if (avail <= 0) continue;
+    const rate = CATAB_RATE_PER_MASS * sat(avail, CATAB_KM);
+    const amt = Math.min(rate * dt, avail);
+    if (amt <= 0) continue;
+    c.reserves[id] = avail - amt;
+    const frac = CATAB_FRACTIONS[id];
+    for (const k in frac) {
+      const key = k as keyof Molecules;
+      c.molecules[key] += amt * (frac[key] as number);
+    }
+  }
+}
+
+// Aerobic respiration: 1 glu + 1 o2 + 6 adp -> 2 co2 + 6 atp.
+function aerobicRespire(c: Creature, dt: number): void {
+  const m = c.molecules;
+  if (m.glucose <= 0 || m.o2 <= 0 || m.adp <= 0) return;
+  const rate = AEROBIC_VMAX * sat(m.glucose) * sat(m.o2) * sat(m.adp / 6);
+  const amt = Math.min(rate * dt, m.glucose, m.o2, m.adp / 6);
+  if (amt <= 0) return;
+  m.glucose -= amt;
+  m.o2 -= amt;
+  m.co2 += 2 * amt;
+  m.adp -= 6 * amt;
+  c.energy += 6 * amt;
+}
+
+// Fermentation: 1 glu + 2 adp -> 0.5 co2 + 0.5 waste + 2 atp. Suppressed
+// when O2 is abundant so it acts as the anaerobic fallback path.
+function ferment(c: Creature, dt: number): void {
+  const m = c.molecules;
+  if (m.glucose <= 0 || m.adp <= 0) return;
+  const o2Suppression = KM_DEFAULT / (KM_DEFAULT + m.o2);
+  const rate = FERMENT_VMAX * sat(m.glucose) * sat(m.adp / 2) * o2Suppression;
+  const amt = Math.min(rate * dt, m.glucose, m.adp / 2);
+  if (amt <= 0) return;
+  m.glucose -= amt;
+  m.adp -= 2 * amt;
+  m.co2 += 0.5 * amt;
+  m.waste += 0.5 * amt;
+  c.energy += 2 * amt;
+}
+
+// Beta-oxidation of fatty acid: 1 fa + 1 o2 + 14 adp -> 2 co2 + 14 atp.
+// Much higher ATP yield per gram than glucose -- fatty acids are dense fuel.
+function betaOxidize(c: Creature, dt: number): void {
+  const m = c.molecules;
+  if (m.fattyAcid <= 0 || m.o2 <= 0 || m.adp <= 0) return;
+  const rate = BETAOX_VMAX * sat(m.fattyAcid) * sat(m.o2) * sat(m.adp / 14);
+  const amt = Math.min(rate * dt, m.fattyAcid, m.o2, m.adp / 14);
+  if (amt <= 0) return;
+  m.fattyAcid -= amt;
+  m.o2 -= amt;
+  m.co2 += 2 * amt;
+  m.adp -= 14 * amt;
+  c.energy += 14 * amt;
+}
+
+// Photosynthesis: 1 co2 + 1 atp + light -> 0.5 glu + 0.5 o2 + 1 adp.
+// Requires chlorophyll catalyst (not consumed). Scales with surface area
+// (perimeter ~ r) and with the local ambient light.
+function photosynthesize(c: Creature, dt: number, light: number): void {
+  const m = c.molecules;
+  if (m.chlorophyll <= 0 || m.co2 <= 0 || c.energy <= 0 || light <= 0) return;
+  const surface = c.r / MIN_CREATURE_R;
+  const rate = PHOTO_VMAX_PER_R * surface * sat(m.chlorophyll) * sat(m.co2) * light;
+  const amt = Math.min(rate * dt, m.co2, c.energy);
+  if (amt <= 0) return;
+  m.co2 -= amt;
+  c.energy -= amt;
+  m.glucose += 0.5 * amt;
+  m.o2 += 0.5 * amt;
+  m.adp += amt;
+}
+
+// Generic biosynthesis helper: combine two substrate molecules (by their
+// mass fractions in the product) with 1 atp, producing 1 unit of product
+// and 1 adp. Mass-conserving: fracA + fracB + 1 = 2, product + adp = 2.
+function biosynthesize(
+  c: Creature,
+  dt: number,
+  vmax: number,
+  fracA: number, subA: keyof Molecules,
+  fracB: number, subB: keyof Molecules,
+  product: keyof Molecules,
+): void {
+  const m = c.molecules;
+  const a = m[subA];
+  const b = m[subB];
+  if (a <= 0 || b <= 0 || c.energy <= 0) return;
+  const rate = vmax * sat(a / fracA) * sat(b / fracB) * sat(c.energy);
+  const amt = Math.min(rate * dt, a / fracA, b / fracB, c.energy);
+  if (amt <= 0) return;
+  m[subA] = a - fracA * amt;
+  m[subB] = b - fracB * amt;
+  c.energy -= amt;
+  m[product] += amt;
+  m.adp += amt;
+}
+
+function autoExcrete(c: Creature, world: World): void {
+  // CO2 vented as gas particles.
+  if (c.molecules.co2 > CO2_EXCRETE_THRESHOLD) {
+    const amt = c.molecules.co2 - EXCRETE_FLOOR;
+    c.molecules.co2 = EXCRETE_FLOOR;
+    spawnExcretedParticle(c, world, "gas", amt);
+  }
+  // Toxic waste vented as organic particles (decomposer-friendly).
+  if (c.molecules.waste > WASTE_EXCRETE_THRESHOLD) {
+    const amt = c.molecules.waste - EXCRETE_FLOOR;
+    c.molecules.waste = EXCRETE_FLOOR;
+    spawnExcretedParticle(c, world, "organic", amt);
+  }
+}
+
+function spawnExcretedParticle(c: Creature, world: World, material: MaterialId, m: number): void {
+  if (m < EXCRETE_MIN_AMOUNT) {
+    // Round-off; just drop it on the floor of the cell (lose to environment).
+    return;
+  }
+  const density = MATERIALS[material].density;
+  const pr = Math.max(1.5, Math.sqrt(m / (density * Math.PI)));
+  const angle = Math.random() * Math.PI * 2;
+  const ejectV = 25;
+  world.particles.push({
+    x: c.x + Math.cos(angle) * (c.r + pr + 1),
+    y: c.y + Math.sin(angle) * (c.r + pr + 1),
+    z: Math.min(world.depth - pr, Math.max(pr, c.z)),
+    vx: Math.cos(angle) * ejectV,
+    vy: Math.sin(angle) * ejectV,
+    vz: (Math.random() - 0.5) * 10,
+    r: pr,
+    material,
+  });
 }
 
 export function genomeColor(genome: Uint8Array): string {
@@ -416,13 +650,31 @@ function updateCreatures(world: World, dt: number): void {
     const c = world.creatures[cIdx];
 
     updateCreatureRadius(c);
-    // Baseline drain scales with total stored mass so big cells aren't free.
-    c.energy -= (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dt;
 
-    const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
-    c.reserves.organic -= burn;
-    c.reserves.gas += burn;
-    c.energy += burn * ENERGY_PER_MASS;
+    // Cost of being alive. ATP turns into ADP, mass conserved.
+    const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dt;
+    spendATP(c, idleDrain);
+
+    // Bulk -> molecules.
+    catabolize(c, dt);
+
+    // Energy production. All three pathways may run in parallel; rates
+    // self-balance via substrate availability (Michaelis-Menten).
+    aerobicRespire(c, dt);
+    ferment(c, dt);
+    betaOxidize(c, dt);
+
+    // Carbon fixation if the cell has chlorophyll and reaches light.
+    const ambientLight = Math.exp(-c.y / LIGHT_DECAY);
+    photosynthesize(c, dt, ambientLight);
+
+    // Cell builds its own catalysts and structure as substrates allow.
+    biosynthesize(c, dt, CHLORO_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "chlorophyll");
+    biosynthesize(c, dt, ENZYME_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "enzyme");
+    biosynthesize(c, dt, BIOMASS_GROW_VMAX, 0.7, "aminoAcid", 0.3, "fattyAcid", "biomass");
+
+    // Vent CO2 / waste back to the world if accumulating.
+    autoExcrete(c, world);
 
     populateSensors(c, world);
 
@@ -437,7 +689,7 @@ function updateCreatures(world: World, dt: number): void {
     VM_SELF.mass = selfMass;
 
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
-    c.energy -= VM_OUT.instructions * ENERGY_PER_INSTRUCTION;
+    spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
 
     if (VM_OUT.reproduce) tryReproduce(c, world);
 
@@ -452,26 +704,12 @@ function updateCreatures(world: World, dt: number): void {
     if (c.energy > 0 && usedFrac > 0) {
       c.vx += ax * dt;
       c.vy += ay * dt;
-      // Thrust energy scales linearly with mass -- pushing a heavier cell
-      // through fluid takes more work.
+      // Thrust ATP cost scales linearly with mass.
       const massScale = Math.max(1, creatureTotalMass(c) / THRUST_MASS_REF);
-      c.energy -= usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt;
-    }
-    if (c.energy < 0) c.energy = 0;
-
-    if (VM_OUT.photosynth && c.reserves.gas > 0) {
-      const light = Math.exp(-c.y / LIGHT_DECAY);
-      // Photosynthesis is a surface phenomenon: rate scales with perimeter
-      // (linear in r). Bigger cells absorb more total light but less per
-      // unit mass, since mass grows quadratically with r in 2D.
-      const massPossible = PHOTOSYNTH_RATE * (c.r / PHOTOSYNTH_REF_R) * light * dt;
-      const massActual = Math.min(massPossible, c.reserves.gas);
-      if (massActual > 0) {
-        c.reserves.gas -= massActual;
-        c.reserves.organic += massActual;
-      }
+      spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
 
+    // VM-controlled excretion (vent specific reserves on demand).
     for (let i = 0; i < 6; i++) {
       const requested = VM_OUT.excrete[i];
       if (requested <= 0) continue;
@@ -480,20 +718,7 @@ function updateCreatures(world: World, dt: number): void {
       const amount = Math.min(requested, available);
       if (amount < EXCRETE_MIN_AMOUNT) continue;
       c.reserves[matId] -= amount;
-      const density = MATERIALS[matId].density;
-      const pr = Math.max(1.5, Math.sqrt(amount / (density * Math.PI)));
-      const angle = Math.random() * Math.PI * 2;
-      const ejectV = 25;
-      world.particles.push({
-        x: c.x + Math.cos(angle) * (c.r + pr + 1),
-        y: c.y + Math.sin(angle) * (c.r + pr + 1),
-        z: Math.min(world.depth - pr, Math.max(pr, c.z)),
-        vx: Math.cos(angle) * ejectV,
-        vy: Math.sin(angle) * ejectV,
-        vz: (Math.random() - 0.5) * 10,
-        r: pr,
-        material: matId,
-      });
+      spawnExcretedParticle(c, world, matId, amount);
     }
 
     if (c.ingestCooldown > 0) {
@@ -519,11 +744,15 @@ function updateCreatures(world: World, dt: number): void {
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
           if (c.energy < cost) continue;
+          // Engulf: take everything the prey was carrying.
           for (let k = 0; k < 6; k++) {
             c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
           }
+          for (const mk of MOLECULE_IDS) {
+            c.molecules[mk] += other.molecules[mk];
+          }
           c.energy += other.energy;
-          c.energy -= cost;
+          spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(j);
           ingested = true;
@@ -538,7 +767,7 @@ function updateCreatures(world: World, dt: number): void {
           const dz = p.z - c.z;
           if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
             c.reserves[p.material] += mass(p);
-            c.energy -= INGEST_ENERGY_COST;
+            spendATP(c, INGEST_ENERGY_COST);
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / Math.max(INGEST_REF_R, c.r));
             world.particles.splice(i, 1);
             break;
@@ -549,7 +778,9 @@ function updateCreatures(world: World, dt: number): void {
 
     updateCreatureRadius(c);
 
-    if (c.energy <= 0 && c.reserves.organic < 0.5) {
+    // Death: no ATP and no way to make more (no fuel in either reserves
+    // or already-broken-down molecule pool).
+    if (c.energy <= 0 && noFuel(c)) {
       dead.push(cIdx);
     }
   }
@@ -567,17 +798,29 @@ function updateCreatures(world: World, dt: number): void {
 }
 
 function releaseReservesAsParticles(c: Creature, world: World): void {
-  for (let i = 0; i < 6; i++) {
-    const matId = MATERIAL_IDS[i];
-    let remaining = c.reserves[matId];
+  // On death the cell's entire contents return to the environment. Reserves
+  // dump as their own material; molecules map to the closest material
+  // (organics back to organic, gases to gas, minerals to sand).
+  const per: Record<MaterialId, number> = {
+    rock: 0, sand: 0, clay: 0, organic: 0, lipid: 0, gas: 0,
+  };
+  for (const id of MATERIAL_IDS) per[id] += c.reserves[id];
+  const m = c.molecules;
+  per.organic += m.glucose + m.fattyAcid + m.aminoAcid + m.biomass
+               + m.chlorophyll + m.enzyme + m.waste + m.adp + c.energy;
+  per.gas += m.o2 + m.co2;
+  per.sand += m.minerals;
+
+  for (const matId of MATERIAL_IDS) {
+    let remaining = per[matId];
     if (remaining < 0.5) continue;
     const density = MATERIALS[matId].density;
     while (remaining > 0.5) {
       let r = 2 + Math.random() * 2;
-      let m = density * Math.PI * r * r;
-      if (m > remaining) {
+      let mp = density * Math.PI * r * r;
+      if (mp > remaining) {
         r = Math.max(DEATH_RELEASE_R_MIN, Math.sqrt(remaining / (density * Math.PI)));
-        m = density * Math.PI * r * r;
+        mp = density * Math.PI * r * r;
       }
       world.particles.push({
         x: c.x + (Math.random() - 0.5) * 6,
@@ -589,7 +832,7 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
         r,
         material: matId,
       });
-      remaining -= m;
+      remaining -= mp;
     }
   }
 }
@@ -607,19 +850,27 @@ function tryReproduce(parent: Creature, world: World): void {
     parent.reserves[MATERIAL_IDS[i]] -= cost[i];
     childReserves[MATERIAL_IDS[i]] = cost[i];
   }
+  // Split the remaining reserves and the molecular pool 50/50 with the
+  // child so it can metabolize from birth.
   const orgGift = parent.reserves.organic * 0.5;
   parent.reserves.organic -= orgGift;
   childReserves.organic += orgGift;
+  const childMolecules = emptyMolecules();
+  for (const mk of MOLECULE_IDS) {
+    const half = parent.molecules[mk] * 0.5;
+    parent.molecules[mk] -= half;
+    childMolecules[mk] = half;
+  }
   const energyGift = parent.energy * 0.5;
   parent.energy -= energyGift;
 
   updateCreatureRadius(parent);
 
   const angle = Math.random() * Math.PI * 2;
-  const childMassEstimate = childReserves.organic + childReserves.rock +
-    childReserves.sand + childReserves.clay +
-    childReserves.lipid + childReserves.gas;
-  const childRGuess = Math.max(MIN_CREATURE_R, Math.sqrt(childMassEstimate / Math.PI));
+  let childMassEstimate = energyGift;
+  for (const id of MATERIAL_IDS) childMassEstimate += childReserves[id];
+  for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
+  const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));
   const offset = (parent.r + childRGuess) * 1.1;
   const child: Creature = {
     x: parent.x + Math.cos(angle) * offset,
@@ -629,6 +880,7 @@ function tryReproduce(parent: Creature, world: World): void {
     r: MIN_CREATURE_R,
     density: parent.density,
     reserves: childReserves,
+    molecules: childMolecules,
     energy: energyGift,
     senseRange: parent.senseRange,
     thrustAccel: parent.thrustAccel,
@@ -687,9 +939,19 @@ function populateSensors(c: Creature, world: World): void {
 }
 
 function creatureTotalMass(c: Creature): number {
-  let m = 0;
+  let m = c.energy; // ATP is a real molecule and contributes to mass.
   for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
+  for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
+}
+
+// Has the cell exhausted every fuel it could turn into ATP?
+function noFuel(c: Creature): boolean {
+  const m = c.molecules;
+  return m.glucose < 0.5 && m.fattyAcid < 0.5
+    && c.reserves.organic < 0.5 && c.reserves.lipid < 0.5
+    // Chlorophyll + CO2 + light can still recover atp via photosynthesis.
+    && !(m.chlorophyll > 0.5 && m.co2 > 0.5);
 }
 
 export function updateCreatureRadius(c: Creature): void {

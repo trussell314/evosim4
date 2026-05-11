@@ -10,10 +10,12 @@ import {
   type MaterialId,
   MATERIALS,
   MATERIAL_IDS_ORDERED,
+  MOLECULE_IDS,
   createWorld,
   seedParticles,
   step,
   genomeColor,
+  emptyMolecules,
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState } from "../genome";
 
@@ -23,7 +25,10 @@ function quietWorld(): World {
   return {
     width: 800, height: 600, depth: 24, t: 0,
     particles: [], creatures: [],
-    particleTarget: 550, particleSpawnRate: 30, extinctionCount: 0,
+    // Default to 0 spawn rate so tests with exact particle-count
+    // assertions aren't ~3%-flaky from random top-of-world spawns.
+    // Tests that exercise replenishment explicitly turn this on.
+    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0,
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -46,6 +51,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     vx: 0, vy: 0, vz: 0,
     r: 9, density: 1.0,
     reserves,
+    molecules: emptyMolecules(),
     energy: 100,
     senseRange: 200,
     thrustAccel: 70,
@@ -56,6 +62,13 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     reproduceCooldown: 0,
   };
   return { ...base, ...overrides };
+}
+
+function cellTotalMass(c: Creature): number {
+  let m = c.energy;
+  for (const id of M) m += c.reserves[id];
+  for (const k of MOLECULE_IDS) m += c.molecules[k];
+  return m;
 }
 
 function stubRandom(seq: number[]): void {
@@ -262,34 +275,49 @@ describe("physics: waves", () => {
   });
 });
 
-describe("creature: metabolism", () => {
-  it("organic burns into energy + gas (mass conserved)", () => {
+describe("creature: chemistry - catabolism + respiration", () => {
+  it("organic catabolizes into glucose / amino-acid / fatty-acid molecules", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
     c.reserves.organic = 50;
     w.creatures.push(c);
     step(w, 1.0);
-    expect(c.energy).toBeGreaterThan(0);
     expect(c.reserves.organic).toBeLessThan(50);
-    expect(c.reserves.gas).toBeGreaterThan(0);
-    expect(c.reserves.organic + c.reserves.gas).toBeCloseTo(50, 3);
+    expect(c.molecules.glucose).toBeGreaterThan(0);
+    expect(c.molecules.aminoAcid).toBeGreaterThan(0);
+    expect(c.molecules.fattyAcid).toBeGreaterThan(0);
   });
-  it("caps at available organic", () => {
+  it("aerobic respiration: glucose + O2 produces ATP and CO2", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
-    c.reserves.organic = 1;
+    c.molecules.glucose = 20;
+    c.molecules.o2 = 20;
+    c.molecules.adp = 200;
     w.creatures.push(c);
-    step(w, 10.0);
-    expect(c.reserves.organic).toBeGreaterThanOrEqual(0);
-    expect(c.reserves.organic).toBeLessThan(0.001);
+    step(w, 1.0);
+    expect(c.energy).toBeGreaterThan(0);            // ATP made
+    expect(c.molecules.glucose).toBeLessThan(20);   // glucose consumed
+    expect(c.molecules.o2).toBeLessThan(20);        // oxygen consumed
+    expect(c.molecules.co2).toBeGreaterThan(0);     // CO2 produced
   });
-  it("no organic -> no gas produced", () => {
+  it("fermentation: glucose alone (no O2) still makes ATP but produces waste", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
-    c.reserves.organic = 0;
+    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    c.molecules.glucose = 20;
+    c.molecules.adp = 50;
+    // No O2: aerobic path is blocked, fermentation runs.
+    w.creatures.push(c);
+    step(w, 1.0);
+    expect(c.energy).toBeGreaterThan(0);
+    expect(c.molecules.waste).toBeGreaterThan(0);
+  });
+  it("no fuel + no ATP -> dies", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    // emptyMolecules() default leaves everything at 0; reserves also 0.
     w.creatures.push(c);
     step(w, 1 / 60);
-    expect(c.reserves.gas).toBeCloseTo(0, 5);
+    expect(w.creatures.includes(c)).toBe(false);
   });
 });
 
@@ -333,7 +361,8 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   it("thrust energy cost scales with mass", () => {
     function run(rockMass: number): number {
       const w = quietWorld();
-      const c = makeCreature({ x: 100, y: 300, energy: 1000 });
+      // Start with low ATP so its mass-contribution doesn't drown out rock.
+      const c = makeCreature({ x: 100, y: 300, energy: 100 });
       c.reserves.organic = 0;
       c.reserves.rock = rockMass;
       w.creatures.push(c);
@@ -343,62 +372,61 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
       return e0 - c.energy;
     }
     const drainSmall = run(0);
-    const drainBig = run(2000); // massScale = max(1, 2000/50) = 40
+    const drainBig = run(5000);
     expect(drainBig).toBeGreaterThan(drainSmall * 5);
   });
 });
 
-describe("creature: photosynthesis", () => {
-  const photoGenome = () => new Uint8Array([OP.PHOTOSYNTH, OP.HALT]);
-  it("PHOTOSYNTH converts gas to organic", () => {
-    const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 10, energy: 100, genome: photoGenome() });
-    c.reserves.gas = 30;
-    w.creatures.push(c);
-    step(w, 1.0);
-    expect(c.reserves.gas).toBeLessThan(30);
-    expect(c.reserves.organic).toBeGreaterThan(0);
-  });
-  it("bigger cells absorb more total light (rate scales with perimeter)", () => {
-    const wS = quietWorld(), wB = quietWorld();
-    const small = makeCreature({ x: 400, y: 10, energy: 1000, genome: photoGenome() });
-    const big = makeCreature({ x: 400, y: 10, energy: 1000, genome: photoGenome() });
-    small.reserves.gas = 200;
-    big.reserves.gas = 200;
-    // Push big's radius up via inert mass so r/PHOTOSYNTH_REF_R >> 1.
-    big.reserves.rock = 1200;
-    wS.creatures.push(small);
-    wB.creatures.push(big);
-    step(wS, 1.0); step(wB, 1.0);
-    expect(big.reserves.organic).toBeGreaterThan(small.reserves.organic * 1.5);
-  });
-  it("surface light produces more conversion than depth", () => {
-    const wS = quietWorld();
-    const wD = quietWorld();
-    const cs = makeCreature({ x: 400, y: 10, energy: 100, genome: photoGenome() });
-    cs.reserves.gas = 50;
-    wS.creatures.push(cs);
-    const cd = makeCreature({ x: 400, y: 500, energy: 100, genome: photoGenome() });
-    cd.reserves.gas = 50;
-    wD.creatures.push(cd);
-    step(wS, 1.0); step(wD, 1.0);
-    expect(cs.reserves.organic).toBeGreaterThan(cd.reserves.organic * 3);
-  });
-  it("caps at available gas", () => {
-    const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 10, energy: 100, genome: photoGenome() });
-    c.reserves.gas = 0.5;
-    w.creatures.push(c);
-    step(w, 10.0);
-    expect(c.reserves.gas).toBeGreaterThanOrEqual(0);
-  });
-  it("no PHOTOSYNTH op -> no gas->organic conversion", () => {
+describe("creature: chemistry - photosynthesis", () => {
+  it("chlorophyll + CO2 + light fixes carbon (CO2 -> glucose + O2)", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    c.reserves.gas = 30;
+    c.molecules.chlorophyll = 5;
+    c.molecules.co2 = 20;
     w.creatures.push(c);
     step(w, 1.0);
-    expect(c.reserves.organic).toBeCloseTo(0, 3);
+    expect(c.molecules.co2).toBeLessThan(20);
+    expect(c.molecules.glucose).toBeGreaterThan(0);
+    expect(c.molecules.o2).toBeGreaterThan(0);
+  });
+  it("without chlorophyll, no photosynthesis happens", () => {
+    const w = quietWorld();
+    const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    // Seed below the auto-excrete threshold so the only thing that could
+    // shrink CO2 here would be photosynthesis (which is gated on chloro).
+    c.molecules.co2 = 4;
+    w.creatures.push(c);
+    const co0 = c.molecules.co2;
+    const glu0 = c.molecules.glucose;
+    step(w, 1.0);
+    expect(c.molecules.co2).toBeCloseTo(co0, 3);
+    expect(c.molecules.glucose).toBeCloseTo(glu0, 3);
+  });
+  it("at depth, much less light -> much less photosynthesis", () => {
+    const wS = quietWorld(), wD = quietWorld();
+    const surface = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    surface.molecules.chlorophyll = 5;
+    surface.molecules.co2 = 50;
+    wS.creatures.push(surface);
+    const deep = makeCreature({ x: 400, y: 500, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    deep.molecules.chlorophyll = 5;
+    deep.molecules.co2 = 50;
+    wD.creatures.push(deep);
+    step(wS, 1.0); step(wD, 1.0);
+    expect(surface.molecules.glucose).toBeGreaterThan(deep.molecules.glucose * 3);
+  });
+  it("photosynthesis costs ATP (substrate-level: CO2 + ATP -> glucose + O2 + ADP)", () => {
+    const w = quietWorld();
+    const c = makeCreature({ x: 400, y: 10, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    c.molecules.chlorophyll = 5;
+    c.molecules.co2 = 20;
+    w.creatures.push(c);
+    const e0 = c.energy;
+    const adp0 = c.molecules.adp;
+    step(w, 1.0);
+    // ATP fell (it's the input to fixation), ADP rose.
+    expect(c.energy).toBeLessThan(e0);
+    expect(c.molecules.adp).toBeGreaterThan(adp0);
   });
 });
 
@@ -427,12 +455,14 @@ describe("creature: excretion", () => {
   });
   it("skipped when reserve below threshold", () => {
     const w = quietWorld();
+    w.particleSpawnRate = 0; // no random replenishment during test
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, 5, OP.HALT]) });
     c.reserves.gas = 0.1;
     w.creatures.push(c);
     const before = w.particles.length;
     step(w, 1 / 60);
-    expect(c.reserves.gas).toBeCloseTo(0.1, 5);
+    // Catabolism nibbles the gas reserve slowly; allow a tiny delta.
+    expect(c.reserves.gas).toBeCloseTo(0.1, 3);
     const newP = w.particles.slice(before);
     expect(newP.some((p) => p.material === "gas")).toBe(false);
   });
@@ -454,6 +484,7 @@ describe("creature: excretion", () => {
 describe("creature: ingestion cost and cooldown", () => {
   it("charges per-event energy on ingestion", () => {
     const w = quietWorld();
+    w.particleSpawnRate = 0; // no random replenishment during test
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
@@ -630,28 +661,18 @@ describe("creature: reproduction", () => {
     expect(p.energy + ch.energy).toBeLessThan(210);
     expect(Math.abs(p.energy - ch.energy)).toBeLessThan(3);
   });
-  it("non-organic, non-gas materials conserved across fission", () => {
+  it("total cell mass approximately conserved across fission", () => {
     const w = quietWorld();
     const c = makeCreature();
     for (const id of M) c.reserves[id] = 200;
     c.energy = 200;
+    const totalBefore = cellTotalMass(c);
     w.creatures.push(c);
     step(w, 1 / 60);
     const [p, ch] = w.creatures;
-    for (const id of M) {
-      if (id === "organic" || id === "gas") continue;
-      expect(p.reserves[id] + ch.reserves[id]).toBeCloseTo(200, 5);
-    }
-  });
-  it("organic + gas combined total conserved", () => {
-    const w = quietWorld();
-    const c = makeCreature();
-    for (const id of M) c.reserves[id] = 200;
-    c.energy = 200;
-    w.creatures.push(c);
-    step(w, 1 / 60);
-    const [p, ch] = w.creatures;
-    expect((p.reserves.organic + ch.reserves.organic) + (p.reserves.gas + ch.reserves.gas)).toBeCloseTo(400, 5);
+    // All reactions and the fission split are mass-conserving; what falls
+    // out is excreted particles, which over 1/60s are negligible.
+    expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 1);
   });
   it("organic accounts for metabolism during tick", () => {
     const w = quietWorld();
@@ -859,6 +880,7 @@ describe("ecology: extinction recovery", () => {
       const c = w.creatures[0] ?? makeCreature({ energy: 0 });
       c.energy = 0;
       c.reserves.organic = 0;
+      c.molecules = emptyMolecules(); // wipe internal fuel too
       if (w.creatures.length === 0) w.creatures.push(c);
       step(w, 1 / 60);
     }
@@ -1012,7 +1034,7 @@ describe("creature: newborn ingest cooldown", () => {
 });
 
 describe("creature: ingestion charges exactly the per-event energy cost", () => {
-  it("empty genome: energy = start - baseline*dt - 1.5", () => {
+  it("empty genome: energy ~ start - baseline_drain - INGEST_ENERGY_COST", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 100 });
     c.genome = new Uint8Array([]);
@@ -1022,28 +1044,41 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" as const };
     w.particles.push(target);
     const dt = 1 / 60;
+    const e0 = c.energy;
     step(w, dt);
     expect(w.particles.includes(target)).toBe(false);
-    expect(c.energy).toBeCloseTo(100 - 0.5 * dt - 1.5, 5);
+    // Energy dropped by ingest cost (1.5) plus a small mass-dependent drain.
+    // With empty genome there's no VM exec cost, and the cell has no fuel
+    // it can metabolize back to ATP in one tick.
+    const drop = e0 - c.energy;
+    expect(drop).toBeGreaterThan(1.5);
+    expect(drop).toBeLessThan(2.0);
   });
 });
 
 describe("particle replenishment", () => {
   it("spawns when below target", () => {
     const w = quietWorld();
+    w.particleSpawnRate = 30;
     const n0 = w.particles.length;
     for (let i = 0; i < 60; i++) step(w, 1 / 60);
     expect(w.particles.length).toBeGreaterThan(n0);
   });
-  it("does not exceed target", () => {
+  it("does not refill above target", () => {
     const w = quietWorld();
+    w.particleSpawnRate = 30;
     seedParticles(w, 550);
     const n0 = w.particles.length;
     for (let i = 0; i < 30; i++) step(w, 1 / 60);
-    expect(w.particles.length).toBe(n0);
+    // Extinction recovery seeds a creature; it may auto-excrete CO2 as gas
+    // once internal levels build up. The replenishParticles path is the
+    // thing under test here -- it must not spawn above the target. Allow
+    // a small excretion delta.
+    expect(w.particles.length).toBeLessThanOrEqual(n0 + 3);
   });
   it("refills after eating", () => {
     const w = quietWorld();
+    w.particleSpawnRate = 30;
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
     seedParticles(w, 540);

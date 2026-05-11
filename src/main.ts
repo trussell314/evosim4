@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, step, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, type Particle, type Creature } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -241,19 +241,27 @@ function updateInspector(): void {
     inspector.textContent = `pop=0  particles=${world.particles.length}`;
     return;
   }
-  let mass = 0;
-  for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
+  let reserveMass = 0;
+  for (const id of MATERIAL_IDS_ORDERED) reserveMass += c.reserves[id];
+  let molMass = c.energy;
+  for (const k of MOLECULE_IDS) molMass += c.molecules[k];
+  const totalMass = reserveMass + molMass;
   const reserves = MATERIAL_IDS_ORDERED
     .map((id) => `${id.slice(0, 3)}=${c.reserves[id].toFixed(0)}`)
     .join(" ");
+  const m = c.molecules;
+  const fmt = (x: number) => x.toFixed(0);
   const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
   inspector.textContent =
     `pop=${world.creatures.length}  parts=${world.particles.length}/${world.particleTarget}  extinct=${world.extinctionCount}  (click a cell)\n` +
     `pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
-    `r=${c.r.toFixed(1)}  mass=${mass.toFixed(0)}  E=${c.energy.toFixed(0)}\n` +
+    `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
     `ingestCD=${c.ingestCooldown.toFixed(2)}s  reproCD=${c.reproduceCooldown.toFixed(2)}s\n` +
-    `${reserves}\n` +
+    `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
+    `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
+    `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} bio=${fmt(m.biomass)}\n` +
+    `stomach: ${reserves}\n` +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
     "—\n" +
     activeDisasm;
