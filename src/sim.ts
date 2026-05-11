@@ -266,7 +266,7 @@ const PREDATION_ENERGY_PER_MASS = 0.1;
 // component. Big cells must keep more chemistry running and starve faster
 // when idle. A r=4 cell pays ~0.5 e/s; a r=20 (~mass 1250) cell pays ~7 e/s.
 const BASE_METABOLIC_DRAIN = 0.5;
-const BASE_METABOLIC_PER_MASS = 0.002;
+const BASE_METABOLIC_PER_MASS = 0.0003;
 const DEATH_RELEASE_R_MIN = 1.2;
 const DEATH_RELEASE_SCATTER = 30;
 
