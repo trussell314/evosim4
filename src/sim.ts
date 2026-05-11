@@ -71,7 +71,6 @@ export interface Creature {
   vm: VMState;
   color: string;
   ingestCooldown: number;
-  reproduceCooldown: number;
   // world.t at the moment this creature was created. Age = world.t - bornAt.
   bornAt: number;
   // Cells this creature has swallowed whole (OP.ENGULF). They sit inert in
@@ -209,7 +208,6 @@ const MASS_PER_GENOME_BYTE = 3;
 const PARTICLE_DENSITY_PER_AREA = 11000 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 const MAX_CREATURES = 400;
-const REPRODUCE_COOLDOWN_SEC = 2;
 
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.35;
@@ -398,7 +396,6 @@ function makeCreature(x: number, y: number, z: number): Creature {
     vm: newVMState(),
     color: genomeColor(genome),
     ingestCooldown: 0,
-    reproduceCooldown: 0,
     bornAt: 0,
     contents: [],
   };
@@ -861,9 +858,6 @@ function updateCreatures(world: World, dt: number): void {
     if (c.ingestCooldown > 0) {
       c.ingestCooldown = Math.max(0, c.ingestCooldown - dt);
     }
-    if (c.reproduceCooldown > 0) {
-      c.reproduceCooldown = Math.max(0, c.reproduceCooldown - dt);
-    }
 
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
       let ingested = false;
@@ -1014,7 +1008,10 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
 }
 
 function tryReproduce(parent: Creature, world: World): void {
-  if (parent.reproduceCooldown > 0) return;
+  // No artificial cooldown: the genome decides when to call REPRODUCE. The
+  // build-block molecule cost paid below is the only gate; a cell that hits
+  // REPRODUCE every tick rate-limits itself naturally by burning its build
+  // pool faster than catabolism + biosynthesis can refill it.
   if (world.creatures.length >= MAX_CREATURES) return;
   const childGenome = mutateGenome(parent.genome);
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
@@ -1075,12 +1072,10 @@ function tryReproduce(parent: Creature, world: World): void {
     vm: newVMState(),
     color: genomeColor(childGenome, world.anchorGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
-    reproduceCooldown: REPRODUCE_COOLDOWN_SEC,
     bornAt: world.t,
     contents: [],
   };
   updateCreatureRadius(child);
-  parent.reproduceCooldown = REPRODUCE_COOLDOWN_SEC;
   world.creatures.push(child);
   noteCreatureBirth(world, child, genomeKey(parent.genome));
 }
