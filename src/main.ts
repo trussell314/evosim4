@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, step } from "./sim";
+import { createWorld, MATERIALS, step } from "./sim";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -23,14 +23,6 @@ function resize(): void {
 resize();
 window.addEventListener("resize", resize);
 
-function densityColor(d: number): string {
-  // Pale yellow → brown as density rises.
-  const t = Math.min(1, Math.max(0, (d - 0.3) / 2.2));
-  const hue = 50 - 30 * t;
-  const light = 72 - 45 * t;
-  return `hsl(${hue.toFixed(0)}, 60%, ${light.toFixed(0)}%)`;
-}
-
 function render(): void {
   const { width, height } = world;
   const grad = ctx.createLinearGradient(0, 0, 0, height);
@@ -40,7 +32,7 @@ function render(): void {
   ctx.fillRect(0, 0, width, height);
 
   for (const p of world.particles) {
-    ctx.fillStyle = densityColor(p.density);
+    ctx.fillStyle = MATERIALS[p.material].color;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();

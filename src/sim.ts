@@ -1,13 +1,46 @@
 // Pure simulation. No DOM access.
 //
 // Units: pixels for length, seconds for time.
-// Water density is the reference (= 1). Particle density is relative.
+// Water density is the reference (= 1). Material densities are relative.
+
+export type MaterialId =
+  | "rock"
+  | "sand"
+  | "clay"
+  | "organic"
+  | "lipid"
+  | "gas";
+
+export interface Material {
+  id: MaterialId;
+  density: number;  // relative to water
+  color: string;
+}
+
+export const MATERIALS: Record<MaterialId, Material> = {
+  rock:    { id: "rock",    density: 2.6, color: "#5b4a3a" },
+  sand:    { id: "sand",    density: 1.9, color: "#c9b074" },
+  clay:    { id: "clay",    density: 1.4, color: "#8c8175" },
+  organic: { id: "organic", density: 1.0, color: "#7fb069" },
+  lipid:   { id: "lipid",   density: 0.7, color: "#f0d264" },
+  gas:     { id: "gas",     density: 0.2, color: "#cfe2ff" },
+};
+
+// Spawn weights. Heavier sediment-formers dominate so a dirt layer is visible.
+const SEED_WEIGHTS: Array<[MaterialId, number]> = [
+  ["rock",    1.0],
+  ["sand",    3.0],
+  ["clay",    3.0],
+  ["organic", 2.0],
+  ["lipid",   1.5],
+  ["gas",     0.5],
+];
 
 export interface Particle {
   x: number; y: number;
   vx: number; vy: number;
   r: number;
-  density: number;
+  material: MaterialId;
 }
 
 export interface World {
@@ -56,14 +89,24 @@ export function seed(world: World, n: number): void {
       vx: 0,
       vy: 0,
       r: 2 + Math.random() * 4,
-      density: 0.4 + Math.random() * 1.8,
+      material: pickMaterial(),
     });
   }
 }
 
+function pickMaterial(): MaterialId {
+  let total = 0;
+  for (const [, w] of SEED_WEIGHTS) total += w;
+  let pick = Math.random() * total;
+  for (const [id, w] of SEED_WEIGHTS) {
+    pick -= w;
+    if (pick <= 0) return id;
+  }
+  return SEED_WEIGHTS[SEED_WEIGHTS.length - 1][0];
+}
+
 function mass(p: Particle): number {
-  // 2D: treat "volume" as area.
-  return p.density * Math.PI * p.r * p.r;
+  return MATERIALS[p.material].density * Math.PI * p.r * p.r;
 }
 
 export function step(world: World, dt: number): void {
@@ -73,7 +116,8 @@ export function step(world: World, dt: number): void {
 
   // Forces + integration.
   for (const p of world.particles) {
-    const ay = world.gravity * (1 - 1 / p.density);
+    const density = MATERIALS[p.material].density;
+    const ay = world.gravity * (1 - 1 / density);
     const ax =
       world.waveAmplitude *
       Math.sin(k * p.x - omega * world.t) *
@@ -125,14 +169,12 @@ function resolveCollisions(world: World): void {
         const overlap = minDist - dist;
         const mb = mass(b);
         const total = ma + mb;
-        // Position correction (push along normal, mass-weighted).
         const corrA = overlap * (mb / total);
         const corrB = overlap * (ma / total);
         a.x -= nx * corrA;
         a.y -= ny * corrA;
         b.x += nx * corrB;
         b.y += ny * corrB;
-        // Impulse only when approaching.
         const rvx = b.vx - a.vx;
         const rvy = b.vy - a.vy;
         const vN = rvx * nx + rvy * ny;
