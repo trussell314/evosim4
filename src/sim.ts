@@ -294,7 +294,7 @@ const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
 const KM_DEFAULT = 1;
 const AEROBIC_VMAX = 8;     // glucose-mass consumed per sec per cell at saturation
 const FERMENT_VMAX = 1.5;
-const BETAOX_VMAX = 4;      // fatty-acid mass per sec
+const BETAOX_VMAX = 1.5;    // fatty-acid mass per sec; tame so fa survives for biosynth
 const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
 const CHLORO_SYNTH_VMAX = 0.2;
 const ENZYME_SYNTH_VMAX = 0.4;
@@ -838,7 +838,10 @@ function updateCreatures(world: World, dt: number): void {
     // Cell builds its own catalysts and structure as substrates allow.
     biosynthesize(c, dt, CHLORO_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "chlorophyll");
     biosynthesize(c, dt, ENZYME_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "enzyme");
-    biosynthesize(c, dt, BIOMASS_GROW_VMAX, 0.7, "aminoAcid", 0.3, "fattyAcid", "biomass");
+    // Biomass is mostly protein (aa); the lipid fraction is structural
+    // membrane only. Old 0.7/0.3 mix made fa the limiting reagent because
+    // it competes with beta-oxidation for the same scarce pool.
+    biosynthesize(c, dt, BIOMASS_GROW_VMAX, 0.9, "aminoAcid", 0.1, "fattyAcid", "biomass");
 
     // Vent CO2 / waste back to the world if accumulating.
     autoExcrete(c, world);
