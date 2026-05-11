@@ -152,7 +152,7 @@ function tempToColor(T: number): string {
 
 // Sample the wavy surface at intervals; sim.surfaceYAt is the shared
 // source of truth so the rendered line matches the physical wall.
-const SURFACE_VIS_STEP = 6;
+const SURFACE_VIS_STEP = 3;
 
 function render(): void {
   const { width, height, depth, surfaceY } = world;

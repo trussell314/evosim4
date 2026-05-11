@@ -383,13 +383,35 @@ const TEMP_Q10 = 2;
 const TEMP_MULT_MIN = 0.25;
 const TEMP_MULT_MAX = 4.0;
 
-// Wavy surface position at a given x. Physics wall and renderer both
-// call this so lipids float up to exactly the visible water line instead
-// of clamping at a flat reference and poking above the wave.
+// Surface displacement at a given x. Built from multiple superposed
+// wavelets so the line looks like real water -- a main gravity wave plus
+// off-rate harmonics, a longer swell contribution, and a coupling term
+// that bulges the surface UP wherever the updraft field is pushing water
+// up from below. Physics wall and renderer share this so lipids float to
+// exactly the visible line.
 export function surfaceYAt(world: World, x: number): number {
+  const t = world.t;
+  const A = world.surfaceWaveAmp;
   const kS = (2 * Math.PI) / world.surfaceLength;
   const wS = (2 * Math.PI) / world.surfacePeriod;
-  return world.surfaceY + world.surfaceWaveAmp * Math.sin(kS * x - wS * world.t);
+  const kL = (2 * Math.PI) / world.swellLength;
+  const wL = (2 * Math.PI) / world.swellPeriod;
+  const kU = (2 * Math.PI) / world.updraftLength;
+  const wU = (2 * Math.PI) / world.updraftPeriod;
+
+  // Main gravity wave.
+  let dy = A * Math.sin(kS * x - wS * t);
+  // Two off-rate harmonics: irrational frequency ratios and phase offsets
+  // keep the surface from repeating noticeably.
+  dy += 0.45 * A * Math.sin(1.7 * kS * x - 1.3 * wS * t + 0.6);
+  dy += 0.25 * A * Math.sin(3.1 * kS * x + 2.1 * wS * t + 1.4);
+  // Longer swell contribution. Slower phase so it reads as a separate
+  // motion riding under the chop.
+  dy += 0.7 * A * Math.sin(kL * x + 0.4 * wL * t);
+  // Coupling to the vertical mixing field: where updraft is pushing
+  // water up (negative ay in applyForces), the surface bulges up.
+  dy -= 0.8 * A * Math.sin(kU * x + wU * t);
+  return world.surfaceY + dy;
 }
 
 export function temperatureAt(world: World, x: number, y: number): number {
