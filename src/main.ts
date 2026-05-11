@@ -378,8 +378,10 @@ function formatAge(sec: number): string {
 function updateInspector(): void {
   if (selectedIdx >= world.creatures.length) {
     selectedIdx = 0;
-    refreshActiveDisasm();
   }
+  // Always re-disassemble: the selected cell's genome can change between
+  // frames from somatic mutation, so a cached string would go stale.
+  refreshActiveDisasm();
   const c = world.creatures[selectedIdx];
   if (!c) {
     inspector.textContent = `pop=0  particles=${world.particles.length}`;
