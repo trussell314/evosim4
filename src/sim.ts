@@ -654,18 +654,18 @@ function diffuseGases(c: Creature, dt: number): void {
   }
 }
 
-// Aerobic respiration: 1 glu + 1 o2 + 6 adp -> 2 co2 + 6 atp.
+// Aerobic respiration: 1 glu + 1 o2 + 10 adp -> 2 co2 + 10 atp.
 function aerobicRespire(c: Creature, dt: number): void {
   const m = c.molecules;
   if (m.glucose <= 0 || m.o2 <= 0 || m.adp <= 0) return;
-  const rate = AEROBIC_VMAX * sat(m.glucose) * sat(m.o2) * sat(m.adp / 6);
-  const amt = Math.min(rate * dt, m.glucose, m.o2, m.adp / 6);
+  const rate = AEROBIC_VMAX * sat(m.glucose) * sat(m.o2) * sat(m.adp / 10);
+  const amt = Math.min(rate * dt, m.glucose, m.o2, m.adp / 10);
   if (amt <= 0) return;
   m.glucose -= amt;
   m.o2 -= amt;
   m.co2 += 2 * amt;
-  m.adp -= 6 * amt;
-  c.energy += 6 * amt;
+  m.adp -= 10 * amt;
+  c.energy += 10 * amt;
 }
 
 // Fermentation: 1 glu + 2 adp -> 0.5 co2 + 0.5 waste + 2 atp. Suppressed
