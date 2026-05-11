@@ -272,7 +272,7 @@ function drawPhylogeny(): void {
   );
 }
 
-const RING_GAP = 3;
+const RING_GAP = 1;
 const RING_SPACING = 3;
 const RING_WIDTH = 2;
 
