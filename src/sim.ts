@@ -70,6 +70,7 @@ export interface Creature {
   genome: Uint8Array;
   vm: VMState;
   color: string;                            // cached, hashed from genome (visual lineage)
+  ingestCooldown: number;                   // seconds until next particle can be absorbed
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -100,6 +101,7 @@ export interface World {
 
   // Collision response (between particles).
   restitution: number;
+  xWallRestitution: number;
   zWallRestitution: number;
   collisionIters: number;
 }
@@ -108,7 +110,7 @@ export interface World {
 const METABOLIZE_RATE = 5;            // mass of organic burned per second
 const ENERGY_PER_MASS = 12;           // energy yielded per unit mass burned
 const ENERGY_PER_THRUST_SEC = 22;     // energy cost per second at full thrust
-const ENERGY_PER_INSTRUCTION = 0.005; // VM bookkeeping cost
+const ENERGY_PER_INSTRUCTION = 0.02;  // per-op cost of running the genome
 const VM_INSTR_BUDGET = 32;           // instructions per tick
 
 // Reproduction & ecology.
@@ -116,6 +118,12 @@ const MASS_PER_GENOME_BYTE = 3;
 const PARTICLE_TARGET = 550;
 const PARTICLE_SPAWN_RATE = 30;       // per second (when below target)
 const MAX_CREATURES = 80;
+
+// Ingestion. Each successful absorption costs energy and locks the cell out
+// of ingesting again for a short cooldown -- prevents cells from sweeping
+// through food without paying anything.
+const INGEST_ENERGY_COST = 1.5;
+const INGEST_COOLDOWN_SEC = 0.35;
 
 export function createWorld(width: number, height: number): World {
   const world: World = {
@@ -140,6 +148,7 @@ export function createWorld(width: number, height: number): World {
     zStirAmp: 9,
 
     restitution: 0.15,
+    xWallRestitution: 0.4,
     zWallRestitution: 0.6,
     collisionIters: 2,
   };
@@ -199,6 +208,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     genome,
     vm: newVMState(),
     color: genomeColor(genome),
+    ingestCooldown: 0,
   };
 }
 
@@ -297,7 +307,12 @@ const VM_OUT: VMOutputs = newOutputs();
 const SENSOR_BEST_SQ = new Float32Array(6);
 
 function updateCreatures(world: World, dt: number): void {
-  for (const c of world.creatures) {
+  // Snapshot length: children spawned this tick don't act until next tick.
+  // Without this a child can reproduce on the same tick it was born, which
+  // cascades and breaks matter/energy conservation per cell.
+  const n = world.creatures.length;
+  for (let cIdx = 0; cIdx < n; cIdx++) {
+    const c = world.creatures[cIdx];
     // Metabolize organic into energy.
     const burn = Math.min(METABOLIZE_RATE * dt, c.reserves.organic);
     c.reserves.organic -= burn;
@@ -336,15 +351,26 @@ function updateCreatures(world: World, dt: number): void {
     }
     if (c.energy < 0) c.energy = 0;
 
-    // Ingest any particle whose center is inside the cell.
-    for (let i = world.particles.length - 1; i >= 0; i--) {
-      const p = world.particles[i];
-      const dx = p.x - c.x;
-      const dy = p.y - c.y;
-      const dz = p.z - c.z;
-      if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
-        c.reserves[p.material] += mass(p);
-        world.particles.splice(i, 1);
+    // Tick down the ingest cooldown.
+    if (c.ingestCooldown > 0) {
+      c.ingestCooldown = Math.max(0, c.ingestCooldown - dt);
+    }
+
+    // At most one ingestion per cooldown window, and only if the cell can pay
+    // the per-event energy cost.
+    if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
+      for (let i = world.particles.length - 1; i >= 0; i--) {
+        const p = world.particles[i];
+        const dx = p.x - c.x;
+        const dy = p.y - c.y;
+        const dz = p.z - c.z;
+        if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
+          c.reserves[p.material] += mass(p);
+          c.energy -= INGEST_ENERGY_COST;
+          c.ingestCooldown = INGEST_COOLDOWN_SEC;
+          world.particles.splice(i, 1);
+          break;
+        }
       }
     }
   }
@@ -389,6 +415,7 @@ function tryReproduce(parent: Creature, world: World): void {
     genome: childGenome,
     vm: newVMState(),
     color: genomeColor(childGenome),
+    ingestCooldown: INGEST_COOLDOWN_SEC,
   };
   world.creatures.push(child);
 }
@@ -481,8 +508,13 @@ function applyWalls(world: World): void {
       o.y = o.r;
       if (o.vy < 0) o.vy = 0;
     }
-    if (o.x < 0) o.x += world.width;
-    else if (o.x >= world.width) o.x -= world.width;
+    if (o.x < o.r) {
+      o.x = o.r;
+      if (o.vx < 0) o.vx = -o.vx * world.xWallRestitution;
+    } else if (o.x > world.width - o.r) {
+      o.x = world.width - o.r;
+      if (o.vx > 0) o.vx = -o.vx * world.xWallRestitution;
+    }
     if (o.z < o.r) {
       o.z = o.r;
       if (o.vz < 0) o.vz = -o.vz * world.zWallRestitution;
