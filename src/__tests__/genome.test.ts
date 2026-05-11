@@ -248,6 +248,12 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, OP.HALT]).out.predate).toBe(true);
   });
+  it("INGEST flag", () => {
+    expect(exec([OP.INGEST, OP.HALT]).out.ingest).toBe(true);
+  });
+  it("INGEST flag defaults to false without the op", () => {
+    expect(exec([OP.NOP, OP.HALT]).out.ingest).toBe(false);
+  });
   it("TURN accumulates angle delta from the stack", () => {
     expect(exec([OP.PUSH8, 1, OP.TURN, OP.HALT]).out.turn).toBe(1);
   });
@@ -267,6 +273,7 @@ describe("VM actuators", () => {
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
     expect(out.turn).toBe(0);
+    expect(out.ingest).toBe(false);
     expect(Array.from(out.excrete)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });

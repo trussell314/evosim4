@@ -362,7 +362,7 @@ export function createWorld(width: number, height: number): World {
     surfaceAmp: 130, surfaceLength: 240, surfacePeriod: 2.4, surfaceDecay: 120,
     swellAmp: 22, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
     zStirAmp: 9,
-    updraftAmp: 18, updraftLength: 360, updraftPeriod: 16,
+    updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
     species: new Map(),
@@ -1094,7 +1094,11 @@ function updateCreatures(world: World, dt: number): void {
           break;
         }
       }
-      if (!ingested) {
+      // Particle ingestion is genome-triggered: the cell must explicitly
+      // run the INGEST op this tick. Engulf/predate above remain genome-
+      // triggered too; this just makes "eat the floating crumb" no longer
+      // automatic.
+      if (!ingested && VM_OUT.ingest) {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
           const dx = p.x - c.x;

@@ -363,14 +363,14 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   });
   it("ingest cooldown shortens for bigger cells (membrane scales with perimeter)", () => {
     const wS = quietWorld();
-    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
     wS.creatures.push(cs);
     wS.particles.push({ x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(wS, 0.001);
     const cdSmall = cs.ingestCooldown;
 
     const wB = quietWorld();
-    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
     cb.reserves.rock = 4000;
     wB.creatures.push(cb);
     wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
@@ -1140,7 +1140,7 @@ describe("creature: death by starvation", () => {
   it("ingesting a molecule-tagged particle deposits into the cell's molecules", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
     w.creatures.push(eater);
     const gluBefore = eater.molecules.glucose;
     const orgReserveBefore = eater.reserves.organic;
@@ -1243,10 +1243,10 @@ describe("creature: newborn ingest cooldown", () => {
 });
 
 describe("creature: ingestion charges exactly the per-event energy cost", () => {
-  it("empty genome: energy ~ start - baseline_drain - INGEST_ENERGY_COST", () => {
+  it("INGEST op: energy drop ~ baseline + INGEST_ENERGY_COST", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100 });
-    c.genome = new Uint8Array([]);
+    // Minimal genome that just triggers INGEST -- no thrust, no reproduce.
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
     c.reserves.organic = 0;
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
@@ -1259,6 +1259,17 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const drop = e0 - c.energy;
     expect(drop).toBeGreaterThan(1.5);
     expect(drop).toBeLessThan(2.0);
+  });
+  it("no INGEST op: nearby particle is not absorbed", () => {
+    const w = quietWorld();
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
+    c.reserves.organic = 0;
+    w.creatures.push(c);
+    const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" as const };
+    w.particles.push(target);
+    step(w, 1 / 60);
+    expect(w.particles.includes(target)).toBe(true);
+    expect(c.reserves.rock).toBe(0);
   });
 });
 

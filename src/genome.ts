@@ -63,6 +63,7 @@ export const OP = {
   SENSE_WALL_Y:  0x5B,
   SENSE_HEAD_X:  0x5C,
   SENSE_HEAD_Y:  0x5D,
+  INGEST:        0x5E,   // absorb a particle in radius (was implicit before)
 
   HALT:          0xFF,
 } as const;
@@ -147,6 +148,7 @@ export interface VMOutputs {
   reproduce: boolean;
   predate: boolean;
   engulf: boolean;
+  ingest: boolean;
   instructions: number;
 }
 
@@ -154,7 +156,7 @@ export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
-    reproduce: false, predate: false, engulf: false,
+    reproduce: false, predate: false, engulf: false, ingest: false,
     instructions: 0,
   };
 }
@@ -174,6 +176,7 @@ export function runTick(
   out.reproduce = false;
   out.predate = false;
   out.engulf = false;
+  out.ingest = false;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -269,6 +272,7 @@ export function runTick(
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
+      case OP.INGEST:     out.ingest     = true; break;
       case OP.TURN:       out.turn      += pop(); break;
       case OP.HALT:
         return;
@@ -317,6 +321,7 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   sense_grad_x organic
 //   sense_grad_y organic
 //   thrust                 ; accelerate up the food gradient
+//   ingest                 ; absorb any particle in radius this tick
 //   self_energy            ; push ATP
 //   push8 8                ; threshold
 //   gt                     ; ATP > 8 ?
@@ -328,6 +333,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_GRAD_X, 3,
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,
+    OP.INGEST,
     OP.SELF_ENERGY,
     OP.PUSH8, 8,
     OP.GT,
