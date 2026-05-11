@@ -252,11 +252,17 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, OP.HALT]).out.predate).toBe(true);
   });
-  it("INGEST flag", () => {
-    expect(exec([OP.INGEST, OP.HALT]).out.ingest).toBe(true);
+  it("INGEST sets material flag by index", () => {
+    const out = exec([OP.INGEST, 3, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 0, 0]);
   });
-  it("INGEST flag defaults to false without the op", () => {
-    expect(exec([OP.NOP, OP.HALT]).out.ingest).toBe(false);
+  it("INGEST flags accumulate across multiple ops", () => {
+    const out = exec([OP.INGEST, 3, OP.INGEST, 4, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 1, 0]);
+  });
+  it("INGEST flags default to all-zero without the op", () => {
+    const out = exec([OP.NOP, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
   });
   it("TURN accumulates angle delta from the stack", () => {
     expect(exec([OP.PUSH8, 1, OP.TURN, OP.HALT]).out.turn).toBe(1);
@@ -277,7 +283,7 @@ describe("VM actuators", () => {
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
     expect(out.turn).toBe(0);
-    expect(out.ingest).toBe(false);
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
     expect(Array.from(out.excrete)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });

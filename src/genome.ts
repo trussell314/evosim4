@@ -79,13 +79,14 @@ OPERANDS[OP.SENSE_GRAD_Y] = 1;
 OPERANDS[OP.SENSE_DENSITY] = 1;
 OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
+OPERANDS[OP.INGEST] = 1;
 
 
 const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 
 const MATERIAL_OPERAND = new Set<number>([
-  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY, OP.SELF_RESERVE, OP.EXCRETE,
+  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY, OP.SELF_RESERVE, OP.EXCRETE, OP.INGEST,
 ]);
 
 const STACK_MAX = 32;
@@ -151,7 +152,10 @@ export interface VMOutputs {
   reproduce: boolean;
   predate: boolean;
   engulf: boolean;
-  ingest: boolean;
+  // Per-material ingest mask. The genome calls INGEST <material>; the
+  // matching index is set to 1 each tick. Multiple INGEST ops in one
+  // tick accumulate (cell can choose to eat either of several types).
+  ingestMaterials: Uint8Array;
   instructions: number;
 }
 
@@ -159,7 +163,8 @@ export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
-    reproduce: false, predate: false, engulf: false, ingest: false,
+    reproduce: false, predate: false, engulf: false,
+    ingestMaterials: new Uint8Array(6),
     instructions: 0,
   };
 }
@@ -179,7 +184,7 @@ export function runTick(
   out.reproduce = false;
   out.predate = false;
   out.engulf = false;
-  out.ingest = false;
+  out.ingestMaterials.fill(0);
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -276,7 +281,7 @@ export function runTick(
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
-      case OP.INGEST:     out.ingest     = true; break;
+      case OP.INGEST:     { const idx = m6(readOperand()); out.ingestMaterials[idx] = 1; break; }
       case OP.TURN:       out.turn      += pop(); break;
       case OP.HALT:
         return;
@@ -325,7 +330,7 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   sense_grad_x organic
 //   sense_grad_y organic
 //   thrust                 ; accelerate up the food gradient
-//   ingest                 ; absorb any particle in radius this tick
+//   ingest organic         ; absorb only organic particles this tick
 //   self_energy            ; push ATP
 //   push8 3                ; threshold
 //   gt                     ; ATP > 3 ?
@@ -337,7 +342,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SENSE_GRAD_X, 3,
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,
-    OP.INGEST,
+    OP.INGEST, 3,
     OP.SELF_ENERGY,
     OP.PUSH8, 3,
     OP.GT,

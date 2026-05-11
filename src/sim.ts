@@ -442,7 +442,7 @@ export function createWorld(width: number, height: number): World {
     gravity: 220,
     drag: 0.6,
     surfaceAmp: 130, surfaceLength: 240, surfacePeriod: 2.4, surfaceDecay: 120,
-    swellAmp: 22, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
+    swellAmp: 11, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
     zStirAmp: 9,
     updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
     surfaceY: height * SURFACE_Y_FRAC,
@@ -1236,12 +1236,16 @@ function updateCreatures(world: World, dt: number): void {
         }
       }
       // Particle ingestion is genome-triggered: the cell must explicitly
-      // run the INGEST op this tick. Engulf/predate above remain genome-
-      // triggered too; this just makes "eat the floating crumb" no longer
-      // automatic.
-      if (!ingested && VM_OUT.ingest) {
+      // run INGEST <material> this tick. Cells now select what they
+      // want to eat -- chasing organic but bumping into a rock no longer
+      // means swallowing the rock. Multiple INGEST ops per tick stack
+      // into per-material flags so a genome can opt in to several types
+      // at once. Engulf/predate above remain genome-triggered too.
+      if (!ingested) {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
+          const matIdx = MATERIAL_IDS.indexOf(p.material);
+          if (!VM_OUT.ingestMaterials[matIdx]) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;

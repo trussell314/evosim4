@@ -369,14 +369,14 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   });
   it("ingest cooldown shortens for bigger cells (membrane scales with perimeter)", () => {
     const wS = quietWorld();
-    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
+    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     wS.creatures.push(cs);
     wS.particles.push({ x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(wS, 0.001);
     const cdSmall = cs.ingestCooldown;
 
     const wB = quietWorld();
-    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
+    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     cb.reserves.rock = 4000;
     wB.creatures.push(cb);
     wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
@@ -502,11 +502,19 @@ describe("creature: excretion", () => {
   });
 });
 
+// Genome that flips INGEST on for every material -- mirrors the old
+// auto-ingest behavior so legacy ingestion tests don't have to care
+// about per-material gates.
+const OMNIVORE = new Uint8Array([
+  OP.INGEST, 0, OP.INGEST, 1, OP.INGEST, 2,
+  OP.INGEST, 3, OP.INGEST, 4, OP.INGEST, 5, OP.HALT,
+]);
+
 describe("creature: ingestion cost and cooldown", () => {
   it("charges per-event energy on ingestion", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     const e0 = c.energy;
@@ -516,7 +524,7 @@ describe("creature: ingestion cost and cooldown", () => {
   });
   it("absorbs only one particle per cooldown window", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
@@ -529,7 +537,7 @@ describe("creature: ingestion cost and cooldown", () => {
   });
   it("cooldown blocks further eating until expired", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const targets: object[] = [];
@@ -542,7 +550,7 @@ describe("creature: ingestion cost and cooldown", () => {
   });
   it("absorbs again after cooldown", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const tgt = new Set<unknown>();
@@ -570,7 +578,7 @@ describe("creature: ingestion cost and cooldown", () => {
 describe("creature: ingestion (basic)", () => {
   it("absorbs a particle inside the cell radius", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     const target = { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" as const };
     w.particles.push(target);
@@ -580,7 +588,7 @@ describe("creature: ingestion (basic)", () => {
   });
   it("does not absorb particles outside the cell", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     w.particles.push({ x: c.x + c.r + 10, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
     step(w, 0.001);
@@ -588,11 +596,22 @@ describe("creature: ingestion (basic)", () => {
   });
   it("reserve gain matches density * pi * r^2", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 50 });
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
     w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
     expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * (4 / 3) * Math.PI * 27, 5);
+  });
+  it("INGEST is material-selective: rock genome ignores lipid", () => {
+    const w = quietWorld();
+    // INGEST 0 -> rock only.
+    const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
+    w.creatures.push(c);
+    const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" as const };
+    w.particles.push(target);
+    step(w, 0.001);
+    expect(w.particles.includes(target)).toBe(true);
+    expect(c.reserves.lipid).toBe(0);
   });
 });
 
@@ -1146,7 +1165,7 @@ describe("creature: death by starvation", () => {
   it("ingesting a molecule-tagged particle deposits into the cell's molecules", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
+    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, 3, OP.HALT]) });
     w.creatures.push(eater);
     const gluBefore = eater.molecules.glucose;
     const orgReserveBefore = eater.reserves.organic;
@@ -1252,7 +1271,7 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
   it("INGEST op: energy drop ~ baseline + INGEST_ENERGY_COST", () => {
     const w = quietWorld();
     // Minimal genome that just triggers INGEST -- no thrust, no reproduce.
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     c.reserves.organic = 0;
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
