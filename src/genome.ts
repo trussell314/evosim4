@@ -255,18 +255,22 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   sense_dy organic
 //   thrust                 ; accelerate toward food
 //   self_energy            ; push ATP
-//   push8 80               ; threshold
-//   gt                     ; ATP > 80 ?
+//   push8 40               ; threshold
+//   gt                     ; ATP > 40 ?
 //   jz +1                  ; if not, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
+//
+// Threshold of 40 sits just above the starter ATP of 30: a feeding cell
+// crosses it within a few seconds, after which the build-block molecule
+// cost inside tryReproduce becomes the real gate.
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_DX, 3,
     OP.SENSE_DY, 3,
     OP.THRUST,
     OP.SELF_ENERGY,
-    OP.PUSH8, 80,
+    OP.PUSH8, 40,
     OP.GT,
     OP.JZ, 1,
     OP.REPRODUCE,

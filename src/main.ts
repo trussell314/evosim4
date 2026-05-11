@@ -89,10 +89,37 @@ canvas.addEventListener("click", (e) => {
   }
 });
 
-const N_BUCKETS = 4;
+// Dramatic depth: near particles are crisp and full-color, deep ones get
+// heavy blur, low alpha, and shift toward the water-color background --
+// classic atmospheric perspective. Eight buckets give a smooth gradient.
+const N_BUCKETS = 8;
 const BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
-const BLURS = [0, 1.0, 1.8, 2.6];
-const ALPHAS = [1.0, 0.92, 0.84, 0.76];
+const BLURS = [0, 0.6, 1.4, 2.4, 3.4, 4.4, 5.4, 6.4];
+const ALPHAS = [1.0, 0.92, 0.82, 0.70, 0.58, 0.46, 0.36, 0.28];
+// How much each bucket is tinted toward the deep-water color. 0 = no tint
+// (use material color as-is); 1 = fully replaced by background.
+const DEPTH_TINTS = [0, 0.05, 0.12, 0.22, 0.34, 0.46, 0.58, 0.70];
+const DEEP_TINT_R = 6;
+const DEEP_TINT_G = 21;
+const DEEP_TINT_B = 32; // matches the bottom of the water gradient (#061520)
+
+function blendToward(hex: string, frac: number): string {
+  // Parse "#rrggbb" and blend toward the deep-water tint by frac.
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const br = Math.round(r + (DEEP_TINT_R - r) * frac);
+  const bg = Math.round(g + (DEEP_TINT_G - g) * frac);
+  const bb = Math.round(b + (DEEP_TINT_B - b) * frac);
+  return `rgb(${br},${bg},${bb})`;
+}
+// Pre-compute tinted material colors per bucket so the render loop just
+// looks them up instead of parsing strings every frame.
+const TINTED_COLORS: Record<string, string[]> = {};
+for (const matId of MATERIAL_IDS_ORDERED) {
+  const base = MATERIALS[matId].color;
+  TINTED_COLORS[matId] = DEPTH_TINTS.map((t) => blendToward(base, t));
+}
 
 function render(): void {
   const { width, height, depth } = world;
@@ -110,8 +137,9 @@ function render(): void {
   for (let i = N_BUCKETS - 1; i >= 0; i--) {
     ctx.filter = BLURS[i] === 0 ? "none" : `blur(${BLURS[i]}px)`;
     ctx.globalAlpha = ALPHAS[i];
+    const tinted = TINTED_COLORS;
     for (const p of BUCKETS[i]) {
-      ctx.fillStyle = MATERIALS[p.material].color;
+      ctx.fillStyle = tinted[p.material][i];
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
