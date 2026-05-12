@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, resizeWorld, temperatureAt, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, type Particle, type Creature, type Species } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -53,6 +53,11 @@ const PHYLO_STRIP_H = 70;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
+// Reused per-frame to avoid allocating fresh arrays/maps inside the
+// phylogeny render loop. With thousands of species after a long run,
+// per-frame Array.from() + Map() was costing meaningful GC pressure.
+const visibleSpecies: Species[] = [];
+const bioByKey = new Map<string, number>();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -162,9 +167,17 @@ canvas.addEventListener("mouseleave", () => {
 // heavy blur, low alpha, and shift toward the water-color background --
 // classic atmospheric perspective. Eight buckets give a smooth gradient.
 const N_BUCKETS = 8;
-const BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
 const BLURS = [0, 0.6, 1.4, 2.4, 3.4, 4.4, 5.4, 6.4];
 const ALPHAS = [1.0, 0.92, 0.82, 0.70, 0.58, 0.46, 0.36, 0.28];
+// One sub-bucket per (depth bucket, material) so the renderer can issue
+// a single beginPath + many arcs + single fill per group. With 12k+
+// particles, dropping from one canvas op per particle to one per group
+// is a big speedup -- arc/fill/beginPath are expensive when called in
+// the millions per second.
+const N_MATERIALS = 6;
+const SUB_BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS * N_MATERIALS }, () => []);
+const MATERIAL_IDX_BY_NAME: Record<string, number> = {};
+for (let i = 0; i < MATERIAL_IDS_ORDERED.length; i++) MATERIAL_IDX_BY_NAME[MATERIAL_IDS_ORDERED[i]] = i;
 // How much each bucket is tinted toward the deep-water color. 0 = no tint
 // (use material color as-is); 1 = fully replaced by background.
 const DEPTH_TINTS = [0, 0.05, 0.12, 0.22, 0.34, 0.46, 0.58, 0.70];
@@ -248,19 +261,31 @@ function render(): void {
   for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
   ctx.stroke();
 
-  for (const b of BUCKETS) b.length = 0;
+  for (const b of SUB_BUCKETS) b.length = 0;
+  const matIdx: Record<string, number> = MATERIAL_IDX_BY_NAME;
   for (const p of world.particles) {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
-    BUCKETS[Math.floor(t * N_BUCKETS)].push(p);
+    const bucket = Math.floor(t * N_BUCKETS);
+    SUB_BUCKETS[bucket * N_MATERIALS + matIdx[p.material]].push(p);
   }
+  const tinted = TINTED_COLORS;
   for (let i = N_BUCKETS - 1; i >= 0; i--) {
     ctx.filter = BLURS[i] === 0 ? "none" : `blur(${BLURS[i]}px)`;
     ctx.globalAlpha = ALPHAS[i];
-    const tinted = TINTED_COLORS;
-    for (const p of BUCKETS[i]) {
-      ctx.fillStyle = tinted[p.material][i];
+    for (let m = 0; m < N_MATERIALS; m++) {
+      const group = SUB_BUCKETS[i * N_MATERIALS + m];
+      if (group.length === 0) continue;
+      const matName = MATERIAL_IDS_ORDERED[m];
+      ctx.fillStyle = tinted[matName][i];
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      // moveTo before each arc prevents canvas from auto-connecting the
+      // previous endpoint -- without it we'd draw spurious lines through
+      // every particle.
+      for (let k = 0; k < group.length; k++) {
+        const p = group[k];
+        ctx.moveTo(p.x + p.r, p.y);
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      }
       ctx.fill();
     }
   }
@@ -419,17 +444,22 @@ function drawPhylogeny(): void {
   const innerY = stripY + padTop;
   const innerH = stripH - padTop - padBot;
 
-  // Every species ever seen. Stable order by creation lane so a single
-  // species keeps its vertical slot for its whole on-screen life.
-  const visible = Array.from(world.species.values());
-  visible.sort((a, b) => a.lane - b.lane);
+  // Only consider species whose lifespan overlaps the visible window.
+  // Keeps the per-frame work proportional to recent activity instead of
+  // every species ever seen.
+  visibleSpecies.length = 0;
+  for (const sp of world.species.values()) {
+    if (sp.lastSeen >= tMin) visibleSpecies.push(sp);
+  }
+  visibleSpecies.sort((a, b) => a.lane - b.lane);
+  const visible = visibleSpecies;
 
-  // Per-species live biomass. Extinct species sum to 0; living species sum
-  // each cell's molecules.biomass.
-  const bioByKey = new Map<string, number>();
+  // Per-species live biomass. Use c.speciesKey (frozen at birth) instead
+  // of recomputing genomeKey each frame -- somatic drift doesn't move a
+  // cell to a different species, so the birth key is the right bucket.
+  bioByKey.clear();
   for (const c of world.creatures) {
-    const key = genomeKey(c.genome);
-    bioByKey.set(key, (bioByKey.get(key) ?? 0) + c.molecules.biomass);
+    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.biomass);
   }
   let maxBio = 0;
   for (const sp of visible) {

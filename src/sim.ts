@@ -1207,9 +1207,12 @@ function updateCreatures(world: World, dt: number): void {
   const n = world.creatures.length;
   const dead: number[] = [];
   const eaten = new Set<number>();
-  // Build the per-tick creature spatial grid. Used by populateSensors,
-  // engulf scans, predation scans, and creature-creature collisions.
+  // Build per-tick spatial grids. Used by populateSensors (both creature
+  // and particle scans), engulf/predation, creature-creature collisions,
+  // and creature-sediment collisions. Replaces O(N) scans over world
+  // particles/creatures inside per-cell loops with O(neighborhood) scans.
   buildCreatureGrid(world);
+  buildParticleGrid(world);
   for (let cIdx = 0; cIdx < n; cIdx++) {
     if (eaten.has(cIdx)) continue;
     const c = world.creatures[cIdx];
@@ -1740,17 +1743,19 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.gradY[i] = 0;
     VM_SENSORS.density[i] = 0;
   }
-  for (const p of world.particles) {
+  const ps = world.particles;
+  forParticlesNear(c.x, c.y, range, (pi) => {
+    const p = ps[pi];
     const dx = p.x - c.x;
     const dy = p.y - c.y;
     const dsq = dx * dx + dy * dy;
-    if (dsq >= rangeSq || dsq < 1) continue;
+    if (dsq >= rangeSq || dsq < 1) return;
     const idx = MATERIAL_INDEX[p.material];
     const w = range / dsq;
     VM_SENSORS.gradX[idx] += dx * w;
     VM_SENSORS.gradY[idx] += dy * w;
     VM_SENSORS.density[idx]++;
-  }
+  });
   // Push-from-wall vector: range * (1/distLeft - 1/distRight). Magnitude
   // ~unit when the cell is at sense range from one wall and far from the
   // opposite one; 0 at the midpoint.
@@ -1844,6 +1849,54 @@ const CREATURE_GRID_CELL = 64;
 const CREATURE_BUCKETS: number[][] = [];
 let CREATURE_GRID_COLS = 0;
 let CREATURE_GRID_ROWS = 0;
+
+// Particle spatial grid -- used by populateSensors gradient/density
+// calculation and by resolveCreatureSedimentCollisions, both of which
+// formerly iterated every particle in the world per cell. Built once at
+// the start of updateCreatures alongside CREATURE_BUCKETS.
+const PARTICLE_GRID_CELL = 48;
+const PARTICLE_BUCKETS: number[][] = [];
+let PARTICLE_GRID_COLS = 0;
+let PARTICLE_GRID_ROWS = 0;
+
+function buildParticleGrid(world: World): void {
+  PARTICLE_GRID_COLS = Math.max(1, Math.ceil(world.width / PARTICLE_GRID_CELL));
+  PARTICLE_GRID_ROWS = Math.max(1, Math.ceil(world.height / PARTICLE_GRID_CELL));
+  const cellCount = PARTICLE_GRID_COLS * PARTICLE_GRID_ROWS;
+  while (PARTICLE_BUCKETS.length < cellCount) PARTICLE_BUCKETS.push([]);
+  for (let i = 0; i < cellCount; i++) PARTICLE_BUCKETS[i].length = 0;
+  const ps = world.particles;
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[i];
+    let cx = Math.floor(p.x / PARTICLE_GRID_CELL);
+    let cy = Math.floor(p.y / PARTICLE_GRID_CELL);
+    if (!Number.isFinite(cx)) cx = 0;
+    if (!Number.isFinite(cy)) cy = 0;
+    if (cx < 0) cx = 0; else if (cx >= PARTICLE_GRID_COLS) cx = PARTICLE_GRID_COLS - 1;
+    if (cy < 0) cy = 0; else if (cy >= PARTICLE_GRID_ROWS) cy = PARTICLE_GRID_ROWS - 1;
+    PARTICLE_BUCKETS[cy * PARTICLE_GRID_COLS + cx].push(i);
+  }
+}
+
+function forParticlesNear(
+  x: number, y: number, range: number,
+  visitor: (pi: number) => void,
+): void {
+  const span = Math.max(1, Math.ceil(range / PARTICLE_GRID_CELL));
+  const cx = Math.max(0, Math.min(PARTICLE_GRID_COLS - 1, Math.floor(x / PARTICLE_GRID_CELL)));
+  const cy = Math.max(0, Math.min(PARTICLE_GRID_ROWS - 1, Math.floor(y / PARTICLE_GRID_CELL)));
+  const x0 = Math.max(0, cx - span);
+  const x1 = Math.min(PARTICLE_GRID_COLS - 1, cx + span);
+  const y0 = Math.max(0, cy - span);
+  const y1 = Math.min(PARTICLE_GRID_ROWS - 1, cy + span);
+  for (let gy = y0; gy <= y1; gy++) {
+    const row = gy * PARTICLE_GRID_COLS;
+    for (let gx = x0; gx <= x1; gx++) {
+      const bucket = PARTICLE_BUCKETS[row + gx];
+      for (let k = 0; k < bucket.length; k++) visitor(bucket[k]);
+    }
+  }
+}
 
 function buildCreatureGrid(world: World): void {
   const ccs = CREATURE_GRID_CELL;
