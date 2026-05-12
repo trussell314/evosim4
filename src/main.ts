@@ -1269,7 +1269,11 @@ function statsLine(): string {
 // a pending task; that path produced the 30fps lock at idle CPU.
 // Posting once per rAF leaves the queue empty when nothing useful
 // is happening, and lets the browser hit every vsync.
-const SIM_SLICE_MS = 6;
+// Max sim time per macrotask call. Bumped from 6 to 10 after we
+// stopped chaining sim macrotasks continuously: with one slice per
+// rAF, throughput is hard-capped at SIM_SLICE_MS * fps. 10ms still
+// leaves ~6ms for render + browser overhead inside a 16.6ms frame.
+const SIM_SLICE_MS = 10;
 const FRAME_OVERHEAD_FOR_SIM_MS = 3;
 const simChannel = new MessageChannel();
 let lastFrameStart = performance.now();
