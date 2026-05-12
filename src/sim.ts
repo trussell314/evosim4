@@ -949,6 +949,13 @@ const LIGHT_DECAY = 250;
 
 const DRAG_REF_R = 4;
 const MIN_CREATURE_R = 4;
+// Cell density: how strongly reserve composition shifts the effective
+// density away from water (1.0). 1.0 = full literal weighting (the
+// rock-stuffed cell really does sit at ~1.3); 0 = density always 1.0.
+// 0.3 = "mostly water, slight nudge from contents."
+const DENSITY_DAMPING = 0.3;
+const DENSITY_FLOOR = 0.85;
+const DENSITY_CEIL = 1.15;
 
 // ----- chemistry constants -----
 //
@@ -3119,9 +3126,12 @@ export function updateCreatureRadius(c: Creature): void {
   c.r = Math.max(MIN_CREATURE_R, Math.cbrt((3 * m) / (4 * Math.PI)));
   // Effective density follows what the cell is carrying. Reserves
   // contribute at their material density (rock 2.6 sinks, gas 0.2
-  // floats); molecules + ATP contribute at water density (1.0). The
-  // buoyancy clamp in applyForces still pins ay to +/- gravity, so
-  // even a rock-filled cell can't accelerate faster than free fall.
+  // floats); molecules + ATP contribute at water density (1.0). Real
+  // cells are osmotically regulated and live near water-density; we
+  // damp the raw mass ratio toward 1.0 so storing some dense reserves
+  // doesn't immediately glue every cell to the seafloor. Final value
+  // is clamped to [DENSITY_FLOOR, DENSITY_CEIL] so the buoyancy
+  // acceleration `g * (1 - 1/density)` stays in a tractable range.
   if (m > 0) {
     const s = c.store; const i = c.idx;
     const resCols = s.resCols;
@@ -3133,8 +3143,12 @@ export function updateCreatureRadius(c: Creature): void {
       reserveMass += rk;
       weighted += rk * matBase[k];
     }
-    const watery = m - reserveMass; // molecules + ATP, at water density
-    c.density = (weighted + watery) / m;
+    const watery = m - reserveMass;
+    const raw = (weighted + watery) / m;
+    const damped = 1 + (raw - 1) * DENSITY_DAMPING;
+    c.density = damped < DENSITY_FLOOR ? DENSITY_FLOOR
+              : damped > DENSITY_CEIL ? DENSITY_CEIL
+              : damped;
   }
 }
 
