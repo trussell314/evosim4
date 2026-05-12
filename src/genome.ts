@@ -617,9 +617,9 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
   return cost;
 }
 
-const P_POINT  = 0.008;
-const P_INSERT = 0.002;
-const P_DELETE = 0.002;
+const P_POINT  = 0.003;
+const P_INSERT = 0.0008;
+const P_DELETE = 0.0008;
 const MAX_GENOME_BYTES = 256;
 
 export function mutateGenome(

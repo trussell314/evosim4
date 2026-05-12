@@ -68,6 +68,7 @@ function quietWorld(): World {
     disturbanceUntil: 0,
     nextDisturbanceAt: Number.POSITIVE_INFINITY,
     currentAmp: 0,
+    obstacles: [],
   };
 }
 

@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, makeProfile, type Particle, type Creature, type Species } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
 import { disassemble, summarizeGenome } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -223,6 +223,17 @@ const TOXIC_WASTE_FRAC = 0.5;
 
 // Map water temperature (°C) to a tint. Warm = lighter cyan, cool = deep
 // dark blue. Chosen so 20°C lands near the original water palette.
+// Scale an "rgb(r,g,b)" string toward black by `mult` in [0..1].
+// Used to apply the day/night dimming to the water gradient.
+function darkenColor(rgb: string, mult: number): string {
+  const m = rgb.match(/rgb\((\d+),(\d+),(\d+)\)/);
+  if (!m) return rgb;
+  const r = Math.round(parseInt(m[1]) * mult);
+  const g = Math.round(parseInt(m[2]) * mult);
+  const b = Math.round(parseInt(m[3]) * mult);
+  return `rgb(${r},${g},${b})`;
+}
+
 function tempToColor(T: number): string {
   // 12°C -> "#041420", 20°C -> "#0e2a3a", 28°C -> "#3a6e8c". Linear lerp
   // in RGB between three anchor colors.
@@ -245,11 +256,16 @@ const SURFACE_VIS_STEP = 3;
 
 function render(): void {
   const { width, height, depth, surfaceY } = world;
-  const tWarm = tempToColor(world.tempSurface);
-  const tCool = tempToColor(world.tempBottom);
+  // Day/night tint applied to both surface and depth water colors so
+  // the whole scene gets dimmer at night. 1 = full day, ~0.4 = deep
+  // night (we don't go fully black so creatures stay visible).
+  const dayMult = 0.4 + 0.6 * solarLight(world);
+  const tWarm = darkenColor(tempToColor(world.tempSurface), dayMult);
+  const tCool = darkenColor(tempToColor(world.tempBottom), dayMult);
 
-  // Atmosphere band -- fill above the wavy surface line.
-  ctx.fillStyle = "#0a1620";
+  // Atmosphere band -- fill above the wavy surface line. Darkened with
+  // the same day/night multiplier as the water so the whole scene dims.
+  ctx.fillStyle = darkenColor("rgb(10,22,32)", dayMult);
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(width, 0);
@@ -270,6 +286,22 @@ function render(): void {
   ctx.lineTo(0, height);
   ctx.closePath();
   ctx.fill();
+
+  // Static terrain (crescent floor + scattered boulders). Drawn before
+  // particles so settled sediment piles read as resting on the rocks.
+  for (const ob of world.obstacles) {
+    ctx.fillStyle = ob.color;
+    ctx.beginPath();
+    for (const l of ob.lobes) {
+      ctx.moveTo(l.x + l.r, l.y);
+      ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    // Subtle rim shading so the obstacle has a visible edge.
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
 
   // Highlight along the surface line.
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
@@ -379,6 +411,7 @@ function dumpProfile(): void {
     { phase: "particle coll", ms: p.particleColl / n },
     { phase: "creature coll", ms: p.creatureColl / n },
     { phase: "sediment coll", ms: p.sedimentColl / n },
+    { phase: "obstacle coll", ms: p.obstacleColl / n },
     { phase: "walls", ms: p.walls / n },
     { phase: "aerate", ms: p.aerate / n },
     { phase: "replenish", ms: p.replenish / n },
@@ -763,13 +796,15 @@ function updateInspector(): void {
     activeDisasm;
 }
 
-// Sim runs at maximum speed: each render frame burns ~MAX_BUDGET_MS of
-// CPU on fixed-dt simulation steps so the world advances as fast as
-// possible while the page stays responsive. The realtime/max toggle and
-// its button were removed -- max-only is simpler and was what we ran
-// 99% of the time anyway.
+// Sim runs at maximum speed but the renderer is paced to hit 60fps.
+// Each frame: measure how long the render + inspector took last time;
+// give the sim whatever budget remains in the 16.6ms slot (with a 2ms
+// safety margin for browser overhead). When CPU-constrained the sim
+// just does fewer ticks per render; render still hits 60fps.
 const FIXED_DT = 1 / 60;
-const MAX_BUDGET_MS = 10;
+const TARGET_FRAME_MS = 16.6;
+const FRAME_OVERHEAD_MS = 2;
+const MIN_SIM_BUDGET_MS = 1.5;
 
 // Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
 // short window so the numbers don't flicker.
@@ -797,23 +832,34 @@ function statsLine(): string {
   if (p && p.ticks > 0) {
     const total =
       p.pheromone + p.bonds + p.forces + p.creatures +
-      p.particleColl + p.creatureColl + p.sedimentColl +
+      p.particleColl + p.creatureColl + p.sedimentColl + p.obstacleColl +
       p.walls + p.aerate + p.replenish + p.prune;
     s += `  [prof ${ (total / p.ticks).toFixed(2) }ms/tick over ${p.ticks}t]`;
   }
   return s;
 }
 
+// Exponentially smoothed render+inspector cost (in ms). The sim budget
+// adapts to this so total per-frame work stays under TARGET_FRAME_MS.
+let renderCostMs = 4;
 function frame(): void {
   const start = performance.now();
+  const simBudget = Math.max(
+    MIN_SIM_BUDGET_MS,
+    TARGET_FRAME_MS - FRAME_OVERHEAD_MS - renderCostMs,
+  );
+  const simDeadline = start + simBudget;
   let advanced = 0;
   do {
     step(world, FIXED_DT);
     advanced += FIXED_DT;
-  } while (performance.now() - start < MAX_BUDGET_MS);
+  } while (performance.now() < simDeadline);
   updatePerfStats(advanced);
+  const renderStart = performance.now();
   render();
   updateInspector();
+  const cost = performance.now() - renderStart;
+  renderCostMs = renderCostMs * 0.85 + cost * 0.15;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

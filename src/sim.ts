@@ -57,6 +57,17 @@ const MATERIAL_IDS = Object.keys(MATERIALS) as MaterialId[];
 const MATERIAL_INDEX: Record<MaterialId, number> = {} as Record<MaterialId, number>;
 for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_INDEX[MATERIAL_IDS[i]] = i;
 
+export interface ObstacleLobe {
+  x: number; y: number; r: number;
+}
+export interface Obstacle {
+  // Bounding box for cheap reject. minY in particular lets the
+  // collision pass skip particles floating in the upper water column.
+  minX: number; minY: number; maxX: number; maxY: number;
+  lobes: ObstacleLobe[];
+  color: string;
+}
+
 export interface Particle {
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
@@ -281,6 +292,12 @@ export interface World {
   // depth the other; the sign reverses on a slow oscillation. Cells and
   // particles both feel it. Tests can zero this for stillwater scenarios.
   currentAmp: number;
+  // Static immovable terrain: rocks pre-placed at world creation. Each
+  // obstacle is a cluster of overlapping circle "lobes" so it can be
+  // irregular in shape. Particles + creatures collide with them like
+  // a fixed wall (no impulse, just positional pushback). Crescent floor
+  // and the seven-or-so dropped boulders both live here.
+  obstacles: Obstacle[];
   // Optional per-phase timing. When present, step() accumulates wall-clock
   // milliseconds spent in each phase plus a tick counter. Read + reset by
   // the UI to display where the frame budget actually goes.
@@ -296,6 +313,7 @@ export interface WorldProfile {
   particleColl: number;
   creatureColl: number;
   sedimentColl: number;
+  obstacleColl: number;
   walls: number;
   aerate: number;
   replenish: number;
@@ -306,7 +324,7 @@ export function makeProfile(): WorldProfile {
   return {
     ticks: 0,
     pheromone: 0, bonds: 0, forces: 0, creatures: 0,
-    particleColl: 0, creatureColl: 0, sedimentColl: 0,
+    particleColl: 0, creatureColl: 0, sedimentColl: 0, obstacleColl: 0,
     walls: 0, aerate: 0, replenish: 0, prune: 0,
   };
 }
@@ -322,7 +340,7 @@ const ENERGY_PER_THRUST_SEC = 5;
 const ENERGY_PER_INSTRUCTION = 0.005;
 const VM_INSTR_BUDGET = 32;
 
-const MASS_PER_GENOME_BYTE = 1.5;
+const MASS_PER_GENOME_BYTE = 1.0;
 const PARTICLE_DENSITY_PER_AREA = 6188 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 // Hard cap on the per-second spawn rate. Without this the world tries
@@ -426,8 +444,8 @@ const THRUST_MASS_REF = 200;
 // biomass to back it up bleeds ATP and starves itself. The per-mass term
 // reflects that splitting a big cell takes more reorganization than a small
 // one.
-const REPRODUCE_ATTEMPT_ATP_BASE = 2;
-const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.05;
+const REPRODUCE_ATTEMPT_ATP_BASE = 1;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.025;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
@@ -489,7 +507,7 @@ const MIN_VIABLE_BIOMASS = 0.5;
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
 // is effectively stable; an old cell accumulates DNA damage gradually.
 // At age 60s: ~7e-3/s (1 mutation per ~140s); 100s: ~0.02/s; 300s: ~0.18/s.
-const SOMATIC_MUTATION_AGE_COEF = 2e-6;
+const SOMATIC_MUTATION_AGE_COEF = 8e-7;
 const REPAIR_ATP_PER_OP = 0.5;
 const REPAIR_WINDOW_TICKS = 30;
 // Horizontal current: amplitude (px/s^2 of acceleration) and the rate of
@@ -631,6 +649,128 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
+// Lay down the world's terrain: a wide crescent floor (covers ~25% of
+// world height, sweeping up at the edges) plus a handful of irregular
+// boulders scattered along the bottom. Each obstacle is a cluster of
+// overlapping circle "lobes" so it reads as an irregular rock outline
+// rather than a perfect circle.
+export function generateObstacles(world: World): void {
+  world.obstacles = [];
+  const W = world.width;
+  const H = world.height;
+  const floorTop = H - H * 0.25; // top of the crescent at the centerline
+
+  // Crescent floor: a sweeping curve of large overlapping lobes. The
+  // shape rises at the sides and dips in the middle. Lobes overlap
+  // generously so the silhouette reads as one continuous rock outline.
+  const crescentLobes: ObstacleLobe[] = [];
+  const N_CRESCENT = 22;
+  for (let i = 0; i < N_CRESCENT; i++) {
+    const t = i / (N_CRESCENT - 1); // 0..1 along the curve
+    const x = t * W;
+    // Cosine curve: high at edges (rises up the walls), low in the middle.
+    const dip = 0.5 - 0.5 * Math.cos(2 * Math.PI * t);
+    const y = floorTop + (H - floorTop) * (0.35 + 0.55 * dip);
+    const r = (H - floorTop) * (0.55 + 0.2 * Math.random());
+    crescentLobes.push({ x, y, r });
+  }
+  world.obstacles.push(makeObstacleFromLobes(crescentLobes, "#3a2e26"));
+
+  // 7-10 individual boulders scattered along the bottom. Each is a
+  // cluster of 3-6 lobes packed tight enough to look like one rock.
+  const nRocks = 7 + Math.floor(Math.random() * 4);
+  const placed: { x: number; y: number; r: number }[] = [];
+  for (let i = 0; i < nRocks; i++) {
+    const targetSize = 22 + Math.random() * 22;
+    let cx = 0, cy = 0, ok = false;
+    for (let attempt = 0; attempt < 30 && !ok; attempt++) {
+      cx = W * (0.05 + 0.9 * Math.random());
+      // Sit just above the crescent floor, not buried in it.
+      cy = floorTop - targetSize * (0.5 + 0.6 * Math.random());
+      ok = true;
+      for (const p of placed) {
+        const dx = cx - p.x;
+        const dy = cy - p.y;
+        if (dx * dx + dy * dy < (p.r + targetSize) * (p.r + targetSize) * 1.6) {
+          ok = false; break;
+        }
+      }
+    }
+    if (!ok) continue;
+    placed.push({ x: cx, y: cy, r: targetSize });
+    const nLobes = 3 + Math.floor(Math.random() * 4);
+    const lobes: ObstacleLobe[] = [];
+    for (let k = 0; k < nLobes; k++) {
+      const ang = (k / nLobes) * Math.PI * 2 + Math.random() * 0.8;
+      const off = targetSize * 0.5 * Math.random();
+      lobes.push({
+        x: cx + Math.cos(ang) * off,
+        y: cy + Math.sin(ang) * off,
+        r: targetSize * (0.55 + 0.4 * Math.random()),
+      });
+    }
+    // 30/70 mix of slightly varied rock tones so adjacent rocks read distinct.
+    const tone = Math.random() < 0.5 ? "#4a3d33" : "#3d3328";
+    world.obstacles.push(makeObstacleFromLobes(lobes, tone));
+  }
+}
+
+function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const l of lobes) {
+    if (l.x - l.r < minX) minX = l.x - l.r;
+    if (l.y - l.r < minY) minY = l.y - l.r;
+    if (l.x + l.r > maxX) maxX = l.x + l.r;
+    if (l.y + l.r > maxY) maxY = l.y + l.r;
+  }
+  return { minX, minY, maxX, maxY, lobes, color };
+}
+
+// Push particles + creatures out of any obstacle they overlap. Static
+// terrain: zero impulse to the obstacle, full corrective push back on
+// the moving body. With ~50-70 total lobes and AABB pre-reject most
+// particles bail in the first compare.
+function resolveObstacleCollisions(world: World): void {
+  if (world.obstacles.length === 0) return;
+  const obs = world.obstacles;
+  for (const p of world.particles) collideWithObstacles(p, obs, world.restitution);
+  for (const c of world.creatures) collideWithObstacles(c, obs, 0.1);
+}
+
+function collideWithObstacles(
+  o: { x: number; y: number; vx: number; vy: number; r: number },
+  obs: Obstacle[],
+  e: number,
+): void {
+  for (let i = 0; i < obs.length; i++) {
+    const ob = obs[i];
+    // Bounding-box cheap reject.
+    if (o.x + o.r < ob.minX || o.x - o.r > ob.maxX) continue;
+    if (o.y + o.r < ob.minY || o.y - o.r > ob.maxY) continue;
+    const lobes = ob.lobes;
+    for (let j = 0; j < lobes.length; j++) {
+      const l = lobes[j];
+      const dx = o.x - l.x;
+      const dy = o.y - l.y;
+      const minDist = o.r + l.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minDist * minDist) continue;
+      let d = Math.sqrt(d2);
+      let nx, ny;
+      if (d < 1e-6) { nx = 0; ny = -1; d = 1; }
+      else { nx = dx / d; ny = dy / d; }
+      const overlap = minDist - d;
+      o.x += nx * overlap;
+      o.y += ny * overlap;
+      const vN = o.vx * nx + o.vy * ny;
+      if (vN < 0) {
+        o.vx -= (1 + e) * vN * nx;
+        o.vy -= (1 + e) * vN * ny;
+      }
+    }
+  }
+}
+
 function tempMult(T: number): number {
   const m = Math.pow(TEMP_Q10, (T - TEMP_REF) / 10);
   return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
@@ -649,12 +789,12 @@ export function createWorld(width: number, height: number): World {
     extinctionCount: 0,
     gravity: 220,
     drag: 0.6,
-    surfaceAmp: 130, surfaceLength: 240, surfacePeriod: 2.4, surfaceDecay: 120,
-    swellAmp: 11, swellLength: 820, swellPeriod: 8.5, swellDecay: 520,
-    zStirAmp: 9,
-    updraftAmp: 9, updraftLength: 360, updraftPeriod: 16,
+    surfaceAmp: 55, surfaceLength: 320, surfacePeriod: 4.5, surfaceDecay: 90,
+    swellAmp: 5, swellLength: 980, swellPeriod: 14, swellDecay: 520,
+    zStirAmp: 4,
+    updraftAmp: 4, updraftLength: 540, updraftPeriod: 28,
     surfaceY: height * SURFACE_Y_FRAC,
-    surfaceWaveAmp: 7,
+    surfaceWaveAmp: 4,
     aerationRate: width * AERATION_PER_PX,
     tempSurface: 28,
     tempBottom: 12,
@@ -670,7 +810,7 @@ export function createWorld(width: number, height: number): World {
     phylogenyEvents: [],
     nextSpeciesLane: 0,
     anchorGenome: new Uint8Array(0),
-    brownianAmp: 25,
+    brownianAmp: 12,
     dayPhase: 0.2, // start a bit before noon so first day shows
     dayPeriod: 90,
     disturbanceIntensity: 0,
@@ -678,9 +818,11 @@ export function createWorld(width: number, height: number): World {
     disturbanceUntil: 0,
     nextDisturbanceAt: 60 + Math.random() * 240,
     currentAmp: CURRENT_AMP,
+    obstacles: [],
   };
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
+  generateObstacles(world);
   // World starts empty: just water and the seed cell. Particles trickle
   // in via replenishParticles() at world.particleSpawnRate until the
   // target is reached, so the simulation has a visible "bootstrap"
@@ -1191,6 +1333,8 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.creatureColl += n - m; m = n;
     resolveCreatureSedimentCollisions(world);
     n = performance.now(); p.sedimentColl += n - m; m = n;
+    resolveObstacleCollisions(world);
+    n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
     aerate(world, dt);
@@ -1208,6 +1352,7 @@ export function step(world: World, dt: number): void {
     resolveCollisions(world);
     resolveCreatureCollisions(world);
     resolveCreatureSedimentCollisions(world);
+    resolveObstacleCollisions(world);
     applyWalls(world);
     aerate(world, dt);
     replenishParticles(world, dt);
@@ -1340,10 +1485,19 @@ function applyForces(world: World, dt: number): void {
   // during a peak storm. Only surface/swell/zStir/brownian get amplified;
   // gravity/drag are unchanged.
   const dMult = 1 + 3 * world.disturbanceIntensity;
-  const bAmp = world.brownianAmp * dMult;
-  const surfAmp = world.surfaceAmp * dMult;
-  const swellAmp = world.swellAmp * dMult;
-  const zAmp = world.zStirAmp * dMult;
+  // Irregularity envelope: sum of two sines with incommensurate periods
+  // (37s and 91s) plus a slow drift. Ranges roughly 0.2..1.0 so quiet
+  // periods drop the wave amplitude down to a fifth of nominal.
+  const env =
+    0.55 +
+    0.25 * Math.sin(world.t * (2 * Math.PI / 37)) +
+    0.20 * Math.sin(world.t * (2 * Math.PI / 91) + 1.7);
+  const envClamped = Math.max(0.15, Math.min(1.0, env));
+  const bAmp = world.brownianAmp * dMult * envClamped;
+  const surfAmp = world.surfaceAmp * dMult * envClamped;
+  const swellAmp = world.swellAmp * dMult * envClamped;
+  const zAmp = world.zStirAmp * dMult * envClamped;
+  const updraftEnv = envClamped;
 
   // Slow horizontal current: surface flows one way, deep flows the other.
   // The direction reverses very slowly so cells eventually have to cope
@@ -1364,7 +1518,7 @@ function applyForces(world: World, dt: number): void {
     const az      = zAmp * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
     // Vertical mixing: gentle up/down currents that vary with x and time.
     // Negative ay = upward push, positive = downward. Full water column.
-    const updraft = -world.updraftAmp * Math.sin(kU * o.x + wU * world.t);
+    const updraft = -world.updraftAmp * updraftEnv * Math.sin(kU * o.x + wU * world.t);
     // Slow horizontal current that depends on depth and drifts in time.
     // +1 at surface, -1 at bottom, multiplied by a slow time-oscillation.
     const depthFrac = depth / colDepth;
@@ -1476,7 +1630,7 @@ function updateCreatures(world: World, dt: number): void {
     const age = world.t - c.bornAt;
     // Clamp at 0.1/tick (10%) so even very old cells don't churn their
     // entire genome every second.
-    let mutP = Math.min(0.05, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
     // REPAIR (op 0x63) suppresses somatic mutation while repairTicks > 0.
     // Each REPAIR execution spends ATP and refreshes the window so a cell
     // can choose to invest energy into stability when it matters.
