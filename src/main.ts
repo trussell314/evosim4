@@ -444,6 +444,7 @@ function render(): void {
   // Reset to DPR-only transform before drawing.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawPhylogeny();
+  drawGenomeStats();
 }
 
 // Optional field overlay. Cycles off -> temp -> density via the `H` key.
@@ -597,6 +598,96 @@ function heatColorDensity(x: number): string {
   const g = Math.round(40 + 180 * x);
   const b = Math.round(80 - 60 * x);
   return `rgb(${r},${g},${b})`;
+}
+
+// Population genome-size histogram in the top-right corner. Bars are
+// counts of cells per length bucket; vertical lines mark mean and
+// mean ± stddev so you can see at a glance whether genomes are
+// bloating, collapsing, or settled.
+const GS_PANEL_W = 240;
+const GS_PANEL_H = 90;
+const GS_PANEL_MARGIN = 8;
+const GS_BUCKET_BYTES = 4;      // 4 bytes per bucket
+const GS_N_BUCKETS = 25;        // covers 0..100 bytes
+const GS_BUCKETS = new Int32Array(GS_N_BUCKETS);
+function drawGenomeStats(): void {
+  const dpr = window.devicePixelRatio || 1;
+  const canvasCssW = canvas.width / dpr;
+  const panelX = canvasCssW - GS_PANEL_W - GS_PANEL_MARGIN;
+  const panelY = GS_PANEL_MARGIN;
+  const cs = world.creatures;
+  const n = cs.length;
+
+  // Bucket fill + mean/stddev. Both passes only N adds; no allocation.
+  GS_BUCKETS.fill(0);
+  let sum = 0, sumSq = 0;
+  let maxLen = 0;
+  for (let i = 0; i < n; i++) {
+    const L = cs[i].genome.length;
+    sum += L;
+    sumSq += L * L;
+    if (L > maxLen) maxLen = L;
+    const b = Math.min(GS_N_BUCKETS - 1, Math.max(0, Math.floor(L / GS_BUCKET_BYTES)));
+    GS_BUCKETS[b]++;
+  }
+  const mean = n > 0 ? sum / n : 0;
+  const variance = n > 0 ? Math.max(0, sumSq / n - mean * mean) : 0;
+  const stddev = Math.sqrt(variance);
+  let maxCount = 1;
+  for (let i = 0; i < GS_N_BUCKETS; i++) if (GS_BUCKETS[i] > maxCount) maxCount = GS_BUCKETS[i];
+
+  // Panel chrome.
+  ctx.fillStyle = "rgba(4,16,24,0.78)";
+  ctx.fillRect(panelX, panelY, GS_PANEL_W, GS_PANEL_H);
+  ctx.strokeStyle = "#1a3340";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(panelX + 0.5, panelY + 0.5, GS_PANEL_W - 1, GS_PANEL_H - 1);
+
+  ctx.fillStyle = "#9ee";
+  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textBaseline = "top";
+  ctx.fillText(
+    `genome size  n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`,
+    panelX + 6, panelY + 4,
+  );
+
+  // Plot area: leave room for the header (16px) and a baseline (4px).
+  const plotX = panelX + 6;
+  const plotY = panelY + 20;
+  const plotW = GS_PANEL_W - 12;
+  const plotH = GS_PANEL_H - 26;
+  const bucketW = plotW / GS_N_BUCKETS;
+
+  // Bars.
+  ctx.fillStyle = "#5fa9c4";
+  for (let i = 0; i < GS_N_BUCKETS; i++) {
+    const c = GS_BUCKETS[i];
+    if (c === 0) continue;
+    const h = (c / maxCount) * plotH;
+    ctx.fillRect(plotX + i * bucketW, plotY + (plotH - h), Math.max(1, bucketW - 1), h);
+  }
+
+  // Mean + ±stddev lines.
+  const xForByteLen = (L: number) =>
+    plotX + Math.min(plotW, Math.max(0, (L / (GS_N_BUCKETS * GS_BUCKET_BYTES)) * plotW));
+  if (n > 0) {
+    const xMean = xForByteLen(mean);
+    ctx.strokeStyle = "#f0c050";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(xMean, plotY);
+    ctx.lineTo(xMean, plotY + plotH);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(240,192,80,0.55)";
+    ctx.lineWidth = 1;
+    for (const off of [-stddev, stddev]) {
+      const x = xForByteLen(mean + off);
+      ctx.beginPath();
+      ctx.moveTo(x, plotY);
+      ctx.lineTo(x, plotY + plotH);
+      ctx.stroke();
+    }
+  }
 }
 
 function drawPhylogeny(): void {
