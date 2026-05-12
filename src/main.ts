@@ -172,7 +172,7 @@ canvas.addEventListener("mouseleave", () => {
 // classic atmospheric perspective. Eight buckets give a smooth gradient.
 const N_BUCKETS = 8;
 const BLURS = [0, 0.3, 0.7, 1.2, 1.7, 2.2, 2.7, 3.2];
-const ALPHAS = [1.0, 0.92, 0.82, 0.70, 0.58, 0.46, 0.36, 0.28];
+const ALPHAS = [1.0, 0.96, 0.91, 0.85, 0.79, 0.73, 0.68, 0.64];
 // One sub-bucket per (depth bucket, material) so the renderer can issue
 // a single beginPath + many arcs + single fill per group. With 12k+
 // particles, dropping from one canvas op per particle to one per group
