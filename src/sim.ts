@@ -494,7 +494,9 @@ const REPAIR_ATP_PER_OP = 0.5;
 const REPAIR_WINDOW_TICKS = 30;
 // Horizontal current: amplitude (px/s^2 of acceleration) and the rate of
 // the slow direction-reversal oscillation (rad/sec; 2pi/600 ~ 10 sim-min).
-const CURRENT_AMP = 35;
+// Currently disabled (0) -- when on it piles sediment against one wall
+// faster than the slow reversal can clear it. Need a better profile.
+const CURRENT_AMP = 0;
 const CURRENT_FREQ = 2 * Math.PI / 600;
 
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
