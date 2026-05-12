@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, resizeWorld, type Particle, type Creature } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -64,14 +64,10 @@ function resize(): void {
   canvas.width = Math.floor(w * dpr);
   canvas.height = Math.floor(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  world.width = w;
   // Reserve the bottom PHYLO_STRIP_H px for the phylogeny timeline so it
-  // never overlaps swimming cells. The world's bottom wall sits at
-  // world.height; the strip renders in (world.height .. innerHeight).
-  world.height = Math.max(100, h - PHYLO_STRIP_H);
-  // Keep the water surface tracking the resized world.
-  world.surfaceY = world.height * 0.05;
-  world.aerationRate = world.width * 0.005;
+  // never overlaps swimming cells. resizeWorld also rescales particle
+  // target/spawn rate so the new area gets filled with food.
+  resizeWorld(world, w, h - PHYLO_STRIP_H);
 }
 resize();
 window.addEventListener("resize", resize);

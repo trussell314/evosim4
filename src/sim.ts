@@ -50,6 +50,12 @@ const SEED_WEIGHTS: Array<[MaterialId, number]> = [
 ];
 
 const MATERIAL_IDS = Object.keys(MATERIALS) as MaterialId[];
+// O(1) reverse lookup. Populated once at module load; the per-tick hot
+// loops in updateCreatures and populateSensors used to call
+// MATERIAL_IDS.indexOf(p.material) inside a loop over every particle for
+// every cell -- tens of millions of string-array scans per second.
+const MATERIAL_INDEX: Record<MaterialId, number> = {} as Record<MaterialId, number>;
+for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_INDEX[MATERIAL_IDS[i]] = i;
 
 export interface Particle {
   x: number; y: number; z: number;
@@ -246,6 +252,18 @@ const VM_INSTR_BUDGET = 32;
 const MASS_PER_GENOME_BYTE = 1.5;
 const PARTICLE_DENSITY_PER_AREA = 16500 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
+
+// Recompute every world field that scales with width/height. Called on
+// resize so a window expansion actually fills the new space with food
+// instead of leaving the old (relatively sparse) particle target.
+export function resizeWorld(world: World, width: number, height: number): void {
+  world.width = width;
+  world.height = Math.max(100, height);
+  world.surfaceY = world.height * SURFACE_Y_FRAC;
+  world.aerationRate = world.width * AERATION_PER_PX;
+  world.particleTarget = Math.max(100, Math.round(world.width * world.height * PARTICLE_DENSITY_PER_AREA));
+  world.particleSpawnRate = Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO);
+}
 const MAX_CREATURES = 400;
 
 const INGEST_ENERGY_COST = 1.5;
@@ -1100,7 +1118,9 @@ function updateCreatures(world: World, dt: number): void {
     // cells slowly become genetic mosaics of their original self. Doesn't
     // create a new species -- only inheritance does that.
     const age = world.t - c.bornAt;
-    if (age > 0 && Math.random() < SOMATIC_MUTATION_AGE_COEF * age * age * dt) {
+    // Clamp at 0.5/tick so extreme ages don't silently mean "always mutate."
+    const mutP = Math.min(0.5, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
       c.color = genomeColor(c.genome, world.anchorGenome);
     }
@@ -1155,10 +1175,9 @@ function updateCreatures(world: World, dt: number): void {
     if (c.energy > 0 && usedFrac > 0) {
       c.vx += ax * dt;
       c.vy += ay * dt;
-      // Thrust ATP cost scales linearly with mass.
-      // Thrust cost scales with cube root of mass instead of linearly --
-      // approximates Stokes drag (~r ∝ mass^(1/3)) so a 10x cell pays
-      // only ~2.15x more to move at the same speed, not 10x.
+      // Thrust cost scales with cube root of mass -- approximates Stokes
+      // drag (~r ∝ mass^(1/3)) so a 10x cell pays only ~2.15x more to
+      // move at the same speed, not 10x.
       const massScale = Math.max(1, Math.cbrt(creatureTotalMass(c) / THRUST_MASS_REF));
       spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
@@ -1247,7 +1266,7 @@ function updateCreatures(world: World, dt: number): void {
       if (!ingested) {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
-          const matIdx = MATERIAL_IDS.indexOf(p.material);
+          const matIdx = MATERIAL_INDEX[p.material];
           if (!VM_OUT.ingestMaterials[matIdx]) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
@@ -1262,7 +1281,8 @@ function updateCreatures(world: World, dt: number): void {
               c.reserves[p.material] += mass(p);
             }
             spendATP(c, INGEST_ENERGY_COST);
-            c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / Math.max(INGEST_REF_R, c.r));
+            // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
+            c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
             world.particles.splice(i, 1);
             break;
           }
@@ -1503,6 +1523,10 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   const child = c.division.child;
   const ang = c.division.axis;
   c.division = null;
+  // Stillbirth check: the child must clear the autolyze floor at commit
+  // time. Otherwise we'd record a birth in the species table and
+  // immediately autolyze the cell, producing phantom +1/-1 churn.
+  if (child.molecules.biomass < MIN_VIABLE_BIOMASS) return;
   // Drop the daughter at the current separation point. Recomputing from
   // the parent's live position keeps the visual in sync even if the
   // parent drifted during the second-long animation.
@@ -1533,7 +1557,7 @@ function populateSensors(c: Creature, world: World): void {
     const dy = p.y - c.y;
     const dsq = dx * dx + dy * dy;
     if (dsq >= rangeSq || dsq < 1) continue;
-    const idx = MATERIAL_IDS.indexOf(p.material);
+    const idx = MATERIAL_INDEX[p.material];
     const w = range / dsq;
     VM_SENSORS.gradX[idx] += dx * w;
     VM_SENSORS.gradY[idx] += dy * w;
