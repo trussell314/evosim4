@@ -1701,8 +1701,14 @@ function applyForces(world: World, dt: number): void {
     // counter-traveling pair stops particles from accumulating against
     // one wall the way a single right-moving wave train did.
     const depth = Math.max(0, o.y - world.surfaceY);
-    const surface = surfAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-depth / world.surfaceDecay);
-    const swell   = swellAmp * Math.sin(kL * o.x + wL * world.t) * Math.exp(-depth / world.swellDecay);
+    // Standing waves: cos(k*x) * sin(w*t). Force at each x oscillates
+    // in time but has zero time-average AND zero net horizontal
+    // momentum, so particles bob locally instead of drifting toward
+    // one wall. The same shape used to be a pair of traveling waves
+    // counter-propagating; lowering swellAmp broke the balance and
+    // everything piled up downstream of the dominant wave.
+    const surface = surfAmp * Math.cos(kS * o.x) * Math.sin(wS * world.t) * Math.exp(-depth / world.surfaceDecay);
+    const swell   = swellAmp * Math.cos(kL * o.x) * Math.sin(wL * world.t) * Math.exp(-depth / world.swellDecay);
     const az      = zAmp * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
     // Vertical mixing: gentle up/down currents that vary with x and time.
     // Negative ay = upward push, positive = downward. Full water column.
