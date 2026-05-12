@@ -184,7 +184,7 @@ const MATERIAL_IDX_BY_NAME: Record<string, number> = {};
 for (let i = 0; i < MATERIAL_IDS_ORDERED.length; i++) MATERIAL_IDX_BY_NAME[MATERIAL_IDS_ORDERED[i]] = i;
 // How much each bucket is tinted toward the deep-water color. 0 = no tint
 // (use material color as-is); 1 = fully replaced by background.
-const DEPTH_TINTS = [0, 0.05, 0.12, 0.22, 0.34, 0.46, 0.58, 0.70];
+const DEPTH_TINTS = [0, 0.025, 0.06, 0.11, 0.17, 0.23, 0.29, 0.35];
 const DEEP_TINT_R = 6;
 const DEEP_TINT_G = 21;
 const DEEP_TINT_B = 32; // matches the bottom of the water gradient (#061520)
