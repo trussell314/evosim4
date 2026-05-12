@@ -41,8 +41,8 @@ hudBar.addEventListener("click", () => {
 // only changes the canvas's visual scale, never the underlying world.
 // Two presets so the world fills the viewport reasonably in either
 // orientation:
-const WORLD_LANDSCAPE = { w: 1920, h: 1080 };
-const WORLD_PORTRAIT = { w: 1080, h: 1920 };
+const WORLD_LANDSCAPE = { w: 800, h: 600 };
+const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const world = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
 
