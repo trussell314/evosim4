@@ -19,7 +19,7 @@ hudBar.style.cssText =
   "display:flex;justify-content:flex-end;padding:2px 4px;cursor:pointer;" +
   "user-select:none;color:#9ee;";
 const hudToggle = document.createElement("span");
-hudToggle.textContent = "[–]"; // [-]
+hudToggle.textContent = "[+]";
 hudToggle.style.cssText = "padding:0 4px;";
 hudBar.appendChild(hudToggle);
 const inspector = document.createElement("pre");
@@ -29,7 +29,8 @@ hud.appendChild(hudBar);
 hud.appendChild(inspector);
 root.appendChild(hud);
 
-let hudMinimized = false;
+let hudMinimized = true;
+inspector.style.display = "none";
 hudBar.addEventListener("click", () => {
   hudMinimized = !hudMinimized;
   inspector.style.display = hudMinimized ? "none" : "";
