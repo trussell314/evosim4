@@ -580,9 +580,24 @@ const TEMP_MULT_MAX = 4.0;
 // that bulges the surface UP wherever the updraft field is pushing water
 // up from below. Physics wall and renderer share this so lipids float to
 // exactly the visible line.
+// Activity factor for surface-related forces. Combines the slow
+// irregularity envelope (so quiet periods read calm) with the storm
+// disturbance intensity (so storms read like real chop). Used by the
+// visible surface wave, the physics wave forcing, and aeration so all
+// three move together.
+export function surfaceActivity(world: World): number {
+  const t = world.t;
+  const env =
+    0.55 +
+    0.25 * Math.sin(t * (2 * Math.PI / 37)) +
+    0.20 * Math.sin(t * (2 * Math.PI / 91) + 1.7);
+  const envClamped = Math.max(0.15, Math.min(1.0, env));
+  return envClamped * (1 + 3 * world.disturbanceIntensity);
+}
+
 export function surfaceYAt(world: World, x: number): number {
   const t = world.t;
-  const A = world.surfaceWaveAmp;
+  const A = world.surfaceWaveAmp * surfaceActivity(world);
   const kS = (2 * Math.PI) / world.surfaceLength;
   const wS = (2 * Math.PI) / world.surfacePeriod;
   const kL = (2 * Math.PI) / world.swellLength;
@@ -864,7 +879,7 @@ export function createWorld(width: number, height: number): World {
     zStirAmp: 4,
     updraftAmp: 4, updraftLength: 540, updraftPeriod: 28,
     surfaceY: height * SURFACE_Y_FRAC,
-    surfaceWaveAmp: 4,
+    surfaceWaveAmp: 14,
     aerationRate: width * AERATION_PER_PX,
     tempSurface: 28,
     tempBottom: 12,
@@ -1469,7 +1484,10 @@ function replenishParticles(world: World, dt: number): void {
 // their molecule pool, just like other molecule-tagged particles.
 function aerate(world: World, dt: number): void {
   if (world.particles.length >= world.particleTarget) return;
-  const expected = world.aerationRate * dt;
+  // Surface chop drives entrainment of air bubbles. Quiet surface =>
+  // baseline aeration; storms and choppy periods => much more O2 mixed in.
+  const act = surfaceActivity(world);
+  const expected = world.aerationRate * dt * (0.5 + act);
   let n = Math.floor(expected);
   if (Math.random() < expected - n) n++;
   for (let i = 0; i < n && world.particles.length < world.particleTarget; i++) {
@@ -1553,21 +1571,15 @@ function applyForces(world: World, dt: number): void {
 
   // Disturbance amplifies wind/wave/mixing forces. 1.0 baseline, up to 4x
   // during a peak storm. Only surface/swell/zStir/brownian get amplified;
-  // gravity/drag are unchanged.
-  const dMult = 1 + 3 * world.disturbanceIntensity;
-  // Irregularity envelope: sum of two sines with incommensurate periods
-  // (37s and 91s) plus a slow drift. Ranges roughly 0.2..1.0 so quiet
-  // periods drop the wave amplitude down to a fifth of nominal.
-  const env =
-    0.55 +
-    0.25 * Math.sin(world.t * (2 * Math.PI / 37)) +
-    0.20 * Math.sin(world.t * (2 * Math.PI / 91) + 1.7);
-  const envClamped = Math.max(0.15, Math.min(1.0, env));
-  const bAmp = world.brownianAmp * dMult * envClamped;
-  const surfAmp = world.surfaceAmp * dMult * envClamped;
-  const swellAmp = world.swellAmp * dMult * envClamped;
-  const zAmp = world.zStirAmp * dMult * envClamped;
-  const updraftEnv = envClamped;
+  // gravity/drag are unchanged. surfaceActivity bundles the slow
+  // irregularity envelope and the storm multiplier so wave physics,
+  // the visible surface line, and aeration all move together.
+  const act = surfaceActivity(world);
+  const bAmp = world.brownianAmp * act;
+  const surfAmp = world.surfaceAmp * act;
+  const swellAmp = world.swellAmp * act;
+  const zAmp = world.zStirAmp * act;
+  const updraftEnv = Math.min(1, act);
 
   // Slow horizontal current: surface flows one way, deep flows the other.
   // The direction reverses very slowly so cells eventually have to cope
