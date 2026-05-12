@@ -601,9 +601,14 @@ function heatColorDensity(x: number): string {
 
 function drawPhylogeny(): void {
   const stripH = PHYLO_STRIP_H;
-  // World ends at world.height; strip sits in the canvas band below that.
-  const stripY = world.height;
-  const w = world.width;
+  // Strip sits at the bottom of the CANVAS (in CSS pixels). The render
+  // path resets the transform to DPR-only before calling us so screen
+  // coords work directly here.
+  const dpr = window.devicePixelRatio || 1;
+  const canvasCssH = canvas.height / dpr;
+  const canvasCssW = canvas.width / dpr;
+  const stripY = canvasCssH - stripH;
+  const w = canvasCssW;
 
   // Semi-opaque panel so the strip is legible over particles drawn underneath.
   ctx.fillStyle = "rgba(4,16,24,0.78)";
