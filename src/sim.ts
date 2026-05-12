@@ -866,21 +866,52 @@ function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
 // terrain: zero impulse to the obstacle, full corrective push back on
 // the moving body. With ~50-70 total lobes and AABB pre-reject most
 // particles bail in the first compare.
-function resolveObstacleCollisions(world: World): void {
-  if (world.obstacles.length === 0) return;
-  const obs = world.obstacles;
-  for (const p of world.particles) collideWithObstacles(p, obs, world.restitution);
-  for (const c of world.creatures) collideWithObstacles(c, obs, 0.1);
+// Static spatial index for obstacles. Terrain doesn't move, so the
+// index is built once in generateObstacles and reused every tick.
+const OBSTACLE_BAND_W = 64;
+let OBSTACLE_BANDS: Obstacle[][] = [];
+let OBSTACLE_BANDS_COLS = 0;
+let OBSTACLES_MIN_Y = Infinity;
+
+function rebuildObstacleIndex(world: World): void {
+  OBSTACLES_MIN_Y = Infinity;
+  for (const ob of world.obstacles) {
+    if (ob.minY < OBSTACLES_MIN_Y) OBSTACLES_MIN_Y = ob.minY;
+  }
+  OBSTACLE_BANDS_COLS = Math.max(1, Math.ceil(world.width / OBSTACLE_BAND_W));
+  OBSTACLE_BANDS = Array.from({ length: OBSTACLE_BANDS_COLS }, () => []);
+  const margin = 6;
+  for (const ob of world.obstacles) {
+    const b0 = Math.max(0, Math.floor((ob.minX - margin) / OBSTACLE_BAND_W));
+    const b1 = Math.min(OBSTACLE_BANDS_COLS - 1, Math.floor((ob.maxX + margin) / OBSTACLE_BAND_W));
+    for (let i = b0; i <= b1; i++) OBSTACLE_BANDS[i].push(ob);
+  }
 }
 
-function collideWithObstacles(
+function resolveObstacleCollisions(world: World): void {
+  if (world.obstacles.length === 0) return;
+  const minY = OBSTACLES_MIN_Y;
+  for (let i = 0; i < world.particles.length; i++) {
+    const p = world.particles[i];
+    if (p.y + p.r < minY) continue;
+    collideObstaclesAt(p, world.restitution);
+  }
+  for (let i = 0; i < world.creatures.length; i++) {
+    const c = world.creatures[i];
+    if (c.y + c.r < minY) continue;
+    collideObstaclesAt(c, 0.1);
+  }
+}
+
+function collideObstaclesAt(
   o: { x: number; y: number; vx: number; vy: number; r: number },
-  obs: Obstacle[],
   e: number,
 ): void {
+  let bx = Math.floor(o.x / OBSTACLE_BAND_W);
+  if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
+  const obs = OBSTACLE_BANDS[bx];
   for (let i = 0; i < obs.length; i++) {
     const ob = obs[i];
-    // Bounding-box cheap reject.
     if (o.x + o.r < ob.minX || o.x - o.r > ob.maxX) continue;
     if (o.y + o.r < ob.minY || o.y - o.r > ob.maxY) continue;
     const lobes = ob.lobes;
@@ -960,6 +991,7 @@ export function createWorld(width: number, height: number): World {
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
   generateObstacles(world);
+  rebuildObstacleIndex(world);
   // World starts empty: just water and the seed cell. Particles trickle
   // in via replenishParticles() at world.particleSpawnRate until the
   // target is reached, so the simulation has a visible "bootstrap"
