@@ -33,6 +33,12 @@ hudBar.appendChild(hudToggle);
 const hudTimings = document.createElement("div");
 hudTimings.style.cssText = "padding:0 8px 2px;color:#9ee;font:inherit;";
 hudTimings.textContent = "r=--ms  s=--ms";
+// Stall + error indicator: visible from the bar so mobile users
+// can see at a glance whether sim is paused / world is empty /
+// last step threw. Hidden by default; shown only when something
+// useful is going on.
+const hudDiag = document.createElement("div");
+hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;font:inherit;display:none;";
 const inspector = document.createElement("pre");
 inspector.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;font:inherit;";
@@ -48,6 +54,7 @@ disasmBody.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;font:inherit;";
 hud.appendChild(hudBar);
 hud.appendChild(hudTimings);
+hud.appendChild(hudDiag);
 hud.appendChild(inspector);
 hud.appendChild(disasmHeader);
 hud.appendChild(disasmBody);
@@ -1273,6 +1280,10 @@ let simMsThisFrame = 0;
 let recentStepMs = 1.5;
 const RECENT_STEP_DECAY = 0.97;
 const STEP_BUDGET_SAFETY = 1.4;
+// Surface step() errors on the HUD so mobile users can see them
+// without opening a console.
+let lastSimError: string | null = null;
+let lastSimErrorAt = 0;
 simChannel.port1.onmessage = () => {
   const sliceDeadline = performance.now() + SIM_SLICE_MS;
   const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
@@ -1287,10 +1298,8 @@ simChannel.port1.onmessage = () => {
     try {
       step(world, FIXED_DT);
     } catch (err) {
-      // A throwing step would kill the macrotask handler's chance to
-      // finish bookkeeping, but the handler stays registered and the
-      // next rAF still posts. Log once per failure mode so we can
-      // diagnose without flooding the console.
+      lastSimError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      lastSimErrorAt = world.t;
       // eslint-disable-next-line no-console
       console.error("[sim] step threw, continuing:", err);
       break;
@@ -1321,9 +1330,37 @@ function frame(): void {
   maybeAnalyzeGenomes();
   const renderMs = performance.now() - tBeforeRender;
   updatePerfStats(advanced, renderMs, simMsLast);
+  updateDiagBar();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Mobile-friendly diag bar: surface stall + error state on screen
+// instead of in the dev console.
+let stallWatchT = 0;
+let stallWatchWall = performance.now();
+const STALL_WALL_MS = 1500;
+function updateDiagBar(): void {
+  const nowWall = performance.now();
+  if (world.t !== stallWatchT) {
+    stallWatchT = world.t;
+    stallWatchWall = nowWall;
+  }
+  const stalledMs = nowWall - stallWatchWall;
+  const parts: string[] = [];
+  if (stalledMs > STALL_WALL_MS) {
+    parts.push(`SIM STALLED ${(stalledMs / 1000).toFixed(1)}s  pop=${world.creatures.length}  parts=${world.particles.length}`);
+  }
+  if (lastSimError) {
+    parts.push(`step err @ t=${lastSimErrorAt.toFixed(0)}s: ${lastSimError.slice(0, 120)}`);
+  }
+  if (parts.length === 0) {
+    hudDiag.style.display = "none";
+  } else {
+    hudDiag.style.display = "";
+    hudDiag.textContent = parts.join(" | ");
+  }
+}
 
 // Periodic genome-analysis dump. Once per ANALYSIS_INTERVAL_SEC of
 // sim-time, snapshot the live population: group by speciesKey, tag
