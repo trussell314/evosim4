@@ -300,29 +300,34 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Static terrain (crescent + scattered rocks). Top-to-bottom linear
-  // gradient gives a "lit from above" rock look; a small offset drop
-  // shadow adds a hard rim under the silhouette so the shape reads as
-  // solid stone rather than floating bubbles. No stroke (would outline
-  // every internal lobe).
+  // Static terrain. Render each rock as a polygon (straight edges, hard
+  // corners) when one is available; fall back to the lobe-union path
+  // for obstacles that don't ship a polygon. Subtle top-to-bottom
+  // gradient + thin dark stroke for the silhouette rim. No shadow blur:
+  // we want hard edges, not the soft "stylized cartoon" halo.
   for (const ob of world.obstacles) {
     const grad = ctx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.35));
-    grad.addColorStop(0.35, ob.color);
-    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.55));
+    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20));
+    grad.addColorStop(0.4, ob.color);
+    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
     ctx.fillStyle = grad;
-    ctx.shadowColor = "rgba(0,0,0,0.65)";
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetY = 2;
     ctx.beginPath();
-    for (const l of ob.lobes) {
-      ctx.moveTo(l.x + l.r, l.y);
-      ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+    if (ob.polygon && ob.polygon.length >= 3) {
+      ctx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
+      for (let i = 1; i < ob.polygon.length; i++) {
+        ctx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
+      }
+      ctx.closePath();
+    } else {
+      for (const l of ob.lobes) {
+        ctx.moveTo(l.x + l.r, l.y);
+        ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+      }
     }
     ctx.fill();
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
+    ctx.strokeStyle = hexLerp(ob.color, 0, 0, 0, 0.55);
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   // Highlight along the surface line.

@@ -64,7 +64,13 @@ export interface Obstacle {
   // Bounding box for cheap reject. minY in particular lets the
   // collision pass skip particles floating in the upper water column.
   minX: number; minY: number; maxX: number; maxY: number;
+  // Lobes drive physics (circle-circle pushback). Cheap, robust.
   lobes: ObstacleLobe[];
+  // Optional polygon outline for rendering. When present the renderer
+  // draws straight-line edges with hard corners (rock-like) instead of
+  // the lobe-circle union (which reads as cartoon bubbles). Crescent
+  // sets this to undefined and is rendered as a lobe union.
+  polygon?: { x: number; y: number }[];
   color: string;
 }
 
@@ -659,122 +665,122 @@ export function generateObstacles(world: World): void {
   const W = world.width;
   const H = world.height;
 
-  // C-shape crescent forming a cove that opens to one side. The body
-  // is a thick arc; the bottom is squashed flatter than the top so it
-  // rests stably on the world floor. The cove (interior of the C) is
-  // an empty pocket cells can swim into and shelter in.
-  const cx = W * (0.35 + Math.random() * 0.30);
-  const cy = H * 0.78;
-  const Rx = W * 0.17;          // half horizontal radius
-  const RyTop = H * 0.13;       // distance from center to top of arc
-  const RyBot = H * 0.07;       // smaller -> flatter bottom
-  const bodyR = H * 0.038;      // half the body thickness
-  // Opening direction: randomly left or right. Stored as -1 (left) or +1 (right).
-  const openSide = Math.random() < 0.5 ? -1 : 1;
-  const openingHalf = Math.PI * 0.22;  // ~40° opening
-  // Iterate angles around the centerline, skipping the chunk facing
-  // the opening side. Canvas y-down: sin(ang)>0 is below the center.
-  const angStart = openingHalf;
-  const angEnd = 2 * Math.PI - openingHalf;
-  const crescentLobes: ObstacleLobe[] = [];
-  const N_CRESCENT = 30;
-  for (let i = 0; i < N_CRESCENT; i++) {
-    const t = i / (N_CRESCENT - 1);
-    const angRaw = angStart + (angEnd - angStart) * t;
-    // Mirror around the y-axis if the opening is on the left.
-    const ang = openSide > 0 ? angRaw : Math.PI - angRaw;
-    const ca = Math.cos(ang);
-    const sa = Math.sin(ang);
-    const ry = sa > 0 ? RyBot : RyTop;
-    const x = cx + ca * Rx;
-    const y = cy + sa * ry;
-    // Taper at the two tips so the C ends in points instead of stubby blobs.
-    const distFromTip = Math.min(t, 1 - t);
-    const tipTaper = Math.min(1, distFromTip * 5);
-    const r = bodyR * (0.5 + 0.5 * tipTaper);
-    crescentLobes.push({ x, y, r });
-  }
-  world.obstacles.push(makeObstacleFromLobes(crescentLobes, "#3d342d"));
+  // Continuous rocky floor across the bottom of the world, with:
+  //   * 2 sandy gaps (vertical strips with no rocks; sand piles there)
+  //   * 1 C-shaped alcove off one of the gaps -- a curved hollow cove
+  //     opening into the sandy strip so cells can swim in and shelter.
+  const floorTopY = H * 0.76;
+  const floorBotY = H - 4;
+  const floorDepth = floorBotY - floorTopY;
 
-  // restAt(x): topmost crescent lobe directly under x. Fallback to a
-  // shallow shelf just above the world floor so rocks placed outside
-  // the crescent still rest somewhere reasonable.
-  const restAt = (x: number): number => {
-    let topY = H - 6;
-    for (const l of crescentLobes) {
-      const dx = x - l.x;
-      if (Math.abs(dx) >= l.r) continue;
-      const dy = Math.sqrt(l.r * l.r - dx * dx);
-      const y = l.y - dy;
-      if (y < topY) topY = y;
-    }
-    return topY;
+  // Sandy gap A: near the cove. Cells use this as the corridor to enter.
+  const gapACx = W * (0.30 + Math.random() * 0.20);
+  const gapAHw = W * 0.035;
+  // Sandy gap B: just for variety, somewhere else.
+  const gapBCx = W * (0.65 + Math.random() * 0.20);
+  const gapBHw = W * 0.028;
+
+  // Cove: a curved circular hollow attached to gap A. Opens into the
+  // gap on one side. Roughly 50% of floor depth in radius -- big enough
+  // to hold a few cells but not so big it eats the floor.
+  const coveSide = gapACx < W * 0.5 ? 1 : -1; // open the cove into world center
+  const coveR = floorDepth * 0.45;
+  const coveCx = gapACx + coveSide * (gapAHw + coveR * 0.65);
+  const coveCy = floorTopY + floorDepth * 0.55;
+
+  const inGap = (px: number): boolean =>
+    Math.abs(px - gapACx) < gapAHw || Math.abs(px - gapBCx) < gapBHw;
+
+  // Cove exclusion: inside the cove disc, PLUS a narrow bridge of width
+  // ~half coveR connecting the cove's inner edge to the gap. The bridge
+  // is what makes it a C (open side) instead of a sealed circle.
+  const bridgeY0 = coveCy - coveR * 0.32;
+  const bridgeY1 = coveCy + coveR * 0.32;
+  const bridgeX0 = coveSide > 0 ? gapACx + gapAHw : coveCx + coveSide * coveR;
+  const bridgeX1 = coveSide > 0 ? coveCx - coveR : gapACx - gapAHw;
+  const bx0 = Math.min(bridgeX0, bridgeX1);
+  const bx1 = Math.max(bridgeX0, bridgeX1);
+  const inCove = (px: number, py: number, pad: number): boolean => {
+    const dx = px - coveCx;
+    const dy = py - coveCy;
+    if (dx * dx + dy * dy < (coveR - pad) * (coveR - pad)) return true;
+    if (px >= bx0 - pad && px <= bx1 + pad &&
+        py >= bridgeY0 - pad && py <= bridgeY1 + pad) return true;
+    return false;
   };
 
-  // 7-10 stylized rocks placed around the world floor. Built as an
-  // elongated body (3 in-line lobes) plus 6-10 perimeter bumps with
-  // wildly varying sizes. Elongation breaks radial symmetry; bump
-  // size variance breaks the "cluster of bubbles" silhouette.
-  const nRocks = 7 + Math.floor(Math.random() * 4);
-  const placed: { x: number; y: number; r: number }[] = [];
-  for (let i = 0; i < nRocks; i++) {
-    const baseR = 18 + Math.random() * 18;
-    const elong = 1.3 + Math.random() * 0.7;
-    const tilt = -0.25 + Math.random() * 0.5;
-    let rx = 0, ry = 0, ok = false;
-    for (let attempt = 0; attempt < 40 && !ok; attempt++) {
-      rx = W * (0.04 + 0.92 * Math.random());
-      ry = restAt(rx) - baseR * 0.5;
-      ok = true;
-      for (const p of placed) {
-        const dx = rx - p.x;
-        const dy = ry - p.y;
-        const minD = (p.r + baseR) * 1.35;
-        if (dx * dx + dy * dy < minD * minD) {
-          ok = false; break;
-        }
+  // Distribute rocks across the floor. For each column x, drop 1-3
+  // rocks stacked downward. Skip columns that overlap gaps or the cove.
+  // Per-rock jitter in x/y breaks the grid so the surface reads natural.
+  const colSpacing = 28;
+  for (let xPos = 8; xPos < W - 8; xPos += colSpacing) {
+    for (let yPos = floorTopY + 8; yPos < floorBotY; yPos += 26) {
+      const baseR = 13 + Math.random() * 14;
+      const rx = xPos + (Math.random() - 0.5) * colSpacing * 0.7;
+      const ry = yPos + (Math.random() - 0.5) * 10;
+      // Top row: jiggle Y so the rocky surface undulates.
+      if (yPos < floorTopY + 14) {
+        // Skip a small fraction of top-row rocks to add silhouette gaps.
+        if (Math.random() < 0.15) continue;
       }
+      if (inGap(rx)) continue;
+      if (inCove(rx, ry, -baseR * 0.4)) continue;
+      const elong = 0.85 + Math.random() * 0.9;
+      const tilt = -0.5 + Math.random() * 1.0;
+      const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
+      const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
+      const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
+      const tone = tones[Math.floor(Math.random() * tones.length)];
+      const ob = makeObstacleFromLobes(lobes, tone);
+      ob.polygon = polygon;
+      for (const v of polygon) {
+        if (v.x < ob.minX) ob.minX = v.x;
+        if (v.y < ob.minY) ob.minY = v.y;
+        if (v.x > ob.maxX) ob.maxX = v.x;
+        if (v.y > ob.maxY) ob.maxY = v.y;
+      }
+      world.obstacles.push(ob);
     }
-    if (!ok) continue;
-    placed.push({ x: rx, y: ry, r: baseR });
-    const lobes: ObstacleLobe[] = buildStylizedRock(rx, ry, baseR, elong, tilt);
-    const tones = ["#4a4038", "#3a312a", "#52463b", "#403631", "#473d34"];
-    const tone = tones[Math.floor(Math.random() * tones.length)];
-    world.obstacles.push(makeObstacleFromLobes(lobes, tone));
   }
 }
 
-function buildStylizedRock(
+// Polygon vertices around a rock center. n vertices distributed around
+// 2pi with jittered angles + radii; offset toward an elongation axis so
+// the rock isn't radially symmetric.
+function buildRockPolygon(
   cx: number, cy: number, baseR: number, elong: number, tilt: number,
-): ObstacleLobe[] {
-  const lobes: ObstacleLobe[] = [];
+): { x: number; y: number }[] {
+  const n = 9 + Math.floor(Math.random() * 4);
   const ca = Math.cos(tilt), sa = Math.sin(tilt);
-  // Body: three lobes along a slightly-tilted axis. Center is biggest;
-  // ends shrink. This breaks radial symmetry so the rock is wider one
-  // way than the other -- the single biggest visual fix.
-  for (let k = -1; k <= 1; k++) {
-    const axisOff = k * baseR * 0.55 * elong;
-    const x = cx + ca * axisOff;
-    const y = cy + sa * axisOff;
-    const r = k === 0 ? baseR : baseR * (0.55 + 0.25 * Math.random());
-    lobes.push({ x, y, r });
-  }
-  // Perimeter bumps. Distributed around the tilted ellipse. Wild size
-  // variance (0.18..0.55 of baseR) so some bumps are barely visible
-  // and others are large protrusions.
-  const nBumps = 7 + Math.floor(Math.random() * 5);
-  for (let k = 0; k < nBumps; k++) {
-    const a = Math.random() * Math.PI * 2;
-    // Position on an axis-aligned ellipse, then rotate by tilt.
-    const ex = Math.cos(a) * baseR * elong * (0.85 + 0.2 * Math.random());
-    const ey = Math.sin(a) * baseR * (0.75 + 0.25 * Math.random());
-    const rx = ca * ex - sa * ey;
-    const ry = sa * ex + ca * ey;
-    lobes.push({
-      x: cx + rx,
-      y: cy + ry,
-      r: baseR * (0.18 + 0.38 * Math.random()),
+  const verts: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / n;
+    // Jitter angle around the even slice so corners aren't symmetric.
+    const ang = t * Math.PI * 2 + (Math.random() - 0.5) * (Math.PI / n);
+    // Vertex radius with strong variance. Some vertices close, some far.
+    const r = baseR * (0.7 + 0.55 * Math.random());
+    // Pre-rotation: ellipse aligned with x-axis, then tilt.
+    const ex = Math.cos(ang) * r * elong;
+    const ey = Math.sin(ang) * r;
+    verts.push({
+      x: cx + ca * ex - sa * ey,
+      y: cy + sa * ex + ca * ey,
     });
+  }
+  return verts;
+}
+
+// Approximate the interior of a polygon with circle lobes for collision.
+// Strategy: one large centroid lobe (inscribed-ish) + a small lobe at
+// each vertex. Particles in the interior collide with the centroid;
+// particles approaching from outside the convex hull collide with the
+// nearest vertex lobe. Good enough for stylized terrain.
+function lobesFromPolygon(
+  cx: number, cy: number, polygon: { x: number; y: number }[], baseR: number,
+): ObstacleLobe[] {
+  const lobes: ObstacleLobe[] = [{ x: cx, y: cy, r: baseR * 0.85 }];
+  for (const v of polygon) {
+    lobes.push({ x: v.x, y: v.y, r: baseR * 0.22 });
   }
   return lobes;
 }
