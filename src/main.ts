@@ -1,6 +1,6 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
-import { disassemble, summarizeGenome } from "./genome";
+import { disassemble, summarizeGenome, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -113,13 +113,37 @@ const PHYLO_WINDOW_SEC = 180;
 const visibleSpecies: Species[] = [];
 const bioByKey = new Map<string, number>();
 
+// Genome-analysis console: right-side sidebar. Canvas shrinks to make
+// room so this panel never overlaps the world. New rows are prepended
+// once per ANALYSIS_INTERVAL_SEC of sim time.
+const ANALYSIS_PANEL_W = 320;
+const analysisPanel = document.createElement("div");
+analysisPanel.style.cssText =
+  "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W + "px;" +
+  "background:rgba(4,16,24,0.92);color:#9ee;border-left:1px solid #1a3340;" +
+  "font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "overflow-y:auto;padding:8px 10px;box-sizing:border-box;z-index:10;";
+const analysisHeader = document.createElement("div");
+analysisHeader.style.cssText = "font-weight:bold;margin-bottom:6px;color:#9ee;";
+analysisHeader.textContent = "genome analysis (every 60 sim-sec)";
+const analysisBody = document.createElement("div");
+analysisBody.style.cssText = "white-space:pre-wrap;";
+analysisPanel.appendChild(analysisHeader);
+analysisPanel.appendChild(analysisBody);
+root.appendChild(analysisPanel);
+
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
   // dimensions but doesn't fire window.resize on iOS Safari.
   const vv = window.visualViewport;
   const dpr = window.devicePixelRatio || 1;
-  const w = vv ? vv.width : window.innerWidth;
+  const fullW = vv ? vv.width : window.innerWidth;
   const h = vv ? vv.height : window.innerHeight;
+  // Reserve right-side strip for the analysis console so the canvas
+  // doesn't render under it. On very narrow screens we fall back to
+  // letting the canvas use full width (the panel still floats on top
+  // there; nothing we can do without a different layout).
+  const w = fullW > ANALYSIS_PANEL_W * 2 ? fullW - ANALYSIS_PANEL_W : fullW;
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
   canvas.width = Math.floor(w * dpr);
@@ -1147,6 +1171,119 @@ function frame(): void {
   advancedThisFrame = 0;
   render();
   updateInspector();
+  maybeAnalyzeGenomes();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Periodic genome-analysis dump. Once per ANALYSIS_INTERVAL_SEC of
+// sim-time, snapshot the live population: group by speciesKey, tag
+// each with its summarized capabilities, compare against the parent
+// species (from phylogenyEvents) to flag what the mutation changed,
+// and prepend a block to the right-side panel.
+const ANALYSIS_INTERVAL_SEC = 60;
+let lastAnalysisT = -Infinity;
+function maybeAnalyzeGenomes(): void {
+  if (world.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
+  lastAnalysisT = world.t;
+  if (world.creatures.length === 0) return;
+  // Group live cells by speciesKey -> count + sample genome.
+  const byKey = new Map<string, { count: number; genome: Uint8Array; sp: Species | undefined }>();
+  for (const c of world.creatures) {
+    const e = byKey.get(c.speciesKey);
+    if (e) e.count++;
+    else byKey.set(c.speciesKey, { count: 1, genome: c.genome, sp: world.species.get(c.speciesKey) });
+  }
+  // Sort by population desc, take top 8 so the panel stays readable.
+  const ranked = Array.from(byKey.entries())
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 8);
+  // Build a quick parent->latest-event map so we can classify each
+  // species as "founder", "first descendant", or "later mutation."
+  const parentOf = new Map<string, string>();
+  for (const ev of world.phylogenyEvents) parentOf.set(ev.to, ev.from);
+
+  const lines: string[] = [];
+  lines.push(`t=${formatAge(world.t)}  pop=${world.creatures.length}  species_alive=${byKey.size}`);
+  for (const [key, info] of ranked) {
+    const summary = summarizeGenome(info.genome, MATERIAL_IDS_ORDERED);
+    const parentKey = parentOf.get(key);
+    let mutDesc = "";
+    let verdict = "neutral";
+    if (parentKey) {
+      const parentSp = world.species.get(parentKey);
+      // Sample a representative parent genome from a live parent cell
+      // if any survive; otherwise we can only describe what current
+      // descendant looks like.
+      const parentLive = world.creatures.find((c) => c.speciesKey === parentKey);
+      const parentGenome = parentLive ? parentLive.genome : undefined;
+      if (parentGenome) {
+        mutDesc = diffGenomeOps(parentGenome, info.genome);
+      }
+      // Beneficial / harmful heuristic: child species has more living
+      // members than its parent species (and parent is still alive),
+      // or has its own children -- counts as beneficial. If parent is
+      // alive but vastly outnumbers child, harmful.
+      const pCount = parentLive
+        ? Array.from(byKey.values()).find((v) => v.sp?.key === parentKey)?.count ?? 0
+        : 0;
+      if (info.count > pCount * 1.5) verdict = "beneficial";
+      else if (parentSp && parentSp.alive > 0 && pCount > info.count * 3) verdict = "harmful";
+    } else {
+      verdict = "founder";
+    }
+    const shortKey = key.slice(0, 6);
+    const ageHint = info.sp ? formatAge(Math.max(0, world.t - info.sp.firstSeen)) : "?";
+    const caps = summary.capabilities.slice(0, 4).join(", ");
+    lines.push(
+      `  ${info.count.toString().padStart(3)}x ${shortKey}  age=${ageHint}  ` +
+      `[${verdict}]\n    bytes=${summary.totalBytes} ops=${summary.executableOps} ` +
+      `junk=${summary.unknownBytes}  ${caps}` +
+      (mutDesc ? `\n    mut: ${mutDesc}` : ""),
+    );
+  }
+  // Prepend the new block so newest is on top; cap the visible log.
+  const newBlock = document.createElement("div");
+  newBlock.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;";
+  newBlock.textContent = lines.join("\n");
+  analysisBody.insertBefore(newBlock, analysisBody.firstChild);
+  while (analysisBody.children.length > 20) analysisBody.removeChild(analysisBody.lastChild!);
+}
+
+// Diff two genomes (parent vs child) into a short human-readable
+// description of what changed: op-name level. Ignores trivial byte-
+// shifts; reports added / removed action ops + sensor ops + amp counts.
+function diffGenomeOps(a: Uint8Array, b: Uint8Array): string {
+  const counts = (g: Uint8Array): Record<string, number> => {
+    const c: Record<string, number> = {};
+    for (let i = 0; i < g.length; i++) {
+      const op = g[i];
+      const name = OP_NAME_BY_BYTE[op];
+      if (name) c[name] = (c[name] ?? 0) + 1;
+    }
+    return c;
+  };
+  const ca = counts(a), cb = counts(b);
+  const keys = new Set([...Object.keys(ca), ...Object.keys(cb)]);
+  const added: string[] = [];
+  const removed: string[] = [];
+  for (const k of keys) {
+    const da = ca[k] ?? 0, db = cb[k] ?? 0;
+    if (db > da) added.push(`+${db - da} ${k}`);
+    else if (da > db) removed.push(`-${da - db} ${k}`);
+  }
+  const lenDiff = b.length - a.length;
+  const parts: string[] = [];
+  if (lenDiff !== 0) parts.push(`len${lenDiff > 0 ? "+" : ""}${lenDiff}`);
+  if (added.length) parts.push(added.join(" "));
+  if (removed.length) parts.push(removed.join(" "));
+  return parts.length ? parts.join("  ") : "(silent point mutation)";
+}
+
+// Reverse of OP enum: byte -> short name. Built lazily; only includes
+// ops the genome.ts OP table knows about.
+const OP_NAME_BY_BYTE: Record<number, string> = (() => {
+  const m: Record<number, string> = {};
+  for (const [name, byte] of Object.entries(OP)) m[byte as number] = name;
+  return m;
+})();

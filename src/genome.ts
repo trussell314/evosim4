@@ -75,6 +75,7 @@ export const OP = {
   POKE_BYTE:     0x65,   // pop (idx, val), write genome[idx % L] = val & 0xff
   SPLICE_DUP:    0x66,   // pop (offset, length), duplicate that region in place
   SPLICE_DEL:    0x67,   // pop (offset, length), delete that region from genome
+  THRUST_AMP:    0x68,   // passive: each copy boosts the cell's thrustAccel
 
   HALT:          0xFF,
 } as const;
@@ -325,6 +326,10 @@ export function runTick(
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
+      // THRUST_AMP is a passive trait marker; sim.ts derives
+      // c.thrustAccel from byte counts at birth (and on somatic
+      // mutation).
+      case OP.THRUST_AMP:     break;
       // POKE_BYTE: write to an arbitrary genome byte in place. (val, idx)
       // are popped; idx is taken mod L, value is masked to 8 bits.
       case OP.POKE_BYTE: {
@@ -653,9 +658,21 @@ export function computeSenseRange(genome: Uint8Array): number {
   return SENSE_BASE + SENSE_PER_AMP * Math.sqrt(amps);
 }
 
+// Thrust acceleration scales with THRUST_AMP byte count. Same sqrt
+// curve as sense range: linear-in-count cost (one byte each), sqrt
+// payoff so doubling thrust costs 4x DNA.
+export const THRUST_BASE = 70;
+export const THRUST_PER_AMP = 25;
+export function computeThrustAccel(genome: Uint8Array): number {
+  let amps = 0;
+  for (let i = 0; i < genome.length; i++) if (genome[i] === OP.THRUST_AMP) amps++;
+  return THRUST_BASE + THRUST_PER_AMP * Math.sqrt(amps);
+}
+
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_AMP,             // one sense amplifier -> 80px range
+    OP.THRUST_AMP,            // one thrust amplifier -> 95 px/s^2
     OP.SENSE_GRAD_X, 3,
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,

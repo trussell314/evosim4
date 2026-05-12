@@ -16,6 +16,7 @@ import {
   mutateGenome,
   somaticMutateOnce,
   computeSenseRange,
+  computeThrustAccel,
   MAX_GENOME_BYTES,
 } from "./genome";
 
@@ -1611,7 +1612,7 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     density: 1.0,
     energy: 30,
     senseRange: computeSenseRange(genome),
-    thrustAccel: 70,
+    thrustAccel: computeThrustAccel(genome),
     genome,
     vm: newVMState(),
     color: genomeColor(genome),
@@ -2478,9 +2479,11 @@ function updateCreatures(world: World, dt: number): void {
     if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
     if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
-      // Sense range tracks the SENSE_AMP count in the live genome;
-      // somatic mutation can add or remove amps, so recompute here.
+      // Sense range tracks the SENSE_AMP count in the live genome
+      // and thrust accel tracks THRUST_AMP. Somatic mutations can
+      // add or remove either, so recompute both here.
       c.senseRange = computeSenseRange(c.genome);
+      c.thrustAccel = computeThrustAccel(c.genome);
       // Note: c.color is NOT updated on somatic drift. Cell keeps its
       // species' visual identity so phylogeny lane color === body color
       // across the population. Inheritance through fission is what
@@ -2522,9 +2525,10 @@ function updateCreatures(world: World, dt: number): void {
     if (VM_OUT.spliceMode !== 0 && VM_OUT.spliceLength > 0) {
       applyGenomeSplice(c, VM_OUT.spliceMode, VM_OUT.spliceOffset, VM_OUT.spliceLength);
     }
-    // POKE_BYTE may have changed SENSE_AMP bytes; SPLICE may have too.
-    // Recompute senseRange so it tracks the live program.
+    // POKE_BYTE / SPLICE may have changed SENSE_AMP or THRUST_AMP
+    // byte counts; recompute both derived traits.
     c.senseRange = computeSenseRange(c.genome);
+    c.thrustAccel = computeThrustAccel(c.genome);
 
     // TURN: rotate the cell's velocity by the accumulated angle delta.
     // Cheap; only does the trig when the genome actually issued a turn.
@@ -2938,7 +2942,7 @@ function tryReproduce(parent: Creature, world: World): void {
     density: parent.density,
     energy: energyGift,
     senseRange: computeSenseRange(childGenome),
-    thrustAccel: parent.thrustAccel,
+    thrustAccel: computeThrustAccel(childGenome),
     genome: childGenome,
     vm: newVMState(),
     color: genomeColor(childGenome, world.anchorGenome),
