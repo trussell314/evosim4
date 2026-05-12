@@ -346,7 +346,7 @@ const ENERGY_PER_THRUST_SEC = 5;
 const ENERGY_PER_INSTRUCTION = 0.005;
 const VM_INSTR_BUDGET = 32;
 
-const MASS_PER_GENOME_BYTE = 0.5;
+const MASS_PER_GENOME_BYTE = 0.1;
 const PARTICLE_DENSITY_PER_AREA = 6188 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 // Hard cap on the per-second spawn rate. Without this the world tries
