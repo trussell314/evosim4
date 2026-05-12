@@ -300,19 +300,20 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Static terrain (crescent + scattered boulders). Top-to-bottom
-  // linear gradient gives a "lit from above" rock look; a soft dark
-  // shadow blur adds a rim around the union silhouette so the shape
-  // reads as solid rock rather than overlapping bubbles. No stroke
-  // (would draw every internal lobe outline).
+  // Static terrain (crescent + scattered rocks). Top-to-bottom linear
+  // gradient gives a "lit from above" rock look; a small offset drop
+  // shadow adds a hard rim under the silhouette so the shape reads as
+  // solid stone rather than floating bubbles. No stroke (would outline
+  // every internal lobe).
   for (const ob of world.obstacles) {
     const grad = ctx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.25));
-    grad.addColorStop(0.45, ob.color);
-    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
+    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.35));
+    grad.addColorStop(0.35, ob.color);
+    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.55));
     ctx.fillStyle = grad;
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = 4;
+    ctx.shadowColor = "rgba(0,0,0,0.65)";
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetY = 2;
     ctx.beginPath();
     for (const l of ob.lobes) {
       ctx.moveTo(l.x + l.r, l.y);
@@ -321,6 +322,7 @@ function render(): void {
     ctx.fill();
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
   }
 
   // Highlight along the surface line.

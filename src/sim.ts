@@ -659,32 +659,46 @@ export function generateObstacles(world: World): void {
   const W = world.width;
   const H = world.height;
 
-  // Crescent: a discrete moon-shaped arc at the bottom-center. Span
-  // ~55% of world width, vertical extent ~22% of world height. The
-  // arc is concave-up (a smile/⌣ shape): tips rise toward the surface,
-  // middle dips toward the world bottom. Built from thin overlapping
-  // lobes along the arc so the curvature is clearly visible -- not a
-  // single fat blob.
+  // C-shape crescent forming a cove that opens to one side. The body
+  // is a thick arc; the bottom is squashed flatter than the top so it
+  // rests stably on the world floor. The cove (interior of the C) is
+  // an empty pocket cells can swim into and shelter in.
+  const cx = W * (0.35 + Math.random() * 0.30);
+  const cy = H * 0.78;
+  const Rx = W * 0.17;          // half horizontal radius
+  const RyTop = H * 0.13;       // distance from center to top of arc
+  const RyBot = H * 0.07;       // smaller -> flatter bottom
+  const bodyR = H * 0.038;      // half the body thickness
+  // Opening direction: randomly left or right. Stored as -1 (left) or +1 (right).
+  const openSide = Math.random() < 0.5 ? -1 : 1;
+  const openingHalf = Math.PI * 0.22;  // ~40° opening
+  // Iterate angles around the centerline, skipping the chunk facing
+  // the opening side. Canvas y-down: sin(ang)>0 is below the center.
+  const angStart = openingHalf;
+  const angEnd = 2 * Math.PI - openingHalf;
   const crescentLobes: ObstacleLobe[] = [];
-  const N_CRESCENT = 22;
-  const span = W * 0.55;
-  const yTipCenter = H * 0.72;
-  const yMidCenter = H * 0.84;
+  const N_CRESCENT = 30;
   for (let i = 0; i < N_CRESCENT; i++) {
     const t = i / (N_CRESCENT - 1);
-    const u = (t - 0.5) * 2; // -1 at left tip, +1 at right tip
-    const x = W / 2 + u * (span / 2);
-    const smileDip = 1 - u * u; // 0 at tips, 1 at middle
-    const yCenter = yTipCenter + (yMidCenter - yTipCenter) * smileDip;
-    const taper = 0.35 + 0.65 * smileDip;
-    const r = H * 0.055 * taper;
-    crescentLobes.push({ x, y: yCenter, r });
+    const angRaw = angStart + (angEnd - angStart) * t;
+    // Mirror around the y-axis if the opening is on the left.
+    const ang = openSide > 0 ? angRaw : Math.PI - angRaw;
+    const ca = Math.cos(ang);
+    const sa = Math.sin(ang);
+    const ry = sa > 0 ? RyBot : RyTop;
+    const x = cx + ca * Rx;
+    const y = cy + sa * ry;
+    // Taper at the two tips so the C ends in points instead of stubby blobs.
+    const distFromTip = Math.min(t, 1 - t);
+    const tipTaper = Math.min(1, distFromTip * 5);
+    const r = bodyR * (0.5 + 0.5 * tipTaper);
+    crescentLobes.push({ x, y, r });
   }
-  world.obstacles.push(makeObstacleFromLobes(crescentLobes, "#3a2e26"));
+  world.obstacles.push(makeObstacleFromLobes(crescentLobes, "#3d342d"));
 
-  // For each candidate rock x, find the y at which it should rest --
-  // i.e. the topmost lobe of the crescent that's directly below. If
-  // nothing's under it, rest on the world bottom (with a small buffer).
+  // restAt(x): topmost crescent lobe directly under x. Fallback to a
+  // shallow shelf just above the world floor so rocks placed outside
+  // the crescent still rest somewhere reasonable.
   const restAt = (x: number): number => {
     let topY = H - 6;
     for (const l of crescentLobes) {
@@ -697,52 +711,72 @@ export function generateObstacles(world: World): void {
     return topY;
   };
 
-  // 7-10 individual boulders. To look like rocks (not constipation
-  // nuggets), each is built as a big central core + many small
-  // protrusions placed irregularly so the silhouette has bumps and
-  // kinks rather than smooth bubbles. Renderer adds top-down gradient
-  // shading; the irregular outline is what sells it as a rock.
+  // 7-10 stylized rocks placed around the world floor. Built as an
+  // elongated body (3 in-line lobes) plus 6-10 perimeter bumps with
+  // wildly varying sizes. Elongation breaks radial symmetry; bump
+  // size variance breaks the "cluster of bubbles" silhouette.
   const nRocks = 7 + Math.floor(Math.random() * 4);
   const placed: { x: number; y: number; r: number }[] = [];
   for (let i = 0; i < nRocks; i++) {
-    const targetSize = 22 + Math.random() * 20;
-    let cx = 0, cy = 0, ok = false;
+    const baseR = 18 + Math.random() * 18;
+    const elong = 1.3 + Math.random() * 0.7;
+    const tilt = -0.25 + Math.random() * 0.5;
+    let rx = 0, ry = 0, ok = false;
     for (let attempt = 0; attempt < 40 && !ok; attempt++) {
-      cx = W * (0.05 + 0.9 * Math.random());
-      const restY = restAt(cx);
-      cy = restY - targetSize * 0.4;
+      rx = W * (0.04 + 0.92 * Math.random());
+      ry = restAt(rx) - baseR * 0.5;
       ok = true;
       for (const p of placed) {
-        const dx = cx - p.x;
-        const dy = cy - p.y;
-        if (dx * dx + dy * dy < (p.r + targetSize) * (p.r + targetSize) * 1.3) {
+        const dx = rx - p.x;
+        const dy = ry - p.y;
+        const minD = (p.r + baseR) * 1.35;
+        if (dx * dx + dy * dy < minD * minD) {
           ok = false; break;
         }
       }
     }
     if (!ok) continue;
-    placed.push({ x: cx, y: cy, r: targetSize });
-
-    const lobes: ObstacleLobe[] = [{ x: cx, y: cy, r: targetSize }];
-    // 6-10 protrusion lobes -- many small bumps along the perimeter
-    // with random angles, distances, and sizes. The result is a
-    // genuinely irregular silhouette (not a clean blob).
-    const nBumps = 6 + Math.floor(Math.random() * 5);
-    for (let k = 0; k < nBumps; k++) {
-      const ang = Math.random() * Math.PI * 2;
-      const off = targetSize * (0.55 + 0.4 * Math.random());
-      const sr = targetSize * (0.22 + 0.4 * Math.random());
-      lobes.push({
-        x: cx + Math.cos(ang) * off,
-        y: cy + Math.sin(ang) * off,
-        r: sr,
-      });
-    }
-    // Slightly varied gray-brown tones so adjacent rocks read distinct.
-    const tones = ["#4a4038", "#3d342c", "#52463b", "#3a302a"];
+    placed.push({ x: rx, y: ry, r: baseR });
+    const lobes: ObstacleLobe[] = buildStylizedRock(rx, ry, baseR, elong, tilt);
+    const tones = ["#4a4038", "#3a312a", "#52463b", "#403631", "#473d34"];
     const tone = tones[Math.floor(Math.random() * tones.length)];
     world.obstacles.push(makeObstacleFromLobes(lobes, tone));
   }
+}
+
+function buildStylizedRock(
+  cx: number, cy: number, baseR: number, elong: number, tilt: number,
+): ObstacleLobe[] {
+  const lobes: ObstacleLobe[] = [];
+  const ca = Math.cos(tilt), sa = Math.sin(tilt);
+  // Body: three lobes along a slightly-tilted axis. Center is biggest;
+  // ends shrink. This breaks radial symmetry so the rock is wider one
+  // way than the other -- the single biggest visual fix.
+  for (let k = -1; k <= 1; k++) {
+    const axisOff = k * baseR * 0.55 * elong;
+    const x = cx + ca * axisOff;
+    const y = cy + sa * axisOff;
+    const r = k === 0 ? baseR : baseR * (0.55 + 0.25 * Math.random());
+    lobes.push({ x, y, r });
+  }
+  // Perimeter bumps. Distributed around the tilted ellipse. Wild size
+  // variance (0.18..0.55 of baseR) so some bumps are barely visible
+  // and others are large protrusions.
+  const nBumps = 7 + Math.floor(Math.random() * 5);
+  for (let k = 0; k < nBumps; k++) {
+    const a = Math.random() * Math.PI * 2;
+    // Position on an axis-aligned ellipse, then rotate by tilt.
+    const ex = Math.cos(a) * baseR * elong * (0.85 + 0.2 * Math.random());
+    const ey = Math.sin(a) * baseR * (0.75 + 0.25 * Math.random());
+    const rx = ca * ex - sa * ey;
+    const ry = sa * ex + ca * ey;
+    lobes.push({
+      x: cx + rx,
+      y: cy + ry,
+      r: baseR * (0.18 + 0.38 * Math.random()),
+    });
+  }
+  return lobes;
 }
 
 function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
