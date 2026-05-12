@@ -658,58 +658,83 @@ export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
   const H = world.height;
-  const floorTop = H - H * 0.25; // top of the crescent at the centerline
+  // The crescent occupies the bottom ~25% of the world. Its highest
+  // point (the lowest y) at the centerline is floorTop.
+  const floorTop = H - H * 0.25;
 
   // Crescent floor: a sweeping curve of large overlapping lobes. The
-  // shape rises at the sides and dips in the middle. Lobes overlap
-  // generously so the silhouette reads as one continuous rock outline.
+  // shape rises at the sides and dips in the middle so cells have to
+  // climb up at the edges. Lobes overlap heavily so the silhouette
+  // reads as one continuous rock outline rather than circles.
   const crescentLobes: ObstacleLobe[] = [];
-  const N_CRESCENT = 22;
+  const N_CRESCENT = 26;
   for (let i = 0; i < N_CRESCENT; i++) {
-    const t = i / (N_CRESCENT - 1); // 0..1 along the curve
+    const t = i / (N_CRESCENT - 1);
     const x = t * W;
     // Cosine curve: high at edges (rises up the walls), low in the middle.
     const dip = 0.5 - 0.5 * Math.cos(2 * Math.PI * t);
-    const y = floorTop + (H - floorTop) * (0.35 + 0.55 * dip);
-    const r = (H - floorTop) * (0.55 + 0.2 * Math.random());
+    const y = floorTop + (H - floorTop) * (0.25 + 0.55 * dip);
+    // Big radius so each lobe overlaps its neighbor by >50%.
+    const r = (H - floorTop) * (0.75 + 0.15 * Math.random());
     crescentLobes.push({ x, y, r });
   }
   world.obstacles.push(makeObstacleFromLobes(crescentLobes, "#3a2e26"));
 
-  // 7-10 individual boulders scattered along the bottom. Each is a
-  // cluster of 3-6 lobes packed tight enough to look like one rock.
+  // For each candidate rock x, find the y at which it should rest --
+  // i.e. the top of the crescent silhouette directly below.
+  const crescentTopAt = (x: number): number => {
+    let topY = Infinity;
+    for (const l of crescentLobes) {
+      const dx = x - l.x;
+      if (Math.abs(dx) >= l.r) continue;
+      const dy = Math.sqrt(l.r * l.r - dx * dx);
+      const y = l.y - dy;
+      if (y < topY) topY = y;
+    }
+    return Number.isFinite(topY) ? topY : H;
+  };
+
+  // 7-10 individual boulders resting on the crescent. Each is a cluster
+  // of one big central lobe plus 3-5 tight satellite lobes so the
+  // silhouette is irregular but unified (no gaps between lobes).
   const nRocks = 7 + Math.floor(Math.random() * 4);
   const placed: { x: number; y: number; r: number }[] = [];
   for (let i = 0; i < nRocks; i++) {
-    const targetSize = 22 + Math.random() * 22;
+    const targetSize = 26 + Math.random() * 22;
     let cx = 0, cy = 0, ok = false;
     for (let attempt = 0; attempt < 30 && !ok; attempt++) {
-      cx = W * (0.05 + 0.9 * Math.random());
-      // Sit just above the crescent floor, not buried in it.
-      cy = floorTop - targetSize * (0.5 + 0.6 * Math.random());
+      cx = W * (0.06 + 0.88 * Math.random());
+      // Sit on the crescent: rock's center is targetSize*0.55 above the
+      // crescent top at this x, so the rock's bottom sinks ~half into
+      // the crescent and rests there visually.
+      const restY = crescentTopAt(cx);
+      cy = restY - targetSize * 0.55;
       ok = true;
       for (const p of placed) {
         const dx = cx - p.x;
         const dy = cy - p.y;
-        if (dx * dx + dy * dy < (p.r + targetSize) * (p.r + targetSize) * 1.6) {
+        if (dx * dx + dy * dy < (p.r + targetSize) * (p.r + targetSize) * 1.3) {
           ok = false; break;
         }
       }
     }
     if (!ok) continue;
     placed.push({ x: cx, y: cy, r: targetSize });
-    const nLobes = 3 + Math.floor(Math.random() * 4);
-    const lobes: ObstacleLobe[] = [];
-    for (let k = 0; k < nLobes; k++) {
-      const ang = (k / nLobes) * Math.PI * 2 + Math.random() * 0.8;
-      const off = targetSize * 0.5 * Math.random();
+
+    // Central lobe + satellites. Satellites' offsets stay below
+    // center.r so they always overlap the center -- no internal gaps.
+    const lobes: ObstacleLobe[] = [{ x: cx, y: cy, r: targetSize }];
+    const nSatellites = 3 + Math.floor(Math.random() * 3);
+    for (let k = 0; k < nSatellites; k++) {
+      const ang = (k / nSatellites) * Math.PI * 2 + Math.random() * 0.6;
+      const off = targetSize * (0.45 + 0.3 * Math.random());
+      const sr = targetSize * (0.55 + 0.25 * Math.random());
       lobes.push({
         x: cx + Math.cos(ang) * off,
         y: cy + Math.sin(ang) * off,
-        r: targetSize * (0.55 + 0.4 * Math.random()),
+        r: sr,
       });
     }
-    // 30/70 mix of slightly varied rock tones so adjacent rocks read distinct.
     const tone = Math.random() < 0.5 ? "#4a3d33" : "#3d3328";
     world.obstacles.push(makeObstacleFromLobes(lobes, tone));
   }

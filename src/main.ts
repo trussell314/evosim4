@@ -289,6 +289,9 @@ function render(): void {
 
   // Static terrain (crescent floor + scattered boulders). Drawn before
   // particles so settled sediment piles read as resting on the rocks.
+  // Fill only -- no stroke, otherwise each individual lobe gets an
+  // outline that bleeds through the union and the rock looks like a
+  // cluster of bubbles instead of one solid silhouette.
   for (const ob of world.obstacles) {
     ctx.fillStyle = ob.color;
     ctx.beginPath();
@@ -297,10 +300,6 @@ function render(): void {
       ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
     }
     ctx.fill();
-    // Subtle rim shading so the obstacle has a visible edge.
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
   }
 
   // Highlight along the surface line.
