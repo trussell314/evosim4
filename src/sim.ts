@@ -352,7 +352,7 @@ export function resetProfile(p: WorldProfile): void {
 }
 
 const ENERGY_PER_THRUST_SEC = 5;
-const ENERGY_PER_INSTRUCTION = 0.005;
+const ENERGY_PER_INSTRUCTION = 0.0005;
 // VM ops per tick per creature. 8 keeps frame cost reasonable at high
 // population. Tests override via world.vmInstrBudget when they need to
 // see the whole default-genome program execute in one step.
@@ -923,10 +923,10 @@ export function createWorld(width: number, height: number): World {
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     extinctionCount: 0,
-    gravity: 220,
+    gravity: 60,
     drag: 0.6,
-    surfaceAmp: 55, surfaceLength: 320, surfacePeriod: 4.5, surfaceDecay: 90,
-    swellAmp: 5, swellLength: 980, swellPeriod: 14, swellDecay: 520,
+    surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
+    swellAmp: 5, swellLength: 600, swellPeriod: 18, swellDecay: 520,
     zStirAmp: 4,
     updraftAmp: 4, updraftLength: 540, updraftPeriod: 28,
     surfaceY: height * SURFACE_Y_FRAC,
