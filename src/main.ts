@@ -663,11 +663,21 @@ function statsLine(): string {
 const speedBtn = document.createElement("button");
 speedBtn.style.cssText =
   "position:fixed;bottom:8px;left:8px;z-index:10;" +
-  "background:rgba(0,0,0,.55);color:#9ee;border:1px solid #356;" +
-  "padding:4px 8px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;" +
-  "cursor:pointer;border-radius:3px;";
+  "padding:6px 10px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "cursor:pointer;border-radius:4px;border:1px solid #6ad;" +
+  "min-width:120px;text-align:left;";
 function refreshSpeedBtn(): void {
-  speedBtn.textContent = speedMode === "realtime" ? "▶ realtime" : "⏩ max";
+  if (speedMode === "realtime") {
+    speedBtn.textContent = "● REALTIME  (click for max)";
+    speedBtn.style.background = "rgba(20,80,120,.85)";
+    speedBtn.style.color = "#cfe7ff";
+    speedBtn.style.borderColor = "#6ad";
+  } else {
+    speedBtn.textContent = "⏩ MAX SPEED  (click for realtime)";
+    speedBtn.style.background = "rgba(180,140,30,.85)";
+    speedBtn.style.color = "#fff8d8";
+    speedBtn.style.borderColor = "#fc4";
+  }
 }
 refreshSpeedBtn();
 speedBtn.addEventListener("click", () => {

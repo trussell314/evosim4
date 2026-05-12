@@ -89,6 +89,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     speciesKey: "",
     division: null,
     contents: [],
+    bonds: [],
   };
   return { ...base, ...overrides };
 }
@@ -1393,6 +1394,45 @@ describe("aeration & surface escape", () => {
     const n0 = w.particles.length;
     step(w, 0.5);
     expect(w.particles.length).toBe(n0);
+  });
+});
+
+describe("adhesion (multicell bonds)", () => {
+  it("ADHERE bonds with the nearest other cell in range", () => {
+    const w = quietWorld();
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.ADHERE, OP.HALT]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    w.creatures.push(a, b);
+    step(w, 1 / 60);
+    expect(a.bonds).toContain(b);
+    expect(b.bonds).toContain(a);
+  });
+  it("bond breaks when cells are pulled far apart", () => {
+    const w = quietWorld();
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    a.bonds.push(b); b.bonds.push(a);
+    w.creatures.push(a, b);
+    // Teleport b far away. Spring pass should snap the bond.
+    b.x = 5000;
+    step(w, 1 / 60);
+    expect(a.bonds).not.toContain(b);
+    expect(b.bonds).not.toContain(a);
+  });
+  it("a dying cell is removed from its partners' bond lists", () => {
+    const w = quietWorld();
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    a.bonds.push(b); b.bonds.push(a);
+    // Force b to die: zero biomass + zero fuel.
+    b.molecules.biomass = 0;
+    b.molecules.glucose = 0;
+    b.molecules.fattyAcid = 0;
+    for (const id of M) b.reserves[id] = 0;
+    b.energy = 0;
+    w.creatures.push(a, b);
+    step(w, 1 / 60);
+    expect(a.bonds.length).toBe(0);
   });
 });
 

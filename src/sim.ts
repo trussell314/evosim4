@@ -98,6 +98,11 @@ export interface Creature {
   // a vacuole inside the predator: no VM, no physics, no chemistry. Their
   // mass still counts toward the predator's total mass (and radius).
   contents: Creature[];
+  // Other creatures this cell is adhered to. Bonds are mutual: each
+  // partner has the other in its bonds[] list. Used by ADHERE to form
+  // multicell colonies / chains / mats. Cleared from BOTH sides on
+  // death or engulf.
+  bonds: Creature[];
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -452,6 +457,15 @@ const PHEROMONE_CELL = 32;
 const PHEROMONE_DECAY_PER_SEC = 0.5;
 const PHEROMONE_DIFFUSE_PER_SEC = 0.6;
 
+// Adhesion: how many partners a single cell can be bonded to and the
+// spring + break distances. Bonds are mutual; the spring rest length
+// is the contact distance (sum of radii). Bonds snap at BOND_BREAK_RATIO
+// times the rest length so a colony being yanked apart eventually
+// disintegrates.
+const MAX_BONDS = 4;
+const BOND_SPRING_K = 8;
+const BOND_BREAK_RATIO = 3.5;
+
 // Temperature chemistry: enzyme-catalyzed reactions and idle metabolism
 // scale with temperature via Q10 -- every 10°C, rates double. T_REF is
 // the "neutral" temperature where the multiplier is 1.0. Clamped so that
@@ -635,6 +649,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     speciesKey: genomeKey(genome),
     division: null,
     contents: [],
+    bonds: [],
   };
   updateCreatureRadius(c);
   return c;
@@ -994,6 +1009,7 @@ function radiusForMass(m: number, density: number): number {
 export function step(world: World, dt: number): void {
   world.t += dt;
   evolvePheromone(world, dt);
+  applyBondSprings(world, dt);
   applyForces(world, dt);
   updateCreatures(world, dt);
   resolveCollisions(world);
@@ -1063,6 +1079,55 @@ function aerate(world: World, dt: number): void {
       material: "gas",
       molecules: mol,
     });
+  }
+}
+
+// Adhesion springs: pull bonded creatures toward their contact distance.
+// Bonds that stretch beyond BOND_BREAK_RATIO * restLen snap.
+//
+// Pair de-duplication: bonds are mutual (each side has the other in its
+// list), so processing each (a, b) without care would apply forces
+// twice. We use a per-tick Set keyed by (smaller-bornAt + larger-bornAt
+// + position) -- creatures don't have a stable numeric ID, but the
+// pair (cs[i], b) where i is the array index works fine because we
+// only process when b's index is > i. Use a precomputed index map.
+function applyBondSprings(world: World, dt: number): void {
+  const cs = world.creatures;
+  // Build a Creature -> index map once. O(N) instead of O(N) per bond.
+  const idxOf = new Map<Creature, number>();
+  for (let i = 0; i < cs.length; i++) idxOf.set(cs[i], i);
+  for (let i = 0; i < cs.length; i++) {
+    const a = cs[i];
+    const bonds = a.bonds;
+    for (let bi = bonds.length - 1; bi >= 0; bi--) {
+      const b = bonds[bi];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      const restLen = a.r + b.r;
+      const breakLen = restLen * BOND_BREAK_RATIO;
+      if (distSq > breakLen * breakLen) {
+        bonds.splice(bi, 1);
+        const j = b.bonds.indexOf(a);
+        if (j >= 0) b.bonds.splice(j, 1);
+        continue;
+      }
+      // Only the lower-indexed side applies the spring.
+      const bj = idxOf.get(b);
+      if (bj === undefined || bj <= i) continue;
+      const dist = Math.sqrt(distSq);
+      if (dist < 1e-6) continue;
+      const stretch = dist - restLen;
+      const f = BOND_SPRING_K * stretch * dt;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const ma = Math.max(0.01, creatureTotalMass(a));
+      const mb = Math.max(0.01, creatureTotalMass(b));
+      a.vx += nx * f / ma;
+      a.vy += ny * f / ma;
+      b.vx -= nx * f / mb;
+      b.vy -= ny * f / mb;
+    }
   }
 }
 
@@ -1242,6 +1307,28 @@ function updateCreatures(world: World, dt: number): void {
       world.pheromone[pheromoneIndex(world, c.x, c.y)] += VM_OUT.emit;
     }
 
+    // Adhesion: bond with the nearest creature in scanRange if not
+    // already bonded. Cap each cell at MAX_BONDS to keep the spring
+    // pass cheap and bounded.
+    if (VM_OUT.adhere && c.bonds.length < MAX_BONDS) {
+      const cs = world.creatures;
+      let nearest = -1;
+      let bestSq = (c.r + 24) * (c.r + 24);
+      forCreaturesNear(c.x, c.y, c.r + 24, (j) => {
+        const other = cs[j];
+        if (other === c || eaten.has(j) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
+        const dx = other.x - c.x;
+        const dy = other.y - c.y;
+        const dsq = dx * dx + dy * dy;
+        if (dsq < bestSq) { bestSq = dsq; nearest = j; }
+      });
+      if (nearest >= 0) {
+        const other = cs[nearest];
+        c.bonds.push(other);
+        other.bonds.push(c);
+      }
+    }
+
     // Advance any in-flight fission. When progress hits 1, the stashed
     // daughter is committed into world.creatures.
     advanceDivision(c, world, dt);
@@ -1396,6 +1483,13 @@ function updateCreatures(world: World, dt: number): void {
       released.push(inner);
     }
     victim.contents.length = 0;
+    // Remove this victim from every bonded partner's list so springs
+    // don't fire against a ghost.
+    for (const partner of victim.bonds) {
+      const k = partner.bonds.indexOf(victim);
+      if (k >= 0) partner.bonds.splice(k, 1);
+    }
+    victim.bonds.length = 0;
     if (r.spill) releaseReservesAsParticles(victim, world);
     noteCreatureDeath(world, victim);
     world.creatures.splice(r.idx, 1);
@@ -1580,6 +1674,7 @@ function tryReproduce(parent: Creature, world: World): void {
     speciesKey: genomeKey(childGenome),
     division: null,
     contents: [],
+    bonds: [],
   };
   updateCreatureRadius(child);
 

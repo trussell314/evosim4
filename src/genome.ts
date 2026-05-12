@@ -69,6 +69,7 @@ export const OP = {
   SENSE_TEMP:    0x5F,   // local water temperature
   EMIT:          0x60,   // pop intensity, add it to the pheromone field here
   SENSE_PHEROMONE: 0x61, // push local pheromone concentration
+  ADHERE:        0x62,   // bond with nearest cell in range; forms colonies
 
   HALT:          0xFF,
 } as const;
@@ -175,6 +176,8 @@ export interface VMOutputs {
   excrete: Float32Array;
   // Pheromone amount this cell wants to emit into the field this tick.
   emit: number;
+  // Cell wants to bond with the nearest creature in range this tick.
+  adhere: boolean;
   reproduce: boolean;
   // Parent's share of mass after fission. Set by REPRODUCE from the
   // stack-top value, clamped to [0.1, 0.9]; out-of-range / NaN / empty
@@ -195,7 +198,7 @@ export function newOutputs(): VMOutputs {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
     reproduce: false, reproduceFraction: 0.5,
-    predate: false, engulf: false, emit: 0,
+    predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
     instructions: 0,
   };
@@ -218,6 +221,7 @@ export function runTick(
   out.predate = false;
   out.engulf = false;
   out.emit = 0;
+  out.adhere = false;
   out.ingestMaterials.fill(0);
   out.instructions = 0;
   const L = genome.length;
@@ -295,6 +299,7 @@ export function runTick(
       case OP.SENSE_TEMP:     vmPush(stack, sensors.temp); break;
       case OP.SENSE_PHEROMONE: vmPush(stack, sensors.pheromone); break;
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
+      case OP.ADHERE:         out.adhere = true; break;
 
       case OP.THRUST: {
         const ay = vmPop(stack);
