@@ -28,6 +28,11 @@ hudToggle.textContent = "[+]";
 hudToggle.style.cssText = "padding:0 4px;";
 hudBar.appendChild(hudStats);
 hudBar.appendChild(hudToggle);
+// Per-frame timing, always visible (even when the inspector body is
+// collapsed) so render/sim budget is glanceable while iterating.
+const hudTimings = document.createElement("div");
+hudTimings.style.cssText = "padding:0 8px 2px;color:#9ee;font:inherit;";
+hudTimings.textContent = "r=--ms  s=--ms";
 const inspector = document.createElement("pre");
 inspector.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;font:inherit;";
@@ -42,6 +47,7 @@ const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;font:inherit;";
 hud.appendChild(hudBar);
+hud.appendChild(hudTimings);
 hud.appendChild(inspector);
 hud.appendChild(disasmHeader);
 hud.appendChild(disasmBody);
@@ -1148,8 +1154,9 @@ function updateInspector(): void {
   // fps + sim/wall ratio + elapsed sim time + species count there.
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms  ` +
     `t=${formatAge(world.t)}  sp=${world.species.size}`;
+  hudTimings.textContent =
+    `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // If the selected cell has died or been eaten, fall back to the first
   // live creature so the inspector shows something useful instead of
   // silently going blank.
