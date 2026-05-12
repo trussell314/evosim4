@@ -1123,12 +1123,14 @@ function updateCreatures(world: World, dt: number): void {
     // create a new species -- only inheritance does that.
     const age = world.t - c.bornAt;
     // Clamp at 0.1/tick (10%) so even very old cells don't churn their
-    // entire genome every second. Above the saturation point, biology
-    // would be other failure modes (toxicity, biomass collapse) anyway.
+    // entire genome every second.
     const mutP = Math.min(0.1, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
     if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
-      c.color = genomeColor(c.genome, world.anchorGenome);
+      // Note: c.color is NOT updated on somatic drift. Cell keeps its
+      // species' visual identity so phylogeny lane color === body color
+      // across the population. Inheritance through fission is what
+      // produces a new lineage and a new color.
     }
 
     populateSensors(c, world);

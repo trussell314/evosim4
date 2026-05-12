@@ -434,7 +434,7 @@ function updateInspector(): void {
   refreshActiveDisasm();
   const c = world.creatures[selectedIdx];
   if (!c) {
-    inspector.textContent = `pop=0  particles=${world.particles.length}`;
+    inspector.textContent = `${statsLine()}\npop=0  particles=${world.particles.length}`;
     return;
   }
   let reserveMass = 0;
@@ -450,6 +450,7 @@ function updateInspector(): void {
   const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
   const age = formatAge(Math.max(0, world.t - c.bornAt));
   inspector.textContent =
+    `${statsLine()}\n` +
     `pop=${world.creatures.length}  parts=${world.particles.length}/${world.particleTarget}  extinct=${world.extinctionCount}  (click a cell)\n` +
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
@@ -474,6 +475,34 @@ let speedMode: SpeedMode = "realtime";
 const FIXED_DT = 1 / 60;
 const MAX_BUDGET_MS = 10;
 
+// Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
+// short window so the numbers don't flicker.
+let perfWallStart = performance.now();
+let perfSimSecs = 0;
+let perfFrames = 0;
+let perfFps = 0;
+let perfSimRate = 1;
+function updatePerfStats(simAdvanced: number): void {
+  perfSimSecs += simAdvanced;
+  perfFrames++;
+  const elapsed = (performance.now() - perfWallStart) / 1000;
+  if (elapsed > 0.5) {
+    perfFps = perfFrames / elapsed;
+    perfSimRate = perfSimSecs / elapsed;
+    perfWallStart = performance.now();
+    perfSimSecs = 0;
+    perfFrames = 0;
+  }
+}
+
+function statsLine(): string {
+  // fps = frames/sec rendered; sim = how many sim-seconds advance per
+  // wall-second (1x in realtime; usually 5..30x in max-speed). t = the
+  // world's elapsed sim-time. Helps tell whether the bottleneck is
+  // render or sim, and how far ahead "max" is running.
+  return `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${world.t.toFixed(0)}s  species=${world.species.size}`;
+}
+
 const speedBtn = document.createElement("button");
 speedBtn.style.cssText =
   "position:fixed;bottom:8px;left:8px;z-index:10;" +
@@ -492,17 +521,18 @@ document.body.appendChild(speedBtn);
 
 let last = performance.now();
 function frame(now: number): void {
+  let advanced = 0;
   if (speedMode === "max") {
-    // Burn through fixed-dt steps for up to MAX_BUDGET_MS so the page
-    // stays interactive while the sim races ahead.
     const start = performance.now();
-    do { step(world, FIXED_DT); } while (performance.now() - start < MAX_BUDGET_MS);
+    do { step(world, FIXED_DT); advanced += FIXED_DT; } while (performance.now() - start < MAX_BUDGET_MS);
     last = now;
   } else {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     step(world, dt);
+    advanced = dt;
   }
+  updatePerfStats(advanced);
   render();
   updateInspector();
   requestAnimationFrame(frame);
