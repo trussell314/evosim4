@@ -16,11 +16,17 @@ hud.style.cssText =
   "max-height:80vh;overflow:hidden;";
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
-  "display:flex;justify-content:flex-end;padding:2px 4px;cursor:pointer;" +
-  "user-select:none;color:#9ee;";
+  "display:flex;justify-content:space-between;align-items:center;padding:2px 4px;" +
+  "cursor:pointer;user-select:none;color:#9ee;gap:8px;";
+// Live stats shown on the bar even when the HUD body is collapsed.
+// Updated by updateInspector() each frame.
+const hudStats = document.createElement("span");
+hudStats.style.cssText = "padding:0 4px;font:inherit;";
+hudStats.textContent = "fps=--  sim=--x  t=0s";
 const hudToggle = document.createElement("span");
 hudToggle.textContent = "[+]";
 hudToggle.style.cssText = "padding:0 4px;";
+hudBar.appendChild(hudStats);
 hudBar.appendChild(hudToggle);
 const inspector = document.createElement("pre");
 inspector.style.cssText =
@@ -1018,6 +1024,11 @@ function formatAge(sec: number): string {
 
 // Best-effort plain-English summary of a cell, inferred from genome ops it
 function updateInspector(): void {
+  // Bar stays visible whether the HUD body is open or collapsed; show
+  // fps + sim/wall ratio + elapsed sim time + species count there.
+  hudStats.textContent =
+    `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
+    `t=${formatAge(world.t)}  sp=${world.species.size}`;
   // If the selected cell has died or been eaten, fall back to the first
   // live creature so the inspector shows something useful instead of
   // silently going blank.
