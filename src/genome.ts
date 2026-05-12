@@ -332,6 +332,140 @@ export function runTick(
   }
 }
 
+// Static analysis of a genome: which actions it can perform, which
+// inputs it reads, whether it has any branching, plus a one-paragraph
+// human-readable verdict. Pure walk over the bytes -- no execution,
+// no per-tick cost. Used by the inspector to give a plain-English
+// answer to "what does this cell actually do?".
+export interface GenomeSummary {
+  totalBytes: number;
+  executableOps: number;
+  unknownBytes: number;
+  estAtpPerTick: number;
+  hasJump: boolean;
+  hasComparison: boolean;
+  conditional: boolean;
+  thrust: boolean;
+  turn: boolean;
+  ingestMaterials: number[];
+  excreteMaterials: number[];
+  reproduce: boolean;
+  predate: boolean;
+  engulf: boolean;
+  emit: boolean;
+  adhere: boolean;
+  sensors: string[];
+  capabilities: string[];
+  verdict: string;
+}
+
+export function summarizeGenome(
+  genome: Uint8Array,
+  materialNames?: ReadonlyArray<string>,
+  opts?: { instrBudget?: number; atpPerInstr?: number },
+): GenomeSummary {
+  const ingestMaterials: number[] = [];
+  const excreteMaterials: number[] = [];
+  const sensors: string[] = [];
+  const seenSensor = new Set<string>();
+  let thrust = false, turn = false, reproduce = false;
+  let predate = false, engulf = false, emit = false, adhere = false;
+  let hasJump = false, hasCmp = false;
+  let executableOps = 0, unknownBytes = 0;
+
+  let i = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    const operandLen = OPERANDS[op];
+    if (NAME_BY_OP[op] === undefined) {
+      unknownBytes++;
+      i += 1;
+      continue;
+    }
+    executableOps++;
+    const operand = operandLen === 1 ? genome[(i + 1) % genome.length] : 0;
+    switch (op) {
+      case OP.THRUST:    thrust = true; break;
+      case OP.TURN:      turn = true; break;
+      case OP.REPRODUCE: reproduce = true; break;
+      case OP.PREDATE:   predate = true; break;
+      case OP.ENGULF:    engulf = true; break;
+      case OP.EMIT:      emit = true; break;
+      case OP.ADHERE:    adhere = true; break;
+      case OP.INGEST: {
+        const mat = m6(operand);
+        if (!ingestMaterials.includes(mat)) ingestMaterials.push(mat);
+        break;
+      }
+      case OP.EXCRETE: {
+        const mat = m6(operand);
+        if (!excreteMaterials.includes(mat)) excreteMaterials.push(mat);
+        break;
+      }
+      case OP.JZ: case OP.JNZ: hasJump = true; break;
+      case OP.LT: case OP.GT: case OP.EQ:
+      case OP.NOT: case OP.AND: case OP.OR:
+        hasCmp = true; break;
+      case OP.SENSE_GRAD_X: case OP.SENSE_GRAD_Y: case OP.SENSE_DENSITY:
+      case OP.SENSE_LIGHT: case OP.SENSE_TEMP: case OP.SENSE_PHEROMONE:
+      case OP.SENSE_WALL_X: case OP.SENSE_WALL_Y:
+      case OP.SENSE_HEAD_X: case OP.SENSE_HEAD_Y:
+      case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
+      case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS:
+      case OP.SELF_VX: case OP.SELF_VY: case OP.SELF_MASS:
+      case OP.SELF_BIOMASS: case OP.SELF_AGE: case OP.SELF_ENERGY:
+      case OP.SELF_GLUCOSE: case OP.SELF_O2: case OP.SELF_FATTY:
+      case OP.SELF_AMINO: case OP.SELF_WASTE: case OP.SELF_RESERVE: {
+        const name = NAME_BY_OP[op].toLowerCase();
+        if (!seenSensor.has(name)) { seenSensor.add(name); sensors.push(name); }
+        break;
+      }
+    }
+    i += 1 + operandLen;
+  }
+
+  const conditional = hasJump && hasCmp;
+  const matName = (idx: number) => materialNames ? materialNames[idx] : String(idx);
+  const capabilities: string[] = [];
+  if (thrust || turn) capabilities.push("moves");
+  if (ingestMaterials.length > 0) {
+    capabilities.push("eats " + ingestMaterials.map(matName).join("/"));
+  }
+  if (reproduce) capabilities.push(conditional ? "reproduces (gated)" : "reproduces (every tick)");
+  if (predate || engulf) capabilities.push("preys on cells");
+  if (emit) capabilities.push("emits pheromone");
+  if (adhere) capabilities.push("forms colonies");
+  if (excreteMaterials.length > 0) {
+    capabilities.push("excretes " + excreteMaterials.map(matName).join("/"));
+  }
+  if (capabilities.length === 0) capabilities.push("inert (no actions)");
+
+  const instrBudget = opts?.instrBudget ?? 32;
+  const atpPerInstr = opts?.atpPerInstr ?? 0.005;
+  const opsPerTick = Math.min(instrBudget, executableOps + unknownBytes);
+  const estAtpPerTick = opsPerTick * atpPerInstr;
+
+  const lines: string[] = [];
+  lines.push(`bytes=${genome.length}  ops=${executableOps}  junk=${unknownBytes}  ~${estAtpPerTick.toFixed(2)} ATP/tick`);
+  lines.push("can: " + capabilities.join(", "));
+  lines.push("reads: " + (sensors.length > 0 ? sensors.join(", ") : "nothing"));
+  if (!conditional && (thrust || reproduce || ingestMaterials.length > 0 || predate || engulf)) {
+    lines.push("note: no JZ/JNZ + comparison -- actions fire every tick (reflexive)");
+  }
+  if (capabilities.length === 1 && capabilities[0] === "inert (no actions)") {
+    lines.push("note: cell will starve (no ingestion, paying ATP per tick)");
+  }
+
+  return {
+    totalBytes: genome.length, executableOps, unknownBytes,
+    estAtpPerTick, hasJump, hasComparison: hasCmp, conditional,
+    thrust, turn, ingestMaterials, excreteMaterials,
+    reproduce, predate, engulf, emit, adhere,
+    sensors, capabilities,
+    verdict: lines.join("\n"),
+  };
+}
+
 export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<string>): string {
   const lines: string[] = [];
   let i = 0;

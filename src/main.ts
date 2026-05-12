@@ -1,6 +1,6 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, makeProfile, type Particle, type Creature, type Species } from "./sim";
-import { disassemble } from "./genome";
+import { disassemble, summarizeGenome } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -45,8 +45,15 @@ const world = createWorld(window.innerWidth, window.innerHeight);
 // totally different creature on the next tick.
 let selectedCell: Creature | null = null;
 let activeDisasm = "";
+let activeSummary = "";
 function refreshActiveDisasm(): void {
-  activeDisasm = selectedCell ? disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED) : "";
+  if (selectedCell) {
+    activeDisasm = disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED);
+    activeSummary = summarizeGenome(selectedCell.genome, MATERIAL_IDS_ORDERED).verdict;
+  } else {
+    activeDisasm = "";
+    activeSummary = "";
+  }
 }
 refreshActiveDisasm();
 
@@ -717,6 +724,8 @@ function updateInspector(): void {
     `stomach: ${reserves}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
+    "—\n" +
+    activeSummary + "\n" +
     "—\n" +
     activeDisasm;
 }
