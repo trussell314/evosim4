@@ -167,7 +167,7 @@ canvas.addEventListener("mouseleave", () => {
 // heavy blur, low alpha, and shift toward the water-color background --
 // classic atmospheric perspective. Eight buckets give a smooth gradient.
 const N_BUCKETS = 8;
-const BLURS = [0, 0.6, 1.4, 2.4, 3.4, 4.4, 5.4, 6.4];
+const BLURS = [0, 0.3, 0.7, 1.2, 1.7, 2.2, 2.7, 3.2];
 const ALPHAS = [1.0, 0.92, 0.82, 0.70, 0.58, 0.46, 0.36, 0.28];
 // One sub-bucket per (depth bucket, material) so the renderer can issue
 // a single beginPath + many arcs + single fill per group. With 12k+
