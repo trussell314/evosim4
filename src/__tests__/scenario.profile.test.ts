@@ -8,11 +8,11 @@ import { createWorld, step, makeProfile } from "../sim";
 test.skip("profile under load", () => {
   const FIXED_DT = 1 / 60;
   const w = createWorld(800, 600);
-  const WARMUP_TICKS = 12_000; // 200 sim-sec
+  const WARMUP_TICKS = 3_000; // 50 sim-sec
   for (let i = 0; i < WARMUP_TICKS; i++) step(w, FIXED_DT);
 
   w.profile = makeProfile();
-  const MEASURE_TICKS = 3_000; // 50 sim-sec
+  const MEASURE_TICKS = 1_500; // 25 sim-sec
   const t0 = Date.now();
   for (let i = 0; i < MEASURE_TICKS; i++) step(w, FIXED_DT);
   const wallMs = Date.now() - t0;
