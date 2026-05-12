@@ -346,7 +346,7 @@ const ENERGY_PER_THRUST_SEC = 5;
 const ENERGY_PER_INSTRUCTION = 0.005;
 const VM_INSTR_BUDGET = 32;
 
-const MASS_PER_GENOME_BYTE = 1.0;
+const MASS_PER_GENOME_BYTE = 0.5;
 const PARTICLE_DENSITY_PER_AREA = 6188 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 // Hard cap on the per-second spawn rate. Without this the world tries
@@ -354,7 +354,7 @@ const PARTICLE_SPAWN_RATIO = 90 / 550;
 // which looks like a wall of stuff falling at startup. Refill after
 // eating still works because pop * eat-rate stays well under this cap
 // for normal populations (~20 cells eating ~3/sec = 60/sec).
-const MAX_SPAWN_PER_SEC = 60;
+const MAX_SPAWN_PER_SEC = 200;
 
 // Recompute every world field that scales with width/height. Called on
 // resize so a window expansion actually fills the new space with food
@@ -450,8 +450,8 @@ const THRUST_MASS_REF = 200;
 // biomass to back it up bleeds ATP and starves itself. The per-mass term
 // reflects that splitting a big cell takes more reorganization than a small
 // one.
-const REPRODUCE_ATTEMPT_ATP_BASE = 1;
-const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.025;
+const REPRODUCE_ATTEMPT_ATP_BASE = 0.4;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
@@ -961,11 +961,11 @@ function makeCreature(x: number, y: number, z: number): Creature {
   // amino-acid / minerals / fatty-acid for biosynthesis and movement,
   // and biomass to give it physical body.
   molecules.adp = 50;
-  molecules.glucose = 10;
-  molecules.fattyAcid = 5;
-  molecules.aminoAcid = 5;
-  molecules.o2 = 10;
-  molecules.minerals = 5;
+  molecules.glucose = 20;
+  molecules.fattyAcid = 15;
+  molecules.aminoAcid = 15;
+  molecules.o2 = 15;
+  molecules.minerals = 15;
   molecules.biomass = 30;
   const genome = makeDefaultGenome();
   const c: Creature = {
