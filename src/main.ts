@@ -628,7 +628,7 @@ function updateInspector(): void {
 // so the sim advances as fast as the CPU allows while keeping the page
 // responsive.
 type SpeedMode = "realtime" | "max";
-let speedMode: SpeedMode = "realtime";
+let speedMode: SpeedMode = "max";
 const FIXED_DT = 1 / 60;
 const MAX_BUDGET_MS = 10;
 
