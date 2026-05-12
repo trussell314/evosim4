@@ -1148,6 +1148,7 @@ function updateInspector(): void {
   // fps + sim/wall ratio + elapsed sim time + species count there.
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
+    `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms  ` +
     `t=${formatAge(world.t)}  sp=${world.species.size}`;
   // If the selected cell has died or been eaten, fall back to the first
   // live creature so the inspector shows something useful instead of
@@ -1208,16 +1209,29 @@ let perfSimSecs = 0;
 let perfFrames = 0;
 let perfFps = 0;
 let perfSimRate = 1;
-function updatePerfStats(simAdvanced: number): void {
+// Per-frame timing for diagnosing where the 16.6ms budget goes.
+// renderMs + simMs + idle ≈ wall-time per frame; the breakdown tells
+// you whether render, sim, or browser pacing is the bottleneck.
+let perfRenderMsAcc = 0;
+let perfSimMsAcc = 0;
+let perfRenderMs = 0;
+let perfSimMs = 0;
+function updatePerfStats(simAdvanced: number, renderMs: number, simMs: number): void {
   perfSimSecs += simAdvanced;
+  perfRenderMsAcc += renderMs;
+  perfSimMsAcc += simMs;
   perfFrames++;
   const elapsed = (performance.now() - perfWallStart) / 1000;
   if (elapsed > 0.5) {
     perfFps = perfFrames / elapsed;
     perfSimRate = perfSimSecs / elapsed;
+    perfRenderMs = perfRenderMsAcc / perfFrames;
+    perfSimMs = perfSimMsAcc / perfFrames;
     perfWallStart = performance.now();
     perfSimSecs = 0;
     perfFrames = 0;
+    perfRenderMsAcc = 0;
+    perfSimMsAcc = 0;
   }
 }
 
@@ -1246,6 +1260,7 @@ const FRAME_OVERHEAD_FOR_SIM_MS = 3;
 const simChannel = new MessageChannel();
 let lastFrameStart = performance.now();
 let advancedThisFrame = 0;
+let simMsThisFrame = 0;
 // Worst recent step() duration in ms, with slow decay. Used to decide
 // whether *another* step would fit before vsync. Without this, the
 // loop checks the deadline *before* each step but a step started just
@@ -1273,6 +1288,7 @@ simChannel.port1.onmessage = () => {
     step(world, FIXED_DT);
     advancedThisFrame += FIXED_DT;
     const elapsed = performance.now() - t0;
+    simMsThisFrame += elapsed;
     // Track the worst recent step time but decay slowly so transient
     // spikes (GC, sudden population surge) are remembered for a few
     // frames and then forgotten.
@@ -1284,11 +1300,16 @@ simChannel.port2.postMessage(null);
 
 function frame(): void {
   lastFrameStart = performance.now();
-  updatePerfStats(advancedThisFrame);
+  const simMsLast = simMsThisFrame;
+  simMsThisFrame = 0;
+  const advanced = advancedThisFrame;
   advancedThisFrame = 0;
+  const tBeforeRender = performance.now();
   render();
   updateInspector();
   maybeAnalyzeGenomes();
+  const renderMs = performance.now() - tBeforeRender;
+  updatePerfStats(advanced, renderMs, simMsLast);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
