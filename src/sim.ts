@@ -559,7 +559,10 @@ export function createWorld(width: number, height: number): World {
   };
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
-  seedParticles(world, Math.round(particleTarget * 0.9));
+  // World starts empty: just water and the seed cell. Particles trickle
+  // in via replenishParticles() at world.particleSpawnRate until the
+  // target is reached, so the simulation has a visible "bootstrap"
+  // period instead of dumping thousands of particles all at once.
   const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
   first.bornAt = 0;
   // First cell defines the root: paint it white and use its genome as the

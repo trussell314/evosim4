@@ -123,7 +123,9 @@ afterEach(() => {
 describe("createWorld", () => {
   it("populated world with ecology fields", () => {
     const w = createWorld(800, 600);
-    expect(w.particles.length).toBeGreaterThan(0);
+    // World starts empty -- particles trickle in via replenishParticles
+    // at particleSpawnRate. Just the seed cell exists at t=0.
+    expect(w.particles.length).toBe(0);
     expect(w.creatures.length).toBe(1);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
