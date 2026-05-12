@@ -113,24 +113,47 @@ const PHYLO_WINDOW_SEC = 180;
 const visibleSpecies: Species[] = [];
 const bioByKey = new Map<string, number>();
 
-// Genome-analysis console: right-side sidebar. Canvas shrinks to make
-// room so this panel never overlaps the world. New rows are prepended
-// once per ANALYSIS_INTERVAL_SEC of sim time.
+// Genome-analysis console: right-side sidebar. Collapsible -- when
+// minimized only a thin tab shows; expanded, the canvas shrinks to
+// leave room so the panel doesn't overlap the world.
 const ANALYSIS_PANEL_W = 320;
+const ANALYSIS_PANEL_W_MIN = 26;
+let analysisMinimized = true;
 const analysisPanel = document.createElement("div");
 analysisPanel.style.cssText =
-  "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W + "px;" +
+  "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-left:1px solid #1a3340;" +
   "font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;" +
-  "overflow-y:auto;padding:8px 10px;box-sizing:border-box;z-index:10;";
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
 const analysisHeader = document.createElement("div");
-analysisHeader.style.cssText = "font-weight:bold;margin-bottom:6px;color:#9ee;";
-analysisHeader.textContent = "genome analysis (every 60 sim-sec)";
+analysisHeader.style.cssText =
+  "display:flex;align-items:center;justify-content:space-between;gap:6px;" +
+  "padding:6px 8px;cursor:pointer;user-select:none;border-bottom:1px solid #1a3340;";
+const analysisTitle = document.createElement("span");
+analysisTitle.textContent = "genome analysis";
+analysisTitle.style.cssText = "font-weight:bold;font-size:11px;";
+const analysisToggle = document.createElement("span");
+analysisToggle.textContent = "[+]";
+analysisToggle.style.cssText = "padding:0 4px;";
+analysisHeader.appendChild(analysisTitle);
+analysisHeader.appendChild(analysisToggle);
 const analysisBody = document.createElement("div");
-analysisBody.style.cssText = "white-space:pre-wrap;";
+analysisBody.style.cssText =
+  "white-space:pre-wrap;padding:8px 10px;overflow-y:auto;display:none;" +
+  "max-height:calc(100vh - 36px);";
 analysisPanel.appendChild(analysisHeader);
 analysisPanel.appendChild(analysisBody);
 root.appendChild(analysisPanel);
+// When minimized, hide the title text so just the [+] sits in the tab.
+analysisTitle.style.display = "none";
+analysisHeader.addEventListener("click", () => {
+  analysisMinimized = !analysisMinimized;
+  analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
+  analysisBody.style.display = analysisMinimized ? "none" : "";
+  analysisToggle.textContent = analysisMinimized ? "[+]" : "[–]";
+  analysisTitle.style.display = analysisMinimized ? "none" : "";
+  resize();
+});
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -139,11 +162,11 @@ function resize(): void {
   const dpr = window.devicePixelRatio || 1;
   const fullW = vv ? vv.width : window.innerWidth;
   const h = vv ? vv.height : window.innerHeight;
-  // Reserve right-side strip for the analysis console so the canvas
-  // doesn't render under it. On very narrow screens we fall back to
-  // letting the canvas use full width (the panel still floats on top
-  // there; nothing we can do without a different layout).
-  const w = fullW > ANALYSIS_PANEL_W * 2 ? fullW - ANALYSIS_PANEL_W : fullW;
+  // Reserve right-side strip for the analysis console (current width
+  // depends on whether it's expanded or just a tab) so the canvas
+  // doesn't render under it.
+  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
+  const w = fullW > panelW * 2 ? fullW - panelW : fullW;
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
   canvas.width = Math.floor(w * dpr);
