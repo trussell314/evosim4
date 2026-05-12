@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, resizeWorld, type Particle, type Creature } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, genomeKey, surfaceYAt, resizeWorld, temperatureAt, type Particle, type Creature } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -245,7 +245,91 @@ function render(): void {
     drawCreature(world.creatures[i], i === selectedIdx);
   }
 
+  drawHeatmap();
   drawPhylogeny();
+}
+
+// Optional field overlay. Cycles off -> temp -> density via the `H` key.
+// Drawn on top of particles + cells but below the phylogeny strip so it
+// reads as an atmospheric tint rather than blocking the bodies.
+type HeatmapMode = "off" | "temp" | "density";
+let heatmapMode: HeatmapMode = "off";
+const HEATMAP_CELL = 32;
+const HEATMAP_ALPHA = 0.28;
+window.addEventListener("keydown", (e) => {
+  if (e.key === "h" || e.key === "H") {
+    heatmapMode = heatmapMode === "off" ? "temp" : heatmapMode === "temp" ? "density" : "off";
+  }
+});
+function drawHeatmap(): void {
+  if (heatmapMode === "off") return;
+  const { width, height, surfaceY } = world;
+  const cell = HEATMAP_CELL;
+  const cols = Math.ceil(width / cell);
+  const rows = Math.ceil((height - surfaceY) / cell);
+  ctx.globalAlpha = HEATMAP_ALPHA;
+  if (heatmapMode === "temp") {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * cell;
+        const y = surfaceY + r * cell;
+        const t = temperatureAt(world, x + cell / 2, y + cell / 2);
+        ctx.fillStyle = heatColorTemp(t);
+        ctx.fillRect(x, y, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+    ctx.fillText("heatmap: temperature (cold blue → warm red, H toggles)", 8, surfaceY + 14);
+    return;
+  }
+  // Density: count particles per heatmap cell.
+  const counts = new Uint16Array(cols * rows);
+  for (const p of world.particles) {
+    const cx = Math.floor(p.x / cell);
+    const cy = Math.floor((p.y - surfaceY) / cell);
+    if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+    counts[cy * cols + cx]++;
+  }
+  let maxC = 1;
+  for (let i = 0; i < counts.length; i++) if (counts[i] > maxC) maxC = counts[i];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const n = counts[r * cols + c];
+      if (n === 0) continue;
+      ctx.fillStyle = heatColorDensity(n / maxC);
+      ctx.fillRect(c * cell, surfaceY + r * cell, cell, cell);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "rgba(255,255,255,0.65)";
+  ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  ctx.fillText(`heatmap: particle density (max ${maxC}/cell, H toggles)`, 8, surfaceY + 14);
+}
+
+function heatColorTemp(t: number): string {
+  // 12 °C → deep blue, 20 °C → green-ish, 28 °C → warm red.
+  const x = Math.max(0, Math.min(1, (t - 10) / 20));
+  if (x < 0.5) {
+    const k = x / 0.5;
+    const r = Math.round(20 + 60 * k);
+    const g = Math.round(60 + 140 * k);
+    const b = Math.round(200 - 80 * k);
+    return `rgb(${r},${g},${b})`;
+  }
+  const k = (x - 0.5) / 0.5;
+  const r = Math.round(80 + 175 * k);
+  const g = Math.round(200 - 120 * k);
+  const b = Math.round(120 - 100 * k);
+  return `rgb(${r},${g},${b})`;
+}
+function heatColorDensity(x: number): string {
+  // Gradient from cool dark to bright yellow as density rises.
+  const r = Math.round(40 + 215 * x);
+  const g = Math.round(40 + 180 * x);
+  const b = Math.round(80 - 60 * x);
+  return `rgb(${r},${g},${b})`;
 }
 
 function drawPhylogeny(): void {
