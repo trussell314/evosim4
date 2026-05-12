@@ -1065,7 +1065,6 @@ function updateInspector(): void {
 // just does fewer ticks per render; render still hits 60fps.
 const FIXED_DT = 1 / 60;
 const TARGET_FRAME_MS = 16.6;
-const FRAME_OVERHEAD_MS = 2;
 
 // Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
 // short window so the numbers don't flicker.
@@ -1100,29 +1099,39 @@ function statsLine(): string {
   return s;
 }
 
-// Exponentially smoothed render+inspector cost (in ms). The sim budget
-// adapts to this so total per-frame work stays under TARGET_FRAME_MS.
-let renderCostMs = 4;
-function frame(): void {
-  const start = performance.now();
-  // Render-priority pacing: render always gets the rAF tick. Sim runs
-  // only if there's measurable slack after render's recent cost. If
-  // render is heavy or sim steps are slow, sim does zero steps this
-  // frame (world pauses for a tick) rather than blowing the 16.6ms
-  // budget and dropping the rAF lock.
-  const simBudget = TARGET_FRAME_MS - FRAME_OVERHEAD_MS - renderCostMs;
-  const simDeadline = start + simBudget;
-  let advanced = 0;
-  while (performance.now() < simDeadline) {
+// Sim and render are decoupled. Render is on rAF (60fps lock).
+// Sim runs on a MessageChannel ping-pong, which the browser
+// schedules as a macrotask -- it gets interleaved between rAF
+// ticks instead of blocking them. Each pong runs a short slice
+// of sim work and posts another. Even on slow hardware render
+// hits vsync; sim falls behind realtime instead of pulling
+// render down with it.
+const SIM_SLICE_MS = 6;
+const FRAME_OVERHEAD_FOR_SIM_MS = 3;
+const simChannel = new MessageChannel();
+let lastFrameStart = performance.now();
+let advancedThisFrame = 0;
+simChannel.port1.onmessage = () => {
+  // Yield often: only step until the per-slice deadline. Browser
+  // will get the next rAF in before scheduling our next port message
+  // unless we exceed slice or hit the rAF deadline.
+  const sliceDeadline = performance.now() + SIM_SLICE_MS;
+  // Also stop if we've eaten too much of the current rAF interval.
+  const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
+  while (performance.now() < sliceDeadline && performance.now() < frameDeadline) {
     step(world, FIXED_DT);
-    advanced += FIXED_DT;
+    advancedThisFrame += FIXED_DT;
   }
-  updatePerfStats(advanced);
-  const renderStart = performance.now();
+  simChannel.port2.postMessage(null);
+};
+simChannel.port2.postMessage(null);
+
+function frame(): void {
+  lastFrameStart = performance.now();
+  updatePerfStats(advancedThisFrame);
+  advancedThisFrame = 0;
   render();
   updateInspector();
-  const cost = performance.now() - renderStart;
-  renderCostMs = renderCostMs * 0.85 + cost * 0.15;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
