@@ -2644,11 +2644,10 @@ function updateCreatures(world: World, dt: number): void {
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(other);
-          // Predated cell is absorbed entirely -- no vacuole, no later
-          // release path -- so free its store slot now. Engulfed prey
-          // (above) keeps its slot since it stays alive inside the
-          // predator's contents[] and may emerge if the predator dies.
-          other.store.release(other.idx);
+          // Note: slot release is deferred to the death pass so the
+          // creature stays readable for the rest of this tick. Other
+          // cells' sensor scans iterate the pre-tick CREATURE_BUCKETS
+          // and could otherwise pick up a zeroed-out ghost slot here.
           ingested = true;
           return true;
         });
@@ -2702,6 +2701,15 @@ function updateCreatures(world: World, dt: number): void {
   // splicing (which is O(N) each).
   if (dead.length > 0 || eaten.size > 0) {
     const spillSet = new Set<Creature>(dead);
+    // Engulfed (vs predated) prey is identified by being in some live
+    // predator's contents[]. Engulfed prey keeps its slot alive (it
+    // may emerge when the predator dies); predated prey gets absorbed
+    // entirely and its slot is freed.
+    const inSomeContents = new Set<Creature>();
+    for (const c of world.creatures) {
+      if (spillSet.has(c) || eaten.has(c)) continue;
+      for (const inner of c.contents) inSomeContents.add(inner);
+    }
     const survivors: Creature[] = [];
     const released: Creature[] = [];
     for (const c of world.creatures) {
@@ -2728,12 +2736,14 @@ function updateCreatures(world: World, dt: number): void {
         }
         if (spillSet.has(c)) {
           releaseReservesAsParticles(c, world);
-          // Free the slot only for spilled (truly dead) creatures.
-          // Engulfed prey keep their slot alive inside the predator
-          // and may be released back to free water when the predator
-          // dies later; their data is still read in the meantime.
+          c.store.release(c.idx);
+        } else if (eaten.has(c) && !inSomeContents.has(c)) {
+          // Predated -- absorbed entirely, no vacuole, slot is free.
           c.store.release(c.idx);
         }
+        // Engulfed cells (in eaten AND in some predator's contents)
+        // keep their slot alive until that predator dies and pushes
+        // them back to world.creatures via released[].
         noteCreatureDeath(world, c);
       } else {
         survivors.push(c);
