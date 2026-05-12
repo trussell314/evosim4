@@ -49,6 +49,9 @@ function quietWorld(): World {
     aerationRate: 0,
     tempSurface: 20, tempBottom: 20, tempPatchAmp: 0,
     tempPatchLength: 400, tempPatchPeriod: 40,
+    pheromone: new Float32Array(25 * 19),
+    pheromoneCols: 25,
+    pheromoneRows: 19,
     restitution: 0.2,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -1390,6 +1393,29 @@ describe("aeration & surface escape", () => {
     const n0 = w.particles.length;
     step(w, 0.5);
     expect(w.particles.length).toBe(n0);
+  });
+});
+
+describe("pheromone field", () => {
+  it("EMIT deposits into the field at the cell's position; SENSE reads it", () => {
+    const w = quietWorld();
+    const c = makeCreature({
+      x: 100, y: 100, energy: 50,
+      genome: new Uint8Array([OP.PUSH8, 30, OP.EMIT, OP.HALT]),
+    });
+    w.creatures.push(c);
+    step(w, 1 / 60);
+    // After step's evolvePheromone runs before updateCreatures, the
+    // freshly emitted value is in the field but not yet decayed/diffused.
+    // The cell deposits at (100,100) -> cell (3, 3) in the 32px grid.
+    const idx = 3 * w.pheromoneCols + 3;
+    expect(w.pheromone[idx]).toBeGreaterThan(0);
+  });
+  it("field decays toward zero with no emissions", () => {
+    const w = quietWorld();
+    w.pheromone[0] = 100;
+    for (let i = 0; i < 600; i++) step(w, 1 / 60);
+    expect(w.pheromone[0]).toBeLessThan(1);
   });
 });
 

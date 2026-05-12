@@ -67,6 +67,8 @@ export const OP = {
   SENSE_HEAD_Y:  0x5D,
   INGEST:        0x5E,   // absorb a particle in radius (was implicit before)
   SENSE_TEMP:    0x5F,   // local water temperature
+  EMIT:          0x60,   // pop intensity, add it to the pheromone field here
+  SENSE_PHEROMONE: 0x61, // push local pheromone concentration
 
   HALT:          0xFF,
 } as const;
@@ -140,6 +142,8 @@ export interface VMSensors {
   headY: number;
   // Local water temperature at the cell's position. Roughly 12..28 °C.
   temp: number;
+  // Local pheromone concentration (diffusing signal field).
+  pheromone: number;
   creatureDx: number;
   creatureDy: number;
   creatureDist: number;
@@ -169,6 +173,8 @@ export interface VMOutputs {
   // applies this after the VM runs by rotating the cell's velocity vector.
   turn: number;
   excrete: Float32Array;
+  // Pheromone amount this cell wants to emit into the field this tick.
+  emit: number;
   reproduce: boolean;
   // Parent's share of mass after fission. Set by REPRODUCE from the
   // stack-top value, clamped to [0.1, 0.9]; out-of-range / NaN / empty
@@ -189,7 +195,7 @@ export function newOutputs(): VMOutputs {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
     reproduce: false, reproduceFraction: 0.5,
-    predate: false, engulf: false,
+    predate: false, engulf: false, emit: 0,
     ingestMaterials: new Uint8Array(6),
     instructions: 0,
   };
@@ -211,6 +217,7 @@ export function runTick(
   out.reproduceFraction = 0.5;
   out.predate = false;
   out.engulf = false;
+  out.emit = 0;
   out.ingestMaterials.fill(0);
   out.instructions = 0;
   const L = genome.length;
@@ -286,6 +293,8 @@ export function runTick(
       case OP.SENSE_HEAD_X:   vmPush(stack, sensors.headX); break;
       case OP.SENSE_HEAD_Y:   vmPush(stack, sensors.headY); break;
       case OP.SENSE_TEMP:     vmPush(stack, sensors.temp); break;
+      case OP.SENSE_PHEROMONE: vmPush(stack, sensors.pheromone); break;
+      case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
 
       case OP.THRUST: {
         const ay = vmPop(stack);

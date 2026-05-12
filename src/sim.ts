@@ -214,6 +214,13 @@ export interface World {
   // atmosphere; cells stay submerged below it; gas particles that drift
   // up past it escape to the atmosphere. Aeration drops fresh O2-rich
   // gas particles in just below the surface at a steady rate.
+  // 2D pheromone field on a coarse grid. Cells EMIT into the field at
+  // their position and SENSE the local concentration. Diffuses + decays
+  // each tick so signals fade and spread. Stigmergy substrate: alarm
+  // calls, mate-finding, "I ate good food here" trails.
+  pheromone: Float32Array;
+  pheromoneCols: number;
+  pheromoneRows: number;
   surfaceY: number;
   // Visible / physical vertical amplitude of the surface wave. The wall
   // and the renderer both use this so lipids (which float to the surface)
@@ -263,6 +270,52 @@ export function resizeWorld(world: World, width: number, height: number): void {
   world.aerationRate = world.width * AERATION_PER_PX;
   world.particleTarget = Math.max(100, Math.round(world.width * world.height * PARTICLE_DENSITY_PER_AREA));
   world.particleSpawnRate = Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO);
+  resizePheromone(world);
+}
+
+function resizePheromone(world: World): void {
+  const cols = Math.max(1, Math.ceil(world.width / PHEROMONE_CELL));
+  const rows = Math.max(1, Math.ceil(world.height / PHEROMONE_CELL));
+  if (cols === world.pheromoneCols && rows === world.pheromoneRows && world.pheromone.length === cols * rows) {
+    return;
+  }
+  world.pheromone = new Float32Array(cols * rows);
+  world.pheromoneCols = cols;
+  world.pheromoneRows = rows;
+}
+
+export function pheromoneIndex(world: World, x: number, y: number): number {
+  const cx = Math.max(0, Math.min(world.pheromoneCols - 1, Math.floor(x / PHEROMONE_CELL)));
+  const cy = Math.max(0, Math.min(world.pheromoneRows - 1, Math.floor(y / PHEROMONE_CELL)));
+  return cy * world.pheromoneCols + cx;
+}
+
+// Pheromone field decay + diffusion. Called once per tick from step().
+// O(cols*rows): cheap at 32px cells on a 1920x1080 canvas (~2000 cells).
+function evolvePheromone(world: World, dt: number): void {
+  const cols = world.pheromoneCols;
+  const rows = world.pheromoneRows;
+  const f = world.pheromone;
+  const decay = Math.max(0, 1 - PHEROMONE_DECAY_PER_SEC * dt);
+  const diff = Math.max(0, Math.min(1, PHEROMONE_DIFFUSE_PER_SEC * dt));
+  // Two-pass: shrink, then blend with neighbors.
+  for (let i = 0; i < f.length; i++) f[i] *= decay;
+  if (diff <= 0 || cols < 2 || rows < 2) return;
+  const next = new Float32Array(f.length);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      let sum = 0;
+      let n = 0;
+      if (x > 0)        { sum += f[i - 1];     n++; }
+      if (x < cols - 1) { sum += f[i + 1];     n++; }
+      if (y > 0)        { sum += f[i - cols];  n++; }
+      if (y < rows - 1) { sum += f[i + cols];  n++; }
+      const avg = n > 0 ? sum / n : f[i];
+      next[i] = f[i] * (1 - diff) + avg * diff;
+    }
+  }
+  for (let i = 0; i < f.length; i++) f[i] = next[i];
 }
 const MAX_CREATURES = 400;
 
@@ -391,6 +444,14 @@ const AERATION_PER_PX = 0.005;
 const AERATION_O2_PER_BUBBLE = 4;
 const AERATION_BUBBLE_DROP_SPEED = 14;
 
+// Pheromone field: coarse grid cell size, per-tick decay rate, and
+// neighbor-blend (diffusion) fraction. Tuned so a single big emit
+// (e.g. 50) fades to background in a few seconds and spreads about
+// one grid cell per tick of diffusion.
+const PHEROMONE_CELL = 32;
+const PHEROMONE_DECAY_PER_SEC = 0.5;
+const PHEROMONE_DIFFUSE_PER_SEC = 0.6;
+
 // Temperature chemistry: enzyme-catalyzed reactions and idle metabolism
 // scale with temperature via Q10 -- every 10°C, rates double. T_REF is
 // the "neutral" temperature where the multiplier is 1.0. Clamped so that
@@ -471,6 +532,9 @@ export function createWorld(width: number, height: number): World {
     tempPatchAmp: 3,
     tempPatchLength: 360,
     tempPatchPeriod: 38,
+    pheromone: new Float32Array(0),
+    pheromoneCols: 0,
+    pheromoneRows: 0,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 2,
     species: new Map(),
@@ -479,6 +543,8 @@ export function createWorld(width: number, height: number): World {
     anchorGenome: new Uint8Array(0),
     brownianAmp: 25,
   };
+  // Allocate the pheromone grid sized to the world.
+  resizePheromone(world);
   seedParticles(world, Math.round(particleTarget * 0.9));
   const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
   first.bornAt = 0;
@@ -927,6 +993,7 @@ function radiusForMass(m: number, density: number): number {
 
 export function step(world: World, dt: number): void {
   world.t += dt;
+  evolvePheromone(world, dt);
   applyForces(world, dt);
   updateCreatures(world, dt);
   resolveCollisions(world);
@@ -1047,7 +1114,7 @@ const VM_SENSORS: VMSensors = {
   density: new Float32Array(6),
   wallX: 0, wallY: 0,
   headX: 0, headY: 0,
-  temp: 0,
+  temp: 0, pheromone: 0,
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
 };
@@ -1168,6 +1235,12 @@ function updateCreatures(world: World, dt: number): void {
     }
 
     if (VM_OUT.reproduce) tryReproduce(c, world);
+
+    // Pheromone emission: cell adds intensity to the field at its
+    // position. Subsequent ticks decay + diffuse it.
+    if (VM_OUT.emit > 0) {
+      world.pheromone[pheromoneIndex(world, c.x, c.y)] += VM_OUT.emit;
+    }
 
     // Advance any in-flight fission. When progress hits 1, the stashed
     // daughter is committed into world.creatures.
@@ -1592,6 +1665,7 @@ function populateSensors(c: Creature, world: World): void {
   }
   VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY);
   VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
+  VM_SENSORS.pheromone = world.pheromone[pheromoneIndex(world, c.x, c.y)];
   VM_SENSORS.creatureDx = 0;
   VM_SENSORS.creatureDy = 0;
   VM_SENSORS.creatureDist = range;

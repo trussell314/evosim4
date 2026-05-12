@@ -19,7 +19,7 @@ import {
 
 function makeSensors(overrides: Partial<{
   gradX: number[]; gradY: number[]; density: number[];
-  wallX: number; wallY: number; headX: number; headY: number; temp: number;
+  wallX: number; wallY: number; headX: number; headY: number; temp: number; pheromone: number;
   creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
   light: number;
 }> = {}): VMSensors {
@@ -32,6 +32,7 @@ function makeSensors(overrides: Partial<{
     headX: overrides.headX ?? 0,
     headY: overrides.headY ?? 0,
     temp: overrides.temp ?? 0,
+    pheromone: overrides.pheromone ?? 0,
     creatureDx: overrides.creatureDx ?? 0,
     creatureDy: overrides.creatureDy ?? 0,
     creatureDist: overrides.creatureDist ?? 0,
@@ -245,6 +246,16 @@ describe("VM sensors", () => {
   });
   it("SENSE_TEMP pushes local water temperature", () => {
     expect(exec([OP.SENSE_TEMP, OP.HALT], { sensors: makeSensors({ temp: 22.5 }) }).state.stack).toEqual([22.5]);
+  });
+  it("SENSE_PHEROMONE pushes local field concentration", () => {
+    expect(exec([OP.SENSE_PHEROMONE, OP.HALT], { sensors: makeSensors({ pheromone: 7 }) }).state.stack).toEqual([7]);
+  });
+  it("EMIT pops a non-negative value into out.emit", () => {
+    expect(exec([OP.PUSH8, 9, OP.EMIT, OP.HALT]).out.emit).toBe(9);
+    // Negative input clamps to 0.
+    expect(exec([OP.PUSH8, 0xFE /* -2 */, OP.EMIT, OP.HALT]).out.emit).toBe(0);
+    // Multiple emits accumulate.
+    expect(exec([OP.PUSH8, 3, OP.EMIT, OP.PUSH8, 4, OP.EMIT, OP.HALT]).out.emit).toBe(7);
   });
 });
 

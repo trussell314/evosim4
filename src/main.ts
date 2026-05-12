@@ -252,13 +252,16 @@ function render(): void {
 // Optional field overlay. Cycles off -> temp -> density via the `H` key.
 // Drawn on top of particles + cells but below the phylogeny strip so it
 // reads as an atmospheric tint rather than blocking the bodies.
-type HeatmapMode = "off" | "temp" | "density";
+type HeatmapMode = "off" | "temp" | "density" | "pheromone";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
 window.addEventListener("keydown", (e) => {
   if (e.key === "h" || e.key === "H") {
-    heatmapMode = heatmapMode === "off" ? "temp" : heatmapMode === "temp" ? "density" : "off";
+    heatmapMode =
+      heatmapMode === "off" ? "temp" :
+      heatmapMode === "temp" ? "density" :
+      heatmapMode === "density" ? "pheromone" : "off";
   }
 });
 function drawHeatmap(): void {
@@ -284,6 +287,7 @@ function drawHeatmap(): void {
     ctx.fillText("heatmap: temperature (cold blue → warm red, H toggles)", 8, surfaceY + 14);
     return;
   }
+  if (heatmapMode === "density") {
   // Density: count particles per heatmap cell.
   const counts = new Uint16Array(cols * rows);
   for (const p of world.particles) {
@@ -306,6 +310,36 @@ function drawHeatmap(): void {
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
   ctx.fillText(`heatmap: particle density (max ${maxC}/cell, H toggles)`, 8, surfaceY + 14);
+    return;
+  }
+  if (heatmapMode === "pheromone") {
+    // Render pheromone field directly. Grid size is world.pheromoneCols/Rows.
+    let maxP = 0.001;
+    for (let i = 0; i < world.pheromone.length; i++) if (world.pheromone[i] > maxP) maxP = world.pheromone[i];
+    const pCols = world.pheromoneCols;
+    const pRows = world.pheromoneRows;
+    const pCell = world.width / pCols;
+    ctx.globalAlpha = HEATMAP_ALPHA;
+    for (let r = 0; r < pRows; r++) {
+      for (let c = 0; c < pCols; c++) {
+        const v = world.pheromone[r * pCols + c];
+        if (v <= 0) continue;
+        ctx.fillStyle = heatColorPheromone(v / maxP);
+        ctx.fillRect(c * pCell, r * pCell, pCell, pCell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.fillText(`heatmap: pheromone field (max ${maxP.toFixed(1)}, H toggles)`, 8, surfaceY + 14);
+  }
+}
+
+function heatColorPheromone(x: number): string {
+  // Cool purple → bright magenta gradient. Distinct from density yellow.
+  const r = Math.round(60 + 200 * x);
+  const g = Math.round(20 + 60 * x);
+  const b = Math.round(80 + 175 * x);
+  return `rgb(${r},${g},${b})`;
 }
 
 function heatColorTemp(t: number): string {
