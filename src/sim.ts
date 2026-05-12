@@ -1797,7 +1797,7 @@ function updateCreatures(world: World, dt: number): void {
   // and creature-sediment collisions. Replaces O(N) scans over world
   // particles/creatures inside per-cell loops with O(neighborhood) scans.
   buildCreatureGrid(world);
-  buildParticleGrid(world);
+  rebuildSensorBins(world);
   for (let cIdx = 0; cIdx < n; cIdx++) {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
@@ -2355,22 +2355,51 @@ function populateSensors(c: Creature, world: World): void {
   // so a particle at the edge of sense range contributes a unit vector, one
   // at half-range contributes ~2x, etc. The scaling keeps magnitudes in a
   // useful range for THRUST (which clamps to thrustAccel ~ 70).
+  // Per-material gradient + density sampled from the prebuilt
+  // SENSOR_BIN_* fields. Each cell visits a small 2D window of bins
+  // around its position; each bin contributes (count, centroid)
+  // weighted as if all its particles sit at the centroid.
   for (let i = 0; i < 6; i++) {
     VM_SENSORS.gradX[i] = 0;
     VM_SENSORS.gradY[i] = 0;
     VM_SENSORS.density[i] = 0;
   }
-  forParticlesNear(c.x, c.y, range, (p) => {
-    const dx = p.x - c.x;
-    const dy = p.y - c.y;
-    const dsq = dx * dx + dy * dy;
-    if (dsq >= rangeSq || dsq < 1) return;
-    const idx = MATERIAL_INDEX[p.material];
-    const w = range / dsq;
-    VM_SENSORS.gradX[idx] += dx * w;
-    VM_SENSORS.gradY[idx] += dy * w;
-    VM_SENSORS.density[idx]++;
-  });
+  const span = Math.ceil(range / SENSOR_BIN);
+  let cbx = Math.floor(c.x / SENSOR_BIN);
+  let cby = Math.floor(c.y / SENSOR_BIN);
+  if (cbx < 0) cbx = 0; else if (cbx >= SENSOR_BIN_COLS) cbx = SENSOR_BIN_COLS - 1;
+  if (cby < 0) cby = 0; else if (cby >= SENSOR_BIN_ROWS) cby = SENSOR_BIN_ROWS - 1;
+  const x0 = Math.max(0, cbx - span);
+  const x1 = Math.min(SENSOR_BIN_COLS - 1, cbx + span);
+  const y0 = Math.max(0, cby - span);
+  const y1 = Math.min(SENSOR_BIN_ROWS - 1, cby + span);
+  for (let m = 0; m < 6; m++) {
+    const cnt = SENSOR_BIN_COUNT[m];
+    const sxArr = SENSOR_BIN_SUMX[m];
+    const syArr = SENSOR_BIN_SUMY[m];
+    let gx = 0, gy = 0, dens = 0;
+    for (let by = y0; by <= y1; by++) {
+      const row = by * SENSOR_BIN_COLS;
+      for (let bx = x0; bx <= x1; bx++) {
+        const bin = row + bx;
+        const n = cnt[bin];
+        if (n === 0) continue;
+        const cx_bin = sxArr[bin] / n;
+        const cy_bin = syArr[bin] / n;
+        const dx = cx_bin - c.x;
+        const dy = cy_bin - c.y;
+        const dsq = dx * dx + dy * dy;
+        if (dsq >= rangeSq || dsq < 1) continue;
+        const w = range / dsq;
+        gx += dx * w * n;
+        gy += dy * w * n;
+        dens += n;
+      }
+    }
+    VM_SENSORS.gradX[m] = gx;
+    VM_SENSORS.gradY[m] = gy;
+    VM_SENSORS.density[m] = dens;
+  }
   // Push-from-wall vector: range * (1/distLeft - 1/distRight). Magnitude
   // ~unit when the cell is at sense range from one wall and far from the
   // opposite one; 0 at the midpoint.
@@ -2487,59 +2516,60 @@ let CREATURE_NONEMPTY_N = 0;
 let CREATURE_GRID_COLS = 0;
 let CREATURE_GRID_ROWS = 0;
 
-// Particle spatial grid -- used by populateSensors gradient/density
-// calculation. Built once at the start of updateCreatures alongside
-// CREATURE_BUCKETS.
+// Per-material particle moment field used by populateSensors. Built
+// once per tick by rebuildSensorBins() and sampled by every cell.
+// Avoids the previous "every cell re-walks every particle in its
+// senseRange" cost which scaled as cells * particles_in_range.
 //
-// Buckets hold Particle REFERENCES (not indices) so that particles
-// being spliced out mid-tick by INGEST don't leave stale entries that
-// dereference to undefined. A particle removed from world.particles
-// still appears in the bucket for the rest of the tick; visitors must
-// tolerate that (it's harmless for sensor gradient -- one tick of
-// lag on a recently-eaten crumb).
-const PARTICLE_GRID_CELL = 48;
-const PARTICLE_BUCKETS: Particle[][] = [];
-let PARTICLE_GRID_COLS = 0;
-let PARTICLE_GRID_ROWS = 0;
+// Each bin stores, per material: count, sumX, sumY. Cells approximate
+// the bin's contribution to their gradient sensor by treating all
+// the bin's particles as concentrated at the centroid (sumX/count,
+// sumY/count). Coarse-grained but cheap.
+const SENSOR_BIN = 40;
+let SENSOR_BIN_COLS = 0;
+let SENSOR_BIN_ROWS = 0;
+const SENSOR_BIN_COUNT: Int32Array[] = [];   // [material][bin]
+const SENSOR_BIN_SUMX: Float32Array[] = [];
+const SENSOR_BIN_SUMY: Float32Array[] = [];
+let SENSOR_BIN_ALLOC = 0;
 
-function buildParticleGrid(world: World): void {
-  PARTICLE_GRID_COLS = Math.max(1, Math.ceil(world.width / PARTICLE_GRID_CELL));
-  PARTICLE_GRID_ROWS = Math.max(1, Math.ceil(world.height / PARTICLE_GRID_CELL));
-  const cellCount = PARTICLE_GRID_COLS * PARTICLE_GRID_ROWS;
-  while (PARTICLE_BUCKETS.length < cellCount) PARTICLE_BUCKETS.push([]);
-  for (let i = 0; i < cellCount; i++) PARTICLE_BUCKETS[i].length = 0;
+function rebuildSensorBins(world: World): void {
+  SENSOR_BIN_COLS = Math.max(1, Math.ceil(world.width / SENSOR_BIN));
+  SENSOR_BIN_ROWS = Math.max(1, Math.ceil(world.height / SENSOR_BIN));
+  const n = SENSOR_BIN_COLS * SENSOR_BIN_ROWS;
+  if (n > SENSOR_BIN_ALLOC) {
+    SENSOR_BIN_COUNT.length = 0;
+    SENSOR_BIN_SUMX.length = 0;
+    SENSOR_BIN_SUMY.length = 0;
+    const alloc = n * 2;
+    for (let m = 0; m < 6; m++) {
+      SENSOR_BIN_COUNT.push(new Int32Array(alloc));
+      SENSOR_BIN_SUMX.push(new Float32Array(alloc));
+      SENSOR_BIN_SUMY.push(new Float32Array(alloc));
+    }
+    SENSOR_BIN_ALLOC = alloc;
+  } else {
+    for (let m = 0; m < 6; m++) {
+      SENSOR_BIN_COUNT[m].fill(0, 0, n);
+      SENSOR_BIN_SUMX[m].fill(0, 0, n);
+      SENSOR_BIN_SUMY[m].fill(0, 0, n);
+    }
+  }
   const ps = world.particles;
   for (let i = 0; i < ps.length; i++) {
     const p = ps[i];
-    let cx = Math.floor(p.x / PARTICLE_GRID_CELL);
-    let cy = Math.floor(p.y / PARTICLE_GRID_CELL);
-    if (!Number.isFinite(cx)) cx = 0;
-    if (!Number.isFinite(cy)) cy = 0;
-    if (cx < 0) cx = 0; else if (cx >= PARTICLE_GRID_COLS) cx = PARTICLE_GRID_COLS - 1;
-    if (cy < 0) cy = 0; else if (cy >= PARTICLE_GRID_ROWS) cy = PARTICLE_GRID_ROWS - 1;
-    PARTICLE_BUCKETS[cy * PARTICLE_GRID_COLS + cx].push(p);
+    let bx = Math.floor(p.x / SENSOR_BIN);
+    let by = Math.floor(p.y / SENSOR_BIN);
+    if (bx < 0) bx = 0; else if (bx >= SENSOR_BIN_COLS) bx = SENSOR_BIN_COLS - 1;
+    if (by < 0) by = 0; else if (by >= SENSOR_BIN_ROWS) by = SENSOR_BIN_ROWS - 1;
+    const idx = MATERIAL_INDEX[p.material];
+    const bin = by * SENSOR_BIN_COLS + bx;
+    SENSOR_BIN_COUNT[idx][bin]++;
+    SENSOR_BIN_SUMX[idx][bin] += p.x;
+    SENSOR_BIN_SUMY[idx][bin] += p.y;
   }
 }
 
-function forParticlesNear(
-  x: number, y: number, range: number,
-  visitor: (p: Particle) => void,
-): void {
-  const span = Math.max(1, Math.ceil(range / PARTICLE_GRID_CELL));
-  const cx = Math.max(0, Math.min(PARTICLE_GRID_COLS - 1, Math.floor(x / PARTICLE_GRID_CELL)));
-  const cy = Math.max(0, Math.min(PARTICLE_GRID_ROWS - 1, Math.floor(y / PARTICLE_GRID_CELL)));
-  const x0 = Math.max(0, cx - span);
-  const x1 = Math.min(PARTICLE_GRID_COLS - 1, cx + span);
-  const y0 = Math.max(0, cy - span);
-  const y1 = Math.min(PARTICLE_GRID_ROWS - 1, cy + span);
-  for (let gy = y0; gy <= y1; gy++) {
-    const row = gy * PARTICLE_GRID_COLS;
-    for (let gx = x0; gx <= x1; gx++) {
-      const bucket = PARTICLE_BUCKETS[row + gx];
-      for (let k = 0; k < bucket.length; k++) visitor(bucket[k]);
-    }
-  }
-}
 
 function buildCreatureGrid(world: World): void {
   const ccs = CREATURE_GRID_CELL;
