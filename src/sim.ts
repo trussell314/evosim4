@@ -1770,7 +1770,13 @@ function applyForces(world: World, dt: number): void {
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
     density: number,
   ) => {
-    const ay = world.gravity * (1 - 1 / density);
+    // Newtonian buoyancy `g * (1 - 1/density)` grows without bound as
+    // density -> 0 (gas at density 0.2 would accelerate at -4g, rising
+    // 8.5x faster than rock sinks). Cap symmetrically so the most-
+    // buoyant particle can't outpace the densest at falling.
+    let ay = world.gravity * (1 - 1 / density);
+    if (ay < -world.gravity) ay = -world.gravity;
+    else if (ay > world.gravity) ay = world.gravity;
     // Surface ripple travels right; deeper swell travels left. The
     // counter-traveling pair stops particles from accumulating against
     // one wall the way a single right-moving wave train did.
