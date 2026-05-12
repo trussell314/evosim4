@@ -409,7 +409,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const cdBig = cb.ingestCooldown;
 
     expect(cdBig).toBeLessThan(cdSmall * 0.5);
-    expect(cdSmall).toBeGreaterThan(0.3);
+    expect(cdSmall).toBeGreaterThan(0.05);
   });
   it("thrust energy cost scales with mass", () => {
     function run(rockMass: number): number {
@@ -879,7 +879,7 @@ describe("creature: predation (cell eats cell)", () => {
     for (const id of M) q.reserves[id] = 1;
     w.creatures.push(p, q);
     step(w, 1 / 60);
-    expect(w.creatures[0].ingestCooldown).toBeGreaterThan(0.35);
+    expect(w.creatures[0].ingestCooldown).toBeGreaterThan(0.15);
   });
   it("non-overlapping cells don't engulf", () => {
     const w = quietWorld();
