@@ -2644,6 +2644,11 @@ function updateCreatures(world: World, dt: number): void {
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(other);
+          // Predated cell is absorbed entirely -- no vacuole, no later
+          // release path -- so free its store slot now. Engulfed prey
+          // (above) keeps its slot since it stays alive inside the
+          // predator's contents[] and may emerge if the predator dies.
+          other.store.release(other.idx);
           ingested = true;
           return true;
         });
@@ -2713,6 +2718,14 @@ function updateCreatures(world: World, dt: number): void {
           if (k >= 0) partner.bonds.splice(k, 1);
         }
         c.bonds.length = 0;
+        // If the cell was mid-division, the stashed child was alloc'd in
+        // tryReproduce but never pushed into world.creatures. Its slot
+        // would leak unless we release it explicitly here.
+        if (c.division) {
+          const ch = c.division.child;
+          ch.store.release(ch.idx);
+          c.division = null;
+        }
         if (spillSet.has(c)) {
           releaseReservesAsParticles(c, world);
           // Free the slot only for spilled (truly dead) creatures.
@@ -2946,7 +2959,12 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   // Stillbirth check: the child must clear the autolyze floor at commit
   // time. Otherwise we'd record a birth in the species table and
   // immediately autolyze the cell, producing phantom +1/-1 churn.
-  if (child.molecules.biomass < MIN_VIABLE_BIOMASS) return;
+  // Release the child's store slot since nothing else will -- the
+  // child was never pushed into world.creatures.
+  if (child.molecules.biomass < MIN_VIABLE_BIOMASS) {
+    child.store.release(child.idx);
+    return;
+  }
   // Drop the daughter at the current separation point. Recomputing from
   // the parent's live position keeps the visual in sync even if the
   // parent drifted during the second-long animation.
