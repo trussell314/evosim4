@@ -699,6 +699,28 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
   return cost;
 }
 
+// Mutation random byte generator. We want the ratio of noop bytes
+// to executable ops in mutated bytes to be roughly 1:2 -- i.e. ~2/3
+// of newly introduced bytes should decode to a real op. Without
+// biasing, a uniform byte has ~73% chance of landing on an unused
+// value and becoming a noop. Pre-compute the partition once.
+const OP_BYTES: number[] = (() => {
+  const seen = new Set<number>();
+  for (const v of Object.values(OP)) seen.add(v as number);
+  return Array.from(seen).sort((a, b) => a - b);
+})();
+const NOOP_BYTES: number[] = (() => {
+  const seen = new Set<number>(OP_BYTES);
+  const out: number[] = [];
+  for (let i = 0; i < 256; i++) if (!seen.has(i)) out.push(i);
+  return out;
+})();
+const OP_BYTE_BIAS = 2 / 3;
+function randMutByte(rng: () => number): number {
+  if (rng() < OP_BYTE_BIAS) return OP_BYTES[Math.floor(rng() * OP_BYTES.length)];
+  return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
+}
+
 const P_POINT  = 0.003;
 const P_INSERT = 0.0010;
 // Deletions are uniquely lossy in our genome: one deleted byte at the
@@ -722,14 +744,14 @@ export function mutateGenome(
   for (let i = 0; i < genome.length; i++) {
     if (rng() < P_DELETE) continue;
     if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
-      out.push(Math.floor(rng() * 256));
+      out.push(randMutByte(rng));
     }
     let b = genome[i];
-    if (rng() < P_POINT) b = Math.floor(rng() * 256);
+    if (rng() < P_POINT) b = randMutByte(rng);
     if (out.length < MAX_GENOME_BYTES) out.push(b);
   }
   if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
-    out.push(Math.floor(rng() * 256));
+    out.push(randMutByte(rng));
   }
   if (out.length === 0) return makeDefaultGenome();
   return new Uint8Array(out);
@@ -748,14 +770,14 @@ export function somaticMutateOnce(
   if (r < 0.7) {
     const idx = Math.floor(rng() * genome.length);
     const out = new Uint8Array(genome);
-    out[idx] = Math.floor(rng() * 256);
+    out[idx] = randMutByte(rng);
     return out;
   }
   if (r < 0.85 && genome.length < MAX_GENOME_BYTES) {
     const idx = Math.floor(rng() * (genome.length + 1));
     const out = new Uint8Array(genome.length + 1);
     out.set(genome.subarray(0, idx), 0);
-    out[idx] = Math.floor(rng() * 256);
+    out[idx] = randMutByte(rng);
     out.set(genome.subarray(idx), idx + 1);
     return out;
   }
