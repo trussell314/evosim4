@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, type Particle, type Creature, type Species } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, makeProfile, type Particle, type Creature, type Species } from "./sim";
 import { disassemble } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -317,8 +317,43 @@ window.addEventListener("keydown", (e) => {
       heatmapMode === "off" ? "temp" :
       heatmapMode === "temp" ? "density" :
       heatmapMode === "density" ? "pheromone" : "off";
+  } else if (e.key === "p" || e.key === "P") {
+    if (world.profile) {
+      dumpProfile();
+      world.profile = undefined;
+    } else {
+      world.profile = makeProfile();
+    }
   }
 });
+
+function dumpProfile(): void {
+  const p = world.profile;
+  if (!p || p.ticks === 0) return;
+  const n = p.ticks;
+  const rows: { phase: string; ms: number }[] = [
+    { phase: "pheromone", ms: p.pheromone / n },
+    { phase: "bonds", ms: p.bonds / n },
+    { phase: "forces", ms: p.forces / n },
+    { phase: "creatures (VM+chem)", ms: p.creatures / n },
+    { phase: "particle coll", ms: p.particleColl / n },
+    { phase: "creature coll", ms: p.creatureColl / n },
+    { phase: "sediment coll", ms: p.sedimentColl / n },
+    { phase: "walls", ms: p.walls / n },
+    { phase: "aerate", ms: p.aerate / n },
+    { phase: "replenish", ms: p.replenish / n },
+    { phase: "prune", ms: p.prune / n },
+  ];
+  rows.sort((a, b) => b.ms - a.ms);
+  const total = rows.reduce((s, r) => s + r.ms, 0);
+  // eslint-disable-next-line no-console
+  console.log(`[profile] over ${n} ticks  total=${total.toFixed(3)}ms/tick  pop=${world.creatures.length}  particles=${world.particles.length}`);
+  for (const r of rows) {
+    const pct = total > 0 ? (100 * r.ms / total).toFixed(1) : "0.0";
+    // eslint-disable-next-line no-console
+    console.log(`  ${r.phase.padEnd(22)} ${r.ms.toFixed(3)}ms  ${pct}%`);
+  }
+}
 function drawHeatmap(): void {
   if (heatmapMode === "off") return;
   const { width, height, surfaceY } = world;
@@ -715,7 +750,16 @@ function updatePerfStats(simAdvanced: number): void {
 }
 
 function statsLine(): string {
-  return `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${world.t.toFixed(0)}s  species=${world.species.size}`;
+  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${world.t.toFixed(0)}s  species=${world.species.size}`;
+  const p = world.profile;
+  if (p && p.ticks > 0) {
+    const total =
+      p.pheromone + p.bonds + p.forces + p.creatures +
+      p.particleColl + p.creatureColl + p.sedimentColl +
+      p.walls + p.aerate + p.replenish + p.prune;
+    s += `  [prof ${ (total / p.ticks).toFixed(2) }ms/tick over ${p.ticks}t]`;
+  }
+  return s;
 }
 
 function frame(): void {

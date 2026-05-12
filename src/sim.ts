@@ -255,6 +255,41 @@ export interface World {
   // Brownian noise amplitude added to wave forcing. Helps prevent stuff
   // from accumulating on one side of the world.
   brownianAmp: number;
+  // Optional per-phase timing. When present, step() accumulates wall-clock
+  // milliseconds spent in each phase plus a tick counter. Read + reset by
+  // the UI to display where the frame budget actually goes.
+  profile?: WorldProfile;
+}
+
+export interface WorldProfile {
+  ticks: number;
+  pheromone: number;
+  bonds: number;
+  forces: number;
+  creatures: number;
+  particleColl: number;
+  creatureColl: number;
+  sedimentColl: number;
+  walls: number;
+  aerate: number;
+  replenish: number;
+  prune: number;
+}
+
+export function makeProfile(): WorldProfile {
+  return {
+    ticks: 0,
+    pheromone: 0, bonds: 0, forces: 0, creatures: 0,
+    particleColl: 0, creatureColl: 0, sedimentColl: 0,
+    walls: 0, aerate: 0, replenish: 0, prune: 0,
+  };
+}
+
+export function resetProfile(p: WorldProfile): void {
+  p.ticks = 0;
+  p.pheromone = 0; p.bonds = 0; p.forces = 0; p.creatures = 0;
+  p.particleColl = 0; p.creatureColl = 0; p.sedimentColl = 0;
+  p.walls = 0; p.aerate = 0; p.replenish = 0; p.prune = 0;
 }
 
 const ENERGY_PER_THRUST_SEC = 5;
@@ -1041,17 +1076,45 @@ function radiusForMass(m: number, density: number): number {
 
 export function step(world: World, dt: number): void {
   world.t += dt;
-  evolvePheromone(world, dt);
-  applyBondSprings(world, dt);
-  applyForces(world, dt);
-  updateCreatures(world, dt);
-  resolveCollisions(world);
-  resolveCreatureCollisions(world);
-  resolveCreatureSedimentCollisions(world);
-  applyWalls(world);
-  aerate(world, dt);
-  replenishParticles(world, dt);
-  pruneSpecies(world);
+  const p = world.profile;
+  if (p) {
+    let m = performance.now();
+    evolvePheromone(world, dt);
+    let n = performance.now(); p.pheromone += n - m; m = n;
+    applyBondSprings(world, dt);
+    n = performance.now(); p.bonds += n - m; m = n;
+    applyForces(world, dt);
+    n = performance.now(); p.forces += n - m; m = n;
+    updateCreatures(world, dt);
+    n = performance.now(); p.creatures += n - m; m = n;
+    resolveCollisions(world);
+    n = performance.now(); p.particleColl += n - m; m = n;
+    resolveCreatureCollisions(world);
+    n = performance.now(); p.creatureColl += n - m; m = n;
+    resolveCreatureSedimentCollisions(world);
+    n = performance.now(); p.sedimentColl += n - m; m = n;
+    applyWalls(world);
+    n = performance.now(); p.walls += n - m; m = n;
+    aerate(world, dt);
+    n = performance.now(); p.aerate += n - m; m = n;
+    replenishParticles(world, dt);
+    n = performance.now(); p.replenish += n - m; m = n;
+    pruneSpecies(world);
+    n = performance.now(); p.prune += n - m;
+    p.ticks++;
+  } else {
+    evolvePheromone(world, dt);
+    applyBondSprings(world, dt);
+    applyForces(world, dt);
+    updateCreatures(world, dt);
+    resolveCollisions(world);
+    resolveCreatureCollisions(world);
+    resolveCreatureSedimentCollisions(world);
+    applyWalls(world);
+    aerate(world, dt);
+    replenishParticles(world, dt);
+    pruneSpecies(world);
+  }
   if (world.creatures.length === 0) {
     const x = world.width * (0.1 + 0.8 * Math.random());
     const y = world.height * (0.1 + 0.6 * Math.random());
