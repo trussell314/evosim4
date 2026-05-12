@@ -295,6 +295,11 @@ export class CreatureStore {
   r_organic: Float32Array;
   r_lipid: Float32Array;
   r_gas: Float32Array;
+  // Parallel arrays of column refs for indexed access in hot loops.
+  // resCols[matIdx] -> r_<mat>; molCols[molKey] -> m_<key>. Initialized
+  // once after the typed arrays exist.
+  resCols!: Float32Array[];
+  molCols!: Float32Array[];
   constructor(initialCap = 256) {
     const blank = new Float32Array(0);
     const blanki = new Int32Array(0);
@@ -346,6 +351,15 @@ export class CreatureStore {
     this.r_lipid = grow1(this.r_lipid);
     this.r_gas = grow1(this.r_gas);
     this.cap = newCap;
+    // Rebuild column-by-name arrays so chemistry hot loops can iterate
+    // them by integer index. Order matches MATERIAL_IDS / MOLECULE_IDS.
+    this.resCols = [this.r_rock, this.r_sand, this.r_clay, this.r_organic, this.r_lipid, this.r_gas];
+    // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll, enzyme, o2, co2, minerals, biomass, waste
+    this.molCols = [
+      this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
+      this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
+      this.m_minerals, this.m_biomass, this.m_waste,
+    ];
   }
   // Returns a fresh slot. Reuses freed slots first; grows on overflow.
   alloc(): number {
@@ -981,6 +995,27 @@ for (const id of Object.keys(CATAB_FRACTIONS) as MaterialId[]) {
   CATAB_KEYS[id] = keys;
   CATAB_FRACS[id] = fracs;
 }
+
+// String key -> index in MOLECULE_IDS array. Used by CATAB_MOL_TARGETS
+// to translate the catabolism table into integer column indices.
+const MOLECULE_INDEX: Record<keyof Molecules, number> = {} as Record<keyof Molecules, number>;
+for (let i = 0; i < MOLECULE_IDS.length; i++) MOLECULE_INDEX[MOLECULE_IDS[i]] = i;
+
+// Catabolism lookups indexed by material number (matching MATERIAL_IDS).
+// Each row is a packed list of (molecule index, fraction) pairs. Lets
+// the hot loop avoid object-keyed dispatch entirely.
+const CATAB_TARGETS_MOL: Int32Array[] = MATERIAL_IDS.map((id) => {
+  const keys = CATAB_KEYS[id];
+  const a = new Int32Array(keys.length);
+  for (let k = 0; k < keys.length; k++) a[k] = MOLECULE_INDEX[keys[k]];
+  return a;
+});
+const CATAB_TARGETS_FRAC: Float32Array[] = MATERIAL_IDS.map((id) => {
+  const fracs = CATAB_FRACS[id];
+  const a = new Float32Array(fracs.length);
+  for (let k = 0; k < fracs.length; k++) a[k] = fracs[k];
+  return a;
+});
 
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
@@ -1672,9 +1707,11 @@ function pruneSpecies(world: World): void {
 // actually paid (which may be less than requested if the cell ran out).
 function spendATP(c: Creature, want: number): number {
   if (want <= 0) return 0;
-  const got = Math.min(c.energy, want);
-  c.energy -= got;
-  c.molecules.adp += got;
+  const s = c.store; const i = c.idx;
+  const e = s.energy[i];
+  const got = e < want ? e : want;
+  s.energy[i] = e - got;
+  s.m_adp[i] += got;
   return got;
 }
 
@@ -1685,21 +1722,23 @@ function sat(x: number, km: number = KM_DEFAULT): number {
 // Convert undigested reserves into named molecules. Mass-conserving:
 // each row of CATAB_FRACTIONS sums to 1.
 function catabolize(c: Creature, dt: number): void {
-  const surface = c.r / MIN_CREATURE_R;
-  const rsv = c.reserves;
-  const mol = c.molecules;
-  for (let i = 0; i < MATERIAL_IDS.length; i++) {
-    const id = MATERIAL_IDS[i];
-    const avail = rsv[id];
+  const s = c.store; const i = c.idx;
+  const surface = s.r[i] / MIN_CREATURE_R;
+  const resCols = s.resCols;
+  const molCols = s.molCols;
+  for (let m = 0; m < 6; m++) {
+    const rc = resCols[m];
+    const avail = rc[i];
     if (avail <= 0) continue;
     const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM));
-    const amt = rate * dt < avail ? rate * dt : avail;
+    const rd = rate * dt;
+    const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
-    rsv[id] = avail - amt;
-    const keys = CATAB_KEYS[id];
-    const fracs = CATAB_FRACS[id];
-    for (let k = 0; k < keys.length; k++) {
-      mol[keys[k]] += amt * fracs[k];
+    rc[i] = avail - amt;
+    const targets = CATAB_TARGETS_MOL[m];
+    const fracs = CATAB_TARGETS_FRAC[m];
+    for (let k = 0; k < targets.length; k++) {
+      molCols[targets[k]][i] += amt * fracs[k];
     }
   }
 }
@@ -1709,12 +1748,14 @@ function catabolize(c: Creature, dt: number): void {
 // with rate proportional to surface area. This is how dissolved gases
 // equilibrate in real cells -- the genome doesn't have to plan for it.
 function diffuseGases(c: Creature, dt: number): void {
-  const surface = c.r / MIN_CREATURE_R;
-  const o2Grad = O2_AMBIENT - c.molecules.o2;
-  c.molecules.o2 += O2_DIFFUSION_PER_R * surface * o2Grad * dt * 0.1;
-  const co2Grad = c.molecules.co2 - CO2_AMBIENT;
+  const s = c.store; const i = c.idx;
+  const surface = s.r[i] / MIN_CREATURE_R;
+  const o2Grad = O2_AMBIENT - s.m_o2[i];
+  s.m_o2[i] += O2_DIFFUSION_PER_R * surface * o2Grad * dt * 0.1;
+  const co2 = s.m_co2[i];
+  const co2Grad = co2 - CO2_AMBIENT;
   if (co2Grad > 0) {
-    c.molecules.co2 -= CO2_OFFGAS_PER_R * surface * co2Grad * dt * 0.1;
+    s.m_co2[i] = co2 - CO2_OFFGAS_PER_R * surface * co2Grad * dt * 0.1;
   }
 }
 
@@ -1722,8 +1763,8 @@ function diffuseGases(c: Creature, dt: number): void {
 // sat() inlined here and below: avoids the default-argument fast path
 // in the generic helper which the JIT doesn't always specialize.
 function aerobicRespire(c: Creature, dt: number): void {
-  const m = c.molecules;
-  const g = m.glucose, o = m.o2, a = m.adp;
+  const s = c.store; const i = c.idx;
+  const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
   if (g <= 0 || o <= 0 || a <= 0) return;
   const a10 = a / 10;
   const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT));
@@ -1732,18 +1773,18 @@ function aerobicRespire(c: Creature, dt: number): void {
   if (o < amt) amt = o;
   if (a10 < amt) amt = a10;
   if (amt <= 0) return;
-  m.glucose = g - amt;
-  m.o2 = o - amt;
-  m.co2 += 2 * amt;
-  m.adp = a - 10 * amt;
-  c.energy += 10 * amt;
+  s.m_glucose[i] = g - amt;
+  s.m_o2[i] = o - amt;
+  s.m_co2[i] += 2 * amt;
+  s.m_adp[i] = a - 10 * amt;
+  s.energy[i] += 10 * amt;
 }
 
 // Fermentation: 1 glu + 2 adp -> 0.5 co2 + 0.5 waste + 2 atp. Suppressed
 // when O2 is abundant so it acts as the anaerobic fallback path.
 function ferment(c: Creature, dt: number): void {
-  const m = c.molecules;
-  const g = m.glucose, o = m.o2, a = m.adp;
+  const s = c.store; const i = c.idx;
+  const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
   if (g <= 0 || a <= 0) return;
   const a2 = a / 2;
   const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
@@ -1752,18 +1793,18 @@ function ferment(c: Creature, dt: number): void {
   let amt = rdt < g ? rdt : g;
   if (a2 < amt) amt = a2;
   if (amt <= 0) return;
-  m.glucose = g - amt;
-  m.adp = a - 2 * amt;
-  m.co2 += 0.5 * amt;
-  m.waste += 0.5 * amt;
-  c.energy += 2 * amt;
+  s.m_glucose[i] = g - amt;
+  s.m_adp[i] = a - 2 * amt;
+  s.m_co2[i] += 0.5 * amt;
+  s.m_waste[i] += 0.5 * amt;
+  s.energy[i] += 2 * amt;
 }
 
 // Beta-oxidation of fatty acid: 1 fa + 1 o2 + 14 adp -> 2 co2 + 14 atp.
 // Much higher ATP yield per gram than glucose -- fatty acids are dense fuel.
 function betaOxidize(c: Creature, dt: number): void {
-  const m = c.molecules;
-  const f = m.fattyAcid, o = m.o2, a = m.adp;
+  const s = c.store; const i = c.idx;
+  const f = s.m_fattyAcid[i], o = s.m_o2[i], a = s.m_adp[i];
   if (f <= 0 || o <= 0 || a <= 0) return;
   const a14 = a / 14;
   const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT));
@@ -1772,28 +1813,31 @@ function betaOxidize(c: Creature, dt: number): void {
   if (o < amt) amt = o;
   if (a14 < amt) amt = a14;
   if (amt <= 0) return;
-  m.fattyAcid = f - amt;
-  m.o2 = o - amt;
-  m.co2 += 2 * amt;
-  m.adp = a - 14 * amt;
-  c.energy += 14 * amt;
+  s.m_fattyAcid[i] = f - amt;
+  s.m_o2[i] = o - amt;
+  s.m_co2[i] += 2 * amt;
+  s.m_adp[i] = a - 14 * amt;
+  s.energy[i] += 14 * amt;
 }
 
 // Photosynthesis: 1 co2 + 1 atp + light -> 0.5 glu + 0.5 o2 + 1 adp.
 // Requires chlorophyll catalyst (not consumed). Scales with surface area
 // (perimeter ~ r) and with the local ambient light.
 function photosynthesize(c: Creature, dt: number, light: number): void {
-  const m = c.molecules;
-  if (m.chlorophyll <= 0 || m.co2 <= 0 || c.energy <= 0 || light <= 0) return;
-  const surface = c.r / MIN_CREATURE_R;
-  const rate = PHOTO_VMAX_PER_R * surface * sat(m.chlorophyll) * sat(m.co2) * light;
-  const amt = Math.min(rate * dt, m.co2, c.energy);
+  const s = c.store; const i = c.idx;
+  const chl = s.m_chlorophyll[i], co2 = s.m_co2[i], e = s.energy[i];
+  if (chl <= 0 || co2 <= 0 || e <= 0 || light <= 0) return;
+  const surface = s.r[i] / MIN_CREATURE_R;
+  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light;
+  const rdt = rate * dt;
+  let amt = rdt < co2 ? rdt : co2;
+  if (e < amt) amt = e;
   if (amt <= 0) return;
-  m.co2 -= amt;
-  c.energy -= amt;
-  m.glucose += 0.5 * amt;
-  m.o2 += 0.5 * amt;
-  m.adp += amt;
+  s.m_co2[i] = co2 - amt;
+  s.energy[i] = e - amt;
+  s.m_glucose[i] += 0.5 * amt;
+  s.m_o2[i] += 0.5 * amt;
+  s.m_adp[i] += amt;
 }
 
 // Generic biosynthesis helper: combine two substrate molecules (by their
@@ -1807,33 +1851,36 @@ function biosynthesize(
   fracB: number, subB: keyof Molecules,
   product: keyof Molecules,
 ): void {
-  const m = c.molecules;
-  const a = m[subA];
-  const b = m[subB];
-  if (a <= 0 || b <= 0 || c.energy <= 0) return;
-  const rate = vmax * sat(a / fracA) * sat(b / fracB) * sat(c.energy);
-  const amt = Math.min(rate * dt, a / fracA, b / fracB, c.energy);
+  const s = c.store; const i = c.idx;
+  const colA = s.molCols[MOLECULE_INDEX[subA]];
+  const colB = s.molCols[MOLECULE_INDEX[subB]];
+  const colP = s.molCols[MOLECULE_INDEX[product]];
+  const a = colA[i], b = colB[i], e = s.energy[i];
+  if (a <= 0 || b <= 0 || e <= 0) return;
+  const aFrac = a / fracA, bFrac = b / fracB;
+  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(e);
+  const rdt = rate * dt;
+  let amt = rdt < aFrac ? rdt : aFrac;
+  if (bFrac < amt) amt = bFrac;
+  if (e < amt) amt = e;
   if (amt <= 0) return;
-  m[subA] = a - fracA * amt;
-  m[subB] = b - fracB * amt;
-  c.energy -= amt;
-  m[product] += amt;
-  m.adp += amt;
+  colA[i] = a - fracA * amt;
+  colB[i] = b - fracB * amt;
+  s.energy[i] = e - amt;
+  colP[i] += amt;
+  s.m_adp[i] += amt;
 }
 
 function autoExcrete(c: Creature, world: World): void {
-  // Bound the world's particle count: if we're already at or above the
-  // target, the excess CO2 / waste dissolves into the environment and is
-  // lost (mass leaves the cell either way, but no new particle).
+  const s = c.store; const i = c.idx;
   const overFlow = world.particles.length >= world.particleTarget;
-  if (c.molecules.co2 > CO2_EXCRETE_THRESHOLD) {
-    const want = c.molecules.co2 - EXCRETE_FLOOR;
-    // Active transport: pumping costs ATP. A stalled cell can't pay,
-    // so co2 stays inside and starts damaging biomass via toxify().
-    const affordable = Math.min(want, c.energy / EXCRETE_ATP_PER_MASS);
+  const co2 = s.m_co2[i];
+  if (co2 > CO2_EXCRETE_THRESHOLD) {
+    const want = co2 - EXCRETE_FLOOR;
+    const affordable = Math.min(want, s.energy[i] / EXCRETE_ATP_PER_MASS);
     if (affordable > 0) {
       spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
-      c.molecules.co2 -= affordable;
+      s.m_co2[i] -= affordable;
       if (!overFlow) {
         const mol = emptyMolecules();
         mol.co2 = affordable;
@@ -1841,12 +1888,13 @@ function autoExcrete(c: Creature, world: World): void {
       }
     }
   }
-  if (c.molecules.waste > WASTE_EXCRETE_THRESHOLD) {
-    const want = c.molecules.waste - EXCRETE_FLOOR;
-    const affordable = Math.min(want, c.energy / EXCRETE_ATP_PER_MASS);
+  const waste = s.m_waste[i];
+  if (waste > WASTE_EXCRETE_THRESHOLD) {
+    const want = waste - EXCRETE_FLOOR;
+    const affordable = Math.min(want, s.energy[i] / EXCRETE_ATP_PER_MASS);
     if (affordable > 0) {
       spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
-      c.molecules.waste -= affordable;
+      s.m_waste[i] -= affordable;
       if (!overFlow) {
         const mol = emptyMolecules();
         mol.waste = affordable;
@@ -1868,25 +1916,28 @@ function autoExcrete(c: Creature, world: World): void {
 // that kills cells which have lost the ability to ingest -- they bleed
 // structure faster than their own catabolism can rebuild it.
 function maintenanceDecay(c: Creature, dt: number): void {
-  const stressMult = 1 + 4 * Math.max(0, 1 - c.energy / 8);
-  const m = c.molecules;
-  if (m.biomass > 0) {
-    const lost = m.biomass * BIOMASS_DECAY_PER_SEC * stressMult * dt;
-    m.biomass -= lost;
-    m.aminoAcid += 0.9 * lost;
-    m.fattyAcid += 0.1 * lost;
+  const s = c.store; const i = c.idx;
+  const stressMult = 1 + 4 * Math.max(0, 1 - s.energy[i] / 8);
+  const bio = s.m_biomass[i];
+  if (bio > 0) {
+    const lost = bio * BIOMASS_DECAY_PER_SEC * stressMult * dt;
+    s.m_biomass[i] = bio - lost;
+    s.m_aminoAcid[i] += 0.9 * lost;
+    s.m_fattyAcid[i] += 0.1 * lost;
   }
-  if (m.enzyme > 0) {
-    const lost = m.enzyme * ENZYME_DECAY_PER_SEC * stressMult * dt;
-    m.enzyme -= lost;
-    m.aminoAcid += 0.5 * lost;
-    m.minerals += 0.5 * lost;
+  const enz = s.m_enzyme[i];
+  if (enz > 0) {
+    const lost = enz * ENZYME_DECAY_PER_SEC * stressMult * dt;
+    s.m_enzyme[i] = enz - lost;
+    s.m_aminoAcid[i] += 0.5 * lost;
+    s.m_minerals[i] += 0.5 * lost;
   }
-  if (m.chlorophyll > 0) {
-    const lost = m.chlorophyll * CHLORO_DECAY_PER_SEC * stressMult * dt;
-    m.chlorophyll -= lost;
-    m.aminoAcid += 0.5 * lost;
-    m.minerals += 0.5 * lost;
+  const chl = s.m_chlorophyll[i];
+  if (chl > 0) {
+    const lost = chl * CHLORO_DECAY_PER_SEC * stressMult * dt;
+    s.m_chlorophyll[i] = chl - lost;
+    s.m_aminoAcid[i] += 0.5 * lost;
+    s.m_minerals[i] += 0.5 * lost;
   }
 }
 
@@ -1895,14 +1946,16 @@ function maintenanceDecay(c: Creature, dt: number): void {
 // with the excess. Net effect: a cell that can pay the excretion ATP
 // cost stays clean; one that can't suffers proportional damage.
 function toxify(c: Creature, dt: number): void {
-  const m = c.molecules;
+  const s = c.store; const i = c.idx;
+  const co2 = s.m_co2[i], waste = s.m_waste[i], bio = s.m_biomass[i];
   let excess = 0;
-  if (m.co2 > CO2_EXCRETE_THRESHOLD) excess += m.co2 - CO2_EXCRETE_THRESHOLD;
-  if (m.waste > WASTE_EXCRETE_THRESHOLD) excess += m.waste - WASTE_EXCRETE_THRESHOLD;
-  if (excess <= 0 || m.biomass <= 0) return;
-  const damage = Math.min(m.biomass, excess * TOX_DAMAGE_PER_EXCESS_PER_SEC * dt);
-  m.biomass -= damage;
-  m.waste += damage;
+  if (co2 > CO2_EXCRETE_THRESHOLD) excess += co2 - CO2_EXCRETE_THRESHOLD;
+  if (waste > WASTE_EXCRETE_THRESHOLD) excess += waste - WASTE_EXCRETE_THRESHOLD;
+  if (excess <= 0 || bio <= 0) return;
+  const want = excess * TOX_DAMAGE_PER_EXCESS_PER_SEC * dt;
+  const damage = want < bio ? want : bio;
+  s.m_biomass[i] = bio - damage;
+  s.m_waste[i] = waste + damage;
 }
 
 function spawnExcretedParticle(
