@@ -1246,6 +1246,16 @@ const FRAME_OVERHEAD_FOR_SIM_MS = 3;
 const simChannel = new MessageChannel();
 let lastFrameStart = performance.now();
 let advancedThisFrame = 0;
+// Worst recent step() duration in ms, with slow decay. Used to decide
+// whether *another* step would fit before vsync. Without this, the
+// loop checks the deadline *before* each step but a step started just
+// under the deadline can finish well past vsync, snapping Chrome's
+// frame pacing to 30fps locked. The faster the sim, the more reliably
+// the loop bumps into the deadline -- so the symptom appears as
+// "locked 30fps at high sim speed."
+let recentStepMs = 1.5;
+const RECENT_STEP_DECAY = 0.97;
+const STEP_BUDGET_SAFETY = 1.4;
 simChannel.port1.onmessage = () => {
   // Yield often: only step until the per-slice deadline. Browser
   // will get the next rAF in before scheduling our next port message
@@ -1253,9 +1263,20 @@ simChannel.port1.onmessage = () => {
   const sliceDeadline = performance.now() + SIM_SLICE_MS;
   // Also stop if we've eaten too much of the current rAF interval.
   const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
-  while (performance.now() < sliceDeadline && performance.now() < frameDeadline) {
+  while (performance.now() < sliceDeadline) {
+    const t0 = performance.now();
+    // Don't start a step we can't finish in time. recentStepMs tracks
+    // the worst recent step duration; refusing to start unless the
+    // estimated finish-time fits is what keeps us from overshooting
+    // vsync.
+    if (t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     step(world, FIXED_DT);
     advancedThisFrame += FIXED_DT;
+    const elapsed = performance.now() - t0;
+    // Track the worst recent step time but decay slowly so transient
+    // spikes (GC, sudden population surge) are remembered for a few
+    // frames and then forgotten.
+    recentStepMs = elapsed > recentStepMs ? elapsed : recentStepMs * RECENT_STEP_DECAY;
   }
   simChannel.port2.postMessage(null);
 };
