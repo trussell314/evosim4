@@ -930,6 +930,7 @@ export function step(world: World, dt: number): void {
   applyForces(world, dt);
   updateCreatures(world, dt);
   resolveCollisions(world);
+  resolveCreatureCollisions(world);
   applyWalls(world);
   aerate(world, dt);
   replenishParticles(world, dt);
@@ -1062,6 +1063,9 @@ function updateCreatures(world: World, dt: number): void {
   const n = world.creatures.length;
   const dead: number[] = [];
   const eaten = new Set<number>();
+  // Build the per-tick creature spatial grid. Used by populateSensors,
+  // engulf scans, predation scans, and creature-creature collisions.
+  buildCreatureGrid(world);
   for (let cIdx = 0; cIdx < n; cIdx++) {
     if (eaten.has(cIdx)) continue;
     const c = world.creatures[cIdx];
@@ -1202,53 +1206,50 @@ function updateCreatures(world: World, dt: number): void {
 
     if (c.ingestCooldown <= 0 && c.energy >= INGEST_ENERGY_COST) {
       let ingested = false;
+      // Engulf and predate both scan for nearby cells via the spatial
+      // grid; range of c.r + 32 covers all plausible neighbor radii.
+      const scanRange = c.r + 32;
       if (VM_OUT.engulf) {
-        // Swallow whole: prey is moved into our vacuole alive, mass-and-all.
-        // It's removed from world.creatures (added to `eaten`) but persists
-        // inside `c.contents`. We pay the same per-mass cost as predation.
         const myMass = creatureTotalMass(c);
-        for (let j = 0; j < n; j++) {
-          if (j === cIdx || eaten.has(j)) continue;
+        forCreaturesNear(c.x, c.y, scanRange, (j) => {
+          if (j === cIdx || eaten.has(j)) return;
           const other = world.creatures[j];
           const dx = other.x - c.x;
           const dy = other.y - c.y;
           const dz = other.z - c.z;
           const minD = c.r + other.r;
-          if (dx * dx + dy * dy + dz * dz >= minD * minD) continue;
+          if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
           const otherMass = creatureTotalMass(other);
-          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
+          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
-          if (c.energy < cost) continue;
+          if (c.energy < cost) return;
           c.contents.push(other);
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(j);
           ingested = true;
-          break;
-        }
+          return true;
+        });
       }
       if (!ingested && VM_OUT.predate) {
         const myMass = creatureTotalMass(c);
-        for (let j = 0; j < n; j++) {
-          if (j === cIdx || eaten.has(j)) continue;
+        forCreaturesNear(c.x, c.y, scanRange, (j) => {
+          if (j === cIdx || eaten.has(j)) return;
           const other = world.creatures[j];
           const dx = other.x - c.x;
           const dy = other.y - c.y;
           const dz = other.z - c.z;
           const minD = c.r + other.r;
-          if (dx * dx + dy * dy + dz * dz >= minD * minD) continue;
+          if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
           const otherMass = creatureTotalMass(other);
-          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) continue;
+          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
-          if (c.energy < cost) continue;
-          // Ingest: take everything the prey was carrying, including anything
-          // its own vacuole still held.
+          if (c.energy < cost) return;
+          // Ingest: take everything the prey was carrying.
           for (let k = 0; k < 6; k++) {
             c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
           }
-          for (const mk of MOLECULE_IDS) {
-            c.molecules[mk] += other.molecules[mk];
-          }
+          for (const mk of MOLECULE_IDS) c.molecules[mk] += other.molecules[mk];
           c.energy += other.energy;
           for (const inner of other.contents) c.contents.push(inner);
           other.contents.length = 0;
@@ -1256,8 +1257,8 @@ function updateCreatures(world: World, dt: number): void {
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(j);
           ingested = true;
-          break;
-        }
+          return true;
+        });
       }
       // Particle ingestion is genome-triggered: the cell must explicitly
       // run INGEST <material> this tick. Cells now select what they
@@ -1590,8 +1591,10 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.creatureDist = range;
   VM_SENSORS.creatureMass = 0;
   let bestCreatureSq = rangeSq;
-  for (const other of world.creatures) {
-    if (other === c) continue;
+  const cs = world.creatures;
+  forCreaturesNear(c.x, c.y, range, (j) => {
+    const other = cs[j];
+    if (other === c) return;
     const dx = other.x - c.x;
     const dy = other.y - c.y;
     const dsq = dx * dx + dy * dy;
@@ -1602,7 +1605,7 @@ function populateSensors(c: Creature, world: World): void {
       VM_SENSORS.creatureDist = Math.sqrt(dsq);
       VM_SENSORS.creatureMass = creatureTotalMass(other);
     }
-  }
+  });
 }
 
 function creatureTotalMass(c: Creature): number {
@@ -1647,6 +1650,59 @@ const GRID_CELL_SIZE = 12;
 const COLLISION_BUCKETS: number[][] = [];
 let COLLISION_MASS = new Float64Array(0);
 
+// Creature spatial grid -- shared across sensor lookup, predation/engulf
+// scans, and the creature-creature collision pass. Built once per tick
+// at the start of updateCreatures. Replaces what used to be O(n^2) scans
+// over world.creatures.
+const CREATURE_GRID_CELL = 64;
+const CREATURE_BUCKETS: number[][] = [];
+let CREATURE_GRID_COLS = 0;
+let CREATURE_GRID_ROWS = 0;
+
+function buildCreatureGrid(world: World): void {
+  const ccs = CREATURE_GRID_CELL;
+  CREATURE_GRID_COLS = Math.max(1, Math.ceil(world.width / ccs));
+  CREATURE_GRID_ROWS = Math.max(1, Math.ceil(world.height / ccs));
+  const cellCount = CREATURE_GRID_COLS * CREATURE_GRID_ROWS;
+  while (CREATURE_BUCKETS.length < cellCount) CREATURE_BUCKETS.push([]);
+  for (let i = 0; i < cellCount; i++) CREATURE_BUCKETS[i].length = 0;
+  const cs = world.creatures;
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
+    let cx = Math.floor(c.x / ccs);
+    let cy = Math.floor(c.y / ccs);
+    if (cx < 0) cx = 0; else if (cx >= CREATURE_GRID_COLS) cx = CREATURE_GRID_COLS - 1;
+    if (cy < 0) cy = 0; else if (cy >= CREATURE_GRID_ROWS) cy = CREATURE_GRID_ROWS - 1;
+    CREATURE_BUCKETS[cy * CREATURE_GRID_COLS + cx].push(i);
+  }
+}
+
+// Iterate creature indices that might be within `range` of (x, y). The
+// visitor may return true to stop iteration early (e.g. when a predator
+// finds its first valid prey). Skips buckets outside the search radius.
+function forCreaturesNear(
+  x: number, y: number, range: number,
+  visitor: (idx: number) => boolean | void,
+): void {
+  const ccs = CREATURE_GRID_CELL;
+  const span = Math.max(1, Math.ceil(range / ccs));
+  const cx = Math.max(0, Math.min(CREATURE_GRID_COLS - 1, Math.floor(x / ccs)));
+  const cy = Math.max(0, Math.min(CREATURE_GRID_ROWS - 1, Math.floor(y / ccs)));
+  const x0 = Math.max(0, cx - span);
+  const x1 = Math.min(CREATURE_GRID_COLS - 1, cx + span);
+  const y0 = Math.max(0, cy - span);
+  const y1 = Math.min(CREATURE_GRID_ROWS - 1, cy + span);
+  for (let gy = y0; gy <= y1; gy++) {
+    const row = gy * CREATURE_GRID_COLS;
+    for (let gx = x0; gx <= x1; gx++) {
+      const bucket = CREATURE_BUCKETS[row + gx];
+      for (let k = 0; k < bucket.length; k++) {
+        if (visitor(bucket[k]) === true) return;
+      }
+    }
+  }
+}
+
 function resolveCollisions(world: World): void {
   const ps = world.particles;
   const n = ps.length;
@@ -1689,6 +1745,100 @@ function resolveCollisions(world: World): void {
       }
     }
   }
+}
+
+// Soft positional separation for overlapping creatures + symmetric
+// velocity exchange like the particle-particle code, but driven off
+// the per-tick CREATURE_BUCKETS grid. Without this cells walk through
+// each other (only PREDATE/ENGULF cared about contact) and you can't
+// see flocking, body-shielding, or crowding pressure emerge.
+function resolveCreatureCollisions(world: World): void {
+  const cs = world.creatures;
+  const n = cs.length;
+  if (n < 2) return;
+  // Restitution: cells are mostly soft membranes, gentle rebound.
+  const e = 0.1;
+  // The grid was last built at the start of updateCreatures; positions
+  // have since moved by at most ~v*dt < a few px, so the grid is still
+  // accurate enough for collision pairing.
+  const cols = CREATURE_GRID_COLS;
+  const rows = CREATURE_GRID_ROWS;
+  for (let gy = 0; gy < rows; gy++) {
+    for (let gx = 0; gx < cols; gx++) {
+      const cell = CREATURE_BUCKETS[gy * cols + gx];
+      const cl = cell.length;
+      if (cl === 0) continue;
+      // Pairs within this cell.
+      for (let i = 0; i < cl; i++) {
+        const ai = cell[i];
+        for (let j = i + 1; j < cl; j++) resolveCreaturePair(cs, ai, cell[j], e);
+      }
+      // Half the 3x3 neighborhood -- the other half is covered by those
+      // cells' own iteration. Standard staggered-neighborhood trick.
+      if (gx + 1 < cols)             checkCreaturePairs(cs, cell, cell.length, cols, gy * cols + gx + 1, e);
+      if (gy + 1 < rows && gx > 0)   checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx - 1, e);
+      if (gy + 1 < rows)             checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx, e);
+      if (gy + 1 < rows && gx + 1 < cols) checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx + 1, e);
+    }
+  }
+}
+
+function checkCreaturePairs(
+  cs: Creature[], cell: number[], cl: number, _cols: number, otherIdx: number, e: number,
+): void {
+  const nb = CREATURE_BUCKETS[otherIdx];
+  const nl = nb.length;
+  if (nl === 0) return;
+  for (let i = 0; i < cl; i++) {
+    const ai = cell[i];
+    for (let j = 0; j < nl; j++) resolveCreaturePair(cs, ai, nb[j], e);
+  }
+}
+
+function resolveCreaturePair(cs: Creature[], i: number, j: number, e: number): void {
+  if (i === j) return;
+  const a = cs[i];
+  const b = cs[j];
+  let dx = b.x - a.x;
+  let dy = b.y - a.y;
+  let dz = b.z - a.z;
+  const minDist = a.r + b.r;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq >= minDist * minDist) return;
+  let dist = Math.sqrt(distSq);
+  if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; }
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const nz = dz / dist;
+  const overlap = minDist - dist;
+  const ma = creatureTotalMass(a);
+  const mb = creatureTotalMass(b);
+  const total = ma + mb;
+  if (total <= 0) return;
+  const corrA = overlap * (mb / total);
+  const corrB = overlap * (ma / total);
+  a.x -= nx * corrA;
+  a.y -= ny * corrA;
+  a.z -= nz * corrA;
+  b.x += nx * corrB;
+  b.y += ny * corrB;
+  b.z += nz * corrB;
+  // Symmetric velocity exchange along the contact normal.
+  const rvx = b.vx - a.vx;
+  const rvy = b.vy - a.vy;
+  const rvz = b.vz - a.vz;
+  const vN = rvx * nx + rvy * ny + rvz * nz;
+  if (vN >= 0) return;
+  const jImp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
+  const ix = nx * jImp;
+  const iy = ny * jImp;
+  const iz = nz * jImp;
+  a.vx -= ix / ma;
+  a.vy -= iy / ma;
+  a.vz -= iz / ma;
+  b.vx += ix / mb;
+  b.vy += iy / mb;
+  b.vz += iz / mb;
 }
 
 function checkNeighborPairs(

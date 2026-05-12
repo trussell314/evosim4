@@ -465,11 +465,44 @@ function updateInspector(): void {
     activeDisasm;
 }
 
+// Sim speed control. "realtime" runs one step per RAF tick using wall
+// clock dt. "max" runs a fixed-dt step in a loop for ~10ms each frame
+// so the sim advances as fast as the CPU allows while keeping the page
+// responsive.
+type SpeedMode = "realtime" | "max";
+let speedMode: SpeedMode = "realtime";
+const FIXED_DT = 1 / 60;
+const MAX_BUDGET_MS = 10;
+
+const speedBtn = document.createElement("button");
+speedBtn.style.cssText =
+  "position:fixed;bottom:8px;left:8px;z-index:10;" +
+  "background:rgba(0,0,0,.55);color:#9ee;border:1px solid #356;" +
+  "padding:4px 8px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "cursor:pointer;border-radius:3px;";
+function refreshSpeedBtn(): void {
+  speedBtn.textContent = speedMode === "realtime" ? "▶ realtime" : "⏩ max";
+}
+refreshSpeedBtn();
+speedBtn.addEventListener("click", () => {
+  speedMode = speedMode === "realtime" ? "max" : "realtime";
+  refreshSpeedBtn();
+});
+document.body.appendChild(speedBtn);
+
 let last = performance.now();
 function frame(now: number): void {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  step(world, dt);
+  if (speedMode === "max") {
+    // Burn through fixed-dt steps for up to MAX_BUDGET_MS so the page
+    // stays interactive while the sim races ahead.
+    const start = performance.now();
+    do { step(world, FIXED_DT); } while (performance.now() - start < MAX_BUDGET_MS);
+    last = now;
+  } else {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    step(world, dt);
+  }
   render();
   updateInspector();
   requestAnimationFrame(frame);
