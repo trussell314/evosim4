@@ -24,17 +24,17 @@ hudToggle.style.cssText = "padding:0 4px;";
 hudBar.appendChild(hudToggle);
 const inspector = document.createElement("pre");
 inspector.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;";
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;font:inherit;";
 // Disasm gets its own collapsible section: it's much longer than the
 // rest of the inspector and almost never wanted at-a-glance. Click the
 // "[show disasm]" header to expand.
 const disasmHeader = document.createElement("div");
 disasmHeader.style.cssText =
-  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;";
+  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;font:inherit;";
 disasmHeader.textContent = "[+] show disasm";
 const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;";
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;font:inherit;";
 hud.appendChild(hudBar);
 hud.appendChild(inspector);
 hud.appendChild(disasmHeader);
@@ -642,7 +642,7 @@ const GS_BUCKET_BYTES = 4;      // 4 bytes per bucket
 const GS_N_BUCKETS = 25;        // covers 0..100 bytes
 const GS_BUCKETS = new Int32Array(GS_N_BUCKETS);
 const GS_TICK_BYTES = [0, 25, 50, 75, 100]; // x-axis labels
-let gsMinimized = false;
+let gsMinimized = true;
 // Last-rendered toggle rect, used by the canvas click handler to
 // hit-test the minimize/expand button. Updated each frame.
 let gsToggleRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -1066,7 +1066,6 @@ function updateInspector(): void {
 const FIXED_DT = 1 / 60;
 const TARGET_FRAME_MS = 16.6;
 const FRAME_OVERHEAD_MS = 2;
-const MIN_SIM_BUDGET_MS = 1.5;
 
 // Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
 // short window so the numbers don't flicker.
@@ -1106,16 +1105,18 @@ function statsLine(): string {
 let renderCostMs = 4;
 function frame(): void {
   const start = performance.now();
-  const simBudget = Math.max(
-    MIN_SIM_BUDGET_MS,
-    TARGET_FRAME_MS - FRAME_OVERHEAD_MS - renderCostMs,
-  );
+  // Render-priority pacing: render always gets the rAF tick. Sim runs
+  // only if there's measurable slack after render's recent cost. If
+  // render is heavy or sim steps are slow, sim does zero steps this
+  // frame (world pauses for a tick) rather than blowing the 16.6ms
+  // budget and dropping the rAF lock.
+  const simBudget = TARGET_FRAME_MS - FRAME_OVERHEAD_MS - renderCostMs;
   const simDeadline = start + simBudget;
   let advanced = 0;
-  do {
+  while (performance.now() < simDeadline) {
     step(world, FIXED_DT);
     advanced += FIXED_DT;
-  } while (performance.now() < simDeadline);
+  }
   updatePerfStats(advanced);
   const renderStart = performance.now();
   render();
