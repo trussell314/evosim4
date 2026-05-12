@@ -3117,6 +3117,25 @@ export function updateCreatureRadius(c: Creature): void {
   // disk-area formula.
   const m = creatureTotalMass(c);
   c.r = Math.max(MIN_CREATURE_R, Math.cbrt((3 * m) / (4 * Math.PI)));
+  // Effective density follows what the cell is carrying. Reserves
+  // contribute at their material density (rock 2.6 sinks, gas 0.2
+  // floats); molecules + ATP contribute at water density (1.0). The
+  // buoyancy clamp in applyForces still pins ay to +/- gravity, so
+  // even a rock-filled cell can't accelerate faster than free fall.
+  if (m > 0) {
+    const s = c.store; const i = c.idx;
+    const resCols = s.resCols;
+    const matBase = MATERIAL_BASE_DENSITY;
+    let reserveMass = 0;
+    let weighted = 0;
+    for (let k = 0; k < 6; k++) {
+      const rk = resCols[k][i];
+      reserveMass += rk;
+      weighted += rk * matBase[k];
+    }
+    const watery = m - reserveMass; // molecules + ATP, at water density
+    c.density = (weighted + watery) / m;
+  }
 }
 
 const GRID_CELL_SIZE = 12;
