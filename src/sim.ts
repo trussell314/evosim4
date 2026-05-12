@@ -15,6 +15,7 @@ import {
   makeDefaultGenome,
   mutateGenome,
   somaticMutateOnce,
+  computeSenseRange,
 } from "./genome";
 
 export type MaterialId =
@@ -1053,7 +1054,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     reserves,
     molecules,
     energy: 30,
-    senseRange: 200,
+    senseRange: computeSenseRange(genome),
     thrustAccel: 70,
     genome,
     vm: newVMState(),
@@ -1784,6 +1785,9 @@ function updateCreatures(world: World, dt: number): void {
     if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
     if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
+      // Sense range tracks the SENSE_AMP count in the live genome;
+      // somatic mutation can add or remove amps, so recompute here.
+      c.senseRange = computeSenseRange(c.genome);
       // Note: c.color is NOT updated on somatic drift. Cell keeps its
       // species' visual identity so phylogeny lane color === body color
       // across the population. Inheritance through fission is what
@@ -2203,7 +2207,7 @@ function tryReproduce(parent: Creature, world: World): void {
     reserves: childReserves,
     molecules: childMolecules,
     energy: energyGift,
-    senseRange: parent.senseRange,
+    senseRange: computeSenseRange(childGenome),
     thrustAccel: parent.thrustAccel,
     genome: childGenome,
     vm: newVMState(),

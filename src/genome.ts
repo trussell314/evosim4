@@ -71,6 +71,7 @@ export const OP = {
   SENSE_PHEROMONE: 0x61, // push local pheromone concentration
   ADHERE:        0x62,   // bond with nearest cell in range; forms colonies
   REPAIR:        0x63,   // spend ATP to suppress somatic mutation briefly
+  SENSE_AMP:     0x64,   // passive: each copy expands the cell's sense range
 
   HALT:          0xFF,
 } as const;
@@ -307,6 +308,9 @@ export function runTick(
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
       case OP.REPAIR:         out.repair++; break;
+      // SENSE_AMP is a passive marker; its only effect is to widen
+      // the cell's sense range, computed once at birth in sim.ts.
+      case OP.SENSE_AMP:      break;
 
       case OP.THRUST: {
         const ay = vmPop(stack);
@@ -589,8 +593,21 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
 //   jz +1                  ; if either fails, skip REPRODUCE
 //   reproduce              ; try to fission
 //   halt
+// Sense range is encoded by SENSE_AMP bytes in the genome. Cost scales
+// with sensing area, so range scales with sqrt(amp count): each amp
+// contributes a constant area increment, but total radius grows
+// sub-linearly. Empty genome -> SENSE_BASE; default genome (1 amp) -> 80.
+export const SENSE_BASE = 40;
+export const SENSE_PER_AMP = 40;
+export function computeSenseRange(genome: Uint8Array): number {
+  let amps = 0;
+  for (let i = 0; i < genome.length; i++) if (genome[i] === OP.SENSE_AMP) amps++;
+  return SENSE_BASE + SENSE_PER_AMP * Math.sqrt(amps);
+}
+
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
+    OP.SENSE_AMP,             // one sense amplifier -> 80px range
     OP.SENSE_GRAD_X, 3,
     OP.SENSE_GRAD_Y, 3,
     OP.THRUST,

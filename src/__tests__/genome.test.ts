@@ -445,10 +445,10 @@ describe("makeDefaultGenome", () => {
   });
   it("contains the starter behavior bytes", () => {
     const g = makeDefaultGenome();
-    expect(g[0]).toBe(OP.SENSE_GRAD_X);
-    expect(g[1]).toBe(3);
+    expect(Array.from(g)).toContain(OP.SENSE_GRAD_X);
     expect(g[g.length - 1]).toBe(OP.HALT);
     expect(Array.from(g)).toContain(OP.THRUST);
     expect(Array.from(g)).toContain(OP.REPRODUCE);
+    expect(Array.from(g)).toContain(OP.SENSE_AMP);
   });
 });
