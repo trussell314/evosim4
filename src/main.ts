@@ -1276,11 +1276,17 @@ const STEP_BUDGET_SAFETY = 1.4;
 simChannel.port1.onmessage = () => {
   const sliceDeadline = performance.now() + SIM_SLICE_MS;
   const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
+  let ranOne = false;
   while (performance.now() < sliceDeadline) {
     const t0 = performance.now();
-    if (t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
+    // Always run at least one step per frame so sim can never stall
+    // permanently. The overshoot guard only applies to *additional*
+    // steps -- if recentStepMs spikes once we still make forward
+    // progress, and the spike decays back to normal as steps run.
+    if (ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     step(world, FIXED_DT);
     advancedThisFrame += FIXED_DT;
+    ranOne = true;
     const elapsed = performance.now() - t0;
     simMsThisFrame += elapsed;
     recentStepMs = elapsed > recentStepMs ? elapsed : recentStepMs * RECENT_STEP_DECAY;
