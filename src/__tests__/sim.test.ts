@@ -1393,6 +1393,50 @@ describe("aeration & surface escape", () => {
   });
 });
 
+describe("mass conservation", () => {
+  // Total system mass = sum of particle mass + sum of all creature stuff
+  // (reserves + molecules + ATP-as-mass, plus engulfed contents).
+  function worldMass(w: World): number {
+    let m = 0;
+    for (const p of w.particles) {
+      m += MATERIALS[p.material].density * (4 / 3) * Math.PI * p.r * p.r * p.r;
+    }
+    function creatureMass(c: Creature): number {
+      let cm = c.energy;
+      for (const id of M) cm += c.reserves[id];
+      for (const mk of MOLECULE_IDS) cm += c.molecules[mk];
+      for (const inner of c.contents) cm += creatureMass(inner);
+      return cm;
+    }
+    for (const c of w.creatures) m += creatureMass(c);
+    return m;
+  }
+
+  it("total mass is preserved across many ticks with no aeration / no escape", () => {
+    const w = quietWorld();
+    // Surface above the world so floating gas can't escape; aeration off
+    // so no fresh O2 enters; spawn rate zero so no replenishment.
+    // particleTarget kept high so autoExcrete spawns particles instead of
+    // hitting the overflow branch (which silently vaporizes molecules).
+    w.surfaceY = -50;
+    w.aerationRate = 0;
+    w.particleSpawnRate = 0;
+    w.particleTarget = 100000;
+    for (let i = 0; i < 20; i++) {
+      w.particles.push({ x: 100 + i * 30, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: i % 2 === 0 ? "organic" : "clay" });
+    }
+    const c = makeCreature({ x: 400, y: 200, energy: 30, genome: OMNIVORE });
+    w.creatures.push(c);
+    const m0 = worldMass(w);
+    for (let i = 0; i < 600; i++) step(w, 1 / 60);
+    const m1 = worldMass(w);
+    // 5% bound accommodates small float drift from the molecule-tagged
+    // particle radius floor (radiusForMass clamped at 1.5, which slightly
+    // overshoots actual molecule mass for very small excretions).
+    expect(Math.abs(m1 - m0)).toBeLessThan(m0 * 0.05);
+  });
+});
+
 describe("particle replenishment", () => {
   it("spawns when below target", () => {
     const w = quietWorld();

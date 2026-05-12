@@ -1447,30 +1447,33 @@ function tryReproduce(parent: Creature, world: World): void {
   if (world.creatures.length >= MAX_CREATURES) return;
   const childGenome = mutateGenome(parent.genome);
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
-  // Reserves are bulk-food, not the substrate cells build themselves out of.
-  // Both daughters need a full copy, so require parent has 2x the cost.
+  // Genome-controlled split ratio: f = parent's share of mass after
+  // fission, 1-f = child's share. Symmetric (0.5) by default; the genome
+  // can push a different value before REPRODUCE to evolve r-strategist
+  // (small frequent daughters, f -> 0.9) or K-strategist (rare big
+  // splits, f -> 0.5) styles. Both daughters need a viable copy, so we
+  // require the smaller side has at least the genome cost in each
+  // build-block.
+  const parentShare = VM_OUT.reproduceFraction;
+  const childShare = 1 - parentShare;
+  const minShare = Math.min(parentShare, childShare);
   const cost = genomeMoleculeCost(childGenome, MASS_PER_GENOME_BYTE);
   for (const k of BUILD_KEYS) {
-    if (parent.molecules[k] < 2 * cost[k]) return;
+    if (parent.molecules[k] * minShare < cost[k]) return;
   }
-  // Symmetric fission: every build-block, every other molecule, every
-  // reserve, and ATP split 50/50 between parent and child. No preferential
-  // cost transfer -- the asymmetric old version starved the parent down
-  // to (initial - cost) / 2 biomass, just above the autolyze floor, so
-  // freshly fissioned parents tended to die within seconds.
   const childMolecules = emptyMolecules();
   const childReserves = emptyReserves();
   for (const mk of MOLECULE_IDS) {
-    const half = parent.molecules[mk] * 0.5;
-    parent.molecules[mk] -= half;
-    childMolecules[mk] = half;
+    const give = parent.molecules[mk] * childShare;
+    parent.molecules[mk] -= give;
+    childMolecules[mk] = give;
   }
   for (const id of MATERIAL_IDS) {
-    const half = parent.reserves[id] * 0.5;
-    parent.reserves[id] -= half;
-    childReserves[id] = half;
+    const give = parent.reserves[id] * childShare;
+    parent.reserves[id] -= give;
+    childReserves[id] = give;
   }
-  const energyGift = parent.energy * 0.5;
+  const energyGift = parent.energy * childShare;
   parent.energy -= energyGift;
 
   updateCreatureRadius(parent);

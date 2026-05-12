@@ -170,6 +170,11 @@ export interface VMOutputs {
   turn: number;
   excrete: Float32Array;
   reproduce: boolean;
+  // Parent's share of mass after fission. Set by REPRODUCE from the
+  // stack-top value, clamped to [0.1, 0.9]; out-of-range / NaN / empty
+  // stack defaults to 0.5 (symmetric). Cells can evolve to "throw small
+  // daughters often" (f=0.9) or "split big" (f=0.5).
+  reproduceFraction: number;
   predate: boolean;
   engulf: boolean;
   // Per-material ingest mask. The genome calls INGEST <material>; the
@@ -183,7 +188,8 @@ export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
-    reproduce: false, predate: false, engulf: false,
+    reproduce: false, reproduceFraction: 0.5,
+    predate: false, engulf: false,
     ingestMaterials: new Uint8Array(6),
     instructions: 0,
   };
@@ -202,6 +208,7 @@ export function runTick(
   out.turn = 0;
   out.excrete.fill(0);
   out.reproduce = false;
+  out.reproduceFraction = 0.5;
   out.predate = false;
   out.engulf = false;
   out.ingestMaterials.fill(0);
@@ -292,7 +299,13 @@ export function runTick(
         out.excrete[idx] += Math.max(0, vmPop(stack));
         break;
       }
-      case OP.REPRODUCE:  out.reproduce  = true; break;
+      case OP.REPRODUCE: {
+        // Pop parent's share of mass (0.1..0.9). Out of range -> symmetric.
+        const f = vmPop(stack);
+        out.reproduce = true;
+        out.reproduceFraction = (f >= 0.1 && f <= 0.9) ? f : 0.5;
+        break;
+      }
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
       case OP.INGEST:     { const idx = m6(genome[state.pc % L]); state.pc++; out.ingestMaterials[idx] = 1; break; }
