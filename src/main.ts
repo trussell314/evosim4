@@ -223,6 +223,19 @@ const TOXIC_WASTE_FRAC = 0.5;
 
 // Map water temperature (°C) to a tint. Warm = lighter cyan, cool = deep
 // dark blue. Chosen so 20°C lands near the original water palette.
+// Lerp a "#rrggbb" hex color toward (tr, tg, tb) by `frac`.
+// Returns an "rgb(r,g,b)" string. Used by the obstacle renderer to
+// compute lighter top and darker bottom stops in one helper.
+function hexLerp(hex: string, tr: number, tg: number, tb: number, frac: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const lr = Math.round(r + (tr - r) * frac);
+  const lg = Math.round(g + (tg - g) * frac);
+  const lb = Math.round(b + (tb - b) * frac);
+  return `rgb(${lr},${lg},${lb})`;
+}
+
 // Scale an "rgb(r,g,b)" string toward black by `mult` in [0..1].
 // Used to apply the day/night dimming to the water gradient.
 function darkenColor(rgb: string, mult: number): string {
@@ -287,19 +300,27 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Static terrain (crescent floor + scattered boulders). Drawn before
-  // particles so settled sediment piles read as resting on the rocks.
-  // Fill only -- no stroke, otherwise each individual lobe gets an
-  // outline that bleeds through the union and the rock looks like a
-  // cluster of bubbles instead of one solid silhouette.
+  // Static terrain (crescent + scattered boulders). Top-to-bottom
+  // linear gradient gives a "lit from above" rock look; a soft dark
+  // shadow blur adds a rim around the union silhouette so the shape
+  // reads as solid rock rather than overlapping bubbles. No stroke
+  // (would draw every internal lobe outline).
   for (const ob of world.obstacles) {
-    ctx.fillStyle = ob.color;
+    const grad = ctx.createLinearGradient(0, ob.minY, 0, ob.maxY);
+    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.25));
+    grad.addColorStop(0.45, ob.color);
+    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
+    ctx.fillStyle = grad;
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 4;
     ctx.beginPath();
     for (const l of ob.lobes) {
       ctx.moveTo(l.x + l.r, l.y);
       ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
     }
     ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
   }
 
   // Highlight along the surface line.
