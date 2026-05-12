@@ -539,6 +539,24 @@ const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
   gas:     { o2: 0.6, co2: 0.4 },
 };
 
+// Precomputed flat tables: per-material, the molecule keys and their
+// fractions, ready for indexed iteration. Beats `for (const k in frac)`
+// in catabolize() -- for-in is several times slower than a tight indexed
+// loop over packed arrays.
+const CATAB_KEYS: Record<MaterialId, (keyof Molecules)[]> = {} as Record<MaterialId, (keyof Molecules)[]>;
+const CATAB_FRACS: Record<MaterialId, number[]> = {} as Record<MaterialId, number[]>;
+for (const id of Object.keys(CATAB_FRACTIONS) as MaterialId[]) {
+  const row = CATAB_FRACTIONS[id];
+  const keys: (keyof Molecules)[] = [];
+  const fracs: number[] = [];
+  for (const k of Object.keys(row) as (keyof Molecules)[]) {
+    const v = row[k];
+    if (v !== undefined && v > 0) { keys.push(k); fracs.push(v); }
+  }
+  CATAB_KEYS[id] = keys;
+  CATAB_FRACS[id] = fracs;
+}
+
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
 const KM_DEFAULT = 1;
@@ -592,6 +610,11 @@ const TOX_DAMAGE_PER_EXCESS_PER_SEC = 0.05;
 // Surface of the water sits 5% of the world height below the top. The
 // band above is atmosphere where cells can't go and gas particles escape.
 const SURFACE_Y_FRAC = 0.05;
+// Vertical splash: how deep the surface "spray" force reaches, and
+// how strong it is relative to the horizontal surface force. High gain
+// makes droplets visibly jump; small depth keeps the bulk water still.
+const SPLASH_DEPTH = 30;
+const SPLASH_GAIN = 1.5;
 // Aeration: per-pixel-of-surface-length, expected gas bubbles per second.
 // Each bubble carries O2 and falls into the water; cells can ingest or
 // it eventually rises back out (or gets ingested by a hungry cell).
@@ -1197,17 +1220,20 @@ function sat(x: number, km: number = KM_DEFAULT): number {
 // each row of CATAB_FRACTIONS sums to 1.
 function catabolize(c: Creature, dt: number): void {
   const surface = c.r / MIN_CREATURE_R;
-  for (const id of MATERIAL_IDS) {
-    const avail = c.reserves[id];
+  const rsv = c.reserves;
+  const mol = c.molecules;
+  for (let i = 0; i < MATERIAL_IDS.length; i++) {
+    const id = MATERIAL_IDS[i];
+    const avail = rsv[id];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * sat(avail, CATAB_KM);
-    const amt = Math.min(rate * dt, avail);
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM));
+    const amt = rate * dt < avail ? rate * dt : avail;
     if (amt <= 0) continue;
-    c.reserves[id] = avail - amt;
-    const frac = CATAB_FRACTIONS[id];
-    for (const k in frac) {
-      const key = k as keyof Molecules;
-      c.molecules[key] += amt * (frac[key] as number);
+    rsv[id] = avail - amt;
+    const keys = CATAB_KEYS[id];
+    const fracs = CATAB_FRACS[id];
+    for (let k = 0; k < keys.length; k++) {
+      mol[keys[k]] += amt * fracs[k];
     }
   }
 }
@@ -1227,16 +1253,23 @@ function diffuseGases(c: Creature, dt: number): void {
 }
 
 // Aerobic respiration: 1 glu + 1 o2 + 10 adp -> 2 co2 + 10 atp.
+// sat() inlined here and below: avoids the default-argument fast path
+// in the generic helper which the JIT doesn't always specialize.
 function aerobicRespire(c: Creature, dt: number): void {
   const m = c.molecules;
-  if (m.glucose <= 0 || m.o2 <= 0 || m.adp <= 0) return;
-  const rate = AEROBIC_VMAX * sat(m.glucose) * sat(m.o2) * sat(m.adp / 10);
-  const amt = Math.min(rate * dt, m.glucose, m.o2, m.adp / 10);
+  const g = m.glucose, o = m.o2, a = m.adp;
+  if (g <= 0 || o <= 0 || a <= 0) return;
+  const a10 = a / 10;
+  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT));
+  const rdt = rate * dt;
+  let amt = rdt < g ? rdt : g;
+  if (o < amt) amt = o;
+  if (a10 < amt) amt = a10;
   if (amt <= 0) return;
-  m.glucose -= amt;
-  m.o2 -= amt;
+  m.glucose = g - amt;
+  m.o2 = o - amt;
   m.co2 += 2 * amt;
-  m.adp -= 10 * amt;
+  m.adp = a - 10 * amt;
   c.energy += 10 * amt;
 }
 
@@ -1244,13 +1277,17 @@ function aerobicRespire(c: Creature, dt: number): void {
 // when O2 is abundant so it acts as the anaerobic fallback path.
 function ferment(c: Creature, dt: number): void {
   const m = c.molecules;
-  if (m.glucose <= 0 || m.adp <= 0) return;
-  const o2Suppression = KM_DEFAULT / (KM_DEFAULT + m.o2);
-  const rate = FERMENT_VMAX * sat(m.glucose) * sat(m.adp / 2) * o2Suppression;
-  const amt = Math.min(rate * dt, m.glucose, m.adp / 2);
+  const g = m.glucose, o = m.o2, a = m.adp;
+  if (g <= 0 || a <= 0) return;
+  const a2 = a / 2;
+  const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
+  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression;
+  const rdt = rate * dt;
+  let amt = rdt < g ? rdt : g;
+  if (a2 < amt) amt = a2;
   if (amt <= 0) return;
-  m.glucose -= amt;
-  m.adp -= 2 * amt;
+  m.glucose = g - amt;
+  m.adp = a - 2 * amt;
   m.co2 += 0.5 * amt;
   m.waste += 0.5 * amt;
   c.energy += 2 * amt;
@@ -1260,14 +1297,19 @@ function ferment(c: Creature, dt: number): void {
 // Much higher ATP yield per gram than glucose -- fatty acids are dense fuel.
 function betaOxidize(c: Creature, dt: number): void {
   const m = c.molecules;
-  if (m.fattyAcid <= 0 || m.o2 <= 0 || m.adp <= 0) return;
-  const rate = BETAOX_VMAX * sat(m.fattyAcid) * sat(m.o2) * sat(m.adp / 14);
-  const amt = Math.min(rate * dt, m.fattyAcid, m.o2, m.adp / 14);
+  const f = m.fattyAcid, o = m.o2, a = m.adp;
+  if (f <= 0 || o <= 0 || a <= 0) return;
+  const a14 = a / 14;
+  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT));
+  const rdt = rate * dt;
+  let amt = rdt < f ? rdt : f;
+  if (o < amt) amt = o;
+  if (a14 < amt) amt = a14;
   if (amt <= 0) return;
-  m.fattyAcid -= amt;
-  m.o2 -= amt;
+  m.fattyAcid = f - amt;
+  m.o2 = o - amt;
   m.co2 += 2 * amt;
-  m.adp -= 14 * amt;
+  m.adp = a - 14 * amt;
   c.energy += 14 * amt;
 }
 
@@ -1742,6 +1784,15 @@ function applyForces(world: World, dt: number): void {
     const surface = surfAmp * Math.cos(kS * o.x) * Math.sin(wS * world.t) * Math.exp(-depth / world.surfaceDecay);
     const swell   = swellAmp * Math.cos(kL * o.x) * Math.sin(wL * world.t) * Math.exp(-depth / world.swellDecay);
     const az      = zAmp * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
+    // Vertical splash near the surface: 90deg-phased counterpart to the
+    // horizontal standing wave. Particles in the top ~30px of the water
+    // get strong upward kicks at wave peaks and downward pulls at
+    // troughs, so the surface visibly chops + sprays instead of just
+    // bobbing horizontally. Decays sharply with depth so the bulk water
+    // column isn't affected.
+    const splash = depth < SPLASH_DEPTH
+      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * o.x) * Math.cos(wS * world.t) * Math.exp(-depth / SPLASH_DEPTH)
+      : 0;
     // Vertical mixing: gentle up/down currents that vary with x and time.
     // Negative ay = upward push, positive = downward. Full water column.
     const updraft = -world.updraftAmp * updraftEnv * Math.sin(kU * o.x + wU * world.t);
@@ -1753,7 +1804,7 @@ function applyForces(world: World, dt: number): void {
     const noiseX = bAmp * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * (Math.random() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
-    const ayTot = ay + updraft + noiseY;
+    const ayTot = ay + splash + updraft + noiseY;
     const dragScale = o.r / DRAG_REF_R;
     o.vx += (ax - world.drag * dragScale * o.vx) * dt;
     o.vy += (ayTot - world.drag * dragScale * o.vy) * dt;
