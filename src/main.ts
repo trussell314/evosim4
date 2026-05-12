@@ -1263,17 +1263,16 @@ function statsLine(): string {
 }
 
 // Sim and render are decoupled. Render is on rAF (vsync). Sim runs
-// in a MessageChannel macrotask that's scheduled once per rAF -- not
-// continuously chained -- so the task queue drains between vsyncs.
-// Chrome's frame scheduler can deprioritize rAF when there's always
-// a pending task; that path produced the 30fps lock at idle CPU.
-// Posting once per rAF leaves the queue empty when nothing useful
-// is happening, and lets the browser hit every vsync.
-// Max sim time per macrotask call. Bumped from 6 to 10 after we
-// stopped chaining sim macrotasks continuously: with one slice per
-// rAF, throughput is hard-capped at SIM_SLICE_MS * fps. 10ms still
-// leaves ~6ms for render + browser overhead inside a 16.6ms frame.
-const SIM_SLICE_MS = 10;
+// in a MessageChannel macrotask that *chains*: every onmessage posts
+// the next one, so sim fills the gap between vsyncs with whatever
+// budget remains (gated by sliceDeadline + frameDeadline checks).
+//
+// Earlier we tried "one macrotask per rAF" to break a suspected
+// rAF-starvation cause of 30fps lock. Data showed r+s well under
+// vsync but still 30fps -- so the lock was browser/OS rate-limiting
+// (mobile thermal/power throttling, vsync clamp hysteresis), not us.
+// Removing the chain hurt sim throughput by ~3x with no fps benefit.
+const SIM_SLICE_MS = 6;
 const FRAME_OVERHEAD_FOR_SIM_MS = 3;
 const simChannel = new MessageChannel();
 let lastFrameStart = performance.now();
@@ -1314,8 +1313,11 @@ simChannel.port1.onmessage = () => {
     simMsThisFrame += elapsed;
     recentStepMs = elapsed > recentStepMs ? elapsed : recentStepMs * RECENT_STEP_DECAY;
   }
-  // Note: no postMessage here. frame() posts exactly one per rAF.
+  // Chain: post the next macrotask so sim fills the gap between
+  // vsyncs. frame() also posts one per rAF as an initial kick.
+  simChannel.port2.postMessage(null);
 };
+simChannel.port2.postMessage(null);
 
 function frame(): void {
   lastFrameStart = performance.now();
@@ -1323,11 +1325,6 @@ function frame(): void {
   simMsThisFrame = 0;
   const advanced = advancedThisFrame;
   advancedThisFrame = 0;
-  // Schedule one sim macrotask for this frame. It will fire after
-  // render() returns and before the next vsync. We don't chain inside
-  // onmessage anymore -- this keeps the macrotask queue from being
-  // continuously full, which can throw off Chrome's vsync pacing.
-  simChannel.port2.postMessage(null);
   const tBeforeRender = performance.now();
   render();
   updateInspector();
