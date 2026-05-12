@@ -161,7 +161,16 @@ function canvasToWorld(cx: number, cy: number): { x: number; y: number } {
 }
 canvas.addEventListener("click", (e) => {
   const rect = canvas.getBoundingClientRect();
-  const w = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  // Genome-stats panel toggle. Hit-test in CSS pixel space against
+  // the last-rendered toggle rect.
+  const t = gsToggleRect;
+  if (cx >= t.x && cx <= t.x + t.w && cy >= t.y && cy <= t.y + t.h) {
+    gsMinimized = !gsMinimized;
+    return;
+  }
+  const w = canvasToWorld(cx, cy);
   const best = findCellAt(w.x, w.y);
   if (best >= 0) {
     selectedCell = world.creatures[best];
@@ -626,14 +635,22 @@ function heatColorDensity(x: number): string {
 // mean ± stddev so you can see at a glance whether genomes are
 // bloating, collapsing, or settled.
 const GS_PANEL_W = 240;
-const GS_PANEL_H = 90;
+const GS_PANEL_H_FULL = 110;
+const GS_PANEL_H_MIN = 22;
 const GS_PANEL_MARGIN = 8;
 const GS_BUCKET_BYTES = 4;      // 4 bytes per bucket
 const GS_N_BUCKETS = 25;        // covers 0..100 bytes
 const GS_BUCKETS = new Int32Array(GS_N_BUCKETS);
+const GS_TICK_BYTES = [0, 25, 50, 75, 100]; // x-axis labels
+let gsMinimized = false;
+// Last-rendered toggle rect, used by the canvas click handler to
+// hit-test the minimize/expand button. Updated each frame.
+let gsToggleRect = { x: 0, y: 0, w: 0, h: 0 };
+
 function drawGenomeStats(): void {
   const dpr = window.devicePixelRatio || 1;
   const canvasCssW = canvas.width / dpr;
+  const panelH = gsMinimized ? GS_PANEL_H_MIN : GS_PANEL_H_FULL;
   const panelX = canvasCssW - GS_PANEL_W - GS_PANEL_MARGIN;
   const panelY = GS_PANEL_MARGIN;
   const cs = world.creatures;
@@ -659,25 +676,42 @@ function drawGenomeStats(): void {
 
   // Panel chrome.
   ctx.fillStyle = "rgba(4,16,24,0.78)";
-  ctx.fillRect(panelX, panelY, GS_PANEL_W, GS_PANEL_H);
+  ctx.fillRect(panelX, panelY, GS_PANEL_W, panelH);
   ctx.strokeStyle = "#1a3340";
   ctx.lineWidth = 1;
-  ctx.strokeRect(panelX + 0.5, panelY + 0.5, GS_PANEL_W - 1, GS_PANEL_H - 1);
+  ctx.strokeRect(panelX + 0.5, panelY + 0.5, GS_PANEL_W - 1, panelH - 1);
 
   ctx.fillStyle = "#9ee";
   ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textBaseline = "top";
+  ctx.textAlign = "left";
   ctx.fillText(
     `genome size  n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`,
     panelX + 6, panelY + 4,
   );
 
-  // Plot area: leave room for the header (16px) and a baseline (4px).
+  // Minimize/maximize toggle in the top-right of the panel header.
+  const tw = 16, th = 14;
+  const tx = panelX + GS_PANEL_W - tw - 4;
+  const ty = panelY + 3;
+  gsToggleRect = { x: tx, y: ty, w: tw, h: th };
+  ctx.strokeStyle = "#9ee";
+  ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
+  ctx.textAlign = "center";
+  ctx.fillText(gsMinimized ? "+" : "–", tx + tw / 2, ty + 2);
+  ctx.textAlign = "left";
+
+  if (gsMinimized) return;
+
+  // Plot area: leave room for header (18px) and tick-label band (14px).
   const plotX = panelX + 6;
-  const plotY = panelY + 20;
+  const plotY = panelY + 22;
   const plotW = GS_PANEL_W - 12;
-  const plotH = GS_PANEL_H - 26;
+  const plotH = panelH - 22 - 18;
   const bucketW = plotW / GS_N_BUCKETS;
+  const maxBytes = GS_N_BUCKETS * GS_BUCKET_BYTES;
+  const xForByteLen = (L: number) =>
+    plotX + Math.min(plotW, Math.max(0, (L / maxBytes) * plotW));
 
   // Bars.
   ctx.fillStyle = "#5fa9c4";
@@ -688,9 +722,26 @@ function drawGenomeStats(): void {
     ctx.fillRect(plotX + i * bucketW, plotY + (plotH - h), Math.max(1, bucketW - 1), h);
   }
 
+  // Baseline + tick marks with byte-count labels.
+  ctx.strokeStyle = "#456773";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(plotX, plotY + plotH + 0.5);
+  ctx.lineTo(plotX + plotW, plotY + plotH + 0.5);
+  ctx.stroke();
+  ctx.fillStyle = "#7ab";
+  ctx.textAlign = "center";
+  for (const b of GS_TICK_BYTES) {
+    const x = xForByteLen(b);
+    ctx.beginPath();
+    ctx.moveTo(x, plotY + plotH);
+    ctx.lineTo(x, plotY + plotH + 3);
+    ctx.stroke();
+    ctx.fillText(String(b), x, plotY + plotH + 5);
+  }
+  ctx.textAlign = "left";
+
   // Mean + ±stddev lines.
-  const xForByteLen = (L: number) =>
-    plotX + Math.min(plotW, Math.max(0, (L / (GS_N_BUCKETS * GS_BUCKET_BYTES)) * plotW));
   if (n > 0) {
     const xMean = xForByteLen(mean);
     ctx.strokeStyle = "#f0c050";
