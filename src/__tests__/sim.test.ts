@@ -61,6 +61,13 @@ function quietWorld(): World {
     nextSpeciesLane: 0,
     anchorGenome: new Uint8Array(0),
     brownianAmp: 0,
+    dayPhase: 0.25, // midday for tests so photosynthesis works normally
+    dayPeriod: 90,
+    disturbanceIntensity: 0,
+    disturbanceStartedAt: 0,
+    disturbanceUntil: 0,
+    nextDisturbanceAt: Number.POSITIVE_INFINITY,
+    currentAmp: 0,
   };
 }
 
@@ -85,6 +92,7 @@ function makeCreature(overrides: Partial<Creature> = {}): Creature {
     vm: newVMState(),
     color: "#ffffff",
     ingestCooldown: 0,
+    repairTicks: 0,
     bornAt: 0,
     speciesKey: "",
     division: null,

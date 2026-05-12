@@ -90,6 +90,9 @@ export interface Creature {
   vm: VMState;
   color: string;
   ingestCooldown: number;
+  // Ticks remaining where somatic mutation is suppressed. Refreshed by
+  // REPAIR op execution. Costs ATP per refresh.
+  repairTicks: number;
   // world.t at the moment this creature was created. Age = world.t - bornAt.
   bornAt: number;
   // genomeKey at birth -- frozen for life so species accounting (alive
@@ -260,6 +263,24 @@ export interface World {
   // Brownian noise amplitude added to wave forcing. Helps prevent stuff
   // from accumulating on one side of the world.
   brownianAmp: number;
+  // Day/night: phase 0..1 advances at 1/dayPeriod each sec. Solar light
+  // multiplier = max(0, sin(2*pi*phase + offset)); midday at phase 0.25,
+  // dead night at phase 0.75. Photosynthesis and the light sensor both
+  // multiply through this so cells experience a real day/night rhythm.
+  dayPhase: number;
+  dayPeriod: number;
+  // Disturbance events ("storms"). intensity 0..1 ramps up + down across
+  // an event; surfaceAmp/brownian/zStir scale with it at use sites. The
+  // scheduler picks the next event time uniformly within [60s, 1200s]
+  // after the previous one ends, so the gaps are irregular.
+  disturbanceIntensity: number;
+  disturbanceStartedAt: number;
+  disturbanceUntil: number;
+  nextDisturbanceAt: number;
+  // Horizontal current amplitude (accel px/s^2). Surface flows one way,
+  // depth the other; the sign reverses on a slow oscillation. Cells and
+  // particles both feel it. Tests can zero this for stillwater scenarios.
+  currentAmp: number;
   // Optional per-phase timing. When present, step() accumulates wall-clock
   // milliseconds spent in each phase plus a tick counter. Read + reset by
   // the UI to display where the frame budget actually goes.
@@ -469,6 +490,12 @@ const MIN_VIABLE_BIOMASS = 0.5;
 // is effectively stable; an old cell accumulates DNA damage gradually.
 // At age 60s: ~7e-3/s (1 mutation per ~140s); 100s: ~0.02/s; 300s: ~0.18/s.
 const SOMATIC_MUTATION_AGE_COEF = 2e-6;
+const REPAIR_ATP_PER_OP = 0.5;
+const REPAIR_WINDOW_TICKS = 30;
+// Horizontal current: amplitude (px/s^2 of acceleration) and the rate of
+// the slow direction-reversal oscillation (rad/sec; 2pi/600 ~ 10 sim-min).
+const CURRENT_AMP = 35;
+const CURRENT_FREQ = 2 * Math.PI / 600;
 
 // Auto-excretion: once internal CO2 / waste crosses these thresholds, the
 // cell dumps the excess back to the world as particles (mass-conserving).
@@ -562,6 +589,46 @@ export function temperatureAt(world: World, x: number, y: number): number {
   return base + patch;
 }
 
+// Solar light multiplier 0..1. Sin curve over dayPhase with midday at
+// phase 0.25; dark half of cycle returns 0. Multiplied into the depth
+// attenuation at every light-using site (photosynthesis, sensor).
+export function solarLight(world: World): number {
+  return Math.max(0, Math.sin(2 * Math.PI * world.dayPhase));
+}
+
+function advanceDayCycle(world: World, dt: number): void {
+  world.dayPhase = (world.dayPhase + dt / world.dayPeriod) % 1;
+}
+
+// Schedule + ramp disturbance ("storm") intensity. While intensity > 0,
+// surface waves, vertical mixing, and brownian forcing are all
+// amplified at use sites. Trapezoidal envelope: ramp up 0..1 in first
+// 30% of the event, hold, ramp 1..0 in last 30%. Gaps between events
+// are picked from [60s, 1200s] so they're irregular.
+function advanceDisturbance(world: World, dt: number): void {
+  void dt;
+  const t = world.t;
+  if (world.disturbanceUntil > 0 && t >= world.disturbanceUntil) {
+    world.disturbanceUntil = 0;
+    world.disturbanceIntensity = 0;
+  }
+  if (world.disturbanceUntil === 0 && t >= world.nextDisturbanceAt) {
+    const duration = 8 + Math.random() * 10;
+    world.disturbanceStartedAt = t;
+    world.disturbanceUntil = t + duration;
+    world.nextDisturbanceAt = world.disturbanceUntil + 60 + Math.random() * 1140;
+  }
+  if (world.disturbanceUntil > 0) {
+    const duration = world.disturbanceUntil - world.disturbanceStartedAt;
+    const f = (t - world.disturbanceStartedAt) / duration;
+    let i: number;
+    if (f < 0.3) i = f / 0.3;
+    else if (f > 0.7) i = (1 - f) / 0.3;
+    else i = 1;
+    world.disturbanceIntensity = Math.max(0, Math.min(1, i));
+  }
+}
+
 function tempMult(T: number): number {
   const m = Math.pow(TEMP_Q10, (T - TEMP_REF) / 10);
   return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
@@ -602,6 +669,13 @@ export function createWorld(width: number, height: number): World {
     nextSpeciesLane: 0,
     anchorGenome: new Uint8Array(0),
     brownianAmp: 25,
+    dayPhase: 0.2, // start a bit before noon so first day shows
+    dayPeriod: 90,
+    disturbanceIntensity: 0,
+    disturbanceStartedAt: 0,
+    disturbanceUntil: 0,
+    nextDisturbanceAt: 60 + Math.random() * 240,
+    currentAmp: CURRENT_AMP,
   };
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
@@ -694,6 +768,7 @@ function makeCreature(x: number, y: number, z: number): Creature {
     vm: newVMState(),
     color: genomeColor(genome),
     ingestCooldown: 0,
+    repairTicks: 0,
     bornAt: 0,
     speciesKey: genomeKey(genome),
     division: null,
@@ -1027,6 +1102,20 @@ function spawnExcretedParticle(
 
 // Levenshtein edit distance between two genomes. Bounded by the larger of
 // the two lengths. Genomes are <= 256 bytes so the O(n*m) cost is fine.
+// Single-crossover recombination of two genomes. The result has the
+// parent's length (so size-based costs are stable). Bytes 0..k come
+// from parent a, bytes k..end from parent b; if b is shorter we fall
+// back to a's tail. k is uniformly random.
+function crossoverGenomes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const len = a.length;
+  if (len === 0) return new Uint8Array(b);
+  const out = new Uint8Array(len);
+  const k = Math.floor(Math.random() * (len + 1));
+  for (let i = 0; i < k; i++) out[i] = a[i];
+  for (let i = k; i < len; i++) out[i] = i < b.length ? b[i] : a[i];
+  return out;
+}
+
 export function genomeDistance(a: Uint8Array, b: Uint8Array): number {
   const m = a.length, n = b.length;
   if (m === 0) return n;
@@ -1081,6 +1170,8 @@ function radiusForMass(m: number, density: number): number {
 
 export function step(world: World, dt: number): void {
   world.t += dt;
+  advanceDayCycle(world, dt);
+  advanceDisturbance(world, dt);
   const p = world.profile;
   if (p) {
     let m = performance.now();
@@ -1243,7 +1334,20 @@ function applyForces(world: World, dt: number): void {
   const kU = (2 * Math.PI) / world.updraftLength;
   const wU = (2 * Math.PI) / world.updraftPeriod;
 
-  const bAmp = world.brownianAmp;
+  // Disturbance amplifies wind/wave/mixing forces. 1.0 baseline, up to 4x
+  // during a peak storm. Only surface/swell/zStir/brownian get amplified;
+  // gravity/drag are unchanged.
+  const dMult = 1 + 3 * world.disturbanceIntensity;
+  const bAmp = world.brownianAmp * dMult;
+  const surfAmp = world.surfaceAmp * dMult;
+  const swellAmp = world.swellAmp * dMult;
+  const zAmp = world.zStirAmp * dMult;
+
+  // Slow horizontal current: surface flows one way, deep flows the other.
+  // The direction reverses very slowly so cells eventually have to cope
+  // with both regimes.
+  const colDepth = Math.max(1, world.height - world.surfaceY);
+  const currentDrift = Math.sin(world.t * CURRENT_FREQ);
   const integrate = (
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
     density: number,
@@ -1253,16 +1357,20 @@ function applyForces(world: World, dt: number): void {
     // counter-traveling pair stops particles from accumulating against
     // one wall the way a single right-moving wave train did.
     const depth = Math.max(0, o.y - world.surfaceY);
-    const surface = world.surfaceAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-depth / world.surfaceDecay);
-    const swell   = world.swellAmp   * Math.sin(kL * o.x + wL * world.t) * Math.exp(-depth / world.swellDecay);
-    const az      = world.zStirAmp   * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
+    const surface = surfAmp * Math.sin(kS * o.x - wS * world.t) * Math.exp(-depth / world.surfaceDecay);
+    const swell   = swellAmp * Math.sin(kL * o.x + wL * world.t) * Math.exp(-depth / world.swellDecay);
+    const az      = zAmp * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
     // Vertical mixing: gentle up/down currents that vary with x and time.
     // Negative ay = upward push, positive = downward. Full water column.
     const updraft = -world.updraftAmp * Math.sin(kU * o.x + wU * world.t);
+    // Slow horizontal current that depends on depth and drifts in time.
+    // +1 at surface, -1 at bottom, multiplied by a slow time-oscillation.
+    const depthFrac = depth / colDepth;
+    const current = world.currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
     // Per-tick zero-mean noise to break up any residual coherent drift.
     const noiseX = bAmp * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * (Math.random() - 0.5) * 2;
-    const ax = surface + swell + noiseX;
+    const ax = surface + swell + current + noiseX;
     const ayTot = ay + updraft + noiseY;
     const dragScale = o.r / DRAG_REF_R;
     o.vx += (ax - world.drag * dragScale * o.vx) * dt;
@@ -1339,7 +1447,7 @@ function updateCreatures(world: World, dt: number): void {
     betaOxidize(c, dtT);
 
     // Carbon fixation if the cell has chlorophyll and reaches light.
-    const ambientLight = Math.exp(-c.y / LIGHT_DECAY);
+    const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
     photosynthesize(c, dtT, ambientLight);
 
     // Cell builds its own catalysts and structure as substrates allow.
@@ -1366,7 +1474,11 @@ function updateCreatures(world: World, dt: number): void {
     const age = world.t - c.bornAt;
     // Clamp at 0.1/tick (10%) so even very old cells don't churn their
     // entire genome every second.
-    const mutP = Math.min(0.1, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    let mutP = Math.min(0.05, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    // REPAIR (op 0x63) suppresses somatic mutation while repairTicks > 0.
+    // Each REPAIR execution spends ATP and refreshes the window so a cell
+    // can choose to invest energy into stability when it matters.
+    if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
     if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
       // Note: c.color is NOT updated on somatic drift. Cell keeps its
@@ -1396,6 +1508,14 @@ function updateCreatures(world: World, dt: number): void {
 
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
     spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
+    if (VM_OUT.repair > 0) {
+      // Pay per-op so spamming REPAIR is expensive; refresh the window.
+      // 30 ticks ~= 0.5 sim-sec at FIXED_DT 1/60, enough to span a
+      // damage event without making the cell mutation-proof for life.
+      const want = VM_OUT.repair * REPAIR_ATP_PER_OP;
+      const paid = spendATP(c, want);
+      if (paid > 0) c.repairTicks = Math.max(c.repairTicks, REPAIR_WINDOW_TICKS);
+    }
 
     // TURN: rotate the cell's velocity by the accumulated angle delta.
     // Cheap; only does the trig when the genome actually issued a turn.
@@ -1721,7 +1841,17 @@ function tryReproduce(parent: Creature, world: World): void {
   spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent));
 
   if (world.creatures.length >= MAX_CREATURES) return;
-  const childGenome = mutateGenome(parent.genome);
+  // Sexual reproduction (bonded crossover): if the parent currently has
+  // any bonds, the child's pre-mutation genome is a single-crossover
+  // recombinant of parent + random bond partner. Lets useful subprograms
+  // flow between adjacent lineages. Falls through to plain asexual when
+  // there are no bonds.
+  let parentGenome = parent.genome;
+  if (parent.bonds.length > 0) {
+    const partner = parent.bonds[Math.floor(Math.random() * parent.bonds.length)];
+    parentGenome = crossoverGenomes(parent.genome, partner.genome);
+  }
+  const childGenome = mutateGenome(parentGenome);
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
   // Genome-controlled split ratio: f = parent's share of mass after
   // fission, 1-f = child's share. Symmetric (0.5) by default; the genome
@@ -1776,6 +1906,7 @@ function tryReproduce(parent: Creature, world: World): void {
     vm: newVMState(),
     color: genomeColor(childGenome, world.anchorGenome),
     ingestCooldown: INGEST_COOLDOWN_SEC,
+    repairTicks: 0,
     bornAt: world.t,
     speciesKey: genomeKey(childGenome),
     division: null,
@@ -1864,7 +1995,7 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.headX = 0;
     VM_SENSORS.headY = 0;
   }
-  VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY);
+  VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
   VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
   VM_SENSORS.pheromone = world.pheromone[pheromoneIndex(world, c.x, c.y)];
   VM_SENSORS.creatureDx = 0;

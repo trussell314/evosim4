@@ -70,6 +70,7 @@ export const OP = {
   EMIT:          0x60,   // pop intensity, add it to the pheromone field here
   SENSE_PHEROMONE: 0x61, // push local pheromone concentration
   ADHERE:        0x62,   // bond with nearest cell in range; forms colonies
+  REPAIR:        0x63,   // spend ATP to suppress somatic mutation briefly
 
   HALT:          0xFF,
 } as const;
@@ -190,6 +191,9 @@ export interface VMOutputs {
   // matching index is set to 1 each tick. Multiple INGEST ops in one
   // tick accumulate (cell can choose to eat either of several types).
   ingestMaterials: Uint8Array;
+  // Count of REPAIR ops that fired this tick. Sim multiplies by a fixed
+  // ATP cost to debit the cell, and refreshes its repair window.
+  repair: number;
   instructions: number;
 }
 
@@ -200,6 +204,7 @@ export function newOutputs(): VMOutputs {
     reproduce: false, reproduceFraction: 0.5,
     predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
+    repair: 0,
     instructions: 0,
   };
 }
@@ -223,6 +228,7 @@ export function runTick(
   out.emit = 0;
   out.adhere = false;
   out.ingestMaterials.fill(0);
+  out.repair = 0;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -300,6 +306,7 @@ export function runTick(
       case OP.SENSE_PHEROMONE: vmPush(stack, sensors.pheromone); break;
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
+      case OP.REPAIR:         out.repair++; break;
 
       case OP.THRUST: {
         const ay = vmPop(stack);
@@ -354,6 +361,7 @@ export interface GenomeSummary {
   engulf: boolean;
   emit: boolean;
   adhere: boolean;
+  repair: boolean;
   sensors: string[];
   capabilities: string[];
   verdict: string;
@@ -370,6 +378,7 @@ export function summarizeGenome(
   const seenSensor = new Set<string>();
   let thrust = false, turn = false, reproduce = false;
   let predate = false, engulf = false, emit = false, adhere = false;
+  let repair = false;
   let hasJump = false, hasCmp = false;
   let executableOps = 0, unknownBytes = 0;
 
@@ -392,6 +401,7 @@ export function summarizeGenome(
       case OP.ENGULF:    engulf = true; break;
       case OP.EMIT:      emit = true; break;
       case OP.ADHERE:    adhere = true; break;
+      case OP.REPAIR:    repair = true; break;
       case OP.INGEST: {
         const mat = m6(operand);
         if (!ingestMaterials.includes(mat)) ingestMaterials.push(mat);
@@ -435,6 +445,7 @@ export function summarizeGenome(
   if (predate || engulf) capabilities.push("preys on cells");
   if (emit) capabilities.push("emits pheromone");
   if (adhere) capabilities.push("forms colonies");
+  if (repair) capabilities.push("repairs DNA");
   if (excreteMaterials.length > 0) {
     capabilities.push("excretes " + excreteMaterials.map(matName).join("/"));
   }
@@ -471,6 +482,7 @@ export function summarizeGenome(
   if (adhere) otherActs.push("adheres (forms colonies)");
   if (engulf) otherActs.push("engulfs prey");
   if (predate) otherActs.push("predates");
+  if (repair) otherActs.push("spends ATP on DNA repair");
   bullets.push("- Excrete / emit pheromone / adhere / engulf / predate? " + (otherActs.length > 0
     ? otherActs.join("; ") + "."
     : "None of the corresponding ops are present."));
@@ -519,7 +531,7 @@ export function summarizeGenome(
     totalBytes: genome.length, executableOps, unknownBytes,
     estAtpPerTick, hasJump, hasComparison: hasCmp, conditional,
     thrust, turn, ingestMaterials, excreteMaterials,
-    reproduce, predate, engulf, emit, adhere,
+    reproduce, predate, engulf, emit, adhere, repair,
     sensors, capabilities,
     verdict: lines.join("\n"),
   };
@@ -605,9 +617,9 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
   return cost;
 }
 
-const P_POINT  = 0.02;
-const P_INSERT = 0.005;
-const P_DELETE = 0.005;
+const P_POINT  = 0.008;
+const P_INSERT = 0.002;
+const P_DELETE = 0.002;
 const MAX_GENOME_BYTES = 256;
 
 export function mutateGenome(

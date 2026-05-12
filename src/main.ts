@@ -213,6 +213,13 @@ for (const matId of MATERIAL_IDS_ORDERED) {
   const base = MATERIALS[matId].color;
   TINTED_COLORS[matId] = DEPTH_TINTS.map((t) => blendToward(base, t));
 }
+// Toxic-waste-tagged particles get rendered in a sickly rust color
+// rather than their underlying material color, so the player can see
+// where pollution accumulates. Routed by waste molecule fraction.
+const TOXIC_BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
+const TOXIC_BASE = "#a04a2a";
+const TOXIC_TINTED = DEPTH_TINTS.map((t) => blendToward(TOXIC_BASE, t));
+const TOXIC_WASTE_FRAC = 0.5;
 
 // Map water temperature (°C) to a tint. Warm = lighter cyan, cool = deep
 // dark blue. Chosen so 20°C lands near the original water palette.
@@ -273,10 +280,24 @@ function render(): void {
   ctx.stroke();
 
   for (const b of SUB_BUCKETS) b.length = 0;
+  for (const b of TOXIC_BUCKETS) b.length = 0;
   const matIdx: Record<string, number> = MATERIAL_IDX_BY_NAME;
   for (const p of world.particles) {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
     const bucket = Math.floor(t * N_BUCKETS);
+    // Tag-toxic check: a molecule-tagged particle whose waste fraction
+    // is high enough renders in the toxic palette, regardless of its
+    // underlying material id.
+    if (p.molecules && p.molecules.waste > 0) {
+      let total = 0;
+      const m = p.molecules;
+      total += m.glucose + m.fattyAcid + m.aminoAcid + m.minerals
+        + m.o2 + m.co2 + m.waste + m.adp + m.chlorophyll + m.enzyme + m.biomass;
+      if (total > 0 && m.waste / total >= TOXIC_WASTE_FRAC) {
+        TOXIC_BUCKETS[bucket].push(p);
+        continue;
+      }
+    }
     SUB_BUCKETS[bucket * N_MATERIALS + matIdx[p.material]].push(p);
   }
   const tinted = TINTED_COLORS;
@@ -294,6 +315,18 @@ function render(): void {
       // every particle.
       for (let k = 0; k < group.length; k++) {
         const p = group[k];
+        ctx.moveTo(p.x + p.r, p.y);
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+    // Toxic-waste pass for this depth bucket, in the rust palette.
+    const toxic = TOXIC_BUCKETS[i];
+    if (toxic.length > 0) {
+      ctx.fillStyle = TOXIC_TINTED[i];
+      ctx.beginPath();
+      for (let k = 0; k < toxic.length; k++) {
+        const p = toxic[k];
         ctx.moveTo(p.x + p.r, p.y);
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       }
