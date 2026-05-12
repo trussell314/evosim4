@@ -73,6 +73,16 @@ const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const world = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
 
+// Cap the device pixel ratio used for canvas backing-store size. At
+// DPR=3 (high-end phones, some retina displays) the backing store has
+// 9x the pixels of DPR=1. Past DPR=2 the visual gain is marginal but
+// every render path scales linearly with backing-store area, so this
+// is a free ~2x win on those devices.
+const MAX_DPR = 2;
+function getDpr(): number {
+  return Math.min(MAX_DPR, window.devicePixelRatio || 1);
+}
+
 // View transform mapping world coords -> canvas (CSS pixel) coords.
 // Updated in resize(); used in render and inverse-applied in pointer
 // handlers so a click maps to the right world position regardless of
@@ -159,7 +169,7 @@ function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
   // dimensions but doesn't fire window.resize on iOS Safari.
   const vv = window.visualViewport;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = getDpr();
   const fullW = vv ? vv.width : window.innerWidth;
   const h = vv ? vv.height : window.innerHeight;
   // Reserve right-side strip for the analysis console (current width
@@ -292,6 +302,11 @@ canvas.addEventListener("mouseleave", () => {
 // heavy blur, low alpha, and shift toward the water-color background --
 // classic atmospheric perspective. Eight buckets give a smooth gradient.
 const N_BUCKETS = 8;
+// Render only the front N_RENDER_BUCKETS depth layers. The deepest
+// bucket gets the heaviest canvas blur (3.2px) and lowest alpha
+// (0.64), so dropping it from the render loop skips one full
+// filter+composite pass per frame for minimal visual cost.
+const N_RENDER_BUCKETS = 7;
 const BLURS = [0, 0.3, 0.7, 1.2, 1.7, 2.2, 2.7, 3.2];
 const ALPHAS = [1.0, 0.96, 0.91, 0.85, 0.79, 0.73, 0.68, 0.64];
 // One sub-bucket per (depth bucket, material) so the renderer can issue
@@ -393,7 +408,7 @@ function render(): void {
   // Clear the full canvas (letterbox color), then apply the view
   // transform so subsequent draws use world coords. DPR is folded into
   // the same matrix so a single setTransform suffices.
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = getDpr();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
@@ -458,7 +473,7 @@ function render(): void {
     SUB_BUCKETS[bucket * N_MATERIALS + matIdx[p.material]].push(p);
   }
   const tinted = TINTED_COLORS;
-  for (let i = N_BUCKETS - 1; i >= 0; i--) {
+  for (let i = N_RENDER_BUCKETS - 1; i >= 0; i--) {
     ctx.filter = BLURS[i] === 0 ? "none" : `blur(${BLURS[i]}px)`;
     ctx.globalAlpha = ALPHAS[i];
     for (let m = 0; m < N_MATERIALS; m++) {
@@ -676,7 +691,7 @@ let gsMinimized = true;
 let gsToggleRect = { x: 0, y: 0, w: 0, h: 0 };
 
 function drawGenomeStats(): void {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = getDpr();
   const canvasCssW = canvas.width / dpr;
   const panelH = gsMinimized ? GS_PANEL_H_MIN : GS_PANEL_H_FULL;
   const panelX = canvasCssW - GS_PANEL_W - GS_PANEL_MARGIN;
@@ -795,7 +810,7 @@ function drawPhylogeny(): void {
   // Strip sits at the bottom of the CANVAS (in CSS pixels). The render
   // path resets the transform to DPR-only before calling us so screen
   // coords work directly here.
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = getDpr();
   const canvasCssH = canvas.height / dpr;
   const canvasCssW = canvas.width / dpr;
   const stripY = canvasCssH - stripH;
@@ -1025,11 +1040,28 @@ function drawCellBody(cx: number, cy: number, r: number, color: string, t: numbe
   ctx.restore();
 }
 
+// Below this on-screen radius (in CSS pixels) the wobble and outline
+// are imperceptible -- the cell becomes a tinted dot. Skipping them
+// saves ~15 path ops + a stroke per such cell per frame. The world is
+// always letterboxed-fully-visible, so traditional viewport-based
+// frustum culling is a no-op; this size-based LOD is the equivalent
+// win for cells that occupy ~1 pixel of screen.
+const LOD_MIN_SCREEN_R = 2.0;
+
+function drawCellLOD(cx: number, cy: number, r: number, color: string): void {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawCreature(c: Creature, selected: boolean): void {
   // Each cell has a stable random phase derived from its bornAt + position,
   // so its wobble pattern is its own instead of every cell pulsing in sync.
   const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
   const t = world.t;
+  const screenR = c.r * viewScale;
+  const lod = !selected && screenR < LOD_MIN_SCREEN_R;
   if (c.division) {
     // Mitosis: render two overlapping wobbly bodies whose centers split
     // along the division axis as `progress` advances 0 -> 1.
@@ -1037,10 +1069,17 @@ function drawCreature(c: Creature, selected: boolean): void {
     const sep = c.division.progress * (c.r + child.r);
     const dx = Math.cos(c.division.axis) * sep * 0.5;
     const dy = Math.sin(c.division.axis) * sep * 0.5;
-    drawCellBody(c.x - dx, c.y - dy, c.r, c.color, t, phase);
-    strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
-    drawCellBody(c.x + dx, c.y + dy, child.r, child.color, t, phase + 1.7);
-    strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
+    if (lod) {
+      drawCellLOD(c.x - dx, c.y - dy, c.r, c.color);
+      drawCellLOD(c.x + dx, c.y + dy, child.r, child.color);
+    } else {
+      drawCellBody(c.x - dx, c.y - dy, c.r, c.color, t, phase);
+      strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
+      drawCellBody(c.x + dx, c.y + dy, child.r, child.color, t, phase + 1.7);
+      strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
+    }
+  } else if (lod) {
+    drawCellLOD(c.x, c.y, c.r, c.color);
   } else {
     drawCellBody(c.x, c.y, c.r, c.color, t, phase);
     strokeCellOutline(c.x, c.y, c.r, selected, t, phase);
