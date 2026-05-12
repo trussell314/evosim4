@@ -91,6 +91,10 @@ export interface Particle {
   // asleep: pair tests against another sleeping particle are skipped.
   // Sediment piled on the bottom is the big winner here.
   quietTicks?: number;
+  // Per-particle density override. When set, replaces the material's
+  // base density for physics + mass. Lets organic particles vary --
+  // some sink, some float -- so the food cloud actually mixes.
+  density?: number;
 }
 
 export interface Creature {
@@ -929,15 +933,27 @@ export function seedParticles(world: World, n: number): void {
     const r = 1 + Math.random() * 1.5;
     // Spawn below the surface so the initial state matches the wall.
     const yRange = (world.height - world.surfaceY) * 0.85;
+    const mat = pickMaterial();
     world.particles.push({
       x: Math.random() * world.width,
       y: world.surfaceY + Math.random() * yRange,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
-      material: pickMaterial(),
+      material: mat,
+      density: rollDensity(mat),
     });
   }
+}
+
+// Per-spawn density jitter. Organic biomatter ranges from oily/lipid-rich
+// (floats) to dense protein clumps (sinks); randomize each particle so
+// the cloud actually mixes vertically instead of forming a flat stratum.
+// Triangular distribution centered on the material's base density.
+function rollDensity(material: MaterialId): number | undefined {
+  if (material !== "organic") return undefined;
+  const tri = Math.random() + Math.random() - 1; // -1..1, triangle peak 0
+  return 1.0 + tri * 0.3; // 0.7..1.3
 }
 
 function pickMaterial(): MaterialId {
@@ -1388,7 +1404,8 @@ export function genomeColor(genome: Uint8Array, anchor?: Uint8Array): string {
 // Particle mass = density * (4/3) * pi * r^3. Particles are spheres; the
 // circle we render is the equatorial cross-section. Same convention as cells.
 function mass(p: Particle): number {
-  return MATERIALS[p.material].density * (4 / 3) * Math.PI * p.r * p.r * p.r;
+  const d = p.density ?? MATERIALS[p.material].density;
+  return d * (4 / 3) * Math.PI * p.r * p.r * p.r;
 }
 
 // Inverse: given a target mass and material density, what sphere radius
@@ -1466,13 +1483,15 @@ function replenishParticles(world: World, dt: number): void {
   if (Math.random() < expected - toSpawn) toSpawn++;
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
     const r = 1 + Math.random() * 1.5;
+    const mat = pickMaterial();
     world.particles.push({
       x: Math.random() * world.width,
       y: world.surfaceY + r,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
-      material: pickMaterial(),
+      material: mat,
+      density: rollDensity(mat),
     });
   }
 }
@@ -1619,7 +1638,7 @@ function applyForces(world: World, dt: number): void {
     o.z += o.vz * dt;
   };
 
-  for (const p of world.particles) integrate(p, MATERIALS[p.material].density);
+  for (const p of world.particles) integrate(p, p.density ?? MATERIALS[p.material].density);
   for (const c of world.creatures) integrate(c, c.density);
 }
 

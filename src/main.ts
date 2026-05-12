@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, resizeWorld, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
 import { disassemble, summarizeGenome } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -37,7 +37,22 @@ hudBar.addEventListener("click", () => {
   hudToggle.textContent = hudMinimized ? "[+]" : "[–]";
 });
 
-const world = createWorld(window.innerWidth, window.innerHeight);
+// World dimensions are fixed at startup; zooming/resizing the browser
+// only changes the canvas's visual scale, never the underlying world.
+// Two presets so the world fills the viewport reasonably in either
+// orientation:
+const WORLD_LANDSCAPE = { w: 1920, h: 1080 };
+const WORLD_PORTRAIT = { w: 1080, h: 1920 };
+const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
+const world = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
+
+// View transform mapping world coords -> canvas (CSS pixel) coords.
+// Updated in resize(); used in render and inverse-applied in pointer
+// handlers so a click maps to the right world position regardless of
+// viewport size or pinch zoom.
+let viewScale = 1;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
 
 // Track the selected cell by reference, not index. world.creatures
 // gets fully rebuilt each tick (death/engulf removes plus released
@@ -73,8 +88,7 @@ const bioByKey = new Map<string, number>();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
-  // dimensions but doesn't fire window.resize on iOS Safari, so the canvas
-  // can be smaller than the visible area after zooming out.
+  // dimensions but doesn't fire window.resize on iOS Safari.
   const vv = window.visualViewport;
   const dpr = window.devicePixelRatio || 1;
   const w = vv ? vv.width : window.innerWidth;
@@ -83,11 +97,16 @@ function resize(): void {
   canvas.style.height = `${h}px`;
   canvas.width = Math.floor(w * dpr);
   canvas.height = Math.floor(h * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  // Reserve the bottom PHYLO_STRIP_H px for the phylogeny timeline so it
-  // never overlaps swimming cells. resizeWorld also rescales particle
-  // target/spawn rate so the new area gets filled with food.
-  resizeWorld(world, w, h - PHYLO_STRIP_H);
+  // Fit world into the canvas area above the phylogeny strip with a
+  // uniform scale + center-letterbox. The world's logical dimensions
+  // never change -- this only computes how to draw it on screen.
+  const availW = w;
+  const availH = Math.max(1, h - PHYLO_STRIP_H);
+  const sx = availW / WORLD_SIZE.w;
+  const sy = availH / WORLD_SIZE.h;
+  viewScale = Math.min(sx, sy);
+  viewOffsetX = (availW - WORLD_SIZE.w * viewScale) / 2;
+  viewOffsetY = (availH - WORLD_SIZE.h * viewScale) / 2;
 }
 resize();
 window.addEventListener("resize", resize);
@@ -110,9 +129,19 @@ function findCellAt(x: number, y: number): number {
   }
   return best;
 }
+// Canvas (CSS) pixel coords -> world coords, inverse of the view
+// transform set in resize(). Used by click + hover so cells under
+// the pointer match regardless of browser zoom / window size.
+function canvasToWorld(cx: number, cy: number): { x: number; y: number } {
+  return {
+    x: (cx - viewOffsetX) / viewScale,
+    y: (cy - viewOffsetY) / viewScale,
+  };
+}
 canvas.addEventListener("click", (e) => {
   const rect = canvas.getBoundingClientRect();
-  const best = findCellAt(e.clientX - rect.left, e.clientY - rect.top);
+  const w = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+  const best = findCellAt(w.x, w.y);
   if (best >= 0) {
     selectedCell = world.creatures[best];
     refreshActiveDisasm();
@@ -158,8 +187,9 @@ function flushTooltip(): void {
 }
 canvas.addEventListener("mousemove", (e) => {
   const rect = canvas.getBoundingClientRect();
-  pendingMouseX = e.clientX - rect.left;
-  pendingMouseY = e.clientY - rect.top;
+  const wpt = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
+  pendingMouseX = wpt.x;
+  pendingMouseY = wpt.y;
   pendingMouseClient = { x: e.clientX, y: e.clientY };
   pendingMouseInside = true;
   if (!tooltipScheduled) {
@@ -276,6 +306,15 @@ function render(): void {
   const dayMult = 0.4 + 0.6 * solarLight(world);
   const tWarm = darkenColor(tempToColor(world.tempSurface), dayMult);
   const tCool = darkenColor(tempToColor(world.tempBottom), dayMult);
+
+  // Clear the full canvas (letterbox color), then apply the view
+  // transform so subsequent draws use world coords. DPR is folded into
+  // the same matrix so a single setTransform suffices.
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+  ctx.setTransform(dpr * viewScale, 0, 0, dpr * viewScale, dpr * viewOffsetX, dpr * viewOffsetY);
 
   // Atmosphere band -- fill above the wavy surface line. Darkened with
   // the same day/night multiplier as the water so the whole scene dims.
@@ -401,6 +440,9 @@ function render(): void {
   }
 
   drawHeatmap();
+  // Phylogeny strip lives in canvas (screen) coords below the world.
+  // Reset to DPR-only transform before drawing.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawPhylogeny();
 }
 
