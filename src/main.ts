@@ -686,12 +686,11 @@ function updateInspector(): void {
     activeDisasm;
 }
 
-// Sim speed control. "realtime" runs one step per RAF tick using wall
-// clock dt. "max" runs a fixed-dt step in a loop for ~10ms each frame
-// so the sim advances as fast as the CPU allows while keeping the page
-// responsive.
-type SpeedMode = "realtime" | "max";
-let speedMode: SpeedMode = "max";
+// Sim runs at maximum speed: each render frame burns ~MAX_BUDGET_MS of
+// CPU on fixed-dt simulation steps so the world advances as fast as
+// possible while the page stays responsive. The realtime/max toggle and
+// its button were removed -- max-only is simpler and was what we ran
+// 99% of the time anyway.
 const FIXED_DT = 1 / 60;
 const MAX_BUDGET_MS = 10;
 
@@ -716,52 +715,16 @@ function updatePerfStats(simAdvanced: number): void {
 }
 
 function statsLine(): string {
-  // fps = frames/sec rendered; sim = how many sim-seconds advance per
-  // wall-second (1x in realtime; usually 5..30x in max-speed). t = the
-  // world's elapsed sim-time. Helps tell whether the bottleneck is
-  // render or sim, and how far ahead "max" is running.
   return `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${world.t.toFixed(0)}s  species=${world.species.size}`;
 }
 
-const speedBtn = document.createElement("button");
-speedBtn.style.cssText =
-  "position:fixed;bottom:8px;left:8px;z-index:10;" +
-  "padding:6px 10px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;" +
-  "cursor:pointer;border-radius:4px;border:1px solid #6ad;" +
-  "min-width:120px;text-align:left;";
-function refreshSpeedBtn(): void {
-  if (speedMode === "realtime") {
-    speedBtn.textContent = "● REALTIME  (click for max)";
-    speedBtn.style.background = "rgba(20,80,120,.85)";
-    speedBtn.style.color = "#cfe7ff";
-    speedBtn.style.borderColor = "#6ad";
-  } else {
-    speedBtn.textContent = "⏩ MAX SPEED  (click for realtime)";
-    speedBtn.style.background = "rgba(180,140,30,.85)";
-    speedBtn.style.color = "#fff8d8";
-    speedBtn.style.borderColor = "#fc4";
-  }
-}
-refreshSpeedBtn();
-speedBtn.addEventListener("click", () => {
-  speedMode = speedMode === "realtime" ? "max" : "realtime";
-  refreshSpeedBtn();
-});
-document.body.appendChild(speedBtn);
-
-let last = performance.now();
-function frame(now: number): void {
+function frame(): void {
+  const start = performance.now();
   let advanced = 0;
-  if (speedMode === "max") {
-    const start = performance.now();
-    do { step(world, FIXED_DT); advanced += FIXED_DT; } while (performance.now() - start < MAX_BUDGET_MS);
-    last = now;
-  } else {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    step(world, dt);
-    advanced = dt;
-  }
+  do {
+    step(world, FIXED_DT);
+    advanced += FIXED_DT;
+  } while (performance.now() - start < MAX_BUDGET_MS);
   updatePerfStats(advanced);
   render();
   updateInspector();

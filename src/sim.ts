@@ -714,6 +714,30 @@ function noteCreatureDeath(world: World, c: Creature): void {
   sp.lastSeen = world.t;
 }
 
+// Species accumulate forever otherwise. drawPhylogeny iterates the
+// whole map each frame; an hours-long run can pile up tens of thousands
+// of entries, all dead, and gradually slow the renderer. Drop any
+// species that has been extinct AND off the visible phylogeny window
+// for a generous grace period. Also drop their phylogeny edges.
+const SPECIES_GRACE_SEC = 240;
+const SPECIES_PRUNE_INTERVAL_SEC = 5;
+let lastSpeciesPruneAt = -SPECIES_PRUNE_INTERVAL_SEC;
+function pruneSpecies(world: World): void {
+  if (world.t - lastSpeciesPruneAt < SPECIES_PRUNE_INTERVAL_SEC) return;
+  lastSpeciesPruneAt = world.t;
+  const cutoff = world.t - SPECIES_GRACE_SEC;
+  const drop = new Set<string>();
+  for (const sp of world.species.values()) {
+    if (sp.alive === 0 && sp.lastSeen < cutoff) drop.add(sp.key);
+  }
+  if (drop.size === 0) return;
+  for (const key of drop) world.species.delete(key);
+  for (let i = world.phylogenyEvents.length - 1; i >= 0; i--) {
+    const ev = world.phylogenyEvents[i];
+    if (drop.has(ev.from) || drop.has(ev.to)) world.phylogenyEvents.splice(i, 1);
+  }
+}
+
 // Charge an ATP cost. Caps at available ATP and routes the spent mass into
 // ADP so the cell can later re-charge it via respiration. Returns the amount
 // actually paid (which may be less than requested if the cell ran out).
@@ -1027,6 +1051,7 @@ export function step(world: World, dt: number): void {
   applyWalls(world);
   aerate(world, dt);
   replenishParticles(world, dt);
+  pruneSpecies(world);
   if (world.creatures.length === 0) {
     const x = world.width * (0.1 + 0.8 * Math.random());
     const y = world.height * (0.1 + 0.6 * Math.random());
