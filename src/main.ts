@@ -1284,7 +1284,17 @@ simChannel.port1.onmessage = () => {
     // steps -- if recentStepMs spikes once we still make forward
     // progress, and the spike decays back to normal as steps run.
     if (ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
-    step(world, FIXED_DT);
+    try {
+      step(world, FIXED_DT);
+    } catch (err) {
+      // A throwing step would kill the macrotask handler's chance to
+      // finish bookkeeping, but the handler stays registered and the
+      // next rAF still posts. Log once per failure mode so we can
+      // diagnose without flooding the console.
+      // eslint-disable-next-line no-console
+      console.error("[sim] step threw, continuing:", err);
+      break;
+    }
     advancedThisFrame += FIXED_DT;
     ranOne = true;
     const elapsed = performance.now() - t0;
