@@ -1743,9 +1743,7 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.gradY[i] = 0;
     VM_SENSORS.density[i] = 0;
   }
-  const ps = world.particles;
-  forParticlesNear(c.x, c.y, range, (pi) => {
-    const p = ps[pi];
+  forParticlesNear(c.x, c.y, range, (p) => {
     const dx = p.x - c.x;
     const dy = p.y - c.y;
     const dsq = dx * dx + dy * dy;
@@ -1851,11 +1849,17 @@ let CREATURE_GRID_COLS = 0;
 let CREATURE_GRID_ROWS = 0;
 
 // Particle spatial grid -- used by populateSensors gradient/density
-// calculation and by resolveCreatureSedimentCollisions, both of which
-// formerly iterated every particle in the world per cell. Built once at
-// the start of updateCreatures alongside CREATURE_BUCKETS.
+// calculation. Built once at the start of updateCreatures alongside
+// CREATURE_BUCKETS.
+//
+// Buckets hold Particle REFERENCES (not indices) so that particles
+// being spliced out mid-tick by INGEST don't leave stale entries that
+// dereference to undefined. A particle removed from world.particles
+// still appears in the bucket for the rest of the tick; visitors must
+// tolerate that (it's harmless for sensor gradient -- one tick of
+// lag on a recently-eaten crumb).
 const PARTICLE_GRID_CELL = 48;
-const PARTICLE_BUCKETS: number[][] = [];
+const PARTICLE_BUCKETS: Particle[][] = [];
 let PARTICLE_GRID_COLS = 0;
 let PARTICLE_GRID_ROWS = 0;
 
@@ -1874,13 +1878,13 @@ function buildParticleGrid(world: World): void {
     if (!Number.isFinite(cy)) cy = 0;
     if (cx < 0) cx = 0; else if (cx >= PARTICLE_GRID_COLS) cx = PARTICLE_GRID_COLS - 1;
     if (cy < 0) cy = 0; else if (cy >= PARTICLE_GRID_ROWS) cy = PARTICLE_GRID_ROWS - 1;
-    PARTICLE_BUCKETS[cy * PARTICLE_GRID_COLS + cx].push(i);
+    PARTICLE_BUCKETS[cy * PARTICLE_GRID_COLS + cx].push(p);
   }
 }
 
 function forParticlesNear(
   x: number, y: number, range: number,
-  visitor: (pi: number) => void,
+  visitor: (p: Particle) => void,
 ): void {
   const span = Math.max(1, Math.ceil(range / PARTICLE_GRID_CELL));
   const cx = Math.max(0, Math.min(PARTICLE_GRID_COLS - 1, Math.floor(x / PARTICLE_GRID_CELL)));
