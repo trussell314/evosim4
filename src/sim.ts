@@ -931,6 +931,7 @@ export function step(world: World, dt: number): void {
   updateCreatures(world, dt);
   resolveCollisions(world);
   resolveCreatureCollisions(world);
+  resolveCreatureSedimentCollisions(world);
   applyWalls(world);
   aerate(world, dt);
   replenishParticles(world, dt);
@@ -1844,6 +1845,65 @@ function resolveCreaturePair(cs: Creature[], i: number, j: number, e: number): v
   b.vx += ix / mb;
   b.vy += iy / mb;
   b.vz += iz / mb;
+}
+
+// Sediment particles (rock, sand) act as solid terrain: cells can't
+// phase through the seafloor. Clay stays permeable so cells can ingest
+// it. INGEST runs earlier in the tick, so a cell whose genome fires
+// INGEST on a rock/sand at contact still consumes the particle before
+// this bounce runs.
+const SEDIMENT_MATERIALS = new Set<MaterialId>(["rock", "sand"]);
+function resolveCreatureSedimentCollisions(world: World): void {
+  const ps = world.particles;
+  const cs = world.creatures;
+  if (cs.length === 0) return;
+  for (let pi = 0; pi < ps.length; pi++) {
+    const p = ps[pi];
+    if (!SEDIMENT_MATERIALS.has(p.material)) continue;
+    const range = p.r + 30;
+    forCreaturesNear(p.x, p.y, range, (ci) => {
+      const c = cs[ci];
+      let dx = c.x - p.x;
+      let dy = c.y - p.y;
+      let dz = c.z - p.z;
+      const minD = c.r + p.r;
+      const dsq = dx * dx + dy * dy + dz * dz;
+      if (dsq >= minD * minD) return;
+      let dist = Math.sqrt(dsq);
+      if (dist < 1e-6) { dx = 0; dy = -1; dz = 0; dist = 1; }
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const nz = dz / dist;
+      const overlap = minD - dist;
+      const pm = mass(p);
+      const cm = creatureTotalMass(c);
+      const total = pm + cm;
+      const cShare = pm / total;
+      const pShare = cm / total;
+      c.x += nx * overlap * cShare;
+      c.y += ny * overlap * cShare;
+      c.z += nz * overlap * cShare;
+      p.x -= nx * overlap * pShare;
+      p.y -= ny * overlap * pShare;
+      p.z -= nz * overlap * pShare;
+      const rvx = c.vx - p.vx;
+      const rvy = c.vy - p.vy;
+      const rvz = c.vz - p.vz;
+      const vN = rvx * nx + rvy * ny + rvz * nz;
+      if (vN >= 0) return;
+      const e = 0.2;
+      const jImp = (-(1 + e) * vN) / (1 / cm + 1 / pm);
+      const ix = nx * jImp;
+      const iy = ny * jImp;
+      const iz = nz * jImp;
+      c.vx += ix / cm;
+      c.vy += iy / cm;
+      c.vz += iz / cm;
+      p.vx -= ix / pm;
+      p.vy -= iy / pm;
+      p.vz -= iz / pm;
+    });
+  }
 }
 
 function checkNeighborPairs(
