@@ -686,7 +686,7 @@ function drawPhylogeny(): void {
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
 ): void {
-  ctx.strokeStyle = "#ffffff";
+  ctx.strokeStyle = selected ? "#ffffff" : "#000000";
   ctx.lineWidth = selected ? 3 : 1;
   tracedWobblyBody(cx, cy, r, t, phase);
   ctx.stroke();
