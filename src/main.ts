@@ -1148,6 +1148,7 @@ function updateInspector(): void {
   // fps + sim/wall ratio + elapsed sim time + species count there.
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
+    `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms  ` +
     `t=${formatAge(world.t)}  sp=${world.species.size}`;
   // If the selected cell has died or been eaten, fall back to the first
   // live creature so the inspector shows something useful instead of
@@ -1199,7 +1200,6 @@ function updateInspector(): void {
 // safety margin for browser overhead). When CPU-constrained the sim
 // just does fewer ticks per render; render still hits 60fps.
 const FIXED_DT = 1 / 60;
-const TARGET_FRAME_MS = 16.6;
 
 // Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
 // short window so the numbers don't flicker.
@@ -1208,16 +1208,29 @@ let perfSimSecs = 0;
 let perfFrames = 0;
 let perfFps = 0;
 let perfSimRate = 1;
-function updatePerfStats(simAdvanced: number): void {
+// Per-frame timing for diagnosing where the 16.6ms budget goes.
+// renderMsAvg + simMsAvg + idle ≈ wall-time per frame; together they
+// tell you whether render, sim, or browser pacing is the bottleneck.
+let perfRenderMsAcc = 0;
+let perfSimMsAcc = 0;
+let perfRenderMs = 0;
+let perfSimMs = 0;
+function updatePerfStats(simAdvanced: number, renderMs: number, simMs: number): void {
   perfSimSecs += simAdvanced;
   perfFrames++;
+  perfRenderMsAcc += renderMs;
+  perfSimMsAcc += simMs;
   const elapsed = (performance.now() - perfWallStart) / 1000;
   if (elapsed > 0.5) {
     perfFps = perfFrames / elapsed;
     perfSimRate = perfSimSecs / elapsed;
+    perfRenderMs = perfFrames > 0 ? perfRenderMsAcc / perfFrames : 0;
+    perfSimMs = perfFrames > 0 ? perfSimMsAcc / perfFrames : 0;
     perfWallStart = performance.now();
     perfSimSecs = 0;
     perfFrames = 0;
+    perfRenderMsAcc = 0;
+    perfSimMsAcc = 0;
   }
 }
 
@@ -1241,38 +1254,30 @@ function statsLine(): string {
 // of sim work and posts another. Even on slow hardware render
 // hits vsync; sim falls behind realtime instead of pulling
 // render down with it.
-const SIM_SLICE_MS = 6;
-const FRAME_OVERHEAD_FOR_SIM_MS = 3;
+// Hard ceiling on total sim time per frame, regardless of how many
+// macrotask cycles fit between rAFs. Without a per-frame cap, a fast
+// sim happily fills every gap between vsyncs with step()s and Chrome
+// snaps to 30fps lock. 6ms leaves ~10.6ms of budget for render +
+// browser overhead inside a 16.6ms frame.
+const SIM_MS_PER_FRAME_CAP = 6;
 const simChannel = new MessageChannel();
-let lastFrameStart = performance.now();
 let advancedThisFrame = 0;
+let simMsThisFrame = 0;
 // Worst recent step() duration in ms, with slow decay. Used to decide
-// whether *another* step would fit before vsync. Without this, the
-// loop checks the deadline *before* each step but a step started just
-// under the deadline can finish well past vsync, snapping Chrome's
-// frame pacing to 30fps locked. The faster the sim, the more reliably
-// the loop bumps into the deadline -- so the symptom appears as
-// "locked 30fps at high sim speed."
+// whether *another* step would fit before the per-frame cap.
 let recentStepMs = 1.5;
 const RECENT_STEP_DECAY = 0.97;
 const STEP_BUDGET_SAFETY = 1.4;
 simChannel.port1.onmessage = () => {
-  // Yield often: only step until the per-slice deadline. Browser
-  // will get the next rAF in before scheduling our next port message
-  // unless we exceed slice or hit the rAF deadline.
-  const sliceDeadline = performance.now() + SIM_SLICE_MS;
-  // Also stop if we've eaten too much of the current rAF interval.
-  const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
-  while (performance.now() < sliceDeadline) {
+  // Per-frame sim time cap: stop adding work to this frame's window
+  // once we've already used SIM_MS_PER_FRAME_CAP. The counter resets
+  // when frame() runs (next rAF).
+  while (simMsThisFrame + recentStepMs * STEP_BUDGET_SAFETY < SIM_MS_PER_FRAME_CAP) {
     const t0 = performance.now();
-    // Don't start a step we can't finish in time. recentStepMs tracks
-    // the worst recent step duration; refusing to start unless the
-    // estimated finish-time fits is what keeps us from overshooting
-    // vsync.
-    if (t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     step(world, FIXED_DT);
     advancedThisFrame += FIXED_DT;
     const elapsed = performance.now() - t0;
+    simMsThisFrame += elapsed;
     // Track the worst recent step time but decay slowly so transient
     // spikes (GC, sudden population surge) are remembered for a few
     // frames and then forgotten.
@@ -1283,12 +1288,15 @@ simChannel.port1.onmessage = () => {
 simChannel.port2.postMessage(null);
 
 function frame(): void {
-  lastFrameStart = performance.now();
-  updatePerfStats(advancedThisFrame);
-  advancedThisFrame = 0;
+  const simMsLast = simMsThisFrame;
+  simMsThisFrame = 0;
+  const tBeforeRender = performance.now();
   render();
   updateInspector();
   maybeAnalyzeGenomes();
+  const renderMs = performance.now() - tBeforeRender;
+  updatePerfStats(advancedThisFrame, renderMs, simMsLast);
+  advancedThisFrame = 0;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
