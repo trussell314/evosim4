@@ -789,7 +789,11 @@ function drawPhylogeny(): void {
   const tNow = world.t;
   const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
   const span = Math.max(0.001, tNow - tMin);
-  const padTop = 14;
+  // Reserve enough top padding that the thickest possible lane (live
+  // species at max biomass -> lineWidth ~6px) clears the legend text
+  // baseline at stripY + 11. Was 14, which left ~1.5px and visibly
+  // collided with descenders at high DPR.
+  const padTop = 22;
   const padBot = 6;
   const innerY = stripY + padTop;
   const innerH = stripH - padTop - padBot;
