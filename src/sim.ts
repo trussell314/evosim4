@@ -69,6 +69,11 @@ export interface Particle {
   // World-seeded and VM-EXCRETE-spawned particles leave this undefined
   // and behave as plain bulk material (catabolize via CATAB_FRACTIONS).
   molecules?: Molecules;
+  // Consecutive ticks the particle has been below SLEEP_SPEED_SQ. Once
+  // it crosses SLEEP_THRESHOLD_TICKS the collision pass treats it as
+  // asleep: pair tests against another sleeping particle are skipped.
+  // Sediment piled on the bottom is the big winner here.
+  quietTicks?: number;
 }
 
 export interface Creature {
@@ -1928,6 +1933,11 @@ const COLLISION_BUCKETS: number[][] = [];
 let COLLISION_NONEMPTY = new Int32Array(0);
 let COLLISION_NONEMPTY_N = 0;
 let COLLISION_MASS = new Float64Array(0);
+// Per-particle "is asleep" flag, recomputed each call from quietTicks.
+// Pair tests where both ends are asleep get skipped.
+let COLLISION_ASLEEP = new Uint8Array(0);
+const SLEEP_SPEED_SQ = 25;       // <5 px/s counts as still
+const SLEEP_THRESHOLD_TICKS = 30; // ~half a sim-second before sleeping
 
 // Creature spatial grid -- shared across sensor lookup, predation/engulf
 // scans, and both creature-creature and creature-sediment collisions.
@@ -2063,8 +2073,21 @@ function resolveCollisions(world: World): void {
   while (COLLISION_BUCKETS.length < cellCount) COLLISION_BUCKETS.push([]);
   if (COLLISION_MASS.length < n) COLLISION_MASS = new Float64Array(n * 2);
   if (COLLISION_NONEMPTY.length < cellCount) COLLISION_NONEMPTY = new Int32Array(cellCount * 2);
+  if (COLLISION_ASLEEP.length < n) COLLISION_ASLEEP = new Uint8Array(n * 2);
 
-  for (let i = 0; i < n; i++) COLLISION_MASS[i] = mass(ps[i]);
+  for (let i = 0; i < n; i++) {
+    const p = ps[i];
+    COLLISION_MASS[i] = mass(p);
+    const v2 = p.vx * p.vx + p.vy * p.vy + p.vz * p.vz;
+    if (v2 < SLEEP_SPEED_SQ) {
+      const q = (p.quietTicks || 0) + 1;
+      p.quietTicks = q;
+      COLLISION_ASLEEP[i] = q >= SLEEP_THRESHOLD_TICKS ? 1 : 0;
+    } else {
+      p.quietTicks = 0;
+      COLLISION_ASLEEP[i] = 0;
+    }
+  }
 
   for (let pass = 0; pass < world.collisionIters; pass++) {
     // Clear only the buckets we filled last pass, not the whole grid.
@@ -2271,6 +2294,7 @@ function checkNeighborPairs(
 }
 
 function resolvePair(ps: Particle[], i: number, j: number, e: number): void {
+  if (COLLISION_ASLEEP[i] && COLLISION_ASLEEP[j]) return;
   const a = ps[i];
   const b = ps[j];
   let dx = b.x - a.x;
