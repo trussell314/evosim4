@@ -12,7 +12,7 @@ const ctx = canvas.getContext("2d")!;
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
-  "border-radius:4px;font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "border-radius:4px;font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;" +
   "max-height:80vh;overflow:hidden;";
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
@@ -39,19 +39,22 @@ hudTimings.textContent = "r=--ms  s=--ms";
 // useful is going on.
 const hudDiag = document.createElement("div");
 hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;font:inherit;display:none;";
+// The expanded body uses a smaller font than the always-visible
+// bar -- the inspector pre is dense and reads better tighter.
+const EXPANDED_FONT = "font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;";
 const inspector = document.createElement("pre");
 inspector.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;font:inherit;";
+  `margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;${EXPANDED_FONT}`;
 // Disasm gets its own collapsible section: it's much longer than the
 // rest of the inspector and almost never wanted at-a-glance. Click the
 // "[show disasm]" header to expand.
 const disasmHeader = document.createElement("div");
 disasmHeader.style.cssText =
-  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;font:inherit;";
+  `padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;${EXPANDED_FONT}`;
 disasmHeader.textContent = "[+] show disasm";
 const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;font:inherit;";
+  `margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;${EXPANDED_FONT}`;
 hud.appendChild(hudBar);
 hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
