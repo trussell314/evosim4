@@ -6,8 +6,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   type World,
-  type Creature,
+  Creature,
   type MaterialId,
+  type Molecules,
   MATERIALS,
   MATERIAL_IDS_ORDERED,
   MOLECULE_IDS,
@@ -21,8 +22,10 @@ import {
   temperatureAt,
   ParticleStore,
   pushParticle,
+  CreatureStore,
+  newCreature,
 } from "../sim";
-import { OP, makeDefaultGenome, newVMState } from "../genome";
+import { OP, makeDefaultGenome, newVMState, type VMState } from "../genome";
 
 const M = MATERIAL_IDS_ORDERED;
 
@@ -48,7 +51,7 @@ function stepFullCycle(w: World, dt: number = 1 / 60): void {
 function quietWorld(): World {
   return {
     width: 800, height: 600, depth: 24, t: 0,
-    particles: [], particleStore: new ParticleStore(256), creatures: [],
+    particles: [], particleStore: new ParticleStore(256), creatures: [], creatureStore: new CreatureStore(64),
     particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0,
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
@@ -84,35 +87,50 @@ function quietWorld(): World {
   };
 }
 
-function makeCreature(overrides: Partial<Creature> = {}): Creature {
-  const reserves = {} as Record<MaterialId, number>;
-  for (const id of M) reserves[id] = 0;
-  // Seed enough biomass to clear MIN_VIABLE_BIOMASS so the cell isn't
-  // autolyzed on its first step. Tests that care about specific molecule
-  // pools override via the molecules property.
-  const molecules = emptyMolecules();
-  molecules.biomass = 30;
-  const base: Creature = {
-    x: 400, y: 300, z: 12,
-    vx: 0, vy: 0, vz: 0,
-    r: 9, density: 1.0,
-    reserves,
+// Per-test creature factory. Each call backs the new Creature in its
+// own private CreatureStore so tests don't have to share a world's
+// store. Hot loops in sim.ts dispatch through `c.store` per-creature,
+// so this works regardless of whether the creature ends up in a
+// world or in a standalone test scenario.
+function makeCreature(overrides: Partial<{
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  r: number; density: number;
+  reserves: Partial<Record<MaterialId, number>>;
+  molecules: Partial<Molecules>;
+  energy: number;
+  senseRange: number; thrustAccel: number;
+  genome: Uint8Array;
+  vm: VMState;
+  color: string;
+  ingestCooldown: number;
+  repairTicks: number;
+  bornAt: number;
+  speciesKey: string;
+}> = {}): Creature {
+  const store = new CreatureStore(1);
+  const reserves: Partial<Record<MaterialId, number>> = overrides.reserves ?? {};
+  const molecules: Partial<Molecules> = { biomass: 30, ...(overrides.molecules ?? {}) };
+  return newCreature(store, {
+    x: overrides.x ?? 400,
+    y: overrides.y ?? 300,
+    z: overrides.z ?? 12,
+    vx: overrides.vx ?? 0, vy: overrides.vy ?? 0, vz: overrides.vz ?? 0,
+    r: overrides.r ?? 9,
+    density: overrides.density ?? 1.0,
+    energy: overrides.energy ?? 100,
+    senseRange: overrides.senseRange ?? 200,
+    thrustAccel: overrides.thrustAccel ?? 70,
+    genome: overrides.genome ?? makeDefaultGenome(),
+    vm: overrides.vm ?? newVMState(),
+    color: overrides.color ?? "#ffffff",
+    ingestCooldown: overrides.ingestCooldown ?? 0,
+    repairTicks: overrides.repairTicks ?? 0,
+    bornAt: overrides.bornAt ?? 0,
+    speciesKey: overrides.speciesKey ?? "",
     molecules,
-    energy: 100,
-    senseRange: 200,
-    thrustAccel: 70,
-    genome: makeDefaultGenome(),
-    vm: newVMState(),
-    color: "#ffffff",
-    ingestCooldown: 0,
-    repairTicks: 0,
-    bornAt: 0,
-    speciesKey: "",
-    division: null,
-    contents: [],
-    bonds: [],
-  };
-  return { ...base, ...overrides };
+    reserves,
+  });
 }
 
 function cellTotalMass(c: Creature): number {

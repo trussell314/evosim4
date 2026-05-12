@@ -251,41 +251,312 @@ export interface ParticleData {
   density?: number;
 }
 
-export interface Creature {
-  x: number; y: number; z: number;
-  vx: number; vy: number; vz: number;
-  r: number;
-  density: number;
-  reserves: Record<MaterialId, number>;
-  molecules: Molecules;
-  energy: number;       // ATP. Spent operations turn it into molecules.adp.
-  senseRange: number;
-  thrustAccel: number;
+// Creature storage as Struct-of-Arrays. Primitives + every molecule
+// and reserve get their own typed-array column, sized by capacity and
+// indexed by the creature's persistent `idx`. Slot allocation uses a
+// free-list rather than swap-and-pop so handles to dead creatures
+// still read consistent data through `releaseReservesAsParticles`.
+//
+// The `Creature` class is a thin handle whose primitive-field
+// accessors index into the store. molecules and reserves are exposed
+// via two helper classes (MoleculesView, ReservesView) that proxy
+// their named fields into the right column.
+export class CreatureStore {
+  cap = 0;
+  highWater = 0;
+  free: number[] = [];
+  // primitive position/velocity/shape
+  x: Float32Array; y: Float32Array; z: Float32Array;
+  vx: Float32Array; vy: Float32Array; vz: Float32Array;
+  r: Float32Array; density: Float32Array;
+  // metabolism / lifecycle
+  energy: Float32Array;
+  senseRange: Float32Array;
+  thrustAccel: Float32Array;
+  bornAt: Float32Array;
+  ingestCooldown: Float32Array;
+  repairTicks: Int32Array;
+  // molecule pools (parallel to MOLECULE_IDS order)
+  m_glucose: Float32Array;
+  m_fattyAcid: Float32Array;
+  m_aminoAcid: Float32Array;
+  m_minerals: Float32Array;
+  m_chlorophyll: Float32Array;
+  m_enzyme: Float32Array;
+  m_o2: Float32Array;
+  m_co2: Float32Array;
+  m_biomass: Float32Array;
+  m_waste: Float32Array;
+  m_adp: Float32Array;
+  // reserves (parallel to MATERIAL_IDS order)
+  r_rock: Float32Array;
+  r_sand: Float32Array;
+  r_clay: Float32Array;
+  r_organic: Float32Array;
+  r_lipid: Float32Array;
+  r_gas: Float32Array;
+  constructor(initialCap = 256) {
+    const blank = new Float32Array(0);
+    const blanki = new Int32Array(0);
+    this.x = blank; this.y = blank; this.z = blank;
+    this.vx = blank; this.vy = blank; this.vz = blank;
+    this.r = blank; this.density = blank;
+    this.energy = blank; this.senseRange = blank; this.thrustAccel = blank;
+    this.bornAt = blank; this.ingestCooldown = blank; this.repairTicks = blanki;
+    this.m_glucose = blank; this.m_fattyAcid = blank; this.m_aminoAcid = blank;
+    this.m_minerals = blank; this.m_chlorophyll = blank; this.m_enzyme = blank;
+    this.m_o2 = blank; this.m_co2 = blank; this.m_biomass = blank;
+    this.m_waste = blank; this.m_adp = blank;
+    this.r_rock = blank; this.r_sand = blank; this.r_clay = blank;
+    this.r_organic = blank; this.r_lipid = blank; this.r_gas = blank;
+    this.grow(initialCap);
+  }
+  grow(newCap: number): void {
+    if (newCap <= this.cap) return;
+    const grow1 = (a: Float32Array): Float32Array => {
+      const n = new Float32Array(newCap); n.set(a); return n;
+    };
+    const grow1i = (a: Int32Array): Int32Array => {
+      const n = new Int32Array(newCap); n.set(a); return n;
+    };
+    this.x = grow1(this.x); this.y = grow1(this.y); this.z = grow1(this.z);
+    this.vx = grow1(this.vx); this.vy = grow1(this.vy); this.vz = grow1(this.vz);
+    this.r = grow1(this.r); this.density = grow1(this.density);
+    this.energy = grow1(this.energy);
+    this.senseRange = grow1(this.senseRange);
+    this.thrustAccel = grow1(this.thrustAccel);
+    this.bornAt = grow1(this.bornAt);
+    this.ingestCooldown = grow1(this.ingestCooldown);
+    this.repairTicks = grow1i(this.repairTicks);
+    this.m_glucose = grow1(this.m_glucose);
+    this.m_fattyAcid = grow1(this.m_fattyAcid);
+    this.m_aminoAcid = grow1(this.m_aminoAcid);
+    this.m_minerals = grow1(this.m_minerals);
+    this.m_chlorophyll = grow1(this.m_chlorophyll);
+    this.m_enzyme = grow1(this.m_enzyme);
+    this.m_o2 = grow1(this.m_o2);
+    this.m_co2 = grow1(this.m_co2);
+    this.m_biomass = grow1(this.m_biomass);
+    this.m_waste = grow1(this.m_waste);
+    this.m_adp = grow1(this.m_adp);
+    this.r_rock = grow1(this.r_rock);
+    this.r_sand = grow1(this.r_sand);
+    this.r_clay = grow1(this.r_clay);
+    this.r_organic = grow1(this.r_organic);
+    this.r_lipid = grow1(this.r_lipid);
+    this.r_gas = grow1(this.r_gas);
+    this.cap = newCap;
+  }
+  // Returns a fresh slot. Reuses freed slots first; grows on overflow.
+  alloc(): number {
+    if (this.free.length > 0) return this.free.pop()!;
+    if (this.highWater >= this.cap) this.grow(this.cap * 2 || 256);
+    const i = this.highWater++;
+    this.zero(i);
+    return i;
+  }
+  release(idx: number): void {
+    this.zero(idx);
+    this.free.push(idx);
+  }
+  private zero(i: number): void {
+    this.x[i] = 0; this.y[i] = 0; this.z[i] = 0;
+    this.vx[i] = 0; this.vy[i] = 0; this.vz[i] = 0;
+    this.r[i] = 0; this.density[i] = 0;
+    this.energy[i] = 0;
+    this.senseRange[i] = 0;
+    this.thrustAccel[i] = 0;
+    this.bornAt[i] = 0;
+    this.ingestCooldown[i] = 0;
+    this.repairTicks[i] = 0;
+    this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
+    this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
+    this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
+    this.m_waste[i] = 0; this.m_adp[i] = 0;
+    this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
+    this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
+  }
+}
+
+export class MoleculesView {
+  constructor(public c: Creature) {}
+  get glucose(): number { return this.c.store.m_glucose[this.c.idx]; }
+  set glucose(v: number) { this.c.store.m_glucose[this.c.idx] = v; }
+  get fattyAcid(): number { return this.c.store.m_fattyAcid[this.c.idx]; }
+  set fattyAcid(v: number) { this.c.store.m_fattyAcid[this.c.idx] = v; }
+  get aminoAcid(): number { return this.c.store.m_aminoAcid[this.c.idx]; }
+  set aminoAcid(v: number) { this.c.store.m_aminoAcid[this.c.idx] = v; }
+  get minerals(): number { return this.c.store.m_minerals[this.c.idx]; }
+  set minerals(v: number) { this.c.store.m_minerals[this.c.idx] = v; }
+  get chlorophyll(): number { return this.c.store.m_chlorophyll[this.c.idx]; }
+  set chlorophyll(v: number) { this.c.store.m_chlorophyll[this.c.idx] = v; }
+  get enzyme(): number { return this.c.store.m_enzyme[this.c.idx]; }
+  set enzyme(v: number) { this.c.store.m_enzyme[this.c.idx] = v; }
+  get o2(): number { return this.c.store.m_o2[this.c.idx]; }
+  set o2(v: number) { this.c.store.m_o2[this.c.idx] = v; }
+  get co2(): number { return this.c.store.m_co2[this.c.idx]; }
+  set co2(v: number) { this.c.store.m_co2[this.c.idx] = v; }
+  get biomass(): number { return this.c.store.m_biomass[this.c.idx]; }
+  set biomass(v: number) { this.c.store.m_biomass[this.c.idx] = v; }
+  get waste(): number { return this.c.store.m_waste[this.c.idx]; }
+  set waste(v: number) { this.c.store.m_waste[this.c.idx] = v; }
+  get adp(): number { return this.c.store.m_adp[this.c.idx]; }
+  set adp(v: number) { this.c.store.m_adp[this.c.idx] = v; }
+}
+
+export class ReservesView {
+  constructor(public c: Creature) {}
+  get rock(): number { return this.c.store.r_rock[this.c.idx]; }
+  set rock(v: number) { this.c.store.r_rock[this.c.idx] = v; }
+  get sand(): number { return this.c.store.r_sand[this.c.idx]; }
+  set sand(v: number) { this.c.store.r_sand[this.c.idx] = v; }
+  get clay(): number { return this.c.store.r_clay[this.c.idx]; }
+  set clay(v: number) { this.c.store.r_clay[this.c.idx] = v; }
+  get organic(): number { return this.c.store.r_organic[this.c.idx]; }
+  set organic(v: number) { this.c.store.r_organic[this.c.idx] = v; }
+  get lipid(): number { return this.c.store.r_lipid[this.c.idx]; }
+  set lipid(v: number) { this.c.store.r_lipid[this.c.idx] = v; }
+  get gas(): number { return this.c.store.r_gas[this.c.idx]; }
+  set gas(v: number) { this.c.store.r_gas[this.c.idx] = v; }
+}
+
+export class Creature {
+  idx: number;
+  store: CreatureStore;
+  // Non-typed-array fields kept on the handle (variable-shape, not hot)
+  genome!: Uint8Array;
+  vm!: VMState;
+  color!: string;
+  speciesKey!: string;
+  division: { progress: number; axis: number; child: Creature } | null = null;
+  contents: Creature[] = [];
+  bonds: Creature[] = [];
+  // Views cached on first access. `molecules.glucose` etc. proxy into
+  // store.m_glucose[this.idx].
+  private _m?: MoleculesView;
+  private _r?: ReservesView;
+  constructor(store: CreatureStore, idx: number) { this.store = store; this.idx = idx; }
+  get molecules(): MoleculesView { return this._m ??= new MoleculesView(this); }
+  // Setter: copy field-by-field from any Molecules-shaped object into
+  // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
+  // existing code keep working while the underlying data is SoA.
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number }) {
+    const s = this.store; const i = this.idx;
+    s.m_glucose[i] = m.glucose ?? 0;
+    s.m_fattyAcid[i] = m.fattyAcid ?? 0;
+    s.m_aminoAcid[i] = m.aminoAcid ?? 0;
+    s.m_minerals[i] = m.minerals ?? 0;
+    s.m_chlorophyll[i] = m.chlorophyll ?? 0;
+    s.m_enzyme[i] = m.enzyme ?? 0;
+    s.m_o2[i] = m.o2 ?? 0;
+    s.m_co2[i] = m.co2 ?? 0;
+    s.m_biomass[i] = m.biomass ?? 0;
+    s.m_waste[i] = m.waste ?? 0;
+    s.m_adp[i] = m.adp ?? 0;
+  }
+  get reserves(): ReservesView { return this._r ??= new ReservesView(this); }
+  set reserves(r: { rock?: number; sand?: number; clay?: number; organic?: number; lipid?: number; gas?: number }) {
+    const s = this.store; const i = this.idx;
+    s.r_rock[i] = r.rock ?? 0;
+    s.r_sand[i] = r.sand ?? 0;
+    s.r_clay[i] = r.clay ?? 0;
+    s.r_organic[i] = r.organic ?? 0;
+    s.r_lipid[i] = r.lipid ?? 0;
+    s.r_gas[i] = r.gas ?? 0;
+  }
+  get x(): number { return this.store.x[this.idx]; }
+  set x(v: number) { this.store.x[this.idx] = v; }
+  get y(): number { return this.store.y[this.idx]; }
+  set y(v: number) { this.store.y[this.idx] = v; }
+  get z(): number { return this.store.z[this.idx]; }
+  set z(v: number) { this.store.z[this.idx] = v; }
+  get vx(): number { return this.store.vx[this.idx]; }
+  set vx(v: number) { this.store.vx[this.idx] = v; }
+  get vy(): number { return this.store.vy[this.idx]; }
+  set vy(v: number) { this.store.vy[this.idx] = v; }
+  get vz(): number { return this.store.vz[this.idx]; }
+  set vz(v: number) { this.store.vz[this.idx] = v; }
+  get r(): number { return this.store.r[this.idx]; }
+  set r(v: number) { this.store.r[this.idx] = v; }
+  get density(): number { return this.store.density[this.idx]; }
+  set density(v: number) { this.store.density[this.idx] = v; }
+  get energy(): number { return this.store.energy[this.idx]; }
+  set energy(v: number) { this.store.energy[this.idx] = v; }
+  get senseRange(): number { return this.store.senseRange[this.idx]; }
+  set senseRange(v: number) { this.store.senseRange[this.idx] = v; }
+  get thrustAccel(): number { return this.store.thrustAccel[this.idx]; }
+  set thrustAccel(v: number) { this.store.thrustAccel[this.idx] = v; }
+  get bornAt(): number { return this.store.bornAt[this.idx]; }
+  set bornAt(v: number) { this.store.bornAt[this.idx] = v; }
+  get ingestCooldown(): number { return this.store.ingestCooldown[this.idx]; }
+  set ingestCooldown(v: number) { this.store.ingestCooldown[this.idx] = v; }
+  get repairTicks(): number { return this.store.repairTicks[this.idx]; }
+  set repairTicks(v: number) { this.store.repairTicks[this.idx] = v; }
+}
+
+// Initialization options for a new Creature. Mirrors the field set.
+export interface CreatureInit {
+  x?: number; y?: number; z?: number;
+  vx?: number; vy?: number; vz?: number;
+  r?: number; density?: number;
+  energy?: number;
+  senseRange?: number; thrustAccel?: number;
+  bornAt?: number;
+  ingestCooldown?: number;
+  repairTicks?: number;
   genome: Uint8Array;
   vm: VMState;
   color: string;
-  ingestCooldown: number;
-  // Ticks remaining where somatic mutation is suppressed. Refreshed by
-  // REPAIR op execution. Costs ATP per refresh.
-  repairTicks: number;
-  // world.t at the moment this creature was created. Age = world.t - bornAt.
-  bornAt: number;
-  // genomeKey at birth -- frozen for life so species accounting (alive
-  // counts, phylogeny) survives any in-life somatic mutations.
   speciesKey: string;
-  // When non-null the cell is in the middle of fissioning. The child has
-  // already been built and paid for; we animate the separation here, and
-  // commit the child into world.creatures when progress reaches 1.
-  division: { progress: number; axis: number; child: Creature } | null;
-  // Cells this creature has swallowed whole (OP.ENGULF). They sit inert in
-  // a vacuole inside the predator: no VM, no physics, no chemistry. Their
-  // mass still counts toward the predator's total mass (and radius).
-  contents: Creature[];
-  // Other creatures this cell is adhered to. Bonds are mutual: each
-  // partner has the other in its bonds[] list. Used by ADHERE to form
-  // multicell colonies / chains / mats. Cleared from BOTH sides on
-  // death or engulf.
-  bonds: Creature[];
+  molecules?: Partial<Molecules>;
+  reserves?: Partial<Record<MaterialId, number>>;
+}
+
+export function newCreature(store: CreatureStore, init: CreatureInit): Creature {
+  const idx = store.alloc();
+  const c = new Creature(store, idx);
+  store.x[idx] = init.x ?? 0;
+  store.y[idx] = init.y ?? 0;
+  store.z[idx] = init.z ?? 0;
+  store.vx[idx] = init.vx ?? 0;
+  store.vy[idx] = init.vy ?? 0;
+  store.vz[idx] = init.vz ?? 0;
+  store.r[idx] = init.r ?? 0;
+  store.density[idx] = init.density ?? 1;
+  store.energy[idx] = init.energy ?? 0;
+  store.senseRange[idx] = init.senseRange ?? 0;
+  store.thrustAccel[idx] = init.thrustAccel ?? 0;
+  store.bornAt[idx] = init.bornAt ?? 0;
+  store.ingestCooldown[idx] = init.ingestCooldown ?? 0;
+  store.repairTicks[idx] = init.repairTicks ?? 0;
+  c.genome = init.genome;
+  c.vm = init.vm;
+  c.color = init.color;
+  c.speciesKey = init.speciesKey;
+  if (init.molecules) {
+    const m = init.molecules;
+    if (m.glucose !== undefined) store.m_glucose[idx] = m.glucose;
+    if (m.fattyAcid !== undefined) store.m_fattyAcid[idx] = m.fattyAcid;
+    if (m.aminoAcid !== undefined) store.m_aminoAcid[idx] = m.aminoAcid;
+    if (m.minerals !== undefined) store.m_minerals[idx] = m.minerals;
+    if (m.chlorophyll !== undefined) store.m_chlorophyll[idx] = m.chlorophyll;
+    if (m.enzyme !== undefined) store.m_enzyme[idx] = m.enzyme;
+    if (m.o2 !== undefined) store.m_o2[idx] = m.o2;
+    if (m.co2 !== undefined) store.m_co2[idx] = m.co2;
+    if (m.biomass !== undefined) store.m_biomass[idx] = m.biomass;
+    if (m.waste !== undefined) store.m_waste[idx] = m.waste;
+    if (m.adp !== undefined) store.m_adp[idx] = m.adp;
+  }
+  if (init.reserves) {
+    const r = init.reserves;
+    if (r.rock !== undefined) store.r_rock[idx] = r.rock;
+    if (r.sand !== undefined) store.r_sand[idx] = r.sand;
+    if (r.clay !== undefined) store.r_clay[idx] = r.clay;
+    if (r.organic !== undefined) store.r_organic[idx] = r.organic;
+    if (r.lipid !== undefined) store.r_lipid[idx] = r.lipid;
+    if (r.gas !== undefined) store.r_gas[idx] = r.gas;
+  }
+  return c;
 }
 
 export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
@@ -379,6 +650,7 @@ export interface World {
   particles: Particle[];
   particleStore: ParticleStore;
   creatures: Creature[];
+  creatureStore: CreatureStore;
   particleTarget: number;
   particleSpawnRate: number;
   extinctionCount: number;
@@ -1067,53 +1339,110 @@ function rebuildObstacleIndex(world: World): void {
 function resolveObstacleCollisions(world: World): void {
   if (world.obstacles.length === 0) return;
   const minY = OBSTACLES_MIN_Y;
-  for (let i = 0; i < world.particles.length; i++) {
-    const p = world.particles[i];
-    if (p.y + p.r < minY) continue;
-    collideObstaclesAt(p, world.restitution);
-  }
-  for (let i = 0; i < world.creatures.length; i++) {
-    const c = world.creatures[i];
-    if (c.y + c.r < minY) continue;
-    collideObstaclesAt(c, 0.1);
+  const ps = world.particleStore;
+  const pn = world.particles.length;
+  collideObstaclesSoa(ps.x, ps.y, ps.vx, ps.vy, ps.r, pn, world.restitution, minY, 0);
+  const cn = world.creatures.length;
+  // Creatures may belong to different stores (test fixtures use
+  // private stores). Per-creature hoist into the right typed arrays.
+  for (let k = 0; k < cn; k++) {
+    const c = world.creatures[k];
+    const cs = c.store;
+    collideObstaclesSoaSingle(cs.x, cs.y, cs.vx, cs.vy, cs.r, c.idx, 0.1, minY);
   }
 }
 
-function collideObstaclesAt(
-  o: { x: number; y: number; vx: number; vy: number; r: number },
-  e: number,
+// One-particle/creature variant: same math as the array sweep, fixed
+// to slot idx. Used for creature obstacle collision since each cell
+// can live in a different store.
+function collideObstaclesSoaSingle(
+  X: Float32Array, Y: Float32Array, VX: Float32Array, VY: Float32Array, R: Float32Array,
+  idx: number, e: number, minY: number,
 ): void {
-  let bx = Math.floor(o.x / OBSTACLE_BAND_W);
+  const rk = R[idx];
+  if (Y[idx] + rk < minY) return;
+  const xk = X[idx], yk = Y[idx];
+  let bx = Math.floor(xk / OBSTACLE_BAND_W);
   if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
   const obs = OBSTACLE_BANDS[bx];
+  let ox = xk, oy = yk, ovx = VX[idx], ovy = VY[idx];
   for (let i = 0; i < obs.length; i++) {
     const ob = obs[i];
-    if (o.x + o.r < ob.minX || o.x - o.r > ob.maxX) continue;
-    if (o.y + o.r < ob.minY || o.y - o.r > ob.maxY) continue;
+    if (ox + rk < ob.minX || ox - rk > ob.maxX) continue;
+    if (oy + rk < ob.minY || oy - rk > ob.maxY) continue;
     const lobes = ob.lobes;
     for (let j = 0; j < lobes.length; j++) {
       const l = lobes[j];
-      const dx = o.x - l.x;
-      const dy = o.y - l.y;
-      const minDist = o.r + l.r;
+      const dx = ox - l.x;
+      const dy = oy - l.y;
+      const minDist = rk + l.r;
       const d2 = dx * dx + dy * dy;
       if (d2 >= minDist * minDist) continue;
       let d = Math.sqrt(d2);
-      let nx, ny;
-      if (d < 1e-6) { nx = 0; ny = -1; d = 1; }
+      let nx = 0, ny = -1;
+      if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
       else { nx = dx / d; ny = dy / d; }
       const overlap = minDist - d;
-      o.x += nx * overlap;
-      o.y += ny * overlap;
-      const vN = o.vx * nx + o.vy * ny;
+      ox += nx * overlap;
+      oy += ny * overlap;
+      const vN = ovx * nx + ovy * ny;
       if (vN < 0) {
-        o.vx -= (1 + e) * vN * nx;
-        o.vy -= (1 + e) * vN * ny;
+        ovx -= (1 + e) * vN * nx;
+        ovy -= (1 + e) * vN * ny;
       }
     }
   }
+  X[idx] = ox; Y[idx] = oy; VX[idx] = ovx; VY[idx] = ovy;
 }
 
+// Contiguous-index version: used for particles where slot i corresponds
+// to world.particles[i]. No indirection.
+function collideObstaclesSoa(
+  X: Float32Array, Y: Float32Array, VX: Float32Array, VY: Float32Array, R: Float32Array,
+  n: number, e: number, minY: number, _pad: number,
+): void {
+  void _pad;
+  for (let k = 0; k < n; k++) {
+    const yk = Y[k]; const rk = R[k];
+    if (yk + rk < minY) continue;
+    const xk = X[k];
+    let bx = Math.floor(xk / OBSTACLE_BAND_W);
+    if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
+    const obs = OBSTACLE_BANDS[bx];
+    let ox = xk, oy = yk, ovx = VX[k], ovy = VY[k];
+    for (let i = 0; i < obs.length; i++) {
+      const ob = obs[i];
+      if (ox + rk < ob.minX || ox - rk > ob.maxX) continue;
+      if (oy + rk < ob.minY || oy - rk > ob.maxY) continue;
+      const lobes = ob.lobes;
+      for (let j = 0; j < lobes.length; j++) {
+        const l = lobes[j];
+        const dx = ox - l.x;
+        const dy = oy - l.y;
+        const minDist = rk + l.r;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minDist * minDist) continue;
+        let d = Math.sqrt(d2);
+        let nx = 0, ny = -1;
+        if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
+        else { nx = dx / d; ny = dy / d; }
+        const overlap = minDist - d;
+        ox += nx * overlap;
+        oy += ny * overlap;
+        const vN = ovx * nx + ovy * ny;
+        if (vN < 0) {
+          ovx -= (1 + e) * vN * nx;
+          ovy -= (1 + e) * vN * ny;
+        }
+      }
+    }
+    X[k] = ox; Y[k] = oy; VX[k] = ovx; VY[k] = ovy;
+  }
+}
+
+// Scatter-index version: used for creatures whose store slots are
+// non-contiguous after free-list reuse. idx[k] maps world.creatures[k]
+// to its slot in the typed arrays.
 function tempMult(T: number): number {
   const m = Math.pow(TEMP_Q10, (T - TEMP_REF) / 10);
   return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
@@ -1128,6 +1457,7 @@ export function createWorld(width: number, height: number): World {
     particles: [],
     particleStore: new ParticleStore(Math.max(256, particleTarget)),
     creatures: [],
+    creatureStore: new CreatureStore(512),
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     extinctionCount: 0,
@@ -1173,7 +1503,7 @@ export function createWorld(width: number, height: number): World {
   // in via replenishParticles() at world.particleSpawnRate until the
   // target is reached, so the simulation has a visible "bootstrap"
   // period instead of dumping thousands of particles all at once.
-  const first = makeCreature(world.width * 0.5, world.height * 0.3, world.depth * 0.5);
+  const first = makeCreature(world, world.width * 0.5, world.height * 0.3, world.depth * 0.5);
   first.bornAt = 0;
   // First cell defines the root: paint it white and use its genome as the
   // anchor every other cell colors against until the next extinction.
@@ -1231,53 +1561,34 @@ function emptyReserves(): Record<MaterialId, number> {
   return r;
 }
 
-function makeCreature(x: number, y: number, z: number): Creature {
-  const reserves = emptyReserves();
-  // Seed reserves across all materials so the cell can pay the per-byte
-  // fission cost (genomeMaterialCost is spread across all 6 materials)
-  // without first having to ingest one particle of every type. Without
-  // this, a cell can ingest organic until its reproduce-threshold is met
-  // but still fail to fission because (say) reserves.sand is still 0.
-  reserves.rock = 4;
-  reserves.sand = 15;
-  reserves.clay = 12;
-  reserves.organic = 30;
-  reserves.lipid = 12;
-  reserves.gas = 6;
-  const molecules = emptyMolecules();
-  // Starter cell ships with a working metabolism: enough ATP to live, a
-  // matched ADP pool, some glucose and O2 to run respiration, a little
-  // amino-acid / minerals / fatty-acid for biosynthesis and movement,
-  // and biomass to give it physical body.
-  molecules.adp = 50;
-  molecules.glucose = 20;
-  molecules.fattyAcid = 15;
-  molecules.aminoAcid = 15;
-  molecules.o2 = 15;
-  molecules.minerals = 15;
-  molecules.biomass = 30;
+function makeCreature(world: World, x: number, y: number, z: number): Creature {
   const genome = makeDefaultGenome();
-  const c: Creature = {
+  const c = newCreature(world.creatureStore, {
     x, y, z,
-    vx: 0, vy: 0, vz: 0,
     r: MIN_CREATURE_R,
     density: 1.0,
-    reserves,
-    molecules,
     energy: 30,
     senseRange: computeSenseRange(genome),
     thrustAccel: 70,
     genome,
     vm: newVMState(),
     color: genomeColor(genome),
-    ingestCooldown: 0,
-    repairTicks: 0,
-    bornAt: 0,
     speciesKey: genomeKey(genome),
-    division: null,
-    contents: [],
-    bonds: [],
-  };
+    // Starter cell ships with a working metabolism: enough ATP to live, a
+    // matched ADP pool, some glucose and O2 to run respiration, a little
+    // amino-acid / minerals / fatty-acid for biosynthesis and movement,
+    // and biomass to give it physical body.
+    molecules: {
+      adp: 50, glucose: 20, fattyAcid: 15, aminoAcid: 15,
+      o2: 15, minerals: 15, biomass: 30,
+    },
+    // Seed reserves across all materials so the cell can pay the per-byte
+    // fission cost (genomeMaterialCost is spread across all 6 materials)
+    // without first having to ingest one particle of every type. Without
+    // this, a cell can ingest organic until its reproduce-threshold is met
+    // but still fail to fission because (say) reserves.sand is still 0.
+    reserves: { rock: 4, sand: 15, clay: 12, organic: 30, lipid: 12, gas: 6 },
+  });
   updateCreatureRadius(c);
   return c;
 }
@@ -1780,7 +2091,7 @@ export function step(world: World, dt: number): void {
     const x = world.width * (0.1 + 0.8 * Math.random());
     const y = world.height * (0.1 + 0.6 * Math.random());
     const z = world.depth * 0.5;
-    const seed = makeCreature(x, y, z);
+    const seed = makeCreature(world, x, y, z);
     seed.bornAt = world.t;
     // Reset the color anchor for the new lineage so descendants color
     // relative to this new "Adam".
@@ -1921,60 +2232,6 @@ function applyForces(world: World, dt: number): void {
   // with both regimes.
   const colDepth = Math.max(1, world.height - world.surfaceY);
   const currentDrift = Math.sin(world.t * CURRENT_FREQ);
-  const integrate = (
-    o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
-    density: number,
-  ) => {
-    // Newtonian buoyancy `g * (1 - 1/density)` grows without bound as
-    // density -> 0 (gas at density 0.2 would accelerate at -4g, rising
-    // 8.5x faster than rock sinks). Cap symmetrically so the most-
-    // buoyant particle can't outpace the densest at falling.
-    let ay = world.gravity * (1 - 1 / density);
-    if (ay < -world.gravity) ay = -world.gravity;
-    else if (ay > world.gravity) ay = world.gravity;
-    // Surface ripple travels right; deeper swell travels left. The
-    // counter-traveling pair stops particles from accumulating against
-    // one wall the way a single right-moving wave train did.
-    const depth = Math.max(0, o.y - world.surfaceY);
-    // Standing waves: cos(k*x) * sin(w*t). Force at each x oscillates
-    // in time but has zero time-average AND zero net horizontal
-    // momentum, so particles bob locally instead of drifting toward
-    // one wall. The same shape used to be a pair of traveling waves
-    // counter-propagating; lowering swellAmp broke the balance and
-    // everything piled up downstream of the dominant wave.
-    const surface = surfAmp * Math.cos(kS * o.x) * Math.sin(wS * world.t) * Math.exp(-depth / world.surfaceDecay);
-    const swell   = swellAmp * Math.cos(kL * o.x) * Math.sin(wL * world.t) * Math.exp(-depth / world.swellDecay);
-    const az      = zAmp * Math.sin(wL * world.t + kL * o.x + 1.0) * Math.exp(-depth / world.swellDecay);
-    // Vertical splash near the surface: 90deg-phased counterpart to the
-    // horizontal standing wave. Particles in the top ~30px of the water
-    // get strong upward kicks at wave peaks and downward pulls at
-    // troughs, so the surface visibly chops + sprays instead of just
-    // bobbing horizontally. Decays sharply with depth so the bulk water
-    // column isn't affected.
-    const splash = depth < SPLASH_DEPTH
-      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * o.x) * Math.cos(wS * world.t) * Math.exp(-depth / SPLASH_DEPTH)
-      : 0;
-    // Vertical mixing: gentle up/down currents that vary with x and time.
-    // Negative ay = upward push, positive = downward. Full water column.
-    const updraft = -world.updraftAmp * updraftEnv * Math.sin(kU * o.x + wU * world.t);
-    // Slow horizontal current that depends on depth and drifts in time.
-    // +1 at surface, -1 at bottom, multiplied by a slow time-oscillation.
-    const depthFrac = depth / colDepth;
-    const current = world.currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
-    // Per-tick zero-mean noise to break up any residual coherent drift.
-    const noiseX = bAmp * (Math.random() - 0.5) * 2;
-    const noiseY = bAmp * (Math.random() - 0.5) * 2;
-    const ax = surface + swell + current + noiseX;
-    const ayTot = ay + splash + updraft + noiseY;
-    const dragScale = o.r / DRAG_REF_R;
-    o.vx += (ax - world.drag * dragScale * o.vx) * dt;
-    o.vy += (ayTot - world.drag * dragScale * o.vy) * dt;
-    o.vz += (az - world.drag * dragScale * o.vz) * dt;
-    o.x += o.vx * dt;
-    o.y += o.vy * dt;
-    o.z += o.vz * dt;
-  };
-
   // Particle fast path: indexed access on the parallel typed arrays
   // avoids the per-particle handle getter/setter chain. With ~4-9k
   // particles per tick this is the hottest loop in the sim.
@@ -2023,7 +2280,46 @@ function applyForces(world: World, dt: number): void {
     PY[i] = yi + vyi * dt;
     PZ[i] = PZ[i] + vzi * dt;
   }
-  for (const c of world.creatures) integrate(c, c.density);
+  // Creature fast path: same math as the particle loop, but creatures
+  // may belong to different stores (tests allocate private stores), so
+  // hoist the store columns per-creature.
+  const cn = world.creatures.length;
+  for (let k = 0; k < cn; k++) {
+    const c = world.creatures[k];
+    const i = c.idx;
+    const cs = c.store;
+    const CX = cs.x, CY = cs.y, CZ = cs.z;
+    const CVX = cs.vx, CVY = cs.vy, CVZ = cs.vz;
+    const CR = cs.r, CDENS = cs.density;
+    const xi = CX[i], yi = CY[i], ri = CR[i];
+    let vxi = CVX[i], vyi = CVY[i], vzi = CVZ[i];
+    const density = CDENS[i];
+    let ay = grav * (1 - 1 / density);
+    if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
+    const depth = yi > surfaceY ? yi - surfaceY : 0;
+    const surface = surfAmp * Math.cos(kS * xi) * Math.sin(wS * t) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * Math.cos(kL * xi) * Math.sin(wL * t) * Math.exp(-depth / swellDecay);
+    const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
+    const splash = depth < SPLASH_DEPTH
+      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * xi) * Math.cos(wS * t) * Math.exp(-depth / SPLASH_DEPTH)
+      : 0;
+    const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
+    const depthFrac = depth / colDepth;
+    const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
+    const noiseX = bAmp * (Math.random() - 0.5) * 2;
+    const noiseY = bAmp * (Math.random() - 0.5) * 2;
+    const ax = surface + swell + current + noiseX;
+    const ayTot = ay + splash + updraft + noiseY;
+    const dragScale = ri / DRAG_REF_R;
+    const dscaleDrag = drag * dragScale;
+    vxi += (ax - dscaleDrag * vxi) * dt;
+    vyi += (ayTot - dscaleDrag * vyi) * dt;
+    vzi += (az - dscaleDrag * vzi) * dt;
+    CVX[i] = vxi; CVY[i] = vyi; CVZ[i] = vzi;
+    CX[i] = xi + vxi * dt;
+    CY[i] = yi + vyi * dt;
+    CZ[i] = CZ[i] + vzi * dt;
+  }
 }
 
 const VM_SENSORS: VMSensors = {
@@ -2364,7 +2660,14 @@ function updateCreatures(world: World, dt: number): void {
           if (k >= 0) partner.bonds.splice(k, 1);
         }
         c.bonds.length = 0;
-        if (spillSet.has(c)) releaseReservesAsParticles(c, world);
+        if (spillSet.has(c)) {
+          releaseReservesAsParticles(c, world);
+          // Free the slot only for spilled (truly dead) creatures.
+          // Engulfed prey keep their slot alive inside the predator
+          // and may be released back to free water when the predator
+          // dies later; their data is still read in the meantime.
+          c.store.release(c.idx);
+        }
         noteCreatureDeath(world, c);
       } else {
         survivors.push(c);
@@ -2543,15 +2846,13 @@ function tryReproduce(parent: Creature, world: World): void {
   for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
   const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));
   const offset = (parent.r + childRGuess) * 1.1;
-  const child: Creature = {
+  const child = newCreature(world.creatureStore, {
     x: parent.x + Math.cos(angle) * offset,
     y: parent.y + Math.sin(angle) * offset,
     z: parent.z,
     vx: parent.vx, vy: parent.vy, vz: parent.vz,
     r: MIN_CREATURE_R,
     density: parent.density,
-    reserves: childReserves,
-    molecules: childMolecules,
     energy: energyGift,
     senseRange: computeSenseRange(childGenome),
     thrustAccel: parent.thrustAccel,
@@ -2562,10 +2863,9 @@ function tryReproduce(parent: Creature, world: World): void {
     repairTicks: 0,
     bornAt: world.t,
     speciesKey: genomeKey(childGenome),
-    division: null,
-    contents: [],
-    bonds: [],
-  };
+    molecules: childMolecules,
+    reserves: childReserves,
+  });
   updateCreatureRadius(child);
 
   // Don't commit the child to the world yet -- stash it in the parent's
