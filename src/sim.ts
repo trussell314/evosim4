@@ -45,9 +45,9 @@ export const MATERIALS: Record<MaterialId, Material> = {
 const SEED_WEIGHTS: Array<[MaterialId, number]> = [
   ["rock",    1.0],
   ["sand",    3.0],
-  ["clay",    3.0],
-  ["organic", 3.5],
-  ["lipid",   1.5],
+  ["clay",    3.5],
+  ["organic", 4.5],
+  ["lipid",   0.5],
   ["gas",     0.5],
 ];
 
