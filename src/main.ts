@@ -692,6 +692,31 @@ function strokeCellOutline(
   ctx.stroke();
 }
 
+// Shift an "hsl(h, s%, l%)" string's lightness by lDelta percentage
+// points (clamped 0..100). Used to build the highlight + rim-shadow
+// gradient stops for the 3D cell render.
+function hslAdjustL(hsl: string, lDelta: number): string {
+  const m = hsl.match(/hsl\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)%,\s*(-?\d+(?:\.\d+)?)%\)/);
+  if (!m) return hsl;
+  const h = m[1];
+  const s = m[2];
+  const l = Math.max(0, Math.min(100, parseFloat(m[3]) + lDelta));
+  return `hsl(${h}, ${s}%, ${l}%)`;
+}
+
+// Radial gradient centered on a light source offset to the upper-left,
+// so each cell renders like a lit sphere. Used as the fill style for
+// the wobbly body path.
+function cellShadingFill(cx: number, cy: number, r: number, color: string): CanvasGradient {
+  const lightX = cx - r * 0.35;
+  const lightY = cy - r * 0.45;
+  const grad = ctx.createRadialGradient(lightX, lightY, r * 0.05, cx, cy, r * 1.05);
+  grad.addColorStop(0, hslAdjustL(color, 22));
+  grad.addColorStop(0.55, color);
+  grad.addColorStop(1, hslAdjustL(color, -25));
+  return grad;
+}
+
 function drawCreature(c: Creature, selected: boolean): void {
   // Each cell has a stable random phase derived from its bornAt + position,
   // so its wobble pattern is its own instead of every cell pulsing in sync.
@@ -704,16 +729,16 @@ function drawCreature(c: Creature, selected: boolean): void {
     const sep = c.division.progress * (c.r + child.r);
     const dx = Math.cos(c.division.axis) * sep * 0.5;
     const dy = Math.sin(c.division.axis) * sep * 0.5;
-    ctx.fillStyle = c.color;
+    ctx.fillStyle = cellShadingFill(c.x - dx, c.y - dy, c.r, c.color);
     tracedWobblyBody(c.x - dx, c.y - dy, c.r, t, phase);
     ctx.fill();
     strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
-    ctx.fillStyle = child.color;
+    ctx.fillStyle = cellShadingFill(c.x + dx, c.y + dy, child.r, child.color);
     tracedWobblyBody(c.x + dx, c.y + dy, child.r, t, phase + 1.7);
     ctx.fill();
     strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
   } else {
-    ctx.fillStyle = c.color;
+    ctx.fillStyle = cellShadingFill(c.x, c.y, c.r, c.color);
     tracedWobblyBody(c.x, c.y, c.r, t, phase);
     ctx.fill();
     strokeCellOutline(c.x, c.y, c.r, selected, t, phase);

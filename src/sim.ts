@@ -347,7 +347,7 @@ const ENERGY_PER_INSTRUCTION = 0.005;
 const VM_INSTR_BUDGET = 32;
 
 const MASS_PER_GENOME_BYTE = 0.1;
-const PARTICLE_DENSITY_PER_AREA = 6188 / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = (6188 * 1.5) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
