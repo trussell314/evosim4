@@ -1255,55 +1255,38 @@ function statsLine(): string {
   return s;
 }
 
-// Sim and render are decoupled. Render is on rAF (60fps lock).
-// Sim runs on a MessageChannel ping-pong, which the browser
-// schedules as a macrotask -- it gets interleaved between rAF
-// ticks instead of blocking them. Each pong runs a short slice
-// of sim work and posts another. Even on slow hardware render
-// hits vsync; sim falls behind realtime instead of pulling
-// render down with it.
+// Sim and render are decoupled. Render is on rAF (vsync). Sim runs
+// in a MessageChannel macrotask that's scheduled once per rAF -- not
+// continuously chained -- so the task queue drains between vsyncs.
+// Chrome's frame scheduler can deprioritize rAF when there's always
+// a pending task; that path produced the 30fps lock at idle CPU.
+// Posting once per rAF leaves the queue empty when nothing useful
+// is happening, and lets the browser hit every vsync.
 const SIM_SLICE_MS = 6;
 const FRAME_OVERHEAD_FOR_SIM_MS = 3;
 const simChannel = new MessageChannel();
 let lastFrameStart = performance.now();
 let advancedThisFrame = 0;
 let simMsThisFrame = 0;
-// Worst recent step() duration in ms, with slow decay. Used to decide
-// whether *another* step would fit before vsync. Without this, the
-// loop checks the deadline *before* each step but a step started just
-// under the deadline can finish well past vsync, snapping Chrome's
-// frame pacing to 30fps locked. The faster the sim, the more reliably
-// the loop bumps into the deadline -- so the symptom appears as
-// "locked 30fps at high sim speed."
+// Worst recent step() duration in ms, with slow decay. Used to refuse
+// to *start* a step that would overshoot the per-frame deadline.
 let recentStepMs = 1.5;
 const RECENT_STEP_DECAY = 0.97;
 const STEP_BUDGET_SAFETY = 1.4;
 simChannel.port1.onmessage = () => {
-  // Yield often: only step until the per-slice deadline. Browser
-  // will get the next rAF in before scheduling our next port message
-  // unless we exceed slice or hit the rAF deadline.
   const sliceDeadline = performance.now() + SIM_SLICE_MS;
-  // Also stop if we've eaten too much of the current rAF interval.
   const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
   while (performance.now() < sliceDeadline) {
     const t0 = performance.now();
-    // Don't start a step we can't finish in time. recentStepMs tracks
-    // the worst recent step duration; refusing to start unless the
-    // estimated finish-time fits is what keeps us from overshooting
-    // vsync.
     if (t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     step(world, FIXED_DT);
     advancedThisFrame += FIXED_DT;
     const elapsed = performance.now() - t0;
     simMsThisFrame += elapsed;
-    // Track the worst recent step time but decay slowly so transient
-    // spikes (GC, sudden population surge) are remembered for a few
-    // frames and then forgotten.
     recentStepMs = elapsed > recentStepMs ? elapsed : recentStepMs * RECENT_STEP_DECAY;
   }
-  simChannel.port2.postMessage(null);
+  // Note: no postMessage here. frame() posts exactly one per rAF.
 };
-simChannel.port2.postMessage(null);
 
 function frame(): void {
   lastFrameStart = performance.now();
@@ -1311,6 +1294,11 @@ function frame(): void {
   simMsThisFrame = 0;
   const advanced = advancedThisFrame;
   advancedThisFrame = 0;
+  // Schedule one sim macrotask for this frame. It will fire after
+  // render() returns and before the next vsync. We don't chain inside
+  // onmessage anymore -- this keeps the macrotask queue from being
+  // continuously full, which can throw off Chrome's vsync pacing.
+  simChannel.port2.postMessage(null);
   const tBeforeRender = performance.now();
   render();
   updateInspector();
