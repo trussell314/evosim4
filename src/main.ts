@@ -25,16 +25,37 @@ hudBar.appendChild(hudToggle);
 const inspector = document.createElement("pre");
 inspector.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;";
+// Disasm gets its own collapsible section: it's much longer than the
+// rest of the inspector and almost never wanted at-a-glance. Click the
+// "[show disasm]" header to expand.
+const disasmHeader = document.createElement("div");
+disasmHeader.style.cssText =
+  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;";
+disasmHeader.textContent = "[+] show disasm";
+const disasmBody = document.createElement("pre");
+disasmBody.style.cssText =
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;";
 hud.appendChild(hudBar);
 hud.appendChild(inspector);
+hud.appendChild(disasmHeader);
+hud.appendChild(disasmBody);
 root.appendChild(hud);
 
 let hudMinimized = true;
 inspector.style.display = "none";
+disasmHeader.style.display = "none";
+let disasmExpanded = false;
 hudBar.addEventListener("click", () => {
   hudMinimized = !hudMinimized;
   inspector.style.display = hudMinimized ? "none" : "";
+  disasmHeader.style.display = hudMinimized ? "none" : "";
+  disasmBody.style.display = (hudMinimized || !disasmExpanded) ? "none" : "";
   hudToggle.textContent = hudMinimized ? "[+]" : "[–]";
+});
+disasmHeader.addEventListener("click", () => {
+  disasmExpanded = !disasmExpanded;
+  disasmBody.style.display = disasmExpanded ? "" : "none";
+  disasmHeader.textContent = disasmExpanded ? "[–] hide disasm" : "[+] show disasm";
 });
 
 // World dimensions are fixed at startup; zooming/resizing the browser
@@ -982,9 +1003,8 @@ function updateInspector(): void {
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
     "—\n" +
-    activeSummary + "\n" +
-    "—\n" +
-    activeDisasm;
+    activeSummary;
+  disasmBody.textContent = activeDisasm;
 }
 
 // Sim runs at maximum speed but the renderer is paced to hit 60fps.
