@@ -302,6 +302,9 @@ export interface World {
   // depth the other; the sign reverses on a slow oscillation. Cells and
   // particles both feel it. Tests can zero this for stillwater scenarios.
   currentAmp: number;
+  // VM ops budget per creature per tick. Lower = cheaper; cells just
+  // take more ticks to finish a full pass through their genome.
+  vmInstrBudget: number;
   // Static immovable terrain: rocks pre-placed at world creation. Each
   // obstacle is a cluster of overlapping circle "lobes" so it can be
   // irregular in shape. Particles + creatures collide with them like
@@ -348,7 +351,10 @@ export function resetProfile(p: WorldProfile): void {
 
 const ENERGY_PER_THRUST_SEC = 5;
 const ENERGY_PER_INSTRUCTION = 0.005;
-const VM_INSTR_BUDGET = 32;
+// VM ops per tick per creature. 8 keeps frame cost reasonable at high
+// population. Tests override via world.vmInstrBudget when they need to
+// see the whole default-genome program execute in one step.
+const DEFAULT_VM_INSTR_BUDGET = 8;
 
 const MASS_PER_GENOME_BYTE = 0.1;
 const PARTICLE_DENSITY_PER_AREA = (6188 * 1.5) / (800 * 600);
@@ -392,30 +398,69 @@ export function pheromoneIndex(world: World, x: number, y: number): number {
 
 // Pheromone field decay + diffusion. Called once per tick from step().
 // O(cols*rows): cheap at 32px cells on a 1920x1080 canvas (~2000 cells).
+// Scratch buffer for evolvePheromone -- preallocated module-level so
+// we don't churn the GC with a fresh Float32Array every tick. Resized
+// in resizePheromone alongside world.pheromone.
+let PHEROMONE_NEXT = new Float32Array(0);
+const PHEROMONE_EPS = 1e-4;
 function evolvePheromone(world: World, dt: number): void {
   const cols = world.pheromoneCols;
   const rows = world.pheromoneRows;
   const f = world.pheromone;
   const decay = Math.max(0, 1 - PHEROMONE_DECAY_PER_SEC * dt);
   const diff = Math.max(0, Math.min(1, PHEROMONE_DIFFUSE_PER_SEC * dt));
-  // Two-pass: shrink, then blend with neighbors.
-  for (let i = 0; i < f.length; i++) f[i] *= decay;
-  if (diff <= 0 || cols < 2 || rows < 2) return;
-  const next = new Float32Array(f.length);
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const i = y * cols + x;
-      let sum = 0;
-      let n = 0;
-      if (x > 0)        { sum += f[i - 1];     n++; }
-      if (x < cols - 1) { sum += f[i + 1];     n++; }
-      if (y > 0)        { sum += f[i - cols];  n++; }
-      if (y < rows - 1) { sum += f[i + cols];  n++; }
-      const avg = n > 0 ? sum / n : f[i];
-      next[i] = f[i] * (1 - diff) + avg * diff;
+  // Decay + scan: shrink in place, and track whether any cell still
+  // has a meaningful value. If the field is empty we can bail before
+  // the diffusion pass.
+  let anyActive = false;
+  for (let i = 0; i < f.length; i++) {
+    const v = f[i] * decay;
+    f[i] = v;
+    if (v > PHEROMONE_EPS) anyActive = true;
+  }
+  if (!anyActive || diff <= 0 || cols < 2 || rows < 2) return;
+  if (PHEROMONE_NEXT.length < f.length) PHEROMONE_NEXT = new Float32Array(f.length);
+  const next = PHEROMONE_NEXT;
+  const oneMinusDiff = 1 - diff;
+  // Interior cells: every cell has 4 neighbors; no boundary checks.
+  // Skip the 4-edge frame which is handled in the boundary pass below.
+  for (let y = 1; y < rows - 1; y++) {
+    const row = y * cols;
+    for (let x = 1; x < cols - 1; x++) {
+      const i = row + x;
+      const avg = (f[i - 1] + f[i + 1] + f[i - cols] + f[i + cols]) * 0.25;
+      next[i] = f[i] * oneMinusDiff + avg * diff;
     }
   }
-  for (let i = 0; i < f.length; i++) f[i] = next[i];
+  // Boundary cells: each has 2 or 3 neighbors. Handle the four edges.
+  for (let x = 0; x < cols; x++) {
+    // top row
+    const it = x;
+    let s = 0, n = 0;
+    if (x > 0)        { s += f[it - 1];    n++; }
+    if (x < cols - 1) { s += f[it + 1];    n++; }
+    s += f[it + cols]; n++;
+    next[it] = f[it] * oneMinusDiff + (s / n) * diff;
+    // bottom row
+    const ib = (rows - 1) * cols + x;
+    s = 0; n = 0;
+    if (x > 0)        { s += f[ib - 1];    n++; }
+    if (x < cols - 1) { s += f[ib + 1];    n++; }
+    s += f[ib - cols]; n++;
+    next[ib] = f[ib] * oneMinusDiff + (s / n) * diff;
+  }
+  for (let y = 1; y < rows - 1; y++) {
+    // left column
+    const il = y * cols;
+    let s = f[il + 1] + f[il - cols] + f[il + cols];
+    next[il] = f[il] * oneMinusDiff + (s / 3) * diff;
+    // right column
+    const ir = il + (cols - 1);
+    s = f[ir - 1] + f[ir - cols] + f[ir + cols];
+    next[ir] = f[ir] * oneMinusDiff + (s / 3) * diff;
+  }
+  // Copy next -> f via subarray-set for a single C-side memcpy.
+  f.set(next.subarray(0, f.length));
 }
 const MAX_CREATURES = 400;
 
@@ -907,6 +952,7 @@ export function createWorld(width: number, height: number): World {
     disturbanceUntil: 0,
     nextDisturbanceAt: 60 + Math.random() * 240,
     currentAmp: CURRENT_AMP,
+    vmInstrBudget: DEFAULT_VM_INSTR_BUDGET,
     obstacles: [],
   };
   // Allocate the pheromone grid sized to the world.
@@ -1763,7 +1809,7 @@ function updateCreatures(world: World, dt: number): void {
     VM_SELF.aminoAcid = c.molecules.aminoAcid;
     VM_SELF.waste = c.molecules.waste;
 
-    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, VM_INSTR_BUDGET, VM_OUT);
+    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, VM_OUT);
     spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
     if (VM_OUT.repair > 0) {
       // Pay per-op so spamming REPAIR is expensive; refresh the window.
@@ -2341,6 +2387,12 @@ const SLEEP_THRESHOLD_TICKS = 30; // ~half a sim-second before sleeping
 // inside their visitor.
 const CREATURE_GRID_CELL = 64;
 const CREATURE_BUCKETS: Creature[][] = [];
+// Indices of occupied creature buckets, refilled in buildCreatureGrid
+// and reused by resolveCreatureCollisions so the collision loop iterates
+// only the cells that actually hold creatures. At pop 200 in an 800x600
+// world the grid has ~130 cells but typically < 50 are occupied.
+let CREATURE_NONEMPTY = new Int32Array(0);
+let CREATURE_NONEMPTY_N = 0;
 let CREATURE_GRID_COLS = 0;
 let CREATURE_GRID_ROWS = 0;
 
@@ -2404,7 +2456,10 @@ function buildCreatureGrid(world: World): void {
   CREATURE_GRID_ROWS = Math.max(1, Math.ceil(world.height / ccs));
   const cellCount = CREATURE_GRID_COLS * CREATURE_GRID_ROWS;
   while (CREATURE_BUCKETS.length < cellCount) CREATURE_BUCKETS.push([]);
-  for (let i = 0; i < cellCount; i++) CREATURE_BUCKETS[i].length = 0;
+  if (CREATURE_NONEMPTY.length < cellCount) CREATURE_NONEMPTY = new Int32Array(cellCount * 2);
+  // Clear only the buckets that were filled last build, not the whole grid.
+  for (let i = 0; i < CREATURE_NONEMPTY_N; i++) CREATURE_BUCKETS[CREATURE_NONEMPTY[i]].length = 0;
+  CREATURE_NONEMPTY_N = 0;
   const cs = world.creatures;
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i];
@@ -2418,7 +2473,10 @@ function buildCreatureGrid(world: World): void {
     if (!Number.isFinite(cy)) cy = 0;
     if (cx < 0) cx = 0; else if (cx >= CREATURE_GRID_COLS) cx = CREATURE_GRID_COLS - 1;
     if (cy < 0) cy = 0; else if (cy >= CREATURE_GRID_ROWS) cy = CREATURE_GRID_ROWS - 1;
-    CREATURE_BUCKETS[cy * CREATURE_GRID_COLS + cx].push(c);
+    const idx = cy * CREATURE_GRID_COLS + cx;
+    const bucket = CREATURE_BUCKETS[idx];
+    if (bucket.length === 0) CREATURE_NONEMPTY[CREATURE_NONEMPTY_N++] = idx;
+    bucket.push(c);
   }
 }
 
@@ -2521,31 +2579,26 @@ function resolveCollisions(world: World): void {
 function resolveCreatureCollisions(world: World): void {
   const n = world.creatures.length;
   if (n < 2) return;
-  // Restitution: cells are mostly soft membranes, gentle rebound.
   const e = 0.1;
-  // The grid was last built at the start of updateCreatures; positions
-  // have since moved by at most ~v*dt < a few px, so the grid is still
-  // accurate enough for collision pairing. Buckets hold Creature refs
-  // so post-splice dead/eaten ghosts don't affect indices -- ghost
-  // entries that point at no-longer-live creatures just contribute
-  // negligible spurious forces against actual cells, which is fine
-  // for one tick (next tick rebuilds the grid without them).
   const cols = CREATURE_GRID_COLS;
   const rows = CREATURE_GRID_ROWS;
-  for (let gy = 0; gy < rows; gy++) {
-    for (let gx = 0; gx < cols; gx++) {
-      const cell = CREATURE_BUCKETS[gy * cols + gx];
-      const cl = cell.length;
-      if (cl === 0) continue;
-      for (let i = 0; i < cl; i++) {
-        const ai = cell[i];
-        for (let j = i + 1; j < cl; j++) resolveCreaturePair(ai, cell[j], e);
-      }
-      if (gx + 1 < cols)             checkCreaturePairs(cell, gy * cols + gx + 1, e);
-      if (gy + 1 < rows && gx > 0)   checkCreaturePairs(cell, (gy + 1) * cols + gx - 1, e);
-      if (gy + 1 < rows)             checkCreaturePairs(cell, (gy + 1) * cols + gx, e);
-      if (gy + 1 < rows && gx + 1 < cols) checkCreaturePairs(cell, (gy + 1) * cols + gx + 1, e);
+  // Iterate only the buckets we filled, not the whole grid -- most
+  // cells are empty at pop ~200 in a 130-cell grid.
+  for (let k = 0; k < CREATURE_NONEMPTY_N; k++) {
+    const idx = CREATURE_NONEMPTY[k];
+    const cell = CREATURE_BUCKETS[idx];
+    const cl = cell.length;
+    if (cl === 0) continue;
+    const gy = (idx / cols) | 0;
+    const gx = idx - gy * cols;
+    for (let i = 0; i < cl; i++) {
+      const ai = cell[i];
+      for (let j = i + 1; j < cl; j++) resolveCreaturePair(ai, cell[j], e);
     }
+    if (gx + 1 < cols)             checkCreaturePairs(cell, gy * cols + gx + 1, e);
+    if (gy + 1 < rows && gx > 0)   checkCreaturePairs(cell, (gy + 1) * cols + gx - 1, e);
+    if (gy + 1 < rows)             checkCreaturePairs(cell, (gy + 1) * cols + gx, e);
+    if (gy + 1 < rows && gx + 1 < cols) checkCreaturePairs(cell, (gy + 1) * cols + gx + 1, e);
   }
 }
 
