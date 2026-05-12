@@ -1035,6 +1035,21 @@ const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
 const CHLORO_SYNTH_VMAX = 0.2;
 const ENZYME_SYNTH_VMAX = 0.4;
 const BIOMASS_GROW_VMAX = 0.8;
+const AA_SYNTH_VMAX = 0.4;
+const FA_SYNTH_VMAX = 0.2;
+
+// ATP cost per unit product built by biosynthesize(). Reflects product
+// complexity. Biomass is bulk structural mass (cheap); enzymes and
+// chlorophyll are catalytic / pigment molecules (per real biology,
+// dozens of ATP per molecule when accounting for cofactors and
+// post-translational steps). Amino-acid synthesis (transamination +
+// carbon-skeleton work) is moderate; fatty-acid synthesis is expensive
+// per the real fatty-acid-synthase pathway (~7 ATP per palmitate).
+const BIOMASS_ATP_COST = 1;
+const ENZYME_ATP_COST = 4;
+const CHLORO_ATP_COST = 8;
+const AA_ATP_COST = 2;
+const FA_ATP_COST = 6;
 
 // Maintenance: structural molecules turn over even when the cell isn't
 // reproducing. Each tick a small fraction of biomass / enzyme / chloro
@@ -1849,14 +1864,21 @@ function photosynthesize(c: Creature, dt: number, light: number): void {
 }
 
 // Generic biosynthesis helper: combine two substrate molecules (by their
-// mass fractions in the product) with 1 atp, producing 1 unit of product
-// and 1 adp. Mass-conserving: fracA + fracB + 1 = 2, product + adp = 2.
+// mass fractions in the product) with atpCost atp, producing 1 unit of
+// product and atpCost adp. Mass-conserving: fracA + fracB + atpCost = 1
+// + atpCost (substrates must sum to 1).
+//
+// atpCost reflects how energetically expensive the product is to build.
+// Storage-grade biomass is cheap (~1 ATP per peptide bond would be
+// idealized, but this is per mass unit not per bond). Catalysts and
+// complex pigments cost more.
 function biosynthesize(
   c: Creature,
   dt: number,
   vmax: number,
   fracA: number, subA: keyof Molecules,
   fracB: number, subB: keyof Molecules,
+  atpCost: number,
   product: keyof Molecules,
 ): void {
   const s = c.store; const i = c.idx;
@@ -1866,17 +1888,21 @@ function biosynthesize(
   const a = colA[i], b = colB[i], e = s.energy[i];
   if (a <= 0 || b <= 0 || e <= 0) return;
   const aFrac = a / fracA, bFrac = b / fracB;
-  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(e);
+  // ATP saturation gates on amount of ATP available *per unit product*.
+  // A cell with 2 ATP trying to build an 8-ATP product runs as if it
+  // had 0.25 ATP per unit, not as if it were well-fueled.
+  const eAvail = e / atpCost;
+  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(eAvail);
   const rdt = rate * dt;
   let amt = rdt < aFrac ? rdt : aFrac;
   if (bFrac < amt) amt = bFrac;
-  if (e < amt) amt = e;
+  if (eAvail < amt) amt = eAvail;
   if (amt <= 0) return;
   colA[i] = a - fracA * amt;
   colB[i] = b - fracB * amt;
-  s.energy[i] = e - amt;
+  s.energy[i] = e - atpCost * amt;
   colP[i] += amt;
-  s.m_adp[i] += amt;
+  s.m_adp[i] += atpCost * amt;
 }
 
 function autoExcrete(c: Creature, world: World): void {
@@ -2449,12 +2475,22 @@ function updateCreatures(world: World, dt: number): void {
     photosynthesize(c, dtT, ambientLight);
 
     // Cell builds its own catalysts and structure as substrates allow.
-    biosynthesize(c, dtT, CHLORO_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "chlorophyll");
-    biosynthesize(c, dtT, ENZYME_SYNTH_VMAX, 0.5, "aminoAcid", 0.5, "minerals", "enzyme");
+    // Amino acids and fatty acids are synthesized de novo from glucose
+    // (carbon source) + a small mineral cofactor charge (stand-in for
+    // nitrogen / sulfur / trace metals that aren't tracked individually).
+    // This unlocks true photoautotrophy: a cell with chlorophyll can run
+    // light + CO2 -> glu -> aa/fa -> biomass without ever ingesting
+    // organic particles. Minerals must still come from ingest or decay,
+    // matching the biological constraint that organisms can't transmute
+    // elements.
+    biosynthesize(c, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+    biosynthesize(c, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+    biosynthesize(c, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+    biosynthesize(c, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
     // Biomass is mostly protein (aa); the lipid fraction is structural
     // membrane only. Old 0.7/0.3 mix made fa the limiting reagent because
     // it competes with beta-oxidation for the same scarce pool.
-    biosynthesize(c, dtT, BIOMASS_GROW_VMAX, 0.9, "aminoAcid", 0.1, "fattyAcid", "biomass");
+    biosynthesize(c, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
