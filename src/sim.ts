@@ -1857,6 +1857,12 @@ function buildCreatureGrid(world: World): void {
     const c = cs[i];
     let cx = Math.floor(c.x / ccs);
     let cy = Math.floor(c.y / ccs);
+    // NaN/Inf safety: comparison ops on NaN are always false, so the
+    // clamp below misses them. Catch explicitly and dump such cells
+    // into bucket (0, 0) -- they'd otherwise pop into BUCKETS[NaN] and
+    // crash the frame loop.
+    if (!Number.isFinite(cx)) cx = 0;
+    if (!Number.isFinite(cy)) cy = 0;
     if (cx < 0) cx = 0; else if (cx >= CREATURE_GRID_COLS) cx = CREATURE_GRID_COLS - 1;
     if (cy < 0) cy = 0; else if (cy >= CREATURE_GRID_ROWS) cy = CREATURE_GRID_ROWS - 1;
     CREATURE_BUCKETS[cy * CREATURE_GRID_COLS + cx].push(i);
@@ -1997,10 +2003,11 @@ function resolveCreaturePair(cs: Creature[], i: number, j: number, e: number): v
   const ny = dy / dist;
   const nz = dz / dist;
   const overlap = minDist - dist;
-  const ma = creatureTotalMass(a);
-  const mb = creatureTotalMass(b);
+  // Mass divisor clamped so a pathological zero-mass cell can't NaN out
+  // the world by producing Infinity/0 = NaN velocities downstream.
+  const ma = Math.max(0.01, creatureTotalMass(a));
+  const mb = Math.max(0.01, creatureTotalMass(b));
   const total = ma + mb;
-  if (total <= 0) return;
   const corrA = overlap * (mb / total);
   const corrB = overlap * (ma / total);
   a.x -= nx * corrA;
@@ -2055,8 +2062,8 @@ function resolveCreatureSedimentCollisions(world: World): void {
       const ny = dy / dist;
       const nz = dz / dist;
       const overlap = minD - dist;
-      const pm = mass(p);
-      const cm = creatureTotalMass(c);
+      const pm = Math.max(0.01, mass(p));
+      const cm = Math.max(0.01, creatureTotalMass(c));
       const total = pm + cm;
       const cShare = pm / total;
       const pShare = cm / total;
