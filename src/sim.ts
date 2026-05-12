@@ -1100,10 +1100,12 @@ function aerate(world: World, dt: number): void {
 // + position) -- creatures don't have a stable numeric ID, but the
 // pair (cs[i], b) where i is the array index works fine because we
 // only process when b's index is > i. Use a precomputed index map.
+// Reused per-tick to avoid allocating a fresh Map each call.
+const BOND_IDX_MAP: Map<Creature, number> = new Map();
 function applyBondSprings(world: World, dt: number): void {
   const cs = world.creatures;
-  // Build a Creature -> index map once. O(N) instead of O(N) per bond.
-  const idxOf = new Map<Creature, number>();
+  const idxOf = BOND_IDX_MAP;
+  idxOf.clear();
   for (let i = 0; i < cs.length; i++) idxOf.set(cs[i], i);
   for (let i = 0; i < cs.length; i++) {
     const a = cs[i];

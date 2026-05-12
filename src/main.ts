@@ -112,9 +112,18 @@ tooltip.style.cssText =
   "padding:4px 6px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;" +
   "border-radius:3px;white-space:pre;";
 document.body.appendChild(tooltip);
-canvas.addEventListener("mousemove", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const idx = findCellAt(e.clientX - rect.left, e.clientY - rect.top);
+// Mousemove can fire 200-1000Hz on some devices. We coalesce per
+// requestAnimationFrame so the cell scan + tooltip rewrite happens at
+// most once per render frame.
+let pendingMouseX = -1;
+let pendingMouseY = -1;
+let pendingMouseInside = false;
+let pendingMouseClient = { x: 0, y: 0 };
+let tooltipScheduled = false;
+function flushTooltip(): void {
+  tooltipScheduled = false;
+  if (!pendingMouseInside) { tooltip.style.display = "none"; return; }
+  const idx = findCellAt(pendingMouseX, pendingMouseY);
   if (idx < 0) { tooltip.style.display = "none"; return; }
   const c = world.creatures[idx];
   let mass = c.energy;
@@ -127,10 +136,27 @@ canvas.addEventListener("mousemove", (e) => {
     `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
     `genome=${c.genome.length}b`;
   tooltip.style.display = "block";
-  tooltip.style.left = `${e.clientX + 12}px`;
-  tooltip.style.top = `${e.clientY + 12}px`;
+  tooltip.style.left = `${pendingMouseClient.x + 12}px`;
+  tooltip.style.top = `${pendingMouseClient.y + 12}px`;
+}
+canvas.addEventListener("mousemove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  pendingMouseX = e.clientX - rect.left;
+  pendingMouseY = e.clientY - rect.top;
+  pendingMouseClient = { x: e.clientX, y: e.clientY };
+  pendingMouseInside = true;
+  if (!tooltipScheduled) {
+    tooltipScheduled = true;
+    requestAnimationFrame(flushTooltip);
+  }
 });
-canvas.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+canvas.addEventListener("mouseleave", () => {
+  pendingMouseInside = false;
+  if (!tooltipScheduled) {
+    tooltipScheduled = true;
+    requestAnimationFrame(flushTooltip);
+  }
+});
 
 // Dramatic depth: near particles are crisp and full-color, deep ones get
 // heavy blur, low alpha, and shift toward the water-color background --
