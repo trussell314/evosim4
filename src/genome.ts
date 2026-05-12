@@ -445,16 +445,75 @@ export function summarizeGenome(
   const opsPerTick = Math.min(instrBudget, executableOps + unknownBytes);
   const estAtpPerTick = opsPerTick * atpPerInstr;
 
+  // Bullet section: a Q/A line for each capability axis, in the same
+  // shape a human would write up the cell after reading the disasm.
+  const bullets: string[] = [];
+  const gateNote = conditional ? "" : " (unconditional -- no JZ/JNZ + comparison gates it)";
+
+  bullets.push("- Ingest food? " + (ingestMaterials.length > 0
+    ? `Yes, opts in to ${ingestMaterials.map(matName).join(", ")}.${gateNote}`
+    : "Never. No INGEST op is present."));
+
+  bullets.push("- Reproduce? " + (reproduce
+    ? `Yes.${gateNote}`
+    : "Never. No REPRODUCE op is present."));
+
+  const moveParts: string[] = [];
+  if (thrust) moveParts.push("THRUST");
+  if (turn) moveParts.push("TURN");
+  bullets.push("- Thrust / steer? " + (moveParts.length > 0
+    ? `Yes -- uses ${moveParts.join(" + ")}.${gateNote}`
+    : "Never. No THRUST, no TURN. It drifts passively under gravity, drag, brownian, and wave forcing only."));
+
+  const otherActs: string[] = [];
+  if (excreteMaterials.length > 0) otherActs.push(`excretes ${excreteMaterials.map(matName).join("/")}`);
+  if (emit) otherActs.push("emits pheromone");
+  if (adhere) otherActs.push("adheres (forms colonies)");
+  if (engulf) otherActs.push("engulfs prey");
+  if (predate) otherActs.push("predates");
+  bullets.push("- Excrete / emit pheromone / adhere / engulf / predate? " + (otherActs.length > 0
+    ? otherActs.join("; ") + "."
+    : "None of the corresponding ops are present."));
+
+  const anyAction = thrust || turn || reproduce || ingestMaterials.length > 0
+    || predate || engulf || emit || adhere || excreteMaterials.length > 0;
+  bullets.push("- React to anything it senses? " + (sensors.length === 0
+    ? "No sensor reads at all."
+    : !anyAction
+    ? `Reads ${sensors.join(", ")}, but with no action ops those readings just pile onto the stack and get discarded when capacity is reached.`
+    : !conditional
+    ? `Reads ${sensors.join(", ")}, but with no JZ/JNZ + comparison the readings don't gate any decision -- actions fire reflexively.`
+    : `Yes -- reads ${sensors.join(", ")}, and has JZ/JNZ + comparison gating its actions.`));
+
+  // Net behavior: short verdict + likely fate in this environment.
+  let netClass: string;
+  if (!anyAction) netClass = "An inert blob.";
+  else if (predate || engulf) netClass = "A predator.";
+  else if (thrust && ingestMaterials.length > 0 && reproduce) netClass = "A complete loop: senses, swims, eats, divides.";
+  else if (ingestMaterials.length > 0 && reproduce) netClass = "A passive eater that divides -- doesn't steer toward food.";
+  else if (thrust && ingestMaterials.length > 0) netClass = "A forager: swims and eats, but never divides.";
+  else if (ingestMaterials.length > 0) netClass = "A passive eater -- waits for food to drift in.";
+  else if (thrust) netClass = "A wanderer -- swims around but never eats.";
+  else if (reproduce) netClass = "Tries to divide but can't sustain itself (no eat path).";
+  else netClass = "Has actions, but no eat path.";
+
+  let fate: string;
+  if (ingestMaterials.length === 0 && !predate && !engulf) {
+    fate = `Pays the per-instruction ATP cost (~${opsPerTick} ops × ${atpPerInstr.toFixed(3)} = ~${estAtpPerTick.toFixed(2)} ATP/tick) plus baseline maintenance, takes in nothing, so biomass and reserves trickle down. Will autolyze once biomass falls below MIN_VIABLE_BIOMASS (0.5).`;
+  } else if (!reproduce) {
+    fate = `Can sustain itself if food is plentiful, but the lineage dies with this cell -- no REPRODUCE.`;
+  } else if (!conditional) {
+    fate = `Reflexive: REPRODUCE fires every tick, which means it tries to fission whenever it has the ATP, regardless of whether biomass is actually large enough to make a viable daughter. Lots of stillbirths.`;
+  } else {
+    fate = `Self-sustaining if food is available; gates make it reproduce only when conditions are met.`;
+  }
+
   const lines: string[] = [];
-  lines.push(`bytes=${genome.length}  ops=${executableOps}  junk=${unknownBytes}  ~${estAtpPerTick.toFixed(2)} ATP/tick`);
-  lines.push("can: " + capabilities.join(", "));
-  lines.push("reads: " + (sensors.length > 0 ? sensors.join(", ") : "nothing"));
-  if (!conditional && (thrust || reproduce || ingestMaterials.length > 0 || predate || engulf)) {
-    lines.push("note: no JZ/JNZ + comparison -- actions fire every tick (reflexive)");
-  }
-  if (capabilities.length === 1 && capabilities[0] === "inert (no actions)") {
-    lines.push("note: cell will starve (no ingestion, paying ATP per tick)");
-  }
+  lines.push(`stats: bytes=${genome.length}  ops=${executableOps}  junk=${unknownBytes}  ~${estAtpPerTick.toFixed(2)} ATP/tick`);
+  lines.push("");
+  lines.push(...bullets);
+  lines.push("");
+  lines.push("Net behavior: " + netClass + " " + fate);
 
   return {
     totalBytes: genome.length, executableOps, unknownBytes,
