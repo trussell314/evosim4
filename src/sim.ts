@@ -58,6 +58,11 @@ const MATERIAL_IDS = Object.keys(MATERIALS) as MaterialId[];
 // every cell -- tens of millions of string-array scans per second.
 const MATERIAL_INDEX: Record<MaterialId, number> = {} as Record<MaterialId, number>;
 for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_INDEX[MATERIAL_IDS[i]] = i;
+// Flat Float32 lookup of material default density, indexed by the
+// uint8 stored in ParticleStore.material[i]. Avoids a string-keyed
+// dictionary lookup in the hot force loop.
+const MATERIAL_BASE_DENSITY = new Float32Array(MATERIAL_IDS.length);
+for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_BASE_DENSITY[i] = MATERIALS[MATERIAL_IDS[i]].density;
 
 export interface ObstacleLobe {
   x: number; y: number; r: number;
@@ -76,26 +81,173 @@ export interface Obstacle {
   color: string;
 }
 
-export interface Particle {
+// Particle storage as Struct-of-Arrays. All hot fields live in a
+// ParticleStore as parallel typed arrays. Each Particle is a thin
+// handle (idx + back-ref) whose property accessors index into the
+// store. Hot loops that need maximum throughput can bypass the
+// handle and read the typed arrays directly.
+//
+// Invariant: world.particles[i].idx === i. Splice / removeAt
+// routines maintain this via swap-and-pop so iterating by array
+// index is equivalent to iterating store slot by slot.
+export class ParticleStore {
+  cap = 0;
+  n = 0;
+  x = new Float32Array(0);
+  y = new Float32Array(0);
+  z = new Float32Array(0);
+  vx = new Float32Array(0);
+  vy = new Float32Array(0);
+  vz = new Float32Array(0);
+  r = new Float32Array(0);
+  density = new Float32Array(0);   // 0 -> use MATERIALS[material].density
+  material = new Uint8Array(0);    // index into MATERIAL_IDS
+  quietTicks = new Int32Array(0);
+  molecules: (Molecules | null)[] = [];
+  constructor(initialCap = 256) { this.grow(initialCap); }
+  grow(newCap: number): void {
+    if (newCap <= this.cap) return;
+    const old = this;
+    const nx = new Float32Array(newCap); nx.set(old.x); this.x = nx;
+    const ny = new Float32Array(newCap); ny.set(old.y); this.y = ny;
+    const nz = new Float32Array(newCap); nz.set(old.z); this.z = nz;
+    const nvx = new Float32Array(newCap); nvx.set(old.vx); this.vx = nvx;
+    const nvy = new Float32Array(newCap); nvy.set(old.vy); this.vy = nvy;
+    const nvz = new Float32Array(newCap); nvz.set(old.vz); this.vz = nvz;
+    const nr = new Float32Array(newCap); nr.set(old.r); this.r = nr;
+    const nd = new Float32Array(newCap); nd.set(old.density); this.density = nd;
+    const nm = new Uint8Array(newCap); nm.set(old.material); this.material = nm;
+    const nq = new Int32Array(newCap); nq.set(old.quietTicks); this.quietTicks = nq;
+    while (this.molecules.length < newCap) this.molecules.push(null);
+    this.cap = newCap;
+  }
+  // Append a slot with the given field values. Returns the new slot
+  // index. Caller is responsible for keeping the world.particles
+  // array in sync (push the handle to the world array).
+  alloc(): number {
+    if (this.n >= this.cap) this.grow(this.cap * 2 || 256);
+    return this.n++;
+  }
+  // Swap-and-pop: copy slot `last` into slot `i`, decrement n. Caller
+  // is responsible for updating the handle that lived at `last`.
+  removeSwapPop(i: number): void {
+    const last = this.n - 1;
+    if (i !== last) {
+      this.x[i] = this.x[last];
+      this.y[i] = this.y[last];
+      this.z[i] = this.z[last];
+      this.vx[i] = this.vx[last];
+      this.vy[i] = this.vy[last];
+      this.vz[i] = this.vz[last];
+      this.r[i] = this.r[last];
+      this.density[i] = this.density[last];
+      this.material[i] = this.material[last];
+      this.quietTicks[i] = this.quietTicks[last];
+      this.molecules[i] = this.molecules[last];
+    }
+    this.molecules[last] = null;
+    this.n--;
+  }
+}
+
+// Handle class. Fields proxy into the owning ParticleStore by idx.
+// JS engines inline these accessors well in practice. Code that
+// already wrote `p.x` continues to work; hot loops that want the
+// fast path should read store.x[i] directly.
+export class Particle {
+  idx: number;
+  store: ParticleStore;
+  constructor(store: ParticleStore, idx: number) { this.store = store; this.idx = idx; }
+  get x(): number { return this.store.x[this.idx]; }
+  set x(v: number) { this.store.x[this.idx] = v; }
+  get y(): number { return this.store.y[this.idx]; }
+  set y(v: number) { this.store.y[this.idx] = v; }
+  get z(): number { return this.store.z[this.idx]; }
+  set z(v: number) { this.store.z[this.idx] = v; }
+  get vx(): number { return this.store.vx[this.idx]; }
+  set vx(v: number) { this.store.vx[this.idx] = v; }
+  get vy(): number { return this.store.vy[this.idx]; }
+  set vy(v: number) { this.store.vy[this.idx] = v; }
+  get vz(): number { return this.store.vz[this.idx]; }
+  set vz(v: number) { this.store.vz[this.idx] = v; }
+  get r(): number { return this.store.r[this.idx]; }
+  set r(v: number) { this.store.r[this.idx] = v; }
+  get density(): number | undefined {
+    const d = this.store.density[this.idx];
+    return d === 0 ? undefined : d;
+  }
+  set density(v: number | undefined) { this.store.density[this.idx] = v ?? 0; }
+  get material(): MaterialId { return MATERIAL_IDS[this.store.material[this.idx]]; }
+  set material(v: MaterialId) { this.store.material[this.idx] = MATERIAL_INDEX[v]; }
+  get quietTicks(): number | undefined {
+    const q = this.store.quietTicks[this.idx];
+    return q === 0 ? undefined : q;
+  }
+  set quietTicks(v: number | undefined) { this.store.quietTicks[this.idx] = v ?? 0; }
+  get molecules(): Molecules | undefined { return this.store.molecules[this.idx] ?? undefined; }
+  set molecules(v: Molecules | undefined) { this.store.molecules[this.idx] = v ?? null; }
+}
+
+// Push a new particle to world.particles AND to the underlying store,
+// maintaining the array-index == store-slot invariant. opts contains
+// the literal field values just like the old object-literal sites.
+export function pushParticle(
+  world: World,
+  opts: {
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
+    r: number;
+    material: MaterialId;
+    density?: number;
+    molecules?: Molecules;
+    quietTicks?: number;
+  },
+): Particle {
+  const store = world.particleStore;
+  const i = store.alloc();
+  store.x[i] = opts.x;
+  store.y[i] = opts.y;
+  store.z[i] = opts.z;
+  store.vx[i] = opts.vx;
+  store.vy[i] = opts.vy;
+  store.vz[i] = opts.vz;
+  store.r[i] = opts.r;
+  store.density[i] = opts.density ?? 0;
+  store.material[i] = MATERIAL_INDEX[opts.material];
+  store.quietTicks[i] = opts.quietTicks ?? 0;
+  store.molecules[i] = opts.molecules ?? null;
+  const h = new Particle(store, i);
+  world.particles.push(h);
+  return h;
+}
+
+// Remove a particle by its array index using swap-and-pop. Maintains
+// the array-index == store-slot invariant by re-pointing the moved
+// particle's handle at slot `arrIdx`.
+export function removeParticleAt(world: World, arrIdx: number): void {
+  const ps = world.particles;
+  const store = world.particleStore;
+  const last = ps.length - 1;
+  if (arrIdx !== last) {
+    store.removeSwapPop(arrIdx);
+    ps[arrIdx] = ps[last];
+    ps[arrIdx].idx = arrIdx;
+  } else {
+    store.removeSwapPop(arrIdx);
+  }
+  ps.pop();
+}
+
+// Legacy interface kept for type compatibility with code that still
+// references `Particle` as a structural shape. The class above
+// implements this shape via accessors.
+export interface ParticleData {
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   r: number;
   material: MaterialId;
-  // Molecule-tagged particles bypass catabolism: when ingested, their
-  // contents are deposited straight into the cell's molecule pool. This
-  // is how death-released corpses and auto-excreted CO2 / waste preserve
-  // their actual chemistry instead of collapsing to a generic material.
-  // World-seeded and VM-EXCRETE-spawned particles leave this undefined
-  // and behave as plain bulk material (catabolize via CATAB_FRACTIONS).
   molecules?: Molecules;
-  // Consecutive ticks the particle has been below SLEEP_SPEED_SQ. Once
-  // it crosses SLEEP_THRESHOLD_TICKS the collision pass treats it as
-  // asleep: pair tests against another sleeping particle are skipped.
-  // Sediment piled on the bottom is the big winner here.
   quietTicks?: number;
-  // Per-particle density override. When set, replaces the material's
-  // base density for physics + mass. Lets organic particles vary --
-  // some sink, some float -- so the food cloud actually mixes.
   density?: number;
 }
 
@@ -225,6 +377,7 @@ export interface World {
   depth: number;
   t: number;
   particles: Particle[];
+  particleStore: ParticleStore;
   creatures: Creature[];
   particleTarget: number;
   particleSpawnRate: number;
@@ -973,6 +1126,7 @@ export function createWorld(width: number, height: number): World {
     depth: 24,
     t: 0,
     particles: [],
+    particleStore: new ParticleStore(Math.max(256, particleTarget)),
     creatures: [],
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
@@ -1032,12 +1186,13 @@ export function createWorld(width: number, height: number): World {
 
 export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
+  world.particleStore.n = 0;
   for (let i = 0; i < n; i++) {
     const r = 1 + Math.random() * 1.5;
     // Spawn below the surface so the initial state matches the wall.
     const yRange = (world.height - world.surfaceY) * 0.85;
     const mat = pickMaterial();
-    world.particles.push({
+    pushParticle(world, {
       x: Math.random() * world.width,
       y: world.surfaceY + Math.random() * yRange,
       z: r + Math.random() * (world.depth - 2 * r),
@@ -1454,7 +1609,7 @@ function spawnExcretedParticle(
   const pr = Math.max(1.5, radiusForMass(m, density));
   const angle = Math.random() * Math.PI * 2;
   const ejectV = 25;
-  world.particles.push({
+  pushParticle(world, {
     x: c.x + Math.cos(angle) * (c.r + pr + 1),
     y: c.y + Math.sin(angle) * (c.r + pr + 1),
     z: Math.min(world.depth - pr, Math.max(pr, c.z)),
@@ -1645,7 +1800,7 @@ function replenishParticles(world: World, dt: number): void {
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
     const r = 1 + Math.random() * 1.5;
     const mat = pickMaterial();
-    world.particles.push({
+    pushParticle(world, {
       x: Math.random() * world.width,
       y: world.surfaceY + r,
       z: r + Math.random() * (world.depth - 2 * r),
@@ -1674,7 +1829,7 @@ function aerate(world: World, dt: number): void {
     const r = 1 + Math.random() * 0.8;
     const mol = emptyMolecules();
     mol.o2 = AERATION_O2_PER_BUBBLE;
-    world.particles.push({
+    pushParticle(world, {
       x: Math.random() * world.width,
       // Just below the surface so the wall-escape pass doesn't immediately
       // strip the new bubble.
@@ -1820,7 +1975,54 @@ function applyForces(world: World, dt: number): void {
     o.z += o.vz * dt;
   };
 
-  for (const p of world.particles) integrate(p, p.density ?? MATERIALS[p.material].density);
+  // Particle fast path: indexed access on the parallel typed arrays
+  // avoids the per-particle handle getter/setter chain. With ~4-9k
+  // particles per tick this is the hottest loop in the sim.
+  const ps = world.particleStore;
+  const PX = ps.x, PY = ps.y, PZ = ps.z;
+  const PVX = ps.vx, PVY = ps.vy, PVZ = ps.vz;
+  const PR = ps.r, PDENS = ps.density, PMAT = ps.material;
+  const np = world.particles.length;
+  const t = world.t;
+  const drag = world.drag;
+  const grav = world.gravity;
+  const surfDecay = world.surfaceDecay;
+  const swellDecay = world.swellDecay;
+  const updraftAmp = world.updraftAmp;
+  const currentAmp = world.currentAmp;
+  const surfaceY = world.surfaceY;
+  const matBase = MATERIAL_BASE_DENSITY;
+  for (let i = 0; i < np; i++) {
+    const xi = PX[i], yi = PY[i], ri = PR[i];
+    let vxi = PVX[i], vyi = PVY[i], vzi = PVZ[i];
+    const overrideD = PDENS[i];
+    const density = overrideD !== 0 ? overrideD : matBase[PMAT[i]];
+    let ay = grav * (1 - 1 / density);
+    if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
+    const depth = yi > surfaceY ? yi - surfaceY : 0;
+    const surface = surfAmp * Math.cos(kS * xi) * Math.sin(wS * t) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * Math.cos(kL * xi) * Math.sin(wL * t) * Math.exp(-depth / swellDecay);
+    const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
+    const splash = depth < SPLASH_DEPTH
+      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * xi) * Math.cos(wS * t) * Math.exp(-depth / SPLASH_DEPTH)
+      : 0;
+    const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
+    const depthFrac = depth / colDepth;
+    const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
+    const noiseX = bAmp * (Math.random() - 0.5) * 2;
+    const noiseY = bAmp * (Math.random() - 0.5) * 2;
+    const ax = surface + swell + current + noiseX;
+    const ayTot = ay + splash + updraft + noiseY;
+    const dragScale = ri / DRAG_REF_R;
+    const dscaleDrag = drag * dragScale;
+    vxi += (ax - dscaleDrag * vxi) * dt;
+    vyi += (ayTot - dscaleDrag * vyi) * dt;
+    vzi += (az - dscaleDrag * vzi) * dt;
+    PVX[i] = vxi; PVY[i] = vyi; PVZ[i] = vzi;
+    PX[i] = xi + vxi * dt;
+    PY[i] = yi + vyi * dt;
+    PZ[i] = PZ[i] + vzi * dt;
+  }
   for (const c of world.creatures) integrate(c, c.density);
 }
 
@@ -2123,7 +2325,7 @@ function updateCreatures(world: World, dt: number): void {
             spendATP(c, INGEST_ENERGY_COST);
             // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
-            world.particles.splice(i, 1);
+            removeParticleAt(world, i);
             break;
           }
         }
@@ -2209,7 +2411,7 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
         r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(remaining, density));
         mp = density * (4 / 3) * Math.PI * r * r * r;
       }
-      world.particles.push({
+      pushParticle(world, {
         x: c.x + (Math.random() - 0.5) * 6,
         y: c.y + (Math.random() - 0.5) * 6,
         z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
@@ -2265,7 +2467,7 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
       usedFrac += frac;
       const pMol = emptyMolecules();
       for (const k of MOLECULE_IDS) pMol[k] = bucketContents[matId][k] * frac;
-      world.particles.push({
+      pushParticle(world, {
         x: c.x + (Math.random() - 0.5) * 6,
         y: c.y + (Math.random() - 0.5) * 6,
         z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
@@ -2612,18 +2814,20 @@ function rebuildSensorBins(world: World): void {
       SENSOR_BIN_SUMY[m].fill(0, 0, n);
     }
   }
-  const ps = world.particles;
-  for (let i = 0; i < ps.length; i++) {
-    const p = ps[i];
-    let bx = Math.floor(p.x / SENSOR_BIN);
-    let by = Math.floor(p.y / SENSOR_BIN);
+  const store = world.particleStore;
+  const PX = store.x, PY = store.y, PMAT = store.material;
+  const np = world.particles.length;
+  for (let i = 0; i < np; i++) {
+    const xi = PX[i], yi = PY[i];
+    let bx = Math.floor(xi / SENSOR_BIN);
+    let by = Math.floor(yi / SENSOR_BIN);
     if (bx < 0) bx = 0; else if (bx >= SENSOR_BIN_COLS) bx = SENSOR_BIN_COLS - 1;
     if (by < 0) by = 0; else if (by >= SENSOR_BIN_ROWS) by = SENSOR_BIN_ROWS - 1;
-    const idx = MATERIAL_INDEX[p.material];
+    const idx = PMAT[i];
     const bin = by * SENSOR_BIN_COLS + bx;
     SENSOR_BIN_COUNT[idx][bin]++;
-    SENSOR_BIN_SUMX[idx][bin] += p.x;
-    SENSOR_BIN_SUMY[idx][bin] += p.y;
+    SENSOR_BIN_SUMX[idx][bin] += xi;
+    SENSOR_BIN_SUMY[idx][bin] += yi;
   }
 }
 
@@ -2685,8 +2889,8 @@ function forCreaturesNear(
 }
 
 function resolveCollisions(world: World): void {
-  const ps = world.particles;
-  const n = ps.length;
+  const store = world.particleStore;
+  const n = world.particles.length;
   if (n < 2) return;
   const e = world.restitution;
   const cellSize = GRID_CELL_SIZE;
@@ -2699,28 +2903,34 @@ function resolveCollisions(world: World): void {
   if (COLLISION_NONEMPTY.length < cellCount) COLLISION_NONEMPTY = new Int32Array(cellCount * 2);
   if (COLLISION_ASLEEP.length < n) COLLISION_ASLEEP = new Uint8Array(n * 2);
 
+  const PX = store.x, PY = store.y, PZ = store.z;
+  const PVX = store.vx, PVY = store.vy, PVZ = store.vz;
+  const PR = store.r, PDENS = store.density, PMAT = store.material;
+  const PQUIET = store.quietTicks;
+  const matBase = MATERIAL_BASE_DENSITY;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
   for (let i = 0; i < n; i++) {
-    const p = ps[i];
-    COLLISION_MASS[i] = mass(p);
-    const v2 = p.vx * p.vx + p.vy * p.vy + p.vz * p.vz;
+    const r = PR[i];
+    const d = PDENS[i] !== 0 ? PDENS[i] : matBase[PMAT[i]];
+    COLLISION_MASS[i] = d * FOUR_THIRDS_PI * r * r * r;
+    const vx = PVX[i], vy = PVY[i], vz = PVZ[i];
+    const v2 = vx * vx + vy * vy + vz * vz;
     if (v2 < SLEEP_SPEED_SQ) {
-      const q = (p.quietTicks || 0) + 1;
-      p.quietTicks = q;
+      const q = PQUIET[i] + 1;
+      PQUIET[i] = q;
       COLLISION_ASLEEP[i] = q >= SLEEP_THRESHOLD_TICKS ? 1 : 0;
     } else {
-      p.quietTicks = 0;
+      PQUIET[i] = 0;
       COLLISION_ASLEEP[i] = 0;
     }
   }
 
   for (let pass = 0; pass < world.collisionIters; pass++) {
-    // Clear only the buckets we filled last pass, not the whole grid.
     for (let i = 0; i < COLLISION_NONEMPTY_N; i++) COLLISION_BUCKETS[COLLISION_NONEMPTY[i]].length = 0;
     COLLISION_NONEMPTY_N = 0;
     for (let pi = 0; pi < n; pi++) {
-      const p = ps[pi];
-      let cx = Math.floor(p.x / cellSize);
-      let cy = Math.floor(p.y / cellSize);
+      let cx = Math.floor(PX[pi] / cellSize);
+      let cy = Math.floor(PY[pi] / cellSize);
       if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
       if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
       const idx = cy * cols + cx;
@@ -2739,12 +2949,12 @@ function resolveCollisions(world: World): void {
       const cx = idx - cy * cols;
       for (let i = 0; i < cl; i++) {
         const ai = cell[i];
-        for (let j = i + 1; j < cl; j++) resolvePair(ps, ai, cell[j], e);
+        for (let j = i + 1; j < cl; j++) resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cell[j], e);
       }
-      checkNeighborPairs(ps, cell, cx + 1, cy,     cols, rows, e);
-      checkNeighborPairs(ps, cell, cx - 1, cy + 1, cols, rows, e);
-      checkNeighborPairs(ps, cell, cx,     cy + 1, cols, rows, e);
-      checkNeighborPairs(ps, cell, cx + 1, cy + 1, cols, rows, e);
+      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx + 1, cy,     cols, rows, e);
+      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx - 1, cy + 1, cols, rows, e);
+      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx,     cy + 1, cols, rows, e);
+      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx + 1, cy + 1, cols, rows, e);
     }
   }
 }
@@ -2896,8 +3106,10 @@ function resolveCreatureSedimentCollisions(world: World): void {
   }
 }
 
-function checkNeighborPairs(
-  ps: Particle[], cell: number[],
+function checkNeighborPairsSoa(
+  PX: Float32Array, PY: Float32Array, PZ: Float32Array,
+  PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
+  PR: Float32Array, cell: number[],
   nx: number, ny: number, cols: number, rows: number,
   e: number,
 ): void {
@@ -2908,52 +3120,47 @@ function checkNeighborPairs(
   const cl = cell.length;
   for (let i = 0; i < cl; i++) {
     const ai = cell[i];
-    for (let j = 0; j < nl; j++) resolvePair(ps, ai, nb[j], e);
+    for (let j = 0; j < nl; j++) resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, nb[j], e);
   }
 }
 
-function resolvePair(ps: Particle[], i: number, j: number, e: number): void {
+function resolvePairSoa(
+  PX: Float32Array, PY: Float32Array, PZ: Float32Array,
+  PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
+  PR: Float32Array, i: number, j: number, e: number,
+): void {
   if (COLLISION_ASLEEP[i] && COLLISION_ASLEEP[j]) return;
-  const a = ps[i];
-  const b = ps[j];
-  let dx = b.x - a.x;
-  let dy = b.y - a.y;
-  let dz = b.z - a.z;
-  const minDist = a.r + b.r;
+  const ax = PX[i], ay = PY[i], az = PZ[i];
+  const bx = PX[j], by = PY[j], bz = PZ[j];
+  let dx = bx - ax, dy = by - ay, dz = bz - az;
+  const minDist = PR[i] + PR[j];
   const distSq = dx * dx + dy * dy + dz * dz;
   if (distSq >= minDist * minDist) return;
   let dist = Math.sqrt(distSq);
-  if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; }
-  const nx = dx / dist;
-  const ny = dy / dist;
-  const nz = dz / dist;
+  let nxv = 0, nyv = -1, nzv = 0;
+  if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; nxv = 1; nyv = 0; nzv = 0; }
+  else { nxv = dx / dist; nyv = dy / dist; nzv = dz / dist; }
   const overlap = minDist - dist;
   const ma = COLLISION_MASS[i];
   const mb = COLLISION_MASS[j];
   const total = ma + mb;
   const corrA = overlap * (mb / total);
   const corrB = overlap * (ma / total);
-  a.x -= nx * corrA;
-  a.y -= ny * corrA;
-  a.z -= nz * corrA;
-  b.x += nx * corrB;
-  b.y += ny * corrB;
-  b.z += nz * corrB;
-  const rvx = b.vx - a.vx;
-  const rvy = b.vy - a.vy;
-  const rvz = b.vz - a.vz;
-  const vN = rvx * nx + rvy * ny + rvz * nz;
+  PX[i] = ax - nxv * corrA;
+  PY[i] = ay - nyv * corrA;
+  PZ[i] = az - nzv * corrA;
+  PX[j] = bx + nxv * corrB;
+  PY[j] = by + nyv * corrB;
+  PZ[j] = bz + nzv * corrB;
+  const avx = PVX[i], avy = PVY[i], avz = PVZ[i];
+  const bvx = PVX[j], bvy = PVY[j], bvz = PVZ[j];
+  const rvx = bvx - avx, rvy = bvy - avy, rvz = bvz - avz;
+  const vN = rvx * nxv + rvy * nyv + rvz * nzv;
   if (vN >= 0) return;
   const jImp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
-  const ix = nx * jImp;
-  const iy = ny * jImp;
-  const iz = nz * jImp;
-  a.vx -= ix / ma;
-  a.vy -= iy / ma;
-  a.vz -= iz / ma;
-  b.vx += ix / mb;
-  b.vy += iy / mb;
-  b.vz += iz / mb;
+  const ix = nxv * jImp, iy = nyv * jImp, iz = nzv * jImp;
+  PVX[i] = avx - ix / ma; PVY[i] = avy - iy / ma; PVZ[i] = avz - iz / ma;
+  PVX[j] = bvx + ix / mb; PVY[j] = bvy + iy / mb; PVZ[j] = bvz + iz / mb;
 }
 
 function applyWalls(world: World): void {
@@ -2962,7 +3169,7 @@ function applyWalls(world: World): void {
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const p = world.particles[i];
     if (p.material === "gas" && p.y - p.r < surfaceYAt(world, p.x)) {
-      world.particles.splice(i, 1);
+      removeParticleAt(world, i);
     }
   }
   const wallEach = (

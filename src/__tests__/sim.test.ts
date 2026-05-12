@@ -19,6 +19,8 @@ import {
   advanceDivision,
   DIVISION_DURATION_SEC,
   temperatureAt,
+  ParticleStore,
+  pushParticle,
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState } from "../genome";
 
@@ -46,7 +48,7 @@ function stepFullCycle(w: World, dt: number = 1 / 60): void {
 function quietWorld(): World {
   return {
     width: 800, height: 600, depth: 24, t: 0,
-    particles: [], creatures: [],
+    particles: [], particleStore: new ParticleStore(256), creatures: [],
     particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0,
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
@@ -194,21 +196,21 @@ describe("createWorld", () => {
 describe("physics: gravity & buoyancy", () => {
   it("denser-than-water material sinks", () => {
     const w = quietWorld(); w.gravity = 100;
-    w.particles.push({ x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "rock" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "rock" });
     step(w, 0.1);
     expect(w.particles[0].vy).toBeGreaterThan(0);
     expect(w.particles[0].y).toBeGreaterThan(100);
   });
   it("less-dense-than-water material rises", () => {
     const w = quietWorld(); w.gravity = 100;
-    w.particles.push({ x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "gas" });
+    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "gas" });
     step(w, 0.1);
     expect(w.particles[0].vy).toBeLessThan(0);
     expect(w.particles[0].y).toBeLessThan(300);
   });
   it("density-1 material (organic) has no net vertical force", () => {
     const w = quietWorld(); w.gravity = 100;
-    w.particles.push({ x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
     step(w, 0.1);
     expect(Math.abs(w.particles[0].vy)).toBeLessThan(1e-6);
   });
@@ -217,13 +219,13 @@ describe("physics: gravity & buoyancy", () => {
 describe("physics: drag", () => {
   it("decays velocity toward zero over time", () => {
     const w = quietWorld(); w.drag = 2.0;
-    w.particles.push({ x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
     for (let i = 0; i < 180; i++) step(w, 1 / 60);
     expect(Math.abs(w.particles[0].vx)).toBeLessThan(5);
   });
   it("doesn't reverse velocity sign in one step", () => {
     const w = quietWorld(); w.drag = 0.6;
-    w.particles.push({ x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
     step(w, 1 / 60);
     expect(w.particles[0].vx).toBeGreaterThan(0);
     expect(w.particles[0].vx).toBeLessThan(50);
@@ -233,7 +235,7 @@ describe("physics: drag", () => {
 describe("physics: walls", () => {
   it("x bounces off the left wall", () => {
     const w = quietWorld(); w.xWallRestitution = 0.5;
-    w.particles.push({ x: 5, y: 100, z: 12, vx: -100, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 5, y: 100, z: 12, vx: -100, vy: 0, vz: 0, r: 4, material: "organic" });
     step(w, 0.5);
     expect(w.particles[0].x).toBeLessThan(w.width / 2);
     expect(w.particles[0].x).toBeGreaterThanOrEqual(w.particles[0].r - 1e-6);
@@ -241,7 +243,7 @@ describe("physics: walls", () => {
   });
   it("x bounces off the right wall", () => {
     const w = quietWorld();
-    w.particles.push({ x: 795, y: 100, z: 12, vx: 100, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 795, y: 100, z: 12, vx: 100, vy: 0, vz: 0, r: 4, material: "organic" });
     step(w, 0.5);
     expect(w.particles[0].x).toBeGreaterThan(w.width / 2);
     expect(w.particles[0].vx).toBeLessThan(0);
@@ -258,21 +260,21 @@ describe("physics: walls", () => {
   });
   it("y clamps at the floor and zeros downward velocity", () => {
     const w = quietWorld();
-    w.particles.push({ x: 100, y: 595, z: 12, vx: 0, vy: 50, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 595, z: 12, vx: 0, vy: 50, vz: 0, r: 4, material: "organic" });
     step(w, 0.5);
     expect(w.particles[0].y + w.particles[0].r).toBeLessThanOrEqual(w.height + 1e-6);
     expect(w.particles[0].vy).toBeLessThanOrEqual(0);
   });
   it("y clamps at the ceiling", () => {
     const w = quietWorld();
-    w.particles.push({ x: 100, y: 1, z: 12, vx: 0, vy: -50, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 1, z: 12, vx: 0, vy: -50, vz: 0, r: 4, material: "organic" });
     step(w, 0.5);
     expect(w.particles[0].y).toBeGreaterThanOrEqual(w.particles[0].r - 1e-6);
     expect(w.particles[0].vy).toBeGreaterThanOrEqual(0);
   });
   it("z reflects with restitution on both faces", () => {
     const w = quietWorld(); w.zWallRestitution = 0.5;
-    w.particles.push({ x: 100, y: 100, z: 1, vx: 0, vy: 0, vz: -50, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 1, vx: 0, vy: 0, vz: -50, r: 4, material: "organic" });
     step(w, 0.1);
     expect(w.particles[0].vz).toBeGreaterThan(0);
     expect(w.particles[0].vz).toBeLessThan(50);
@@ -282,10 +284,8 @@ describe("physics: walls", () => {
 describe("physics: collisions", () => {
   it("two overlapping particles get separated", () => {
     const w = quietWorld();
-    w.particles.push(
-      { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" },
-      { x: 103, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" },
-    );
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
+    pushParticle(w, { x: 103, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
     step(w, 0.001);
     const dx = w.particles[1].x - w.particles[0].x;
     const dy = w.particles[1].y - w.particles[0].y;
@@ -294,10 +294,8 @@ describe("physics: collisions", () => {
   });
   it("co-located particles resolve without crashing", () => {
     const w = quietWorld();
-    w.particles.push(
-      { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" },
-      { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" },
-    );
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
     expect(() => step(w, 0.001)).not.toThrow();
     const dx = w.particles[1].x - w.particles[0].x;
     const dy = w.particles[1].y - w.particles[0].y;
@@ -306,19 +304,15 @@ describe("physics: collisions", () => {
   });
   it("denser particle moves less than lighter on overlap", () => {
     const w = quietWorld();
-    w.particles.push(
-      { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "rock" },
-      { x: 105, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "gas" },
-    );
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "rock" });
+    pushParticle(w, { x: 105, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "gas" });
     step(w, 0.001);
     expect(Math.abs(w.particles[1].x - 105)).toBeGreaterThan(Math.abs(w.particles[0].x - 100));
   });
   it("non-overlapping particles don't move from collision", () => {
     const w = quietWorld();
-    w.particles.push(
-      { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" },
-      { x: 200, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" },
-    );
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: 200, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
     expect(w.particles[0].x).toBeCloseTo(100, 5);
     expect(w.particles[1].x).toBeCloseTo(200, 5);
@@ -328,9 +322,9 @@ describe("physics: collisions", () => {
 describe("physics: waves", () => {
   it("surface wave forcing decays with depth", () => {
     const wS = quietWorld(); wS.surfaceAmp = 200; wS.surfaceDecay = 50;
-    wS.particles.push({ x: 100, y: 10, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(wS, { x: 100, y: 10, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
     const wD = quietWorld(); wD.surfaceAmp = 200; wD.surfaceDecay = 50;
-    wD.particles.push({ x: 100, y: 400, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(wD, { x: 100, y: 400, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
     step(wS, 0.1); step(wD, 0.1);
     expect(Math.abs(wS.particles[0].vx)).toBeGreaterThan(Math.abs(wD.particles[0].vx) * 5);
   });
@@ -396,7 +390,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const wS = quietWorld();
     const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     wS.creatures.push(cs);
-    wS.particles.push({ x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(wS, { x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(wS, 0.001);
     const cdSmall = cs.ingestCooldown;
 
@@ -404,7 +398,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     cb.reserves.rock = 4000;
     wB.creatures.push(cb);
-    wB.particles.push({ x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(wB, { x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(wB, 0.001);
     const cdBig = cb.ingestCooldown;
 
@@ -418,7 +412,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
       c.reserves.organic = 0;
       c.reserves.rock = rockMass;
       w.creatures.push(c);
-      w.particles.push({ x: 600, y: 300, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+      pushParticle(w, { x: 600, y: 300, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
       const e0 = c.energy;
       // Two ticks so the VM completes a full default-genome pass and
       // REPRODUCE fires (its mass-scaled ATP attempt fee is what makes
@@ -487,7 +481,7 @@ describe("creature: excretion", () => {
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 5, OP.HALT]) });
     c.reserves.gas = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     step(w, 1 / 60);
     const newP = w.particles.filter((p) => !before.has(p));
@@ -521,7 +515,7 @@ describe("creature: excretion", () => {
     const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 5, OP.HALT]) });
     c.reserves.gas = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     step(w, 1 / 60);
     const newP = w.particles.filter((p) => !before.has(p) && p.material === "gas");
@@ -545,7 +539,7 @@ describe("creature: ingestion cost and cooldown", () => {
     w.particleSpawnRate = 0;
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     const e0 = c.energy;
     step(w, 0.001);
     expect(w.particles.length).toBe(0);
@@ -557,8 +551,8 @@ describe("creature: ingestion cost and cooldown", () => {
     w.creatures.push(c);
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
-      const p = { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" as const };
-      w.particles.push(p); targets.push(p);
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      targets.push(p);
     }
     step(w, 0.001);
     expect(w.particles.filter((p) => targets.includes(p)).length).toBe(4);
@@ -568,11 +562,11 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
-      const p = { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" as const };
-      w.particles.push(p); targets.push(p);
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      targets.push(p);
     }
     for (let i = 0; i < 5; i++) step(w, 0.01);
     expect(w.particles.filter((p) => targets.includes(p)).length).toBe(4);
@@ -581,11 +575,11 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const tgt = new Set<unknown>();
     for (let i = 0; i < 3; i++) {
-      const p = { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" as const };
-      w.particles.push(p); tgt.add(p);
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      tgt.add(p);
     }
     for (let i = 0; i < 60; i++) step(w, 1 / 60);
     expect(w.particles.filter((p) => tgt.has(p)).length).toBeLessThan(3);
@@ -598,7 +592,7 @@ describe("creature: ingestion cost and cooldown", () => {
     const c = makeCreature({ energy: 0 });
     c.molecules.glucose = 1;
     w.creatures.push(c);
-    w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
   });
@@ -609,8 +603,7 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    const target = { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" as const };
-    w.particles.push(target);
+    const target = pushParticle(w, { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
     step(w, 0.001);
     expect(w.particles.includes(target)).toBe(false);
     expect(c.reserves.lipid).toBeGreaterThan(0);
@@ -619,7 +612,7 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    w.particles.push({ x: c.x + c.r + 10, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
+    pushParticle(w, { x: c.x + c.r + 10, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
   });
@@ -627,7 +620,7 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 0.001);
     expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * (4 / 3) * Math.PI * 27, 5);
   });
@@ -636,8 +629,7 @@ describe("creature: ingestion (basic)", () => {
     // INGEST 0 -> rock only.
     const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     w.creatures.push(c);
-    const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" as const };
-    w.particles.push(target);
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
     step(w, 0.001);
     expect(w.particles.includes(target)).toBe(true);
     expect(c.reserves.lipid).toBe(0);
@@ -711,8 +703,8 @@ describe("creature: thrust", () => {
     const c = makeCreature({ x: 100, y: 100, energy: 100 });
     c.reserves.organic = 0;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
-    w.particles.push({ x: 250, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: 250, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
     const e0 = c.energy;
     step(w, 0.1);
     expect(c.vx).toBeGreaterThan(0);
@@ -723,7 +715,7 @@ describe("creature: thrust", () => {
     const c = makeCreature({ x: 0, y: 0, thrustAccel: 50, energy: 1000 });
     c.reserves.organic = 0;
     w.creatures.push(c);
-    w.particles.push({ x: 700, y: 0, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: 700, y: 0, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
     step(w, 1.0);
     expect(c.vx).toBeLessThanOrEqual(50 + 1e-6);
   });
@@ -732,7 +724,7 @@ describe("creature: thrust", () => {
     const c = makeCreature({ x: 100, y: 100, energy: 0 });
     c.reserves.organic = 0;
     w.creatures.push(c);
-    w.particles.push({ x: 300, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: 300, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
     step(w, 0.1);
     expect(c.vx).toBeCloseTo(0, 6);
   });
@@ -950,7 +942,7 @@ describe("creature: predation (cell eats cell)", () => {
   });
   it("engulfing does NOT spawn death particles", () => {
     const w = quietWorld();
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
     for (const id of M) p.reserves[id] = 200;
@@ -1123,7 +1115,7 @@ describe("creature: death by starvation", () => {
   });
   it("released mass approximately conserved", () => {
     const w = quietWorld();
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50 + (i % 700), y: 10 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50 + (i % 700), y: 10 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     const c = makeCreature({ energy: 0 });
     c.reserves.organic = 0;
@@ -1146,7 +1138,7 @@ describe("creature: death by starvation", () => {
     // Strip molecules so the only mass to release is the rock reserve;
     // biomass would otherwise spawn organic-tagged corpse particles too.
     c.molecules = emptyMolecules();
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
     const before = new Set(w.particles);
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -1200,7 +1192,7 @@ describe("creature: death by starvation", () => {
     const orgReserveBefore = eater.reserves.organic;
     const mol = emptyMolecules();
     mol.glucose = 12;
-    w.particles.push({
+    pushParticle(w, {
       x: eater.x, y: eater.y, z: eater.z,
       vx: 0, vy: 0, vz: 0,
       r: 3, material: "organic",
@@ -1303,9 +1295,8 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     c.reserves.organic = 0;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
-    const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" as const };
-    w.particles.push(target);
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     const dt = 1 / 60;
     const e0 = c.energy;
     step(w, dt);
@@ -1319,8 +1310,7 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
     c.reserves.organic = 0;
     w.creatures.push(c);
-    const target = { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" as const };
-    w.particles.push(target);
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
     step(w, 1 / 60);
     expect(w.particles.includes(target)).toBe(true);
     expect(c.reserves.rock).toBe(0);
@@ -1376,14 +1366,14 @@ describe("aeration & surface escape", () => {
   it("gas particle above the surface escapes", () => {
     const w = quietWorld();
     w.surfaceY = 50;
-    w.particles.push({ x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "gas" });
+    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "gas" });
     step(w, 0.001);
     expect(w.particles.length).toBe(0);
   });
   it("non-gas particle above the surface is clamped, not escaped", () => {
     const w = quietWorld();
     w.surfaceY = 50;
-    w.particles.push({ x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
     expect(w.particles[0].y).toBeGreaterThanOrEqual(w.surfaceY);
@@ -1514,7 +1504,7 @@ describe("mass conservation", () => {
     w.particleSpawnRate = 0;
     w.particleTarget = 100000;
     for (let i = 0; i < 20; i++) {
-      w.particles.push({ x: 100 + i * 30, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: i % 2 === 0 ? "organic" : "clay" });
+      pushParticle(w, { x: 100 + i * 30, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: i % 2 === 0 ? "organic" : "clay" });
     }
     const c = makeCreature({ x: 400, y: 200, energy: 30, genome: OMNIVORE });
     w.creatures.push(c);
@@ -1550,7 +1540,7 @@ describe("particle replenishment", () => {
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
     seedParticles(w, 540);
-    w.particles.push({ x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
     for (let i = 0; i < 120; i++) step(w, 1 / 60);
     expect(w.particles.length).toBeGreaterThan(540);
   });
@@ -1576,8 +1566,8 @@ describe("default creature behavior (integration)", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 100, y: 100 });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) w.particles.push({ x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
-    w.particles.push({ x: 160, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: 160, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
     for (let i = 0; i < 30; i++) step(w, 1 / 60);
     const stillThere = w.particles.some((p) => p.material === "organic" && p.x > 150 && p.x < 170);
     if (stillThere) expect(w.creatures[0].x).toBeGreaterThan(100);
