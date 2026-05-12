@@ -38,11 +38,15 @@ hudBar.addEventListener("click", () => {
 
 const world = createWorld(window.innerWidth, window.innerHeight);
 
-let selectedIdx = 0;
+// Track the selected cell by reference, not index. world.creatures
+// gets fully rebuilt each tick (death/engulf removes plus released
+// vacuole prey appends), so any cached numeric index goes stale
+// silently -- you'd click cell 5 and find yourself looking at a
+// totally different creature on the next tick.
+let selectedCell: Creature | null = null;
 let activeDisasm = "";
 function refreshActiveDisasm(): void {
-  const c = world.creatures[selectedIdx];
-  activeDisasm = c ? disassemble(c.genome, MATERIAL_IDS_ORDERED) : "";
+  activeDisasm = selectedCell ? disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED) : "";
 }
 refreshActiveDisasm();
 
@@ -102,7 +106,7 @@ canvas.addEventListener("click", (e) => {
   const rect = canvas.getBoundingClientRect();
   const best = findCellAt(e.clientX - rect.left, e.clientY - rect.top);
   if (best >= 0) {
-    selectedIdx = best;
+    selectedCell = world.creatures[best];
     refreshActiveDisasm();
   }
 });
@@ -293,7 +297,7 @@ function render(): void {
   ctx.globalAlpha = 1;
 
   for (let i = 0; i < world.creatures.length; i++) {
-    drawCreature(world.creatures[i], i === selectedIdx);
+    drawCreature(world.creatures[i], world.creatures[i] === selectedCell);
   }
 
   drawHeatmap();
@@ -639,13 +643,16 @@ function formatAge(sec: number): string {
 
 // Best-effort plain-English summary of a cell, inferred from genome ops it
 function updateInspector(): void {
-  if (selectedIdx >= world.creatures.length) {
-    selectedIdx = 0;
+  // If the selected cell has died or been eaten, fall back to the first
+  // live creature so the inspector shows something useful instead of
+  // silently going blank.
+  if (!selectedCell || world.creatures.indexOf(selectedCell) < 0) {
+    selectedCell = world.creatures[0] ?? null;
   }
   // Always re-disassemble: the selected cell's genome can change between
   // frames from somatic mutation, so a cached string would go stale.
   refreshActiveDisasm();
-  const c = world.creatures[selectedIdx];
+  const c = selectedCell;
   if (!c) {
     inspector.textContent = `${statsLine()}\npop=0  particles=${world.particles.length}`;
     return;

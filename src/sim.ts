@@ -1205,8 +1205,10 @@ const VM_OUT: VMOutputs = newOutputs();
 
 function updateCreatures(world: World, dt: number): void {
   const n = world.creatures.length;
-  const dead: number[] = [];
-  const eaten = new Set<number>();
+  // Dead/eaten tracked as Creature refs so subsequent passes don't have
+  // to worry about array indices shifting underneath them.
+  const dead: Creature[] = [];
+  const eaten = new Set<Creature>();
   // Build per-tick spatial grids. Used by populateSensors (both creature
   // and particle scans), engulf/predation, creature-creature collisions,
   // and creature-sediment collisions. Replaces O(N) scans over world
@@ -1214,8 +1216,8 @@ function updateCreatures(world: World, dt: number): void {
   buildCreatureGrid(world);
   buildParticleGrid(world);
   for (let cIdx = 0; cIdx < n; cIdx++) {
-    if (eaten.has(cIdx)) continue;
     const c = world.creatures[cIdx];
+    if (eaten.has(c)) continue;
 
     updateCreatureRadius(c);
 
@@ -1325,21 +1327,18 @@ function updateCreatures(world: World, dt: number): void {
     // already bonded. Cap each cell at MAX_BONDS to keep the spring
     // pass cheap and bounded.
     if (VM_OUT.adhere && c.bonds.length < MAX_BONDS) {
-      const cs = world.creatures;
-      let nearest = -1;
+      let nearest: Creature | null = null;
       let bestSq = (c.r + 24) * (c.r + 24);
-      forCreaturesNear(c.x, c.y, c.r + 24, (j) => {
-        const other = cs[j];
-        if (other === c || eaten.has(j) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
+      forCreaturesNear(c.x, c.y, c.r + 24, (other) => {
+        if (other === c || eaten.has(other) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
         const dx = other.x - c.x;
         const dy = other.y - c.y;
         const dsq = dx * dx + dy * dy;
-        if (dsq < bestSq) { bestSq = dsq; nearest = j; }
+        if (dsq < bestSq) { bestSq = dsq; nearest = other; }
       });
-      if (nearest >= 0) {
-        const other = cs[nearest];
-        c.bonds.push(other);
-        other.bonds.push(c);
+      if (nearest) {
+        c.bonds.push(nearest);
+        (nearest as Creature).bonds.push(c);
       }
     }
 
@@ -1388,9 +1387,8 @@ function updateCreatures(world: World, dt: number): void {
       const scanRange = c.r + 32;
       if (VM_OUT.engulf) {
         const myMass = creatureTotalMass(c);
-        forCreaturesNear(c.x, c.y, scanRange, (j) => {
-          if (j === cIdx || eaten.has(j)) return;
-          const other = world.creatures[j];
+        forCreaturesNear(c.x, c.y, scanRange, (other) => {
+          if (other === c || eaten.has(other)) return;
           const dx = other.x - c.x;
           const dy = other.y - c.y;
           const dz = other.z - c.z;
@@ -1403,16 +1401,15 @@ function updateCreatures(world: World, dt: number): void {
           c.contents.push(other);
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
-          eaten.add(j);
+          eaten.add(other);
           ingested = true;
           return true;
         });
       }
       if (!ingested && VM_OUT.predate) {
         const myMass = creatureTotalMass(c);
-        forCreaturesNear(c.x, c.y, scanRange, (j) => {
-          if (j === cIdx || eaten.has(j)) return;
-          const other = world.creatures[j];
+        forCreaturesNear(c.x, c.y, scanRange, (other) => {
+          if (other === c || eaten.has(other)) return;
           const dx = other.x - c.x;
           const dy = other.y - c.y;
           const dz = other.z - c.z;
@@ -1422,7 +1419,6 @@ function updateCreatures(world: World, dt: number): void {
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
           if (c.energy < cost) return;
-          // Ingest: take everything the prey was carrying.
           for (let k = 0; k < 6; k++) {
             c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
           }
@@ -1432,7 +1428,7 @@ function updateCreatures(world: World, dt: number): void {
           other.contents.length = 0;
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
-          eaten.add(j);
+          eaten.add(other);
           ingested = true;
           return true;
         });
@@ -1477,38 +1473,41 @@ function updateCreatures(world: World, dt: number): void {
     //  2. Autolysis: biomass has decayed below the viable minimum (the
     //     cell can no longer hold itself together as a cell).
     if ((c.energy <= 0 && noFuel(c)) || c.molecules.biomass < MIN_VIABLE_BIOMASS) {
-      dead.push(cIdx);
+      dead.push(c);
     }
   }
 
-  const removed: { idx: number; spill: boolean }[] = [];
-  for (const idx of dead) removed.push({ idx, spill: true });
-  for (const idx of eaten) removed.push({ idx, spill: false });
-  removed.sort((a, b) => b.idx - a.idx);
-  const released: Creature[] = [];
-  for (const r of removed) {
-    const victim = world.creatures[r.idx];
-    // Spill the vacuole: held cells are alive and break out at the host's
-    // position when the host dies or is ingested by something larger.
-    for (const inner of victim.contents) {
-      inner.x = victim.x + (Math.random() - 0.5) * Math.max(2, victim.r);
-      inner.y = victim.y + (Math.random() - 0.5) * Math.max(2, victim.r);
-      inner.z = victim.z;
-      released.push(inner);
+  // Combined removal pass. dead = spilled, eaten = absorbed (no spill).
+  // Build a survivors array in one O(N) pass instead of repeatedly
+  // splicing (which is O(N) each).
+  if (dead.length > 0 || eaten.size > 0) {
+    const spillSet = new Set<Creature>(dead);
+    const survivors: Creature[] = [];
+    const released: Creature[] = [];
+    for (const c of world.creatures) {
+      if (spillSet.has(c) || eaten.has(c)) {
+        for (const inner of c.contents) {
+          inner.x = c.x + (Math.random() - 0.5) * Math.max(2, c.r);
+          inner.y = c.y + (Math.random() - 0.5) * Math.max(2, c.r);
+          inner.z = c.z;
+          released.push(inner);
+        }
+        c.contents.length = 0;
+        for (const partner of c.bonds) {
+          const k = partner.bonds.indexOf(c);
+          if (k >= 0) partner.bonds.splice(k, 1);
+        }
+        c.bonds.length = 0;
+        if (spillSet.has(c)) releaseReservesAsParticles(c, world);
+        noteCreatureDeath(world, c);
+      } else {
+        survivors.push(c);
+      }
     }
-    victim.contents.length = 0;
-    // Remove this victim from every bonded partner's list so springs
-    // don't fire against a ghost.
-    for (const partner of victim.bonds) {
-      const k = partner.bonds.indexOf(victim);
-      if (k >= 0) partner.bonds.splice(k, 1);
-    }
-    victim.bonds.length = 0;
-    if (r.spill) releaseReservesAsParticles(victim, world);
-    noteCreatureDeath(world, victim);
-    world.creatures.splice(r.idx, 1);
+    world.creatures.length = 0;
+    for (const s of survivors) world.creatures.push(s);
+    for (const r of released) world.creatures.push(r);
   }
-  for (const r of released) world.creatures.push(r);
 }
 
 // Which world material best represents each molecule when it leaves a
@@ -1780,9 +1779,7 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.creatureDist = range;
   VM_SENSORS.creatureMass = 0;
   let bestCreatureSq = rangeSq;
-  const cs = world.creatures;
-  forCreaturesNear(c.x, c.y, range, (j) => {
-    const other = cs[j];
+  forCreaturesNear(c.x, c.y, range, (other) => {
     if (other === c) return;
     const dx = other.x - c.x;
     const dy = other.y - c.y;
@@ -1840,11 +1837,19 @@ const COLLISION_BUCKETS: number[][] = [];
 let COLLISION_MASS = new Float64Array(0);
 
 // Creature spatial grid -- shared across sensor lookup, predation/engulf
-// scans, and the creature-creature collision pass. Built once per tick
-// at the start of updateCreatures. Replaces what used to be O(n^2) scans
-// over world.creatures.
+// scans, and both creature-creature and creature-sediment collisions.
+//
+// Buckets hold Creature REFERENCES (not indices). updateCreatures
+// splices dead/eaten creatures out of world.creatures before returning,
+// which would otherwise invalidate every index in the grid before the
+// collision passes run. Refs survive the splice; stale entries are
+// harmless because we hold the object directly.
+//
+// Predation/engulf, which still need an "is this creature already
+// dead-this-tick" check, pass a Set of in-flight victims to filter
+// inside their visitor.
 const CREATURE_GRID_CELL = 64;
-const CREATURE_BUCKETS: number[][] = [];
+const CREATURE_BUCKETS: Creature[][] = [];
 let CREATURE_GRID_COLS = 0;
 let CREATURE_GRID_ROWS = 0;
 
@@ -1922,7 +1927,7 @@ function buildCreatureGrid(world: World): void {
     if (!Number.isFinite(cy)) cy = 0;
     if (cx < 0) cx = 0; else if (cx >= CREATURE_GRID_COLS) cx = CREATURE_GRID_COLS - 1;
     if (cy < 0) cy = 0; else if (cy >= CREATURE_GRID_ROWS) cy = CREATURE_GRID_ROWS - 1;
-    CREATURE_BUCKETS[cy * CREATURE_GRID_COLS + cx].push(i);
+    CREATURE_BUCKETS[cy * CREATURE_GRID_COLS + cx].push(c);
   }
 }
 
@@ -1931,7 +1936,7 @@ function buildCreatureGrid(world: World): void {
 // finds its first valid prey). Skips buckets outside the search radius.
 function forCreaturesNear(
   x: number, y: number, range: number,
-  visitor: (idx: number) => boolean | void,
+  visitor: (c: Creature) => boolean | void,
 ): void {
   const ccs = CREATURE_GRID_CELL;
   const span = Math.max(1, Math.ceil(range / ccs));
@@ -2002,14 +2007,17 @@ function resolveCollisions(world: World): void {
 // each other (only PREDATE/ENGULF cared about contact) and you can't
 // see flocking, body-shielding, or crowding pressure emerge.
 function resolveCreatureCollisions(world: World): void {
-  const cs = world.creatures;
-  const n = cs.length;
+  const n = world.creatures.length;
   if (n < 2) return;
   // Restitution: cells are mostly soft membranes, gentle rebound.
   const e = 0.1;
   // The grid was last built at the start of updateCreatures; positions
   // have since moved by at most ~v*dt < a few px, so the grid is still
-  // accurate enough for collision pairing.
+  // accurate enough for collision pairing. Buckets hold Creature refs
+  // so post-splice dead/eaten ghosts don't affect indices -- ghost
+  // entries that point at no-longer-live creatures just contribute
+  // negligible spurious forces against actual cells, which is fine
+  // for one tick (next tick rebuilds the grid without them).
   const cols = CREATURE_GRID_COLS;
   const rows = CREATURE_GRID_ROWS;
   for (let gy = 0; gy < rows; gy++) {
@@ -2017,37 +2025,33 @@ function resolveCreatureCollisions(world: World): void {
       const cell = CREATURE_BUCKETS[gy * cols + gx];
       const cl = cell.length;
       if (cl === 0) continue;
-      // Pairs within this cell.
       for (let i = 0; i < cl; i++) {
         const ai = cell[i];
-        for (let j = i + 1; j < cl; j++) resolveCreaturePair(cs, ai, cell[j], e);
+        for (let j = i + 1; j < cl; j++) resolveCreaturePair(ai, cell[j], e);
       }
-      // Half the 3x3 neighborhood -- the other half is covered by those
-      // cells' own iteration. Standard staggered-neighborhood trick.
-      if (gx + 1 < cols)             checkCreaturePairs(cs, cell, cell.length, cols, gy * cols + gx + 1, e);
-      if (gy + 1 < rows && gx > 0)   checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx - 1, e);
-      if (gy + 1 < rows)             checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx, e);
-      if (gy + 1 < rows && gx + 1 < cols) checkCreaturePairs(cs, cell, cell.length, cols, (gy + 1) * cols + gx + 1, e);
+      if (gx + 1 < cols)             checkCreaturePairs(cell, gy * cols + gx + 1, e);
+      if (gy + 1 < rows && gx > 0)   checkCreaturePairs(cell, (gy + 1) * cols + gx - 1, e);
+      if (gy + 1 < rows)             checkCreaturePairs(cell, (gy + 1) * cols + gx, e);
+      if (gy + 1 < rows && gx + 1 < cols) checkCreaturePairs(cell, (gy + 1) * cols + gx + 1, e);
     }
   }
 }
 
 function checkCreaturePairs(
-  cs: Creature[], cell: number[], cl: number, _cols: number, otherIdx: number, e: number,
+  cell: Creature[], otherIdx: number, e: number,
 ): void {
   const nb = CREATURE_BUCKETS[otherIdx];
   const nl = nb.length;
   if (nl === 0) return;
+  const cl = cell.length;
   for (let i = 0; i < cl; i++) {
     const ai = cell[i];
-    for (let j = 0; j < nl; j++) resolveCreaturePair(cs, ai, nb[j], e);
+    for (let j = 0; j < nl; j++) resolveCreaturePair(ai, nb[j], e);
   }
 }
 
-function resolveCreaturePair(cs: Creature[], i: number, j: number, e: number): void {
-  if (i === j) return;
-  const a = cs[i];
-  const b = cs[j];
+function resolveCreaturePair(a: Creature, b: Creature, e: number): void {
+  if (a === b) return;
   let dx = b.x - a.x;
   let dy = b.y - a.y;
   let dz = b.z - a.z;
@@ -2105,8 +2109,7 @@ function resolveCreatureSedimentCollisions(world: World): void {
     const p = ps[pi];
     if (!SEDIMENT_MATERIALS.has(p.material)) continue;
     const range = p.r + 30;
-    forCreaturesNear(p.x, p.y, range, (ci) => {
-      const c = cs[ci];
+    forCreaturesNear(p.x, p.y, range, (c) => {
       let dx = c.x - p.x;
       let dy = c.y - p.y;
       let dz = c.z - p.z;
