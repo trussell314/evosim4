@@ -72,6 +72,9 @@ export const OP = {
   ADHERE:        0x62,   // bond with nearest cell in range; forms colonies
   REPAIR:        0x63,   // spend ATP to suppress somatic mutation briefly
   SENSE_AMP:     0x64,   // passive: each copy expands the cell's sense range
+  POKE_BYTE:     0x65,   // pop (idx, val), write genome[idx % L] = val & 0xff
+  SPLICE_DUP:    0x66,   // pop (offset, length), duplicate that region in place
+  SPLICE_DEL:    0x67,   // pop (offset, length), delete that region from genome
 
   HALT:          0xFF,
 } as const;
@@ -195,6 +198,13 @@ export interface VMOutputs {
   // Count of REPAIR ops that fired this tick. Sim multiplies by a fixed
   // ATP cost to debit the cell, and refreshes its repair window.
   repair: number;
+  // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
+  // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
+  // this after runTick returns: changing genome length mid-tick would
+  // invalidate PC. Last splice op of the tick wins.
+  spliceMode: number;
+  spliceOffset: number;
+  spliceLength: number;
   instructions: number;
 }
 
@@ -206,6 +216,7 @@ export function newOutputs(): VMOutputs {
     predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
     repair: 0,
+    spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     instructions: 0,
   };
 }
@@ -230,6 +241,9 @@ export function runTick(
   out.adhere = false;
   out.ingestMaterials.fill(0);
   out.repair = 0;
+  out.spliceMode = 0;
+  out.spliceOffset = 0;
+  out.spliceLength = 0;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -311,6 +325,34 @@ export function runTick(
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
+      // POKE_BYTE: write to an arbitrary genome byte in place. (val, idx)
+      // are popped; idx is taken mod L, value is masked to 8 bits.
+      case OP.POKE_BYTE: {
+        const idxRaw = vmPop(stack);
+        const valRaw = vmPop(stack);
+        const idx = (((idxRaw | 0) % L) + L) % L;
+        genome[idx] = (valRaw | 0) & 0xff;
+        break;
+      }
+      // SPLICE_DUP / SPLICE_DEL: pop (length, offset). Length capped to
+      // avoid ridiculous payloads; offset taken mod L. Resizing happens
+      // after runTick returns, so PC stays valid for the rest of this tick.
+      case OP.SPLICE_DUP: {
+        const lenRaw = vmPop(stack);
+        const offRaw = vmPop(stack);
+        out.spliceMode = 1;
+        out.spliceOffset = (((offRaw | 0) % L) + L) % L;
+        out.spliceLength = Math.max(0, Math.min(32, lenRaw | 0));
+        break;
+      }
+      case OP.SPLICE_DEL: {
+        const lenRaw = vmPop(stack);
+        const offRaw = vmPop(stack);
+        out.spliceMode = 2;
+        out.spliceOffset = (((offRaw | 0) % L) + L) % L;
+        out.spliceLength = Math.max(0, Math.min(32, lenRaw | 0));
+        break;
+      }
 
       case OP.THRUST: {
         const ay = vmPop(stack);
@@ -366,6 +408,7 @@ export interface GenomeSummary {
   emit: boolean;
   adhere: boolean;
   repair: boolean;
+  selfModifies: boolean;
   sensors: string[];
   capabilities: string[];
   verdict: string;
@@ -382,7 +425,7 @@ export function summarizeGenome(
   const seenSensor = new Set<string>();
   let thrust = false, turn = false, reproduce = false;
   let predate = false, engulf = false, emit = false, adhere = false;
-  let repair = false;
+  let repair = false, selfModifies = false;
   let hasJump = false, hasCmp = false;
   let executableOps = 0, unknownBytes = 0;
 
@@ -406,6 +449,9 @@ export function summarizeGenome(
       case OP.EMIT:      emit = true; break;
       case OP.ADHERE:    adhere = true; break;
       case OP.REPAIR:    repair = true; break;
+      case OP.POKE_BYTE:
+      case OP.SPLICE_DUP:
+      case OP.SPLICE_DEL: selfModifies = true; break;
       case OP.INGEST: {
         const mat = m6(operand);
         if (!ingestMaterials.includes(mat)) ingestMaterials.push(mat);
@@ -450,6 +496,7 @@ export function summarizeGenome(
   if (emit) capabilities.push("emits pheromone");
   if (adhere) capabilities.push("forms colonies");
   if (repair) capabilities.push("repairs DNA");
+  if (selfModifies) capabilities.push("self-modifies genome");
   if (excreteMaterials.length > 0) {
     capabilities.push("excretes " + excreteMaterials.map(matName).join("/"));
   }
@@ -487,6 +534,7 @@ export function summarizeGenome(
   if (engulf) otherActs.push("engulfs prey");
   if (predate) otherActs.push("predates");
   if (repair) otherActs.push("spends ATP on DNA repair");
+  if (selfModifies) otherActs.push("rewrites its own genome (POKE / SPLICE)");
   bullets.push("- Excrete / emit pheromone / adhere / engulf / predate? " + (otherActs.length > 0
     ? otherActs.join("; ") + "."
     : "None of the corresponding ops are present."));
@@ -535,7 +583,7 @@ export function summarizeGenome(
     totalBytes: genome.length, executableOps, unknownBytes,
     estAtpPerTick, hasJump, hasComparison: hasCmp, conditional,
     thrust, turn, ingestMaterials, excreteMaterials,
-    reproduce, predate, engulf, emit, adhere, repair,
+    reproduce, predate, engulf, emit, adhere, repair, selfModifies,
     sensors, capabilities,
     verdict: lines.join("\n"),
   };
@@ -637,7 +685,7 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
 const P_POINT  = 0.003;
 const P_INSERT = 0.0008;
 const P_DELETE = 0.0008;
-const MAX_GENOME_BYTES = 256;
+export const MAX_GENOME_BYTES = 256;
 
 export function mutateGenome(
   genome: Uint8Array,

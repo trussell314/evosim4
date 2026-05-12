@@ -16,6 +16,7 @@ import {
   mutateGenome,
   somaticMutateOnce,
   computeSenseRange,
+  MAX_GENOME_BYTES,
 } from "./genome";
 
 export type MaterialId =
@@ -1398,6 +1399,45 @@ function spawnExcretedParticle(
 // parent's length (so size-based costs are stable). Bytes 0..k come
 // from parent a, bytes k..end from parent b; if b is shorter we fall
 // back to a's tail. k is uniformly random.
+// Apply a SPLICE_DUP / SPLICE_DEL request to a cell's live genome.
+// mode 1 = duplicate the [off, off+len) region in place; mode 2 = delete
+// it. Genome length is clamped to [1, MAX_GENOME_BYTES]. PC is taken
+// mod the new length so the next tick resumes somewhere valid.
+function applyGenomeSplice(c: Creature, mode: number, off: number, len: number): void {
+  const g = c.genome;
+  const L = g.length;
+  if (L === 0 || len <= 0) return;
+  const a = ((off % L) + L) % L;
+  const b = Math.min(L, a + len);
+  if (b <= a) return;
+  let next: Uint8Array;
+  if (mode === 1) {
+    // Duplicate: [0..L) -> [0..b) + [a..b) (the duplicated region) + [b..L)
+    const dupLen = b - a;
+    const newLen = Math.min(MAX_GENOME_BYTES, L + dupLen);
+    next = new Uint8Array(newLen);
+    next.set(g.subarray(0, Math.min(b, newLen)), 0);
+    // Copy the duplicate region after the original; cap to newLen.
+    const dupStart = b;
+    const dupEnd = Math.min(newLen, dupStart + dupLen);
+    if (dupEnd > dupStart) next.set(g.subarray(a, a + (dupEnd - dupStart)), dupStart);
+    // Tail (originally [b..L))
+    const tailStart = dupEnd;
+    const tailLen = Math.min(L - b, newLen - tailStart);
+    if (tailLen > 0) next.set(g.subarray(b, b + tailLen), tailStart);
+  } else if (mode === 2) {
+    // Delete: keep [0..a) and [b..L).
+    const newLen = Math.max(1, L - (b - a));
+    next = new Uint8Array(newLen);
+    next.set(g.subarray(0, a), 0);
+    if (newLen > a) next.set(g.subarray(b, b + (newLen - a)), a);
+  } else {
+    return;
+  }
+  c.genome = next;
+  if (c.vm.pc >= next.length) c.vm.pc = c.vm.pc % next.length;
+}
+
 function crossoverGenomes(a: Uint8Array, b: Uint8Array): Uint8Array {
   const len = a.length;
   if (len === 0) return new Uint8Array(b);
@@ -1823,6 +1863,15 @@ function updateCreatures(world: World, dt: number): void {
       const paid = spendATP(c, want);
       if (paid > 0) c.repairTicks = Math.max(c.repairTicks, REPAIR_WINDOW_TICKS);
     }
+    // Apply pending genome self-modifications after VM exits. SPLICE_*
+    // changed length, which would invalidate PC mid-tick; we let the
+    // rest of this tick's ops finish first, then resize here.
+    if (VM_OUT.spliceMode !== 0 && VM_OUT.spliceLength > 0) {
+      applyGenomeSplice(c, VM_OUT.spliceMode, VM_OUT.spliceOffset, VM_OUT.spliceLength);
+    }
+    // POKE_BYTE may have changed SENSE_AMP bytes; SPLICE may have too.
+    // Recompute senseRange so it tracks the live program.
+    c.senseRange = computeSenseRange(c.genome);
 
     // TURN: rotate the cell's velocity by the accumulated angle delta.
     // Cheap; only does the trig when the genome actually issued a turn.
