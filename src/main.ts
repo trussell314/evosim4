@@ -423,35 +423,10 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Static terrain. Render each rock as a polygon (straight edges, hard
-  // corners) when one is available; fall back to the lobe-union path
-  // for obstacles that don't ship a polygon. Subtle top-to-bottom
-  // gradient + thin dark stroke for the silhouette rim. No shadow blur:
-  // we want hard edges, not the soft "stylized cartoon" halo.
-  for (const ob of world.obstacles) {
-    const grad = ctx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20));
-    grad.addColorStop(0.4, ob.color);
-    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    if (ob.polygon && ob.polygon.length >= 3) {
-      ctx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
-      for (let i = 1; i < ob.polygon.length; i++) {
-        ctx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
-      }
-      ctx.closePath();
-    } else {
-      for (const l of ob.lobes) {
-        ctx.moveTo(l.x + l.r, l.y);
-        ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
-      }
-    }
-    ctx.fill();
-    ctx.strokeStyle = hexLerp(ob.color, 0, 0, 0, 0.55);
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
+  // Static terrain. Pre-baked once into terrainBitmap (an offscreen
+  // canvas sized to the world); we just blit it per frame.
+  if (!terrainBitmap) buildTerrainBitmap();
+  if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
 
   // Highlight along the surface line.
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
@@ -975,14 +950,79 @@ function hslAdjustL(hsl: string, lDelta: number): string {
 // Radial gradient centered on a light source offset to the upper-left,
 // so each cell renders like a lit sphere. Used as the fill style for
 // the wobbly body path.
-function cellShadingFill(cx: number, cy: number, r: number, color: string): CanvasGradient {
-  const lightX = cx - r * 0.35;
-  const lightY = cy - r * 0.45;
-  const grad = ctx.createRadialGradient(lightX, lightY, r * 0.05, cx, cy, r * 1.05);
-  grad.addColorStop(0, hslAdjustL(color, 22));
-  grad.addColorStop(0.55, color);
-  grad.addColorStop(1, hslAdjustL(color, -25));
-  return grad;
+// Static-terrain bitmap. Obstacles never move and never change after
+// world creation, so the polygon/gradient/stroke work that used to
+// run every frame in the main render loop is baked into an offscreen
+// canvas once. The main loop then blits it with a single drawImage().
+let terrainBitmap: HTMLCanvasElement | null = null;
+function buildTerrainBitmap(): void {
+  const w = WORLD_SIZE.w;
+  const h = WORLD_SIZE.h;
+  const off = document.createElement("canvas");
+  off.width = w;
+  off.height = h;
+  const octx = off.getContext("2d");
+  if (!octx) return;
+  for (const ob of world.obstacles) {
+    const grad = octx.createLinearGradient(0, ob.minY, 0, ob.maxY);
+    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20));
+    grad.addColorStop(0.4, ob.color);
+    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
+    octx.fillStyle = grad;
+    octx.beginPath();
+    if (ob.polygon && ob.polygon.length >= 3) {
+      octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
+      for (let i = 1; i < ob.polygon.length; i++) {
+        octx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
+      }
+      octx.closePath();
+    } else {
+      for (const l of ob.lobes) {
+        octx.moveTo(l.x + l.r, l.y);
+        octx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+      }
+    }
+    octx.fill();
+    octx.strokeStyle = hexLerp(ob.color, 0, 0, 0, 0.55);
+    octx.lineWidth = 1;
+    octx.stroke();
+  }
+  terrainBitmap = off;
+}
+
+// Cell-fill gradient cache. cellShadingFill() used to build a fresh
+// CanvasGradient per cell per frame. At pop=100, 60fps, that's 6k
+// gradients/sec being allocated and garbage-collected. Caching keyed
+// by (color, r-bucket) keeps the count to a few hundred entries
+// across the run. Each cached gradient is built at origin so the
+// caller translates the canvas to the cell's position before fill.
+const CELL_GRAD_CACHE = new Map<string, CanvasGradient>();
+function getCellGradient(color: string, r: number): CanvasGradient {
+  // Round to 1px buckets -- gradients quantized to integer cell radii
+  // are visually indistinguishable but cap the cache size.
+  const rb = Math.max(1, Math.round(r));
+  const key = color + "@" + rb;
+  let g = CELL_GRAD_CACHE.get(key);
+  if (g) return g;
+  g = ctx.createRadialGradient(-rb * 0.35, -rb * 0.45, rb * 0.05, 0, 0, rb * 1.05);
+  g.addColorStop(0, hslAdjustL(color, 22));
+  g.addColorStop(0.55, color);
+  g.addColorStop(1, hslAdjustL(color, -25));
+  CELL_GRAD_CACHE.set(key, g);
+  return g;
+}
+
+// Draw a wobbly cell body filled with the cached radial gradient
+// for its color. The gradient is built at origin; we translate the
+// canvas to the cell's position so the same cached object can fill
+// any cell of that color/radius.
+function drawCellBody(cx: number, cy: number, r: number, color: string, t: number, phase: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = getCellGradient(color, r);
+  tracedWobblyBody(0, 0, r, t, phase);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawCreature(c: Creature, selected: boolean): void {
@@ -997,18 +1037,12 @@ function drawCreature(c: Creature, selected: boolean): void {
     const sep = c.division.progress * (c.r + child.r);
     const dx = Math.cos(c.division.axis) * sep * 0.5;
     const dy = Math.sin(c.division.axis) * sep * 0.5;
-    ctx.fillStyle = cellShadingFill(c.x - dx, c.y - dy, c.r, c.color);
-    tracedWobblyBody(c.x - dx, c.y - dy, c.r, t, phase);
-    ctx.fill();
+    drawCellBody(c.x - dx, c.y - dy, c.r, c.color, t, phase);
     strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
-    ctx.fillStyle = cellShadingFill(c.x + dx, c.y + dy, child.r, child.color);
-    tracedWobblyBody(c.x + dx, c.y + dy, child.r, t, phase + 1.7);
-    ctx.fill();
+    drawCellBody(c.x + dx, c.y + dy, child.r, child.color, t, phase + 1.7);
     strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
   } else {
-    ctx.fillStyle = cellShadingFill(c.x, c.y, c.r, c.color);
-    tracedWobblyBody(c.x, c.y, c.r, t, phase);
-    ctx.fill();
+    drawCellBody(c.x, c.y, c.r, c.color, t, phase);
     strokeCellOutline(c.x, c.y, c.r, selected, t, phase);
   }
 
