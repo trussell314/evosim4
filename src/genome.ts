@@ -683,8 +683,13 @@ export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Flo
 }
 
 const P_POINT  = 0.003;
-const P_INSERT = 0.0008;
-const P_DELETE = 0.0008;
+const P_INSERT = 0.0010;
+// Deletions are uniquely lossy in our genome: one deleted byte at the
+// wrong offset can remove REPRODUCE or break a gate, sterilizing the
+// lineage. Without functional redundancy or reading frames there's
+// nothing to absorb the loss -- bias against deletion at the mutation
+// level instead.
+const P_DELETE = 0.0003;
 export const MAX_GENOME_BYTES = 256;
 
 export function mutateGenome(
