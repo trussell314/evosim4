@@ -13,6 +13,7 @@ import {
   type World,
   MATERIAL_IDS_ORDERED,
 } from "../sim";
+import { newVMState } from "../genome";
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -141,13 +142,13 @@ describe("smoke: default-creature ecosystem (long run)", () => {
       ...proto,
       x: 200, y: 200,
       genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
+      vm: newVMState(),
     });
     w.creatures.push({
       ...proto,
       x: 600, y: 400,
       genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
+      vm: newVMState(),
     });
     for (const c of w.creatures) {
       const fresh = {} as typeof proto.reserves;

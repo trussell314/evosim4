@@ -1118,8 +1118,10 @@ function updateCreatures(world: World, dt: number): void {
     // cells slowly become genetic mosaics of their original self. Doesn't
     // create a new species -- only inheritance does that.
     const age = world.t - c.bornAt;
-    // Clamp at 0.5/tick so extreme ages don't silently mean "always mutate."
-    const mutP = Math.min(0.5, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    // Clamp at 0.1/tick (10%) so even very old cells don't churn their
+    // entire genome every second. Above the saturation point, biology
+    // would be other failure modes (toxicity, biomass collapse) anyway.
+    const mutP = Math.min(0.1, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
     if (age > 0 && Math.random() < mutP) {
       c.genome = somaticMutateOnce(c.genome);
       c.color = genomeColor(c.genome, world.anchorGenome);

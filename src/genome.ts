@@ -8,6 +8,8 @@ export const OP = {
   SWAP:          0x04,
   OVER:          0x05,
   ROT:           0x06,
+  LOAD:          0x07,    // push register[i] onto stack
+  STORE:         0x08,    // pop, store into register[i]
 
   ADD:           0x10,
   SUB:           0x11,
@@ -80,6 +82,8 @@ OPERANDS[OP.SENSE_DENSITY] = 1;
 OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
 OPERANDS[OP.INGEST] = 1;
+OPERANDS[OP.LOAD] = 1;
+OPERANDS[OP.STORE] = 1;
 
 
 const NAME_BY_OP: Record<number, string> = {};
@@ -90,16 +94,32 @@ const MATERIAL_OPERAND = new Set<number>([
 ]);
 
 const STACK_MAX = 32;
+const REG_COUNT = 16;
 const i8 = (b: number): number => (b > 127 ? b - 256 : b);
 const m6 = (b: number): number => b % 6;
+const m16 = (b: number): number => b % REG_COUNT;
+
+// Hoisted stack helpers. Module-level so runTick doesn't allocate
+// fresh closures on every call.
+function vmPush(stack: number[], v: number): void {
+  if (!Number.isFinite(v)) v = 0;
+  if (stack.length >= STACK_MAX) stack.shift();
+  stack.push(v);
+}
+function vmPop(stack: number[]): number {
+  return stack.length ? (stack.pop() as number) : 0;
+}
 
 export interface VMState {
   pc: number;
   stack: number[];
+  // Scratch register file. Persists across ticks so a genome can build
+  // oscillators, timers, integrators, memory of past sensor values.
+  regs: Float32Array;
 }
 
 export function newVMState(): VMState {
-  return { pc: 0, stack: [] };
+  return { pc: 0, stack: [], regs: new Float32Array(REG_COUNT) };
 }
 
 export interface VMSensors {
@@ -189,18 +209,11 @@ export function runTick(
   const L = genome.length;
   if (L === 0) return;
 
+  // Hoisted helpers: stack/genome live on `state`, no per-call closure
+  // allocation. Tens of thousands of runTick calls per second on a busy
+  // world used to make these allocations show up in profiles.
   const stack = state.stack;
-  const push = (v: number): void => {
-    if (!Number.isFinite(v)) v = 0;
-    if (stack.length >= STACK_MAX) stack.shift();
-    stack.push(v);
-  };
-  const pop = (): number => (stack.length ? (stack.pop() as number) : 0);
-  const readOperand = (): number => {
-    const b = genome[state.pc % L];
-    state.pc++;
-    return b;
-  };
+  const regs = state.regs;
 
   for (let n = 0; n < budget; n++) {
     state.pc = ((state.pc % L) + L) % L;
@@ -210,79 +223,80 @@ export function runTick(
 
     switch (op) {
       case OP.NOP: break;
-      case OP.PUSH8: push(i8(readOperand())); break;
-      case OP.POP: pop(); break;
-      case OP.DUP: { const x = pop(); push(x); push(x); break; }
-      case OP.SWAP: { const a = pop(); const b = pop(); push(a); push(b); break; }
-      case OP.OVER: { const b = pop(); const a = pop(); push(a); push(b); push(a); break; }
-      case OP.ROT:  { const c = pop(); const b = pop(); const a = pop(); push(b); push(c); push(a); break; }
+      case OP.PUSH8: { const b = genome[state.pc % L]; state.pc++; vmPush(stack, i8(b)); break; }
+      case OP.POP: vmPop(stack); break;
+      case OP.DUP: { const x = vmPop(stack); vmPush(stack, x); vmPush(stack, x); break; }
+      case OP.SWAP: { const a = vmPop(stack); const b = vmPop(stack); vmPush(stack, a); vmPush(stack, b); break; }
+      case OP.OVER: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a); vmPush(stack, b); vmPush(stack, a); break; }
+      case OP.ROT:  { const c = vmPop(stack); const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, b); vmPush(stack, c); vmPush(stack, a); break; }
+      case OP.LOAD: { const i = m16(genome[state.pc % L]); state.pc++; vmPush(stack, regs[i]); break; }
+      case OP.STORE: { const i = m16(genome[state.pc % L]); state.pc++; const v = vmPop(stack); regs[i] = Number.isFinite(v) ? v : 0; break; }
 
-      case OP.ADD: { const b = pop(); const a = pop(); push(a + b); break; }
-      case OP.SUB: { const b = pop(); const a = pop(); push(a - b); break; }
-      case OP.MUL: { const b = pop(); const a = pop(); push(a * b); break; }
-      case OP.DIV: { const b = pop(); const a = pop(); push(b !== 0 ? a / b : 0); break; }
-      case OP.NEG: push(-pop()); break;
-      case OP.ABS: push(Math.abs(pop())); break;
-      case OP.MIN: { const b = pop(); const a = pop(); push(Math.min(a, b)); break; }
-      case OP.MAX: { const b = pop(); const a = pop(); push(Math.max(a, b)); break; }
-      case OP.MOD: { const b = pop(); const a = pop(); push(b !== 0 ? a - Math.floor(a / b) * b : 0); break; }
-      case OP.SIGN: { const a = pop(); push(a > 0 ? 1 : a < 0 ? -1 : 0); break; }
+      case OP.ADD: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a + b); break; }
+      case OP.SUB: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a - b); break; }
+      case OP.MUL: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a * b); break; }
+      case OP.DIV: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, b !== 0 ? a / b : 0); break; }
+      case OP.NEG: vmPush(stack, -vmPop(stack)); break;
+      case OP.ABS: vmPush(stack, Math.abs(vmPop(stack))); break;
+      case OP.MIN: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, Math.min(a, b)); break; }
+      case OP.MAX: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, Math.max(a, b)); break; }
+      case OP.MOD: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, b !== 0 ? a - Math.floor(a / b) * b : 0); break; }
+      case OP.SIGN: { const a = vmPop(stack); vmPush(stack, a > 0 ? 1 : a < 0 ? -1 : 0); break; }
 
-      case OP.LT: { const b = pop(); const a = pop(); push(a < b ? 1 : 0); break; }
-      case OP.GT: { const b = pop(); const a = pop(); push(a > b ? 1 : 0); break; }
-      case OP.EQ: { const b = pop(); const a = pop(); push(a === b ? 1 : 0); break; }
-      case OP.NOT: push(pop() === 0 ? 1 : 0); break;
-      case OP.AND: { const b = pop(); const a = pop(); push(a !== 0 && b !== 0 ? 1 : 0); break; }
-      case OP.OR:  { const b = pop(); const a = pop(); push(a !== 0 || b !== 0 ? 1 : 0); break; }
+      case OP.LT: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a < b ? 1 : 0); break; }
+      case OP.GT: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a > b ? 1 : 0); break; }
+      case OP.EQ: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a === b ? 1 : 0); break; }
+      case OP.NOT: vmPush(stack, vmPop(stack) === 0 ? 1 : 0); break;
+      case OP.AND: { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a !== 0 && b !== 0 ? 1 : 0); break; }
+      case OP.OR:  { const b = vmPop(stack); const a = vmPop(stack); vmPush(stack, a !== 0 || b !== 0 ? 1 : 0); break; }
 
-      case OP.JMP: { const rel = i8(readOperand()); state.pc += rel; break; }
-      case OP.JZ:  { const rel = i8(readOperand()); if (pop() === 0) state.pc += rel; break; }
-      case OP.JNZ: { const rel = i8(readOperand()); if (pop() !== 0) state.pc += rel; break; }
+      case OP.JMP: { const rel = i8(genome[state.pc % L]); state.pc++; state.pc += rel; break; }
+      case OP.JZ:  { const rel = i8(genome[state.pc % L]); state.pc++; if (vmPop(stack) === 0) state.pc += rel; break; }
+      case OP.JNZ: { const rel = i8(genome[state.pc % L]); state.pc++; if (vmPop(stack) !== 0) state.pc += rel; break; }
 
-      case OP.SENSE_GRAD_X:{ const idx = m6(readOperand()); push(sensors.gradX[idx]); break; }
-      case OP.SENSE_GRAD_Y:{ const idx = m6(readOperand()); push(sensors.gradY[idx]); break; }
-      case OP.SENSE_DENSITY:{ const idx = m6(readOperand()); push(sensors.density[idx]); break; }
-      case OP.SELF_ENERGY: push(self.energy); break;
-      case OP.SELF_RESERVE:{ const idx = m6(readOperand()); push(self.reserve[idx]); break; }
-      case OP.SELF_VX:     push(self.vx); break;
-      case OP.SELF_VY:     push(self.vy); break;
-      case OP.SENSE_CRE_DX:   push(sensors.creatureDx); break;
-      case OP.SENSE_CRE_DY:   push(sensors.creatureDy); break;
-      case OP.SENSE_CRE_DIST: push(sensors.creatureDist); break;
-      case OP.SENSE_CRE_MASS: push(sensors.creatureMass); break;
-      case OP.SELF_MASS:      push(self.mass); break;
-      case OP.SENSE_LIGHT:    push(sensors.light); break;
-      case OP.SELF_BIOMASS:   push(self.biomass); break;
-      case OP.SELF_AGE:       push(self.age); break;
-      case OP.SELF_GLUCOSE:   push(self.glucose); break;
-      case OP.SELF_O2:        push(self.o2); break;
-      case OP.SELF_FATTY:     push(self.fattyAcid); break;
-      case OP.SELF_AMINO:     push(self.aminoAcid); break;
-      case OP.SELF_WASTE:     push(self.waste); break;
-      case OP.SENSE_WALL_X:   push(sensors.wallX); break;
-      case OP.SENSE_WALL_Y:   push(sensors.wallY); break;
-      case OP.SENSE_HEAD_X:   push(sensors.headX); break;
-      case OP.SENSE_HEAD_Y:   push(sensors.headY); break;
-      case OP.SENSE_TEMP:     push(sensors.temp); break;
+      case OP.SENSE_GRAD_X:  { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, sensors.gradX[i]); break; }
+      case OP.SENSE_GRAD_Y:  { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, sensors.gradY[i]); break; }
+      case OP.SENSE_DENSITY: { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, sensors.density[i]); break; }
+      case OP.SELF_ENERGY:   vmPush(stack, self.energy); break;
+      case OP.SELF_RESERVE:  { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, self.reserve[i]); break; }
+      case OP.SELF_VX:       vmPush(stack, self.vx); break;
+      case OP.SELF_VY:       vmPush(stack, self.vy); break;
+      case OP.SENSE_CRE_DX:   vmPush(stack, sensors.creatureDx); break;
+      case OP.SENSE_CRE_DY:   vmPush(stack, sensors.creatureDy); break;
+      case OP.SENSE_CRE_DIST: vmPush(stack, sensors.creatureDist); break;
+      case OP.SENSE_CRE_MASS: vmPush(stack, sensors.creatureMass); break;
+      case OP.SELF_MASS:      vmPush(stack, self.mass); break;
+      case OP.SENSE_LIGHT:    vmPush(stack, sensors.light); break;
+      case OP.SELF_BIOMASS:   vmPush(stack, self.biomass); break;
+      case OP.SELF_AGE:       vmPush(stack, self.age); break;
+      case OP.SELF_GLUCOSE:   vmPush(stack, self.glucose); break;
+      case OP.SELF_O2:        vmPush(stack, self.o2); break;
+      case OP.SELF_FATTY:     vmPush(stack, self.fattyAcid); break;
+      case OP.SELF_AMINO:     vmPush(stack, self.aminoAcid); break;
+      case OP.SELF_WASTE:     vmPush(stack, self.waste); break;
+      case OP.SENSE_WALL_X:   vmPush(stack, sensors.wallX); break;
+      case OP.SENSE_WALL_Y:   vmPush(stack, sensors.wallY); break;
+      case OP.SENSE_HEAD_X:   vmPush(stack, sensors.headX); break;
+      case OP.SENSE_HEAD_Y:   vmPush(stack, sensors.headY); break;
+      case OP.SENSE_TEMP:     vmPush(stack, sensors.temp); break;
 
       case OP.THRUST: {
-        const ay = pop();
-        const ax = pop();
+        const ay = vmPop(stack);
+        const ax = vmPop(stack);
         out.thrustX += ax;
         out.thrustY += ay;
         break;
       }
       case OP.EXCRETE: {
-        const idx = m6(readOperand());
-        const amt = Math.max(0, pop());
-        out.excrete[idx] += amt;
+        const idx = m6(genome[state.pc % L]); state.pc++;
+        out.excrete[idx] += Math.max(0, vmPop(stack));
         break;
       }
       case OP.REPRODUCE:  out.reproduce  = true; break;
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
-      case OP.INGEST:     { const idx = m6(readOperand()); out.ingestMaterials[idx] = 1; break; }
-      case OP.TURN:       out.turn      += pop(); break;
+      case OP.INGEST:     { const idx = m6(genome[state.pc % L]); state.pc++; out.ingestMaterials[idx] = 1; break; }
+      case OP.TURN:       out.turn      += vmPop(stack); break;
       case OP.HALT:
         return;
 
@@ -380,6 +394,11 @@ export function mutateGenome(
   genome: Uint8Array,
   rng: () => number = Math.random,
 ): Uint8Array {
+  // Per-byte: roll DELETE first; if not deleted, optionally insert a
+  // random byte just before it, then optionally point-mutate the byte
+  // itself. A deleted byte short-circuits the rest of the slot, so
+  // delete and insert never both fire on the same position.
+  // Plus one trailing-insert chance so the genome can grow at the end.
   const out: number[] = [];
   for (let i = 0; i < genome.length; i++) {
     if (rng() < P_DELETE) continue;

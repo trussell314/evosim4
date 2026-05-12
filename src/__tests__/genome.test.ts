@@ -182,6 +182,28 @@ describe("VM control flow", () => {
   });
 });
 
+describe("VM scratch registers (LOAD / STORE)", () => {
+  it("STORE pops, LOAD pushes from the same register", () => {
+    expect(exec([OP.PUSH8, 42, OP.STORE, 7, OP.LOAD, 7, OP.HALT]).state.stack).toEqual([42]);
+  });
+  it("registers persist across runTick calls", () => {
+    const state = newVMState();
+    const out = newOutputs();
+    runTick(new Uint8Array([OP.PUSH8, 99, OP.STORE, 3, OP.HALT]), state, makeSensors(), makeSelf(), 32, out);
+    // Reset stack + pc to simulate a fresh tick; regs deliberately persist.
+    state.stack.length = 0; state.pc = 0;
+    runTick(new Uint8Array([OP.LOAD, 3, OP.HALT]), state, makeSensors(), makeSelf(), 32, out);
+    expect(state.stack).toEqual([99]);
+  });
+  it("LOAD from an unset register reads zero", () => {
+    expect(exec([OP.LOAD, 5, OP.HALT]).state.stack).toEqual([0]);
+  });
+  it("register index wraps mod 16", () => {
+    // 7 % 16 == 7; 23 % 16 == 7 -- both should hit the same cell.
+    expect(exec([OP.PUSH8, 11, OP.STORE, 23, OP.LOAD, 7, OP.HALT]).state.stack).toEqual([11]);
+  });
+});
+
 describe("VM sensors", () => {
   it("SENSE_GRAD_X/Y read by material index", () => {
     expect(exec([OP.SENSE_GRAD_X, 3, OP.HALT], { sensors: makeSensors({ gradX: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
