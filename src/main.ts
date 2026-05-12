@@ -50,6 +50,9 @@ refreshActiveDisasm();
 // bottom wall sits PHYLO_STRIP_H pixels above the canvas bottom so cells
 // never overlap the timeline.
 const PHYLO_STRIP_H = 70;
+// Rolling phylogeny window. Older history scrolls off the left edge so
+// recent events don't compress into a sliver as the sim runs forever.
+const PHYLO_WINDOW_SEC = 180;
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -76,10 +79,8 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener("scroll", resize);
 }
 
-canvas.addEventListener("click", (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+// Linear scan over creatures; bounded by MAX_CREATURES so cost is small.
+function findCellAt(x: number, y: number): number {
   let best = -1;
   let bestSq = Infinity;
   for (let i = 0; i < world.creatures.length; i++) {
@@ -90,11 +91,46 @@ canvas.addEventListener("click", (e) => {
     const reach = (c.r + 8) * (c.r + 8);
     if (d < bestSq && d < reach) { bestSq = d; best = i; }
   }
+  return best;
+}
+canvas.addEventListener("click", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const best = findCellAt(e.clientX - rect.left, e.clientY - rect.top);
   if (best >= 0) {
     selectedIdx = best;
     refreshActiveDisasm();
   }
 });
+
+// Hover tooltip: a small floating card with the cell's age, ATP, mass,
+// biomass, species color, and genome length. Skim cells without losing
+// the selected one in the inspector.
+const tooltip = document.createElement("div");
+tooltip.style.cssText =
+  "position:fixed;pointer-events:none;display:none;z-index:9;" +
+  "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #356;" +
+  "padding:4px 6px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "border-radius:3px;white-space:pre;";
+document.body.appendChild(tooltip);
+canvas.addEventListener("mousemove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const idx = findCellAt(e.clientX - rect.left, e.clientY - rect.top);
+  if (idx < 0) { tooltip.style.display = "none"; return; }
+  const c = world.creatures[idx];
+  let mass = c.energy;
+  for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
+  for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
+  const age = formatAge(Math.max(0, world.t - c.bornAt));
+  tooltip.innerHTML =
+    `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
+    `age=${age}\n` +
+    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
+    `genome=${c.genome.length}b`;
+  tooltip.style.display = "block";
+  tooltip.style.left = `${e.clientX + 12}px`;
+  tooltip.style.top = `${e.clientY + 12}px`;
+});
+canvas.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
 
 // Dramatic depth: near particles are crisp and full-color, deep ones get
 // heavy blur, low alpha, and shift toward the water-color background --
@@ -228,8 +264,11 @@ function drawPhylogeny(): void {
   ctx.lineTo(w, stripY + 0.5);
   ctx.stroke();
 
+  // Rolling window: only the last PHYLO_WINDOW_SEC of history is shown
+  // so recent events stay legible. Species whose lifespan starts before
+  // the window clip at the left edge (handled naturally by tx()).
   const tNow = world.t;
-  const tMin = 0; // show full history; extinct lineages stay as fixed segments
+  const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
   const span = Math.max(0.001, tNow - tMin);
   const padTop = 14;
   const padBot = 6;
@@ -322,7 +361,7 @@ function drawPhylogeny(): void {
   ctx.fillStyle = "#7fb8c8";
   ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
   ctx.fillText(
-    `phylogeny  t=0..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)`,
+    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)`,
     8,
     stripY + 11,
   );
