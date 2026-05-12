@@ -264,6 +264,12 @@ const VM_INSTR_BUDGET = 32;
 const MASS_PER_GENOME_BYTE = 1.5;
 const PARTICLE_DENSITY_PER_AREA = 16500 / (800 * 600);
 const PARTICLE_SPAWN_RATIO = 90 / 550;
+// Hard cap on the per-second spawn rate. Without this the world tries
+// to fill thousands of particles per second from the top of the water,
+// which looks like a wall of stuff falling at startup. Refill after
+// eating still works because pop * eat-rate stays well under this cap
+// for normal populations (~20 cells eating ~3/sec = 60/sec).
+const MAX_SPAWN_PER_SEC = 60;
 
 // Recompute every world field that scales with width/height. Called on
 // resize so a window expansion actually fills the new space with food
@@ -274,7 +280,7 @@ export function resizeWorld(world: World, width: number, height: number): void {
   world.surfaceY = world.height * SURFACE_Y_FRAC;
   world.aerationRate = world.width * AERATION_PER_PX;
   world.particleTarget = Math.max(100, Math.round(world.width * world.height * PARTICLE_DENSITY_PER_AREA));
-  world.particleSpawnRate = Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO);
+  world.particleSpawnRate = Math.min(MAX_SPAWN_PER_SEC, Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO));
   resizePheromone(world);
 }
 
@@ -530,7 +536,7 @@ export function createWorld(width: number, height: number): World {
     particles: [],
     creatures: [],
     particleTarget,
-    particleSpawnRate: Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO),
+    particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     extinctionCount: 0,
     gravity: 220,
     drag: 0.6,
