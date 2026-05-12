@@ -12,7 +12,7 @@ const ctx = canvas.getContext("2d")!;
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
-  "border-radius:4px;font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "border-radius:4px;font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;" +
   "max-height:80vh;overflow:hidden;";
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
