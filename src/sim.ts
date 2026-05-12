@@ -591,7 +591,7 @@ export function createWorld(width: number, height: number): World {
     pheromoneCols: 0,
     pheromoneRows: 0,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
-    collisionIters: 2,
+    collisionIters: 1,
     species: new Map(),
     phylogenyEvents: [],
     nextSpeciesLane: 0,
@@ -1922,6 +1922,11 @@ export function updateCreatureRadius(c: Creature): void {
 
 const GRID_CELL_SIZE = 12;
 const COLLISION_BUCKETS: number[][] = [];
+// Indices of buckets that received at least one particle this pass.
+// Lets the resolve loop iterate only occupied cells (~30% of total at
+// typical density) instead of every cell in the grid.
+let COLLISION_NONEMPTY = new Int32Array(0);
+let COLLISION_NONEMPTY_N = 0;
 let COLLISION_MASS = new Float64Array(0);
 
 // Creature spatial grid -- shared across sensor lookup, predation/engulf
@@ -2057,34 +2062,42 @@ function resolveCollisions(world: World): void {
 
   while (COLLISION_BUCKETS.length < cellCount) COLLISION_BUCKETS.push([]);
   if (COLLISION_MASS.length < n) COLLISION_MASS = new Float64Array(n * 2);
+  if (COLLISION_NONEMPTY.length < cellCount) COLLISION_NONEMPTY = new Int32Array(cellCount * 2);
 
   for (let i = 0; i < n; i++) COLLISION_MASS[i] = mass(ps[i]);
 
   for (let pass = 0; pass < world.collisionIters; pass++) {
-    for (let i = 0; i < cellCount; i++) COLLISION_BUCKETS[i].length = 0;
+    // Clear only the buckets we filled last pass, not the whole grid.
+    for (let i = 0; i < COLLISION_NONEMPTY_N; i++) COLLISION_BUCKETS[COLLISION_NONEMPTY[i]].length = 0;
+    COLLISION_NONEMPTY_N = 0;
     for (let pi = 0; pi < n; pi++) {
       const p = ps[pi];
       let cx = Math.floor(p.x / cellSize);
       let cy = Math.floor(p.y / cellSize);
       if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
       if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
-      COLLISION_BUCKETS[cy * cols + cx].push(pi);
+      const idx = cy * cols + cx;
+      const bucket = COLLISION_BUCKETS[idx];
+      if (bucket.length === 0) {
+        COLLISION_NONEMPTY[COLLISION_NONEMPTY_N++] = idx;
+      }
+      bucket.push(pi);
     }
 
-    for (let cy = 0; cy < rows; cy++) {
-      for (let cx = 0; cx < cols; cx++) {
-        const cell = COLLISION_BUCKETS[cy * cols + cx];
-        const cl = cell.length;
-        if (cl === 0) continue;
-        for (let i = 0; i < cl; i++) {
-          const ai = cell[i];
-          for (let j = i + 1; j < cl; j++) resolvePair(ps, ai, cell[j], e);
-        }
-        checkNeighborPairs(ps, cell, cx + 1, cy,     cols, rows, e);
-        checkNeighborPairs(ps, cell, cx - 1, cy + 1, cols, rows, e);
-        checkNeighborPairs(ps, cell, cx,     cy + 1, cols, rows, e);
-        checkNeighborPairs(ps, cell, cx + 1, cy + 1, cols, rows, e);
+    for (let k = 0; k < COLLISION_NONEMPTY_N; k++) {
+      const idx = COLLISION_NONEMPTY[k];
+      const cell = COLLISION_BUCKETS[idx];
+      const cl = cell.length;
+      const cy = (idx / cols) | 0;
+      const cx = idx - cy * cols;
+      for (let i = 0; i < cl; i++) {
+        const ai = cell[i];
+        for (let j = i + 1; j < cl; j++) resolvePair(ps, ai, cell[j], e);
       }
+      checkNeighborPairs(ps, cell, cx + 1, cy,     cols, rows, e);
+      checkNeighborPairs(ps, cell, cx - 1, cy + 1, cols, rows, e);
+      checkNeighborPairs(ps, cell, cx,     cy + 1, cols, rows, e);
+      checkNeighborPairs(ps, cell, cx + 1, cy + 1, cols, rows, e);
     }
   }
 }
