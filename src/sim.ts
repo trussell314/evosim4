@@ -833,6 +833,16 @@ export interface World {
   // never appear above the rendered water line.
   surfaceWaveAmp: number;
   aerationRate: number;
+  // Atmospheric composition tracked as a single mole pool (in the same
+  // mass units the cell pools use). Gas particles that escape past
+  // the surface dump their molecules in here; aeration() pulls
+  // bubble composition from these mole fractions, so the loop is
+  // mass-conserving and creates feedback (CO2-vented world ->
+  // CO2-rich bubbles re-entering -> photoautotrophs near the surface
+  // benefit). The atmosphere has a finite buffer -- if it gets
+  // depleted (every gas dissolved or trapped in cells) aeration
+  // slows; we don't conjure new mass.
+  atmosphere: Molecules;
   // Water temperature profile. The surface is warmer (sunlight), the
   // bottom is colder. Horizontal patches drift slowly via tempPatch*,
   // standing in for thermal convection without simulating it.
@@ -1647,6 +1657,21 @@ const SPLASH_GAIN = 1.5;
 const AERATION_PER_PX = 0.005;
 const AERATION_O2_PER_BUBBLE = 4;
 const AERATION_BUBBLE_DROP_SPEED = 14;
+// Total mass per bubble (drawn from the atmosphere). Composition is
+// sampled from atmospheric mole fractions, so a CO2-rich atmosphere
+// yields CO2-rich bubbles (and O2-depleted ones).
+const AERATION_MASS_PER_BUBBLE = AERATION_O2_PER_BUBBLE;
+// Starting atmospheric inventory. Earthlike: mostly O2, trace CO2,
+// nothing else. Large enough that early bubble composition is stable;
+// not so large that long runs can't shift it via cellular excretion.
+const ATMOSPHERE_INIT_O2 = 8000;
+const ATMOSPHERE_INIT_CO2 = 200;
+function initialAtmosphere(): Molecules {
+  const a = emptyMolecules();
+  a.o2 = ATMOSPHERE_INIT_O2;
+  a.co2 = ATMOSPHERE_INIT_CO2;
+  return a;
+}
 
 // Pheromone field: coarse grid cell size, per-tick decay rate, and
 // neighbor-blend (diffusion) fraction. Tuned so a single big emit
@@ -2149,6 +2174,7 @@ export function createWorld(width: number, height: number): World {
     surfaceY: height * SURFACE_Y_FRAC,
     surfaceWaveAmp: 14,
     aerationRate: width * AERATION_PER_PX,
+    atmosphere: initialAtmosphere(),
     tempSurface: 28,
     tempBottom: 12,
     tempPatchAmp: 3,
@@ -2937,10 +2963,29 @@ function aerate(world: World, dt: number): void {
   const expected = world.aerationRate * dt * (0.5 + act);
   let n = Math.floor(expected);
   if (Math.random() < expected - n) n++;
+  // Compute current atmospheric composition (mole fractions). Bubbles
+  // pick up the same fractions, scaled to AERATION_MASS_PER_BUBBLE
+  // total. If the atmosphere is depleted (zero total), aeration
+  // stalls -- we don't conjure new mass.
+  const atm = world.atmosphere;
+  let totalAtm = 0;
+  for (const k of MOLECULE_IDS) totalAtm += atm[k];
+  if (totalAtm <= 0) return;
   for (let i = 0; i < n && world.particles.length < world.particleTarget; i++) {
     const r = 1 + Math.random() * 0.8;
+    // Pull at most what's available; bubble may be smaller than the
+    // nominal mass when the atmosphere is thin.
+    const want = Math.min(AERATION_MASS_PER_BUBBLE, totalAtm);
     const mol = emptyMolecules();
-    mol.o2 = AERATION_O2_PER_BUBBLE;
+    let actualPulled = 0;
+    for (const k of MOLECULE_IDS) {
+      const share = atm[k] / totalAtm;
+      const take = want * share;
+      mol[k] = take;
+      atm[k] -= take;
+      actualPulled += take;
+    }
+    totalAtm -= actualPulled;
     pushParticle(world, {
       x: Math.random() * world.width,
       // Just below the surface so the wall-escape pass doesn't immediately
@@ -2954,6 +2999,7 @@ function aerate(world: World, dt: number): void {
       material: "gas",
       molecules: mol,
     });
+    if (totalAtm <= 0) break;
   }
 }
 
@@ -4586,11 +4632,20 @@ function resolvePairSoa(
 }
 
 function applyWalls(world: World): void {
-  // Gas particles that drift up past the (wavy) water surface escape to
-  // the atmosphere -- splice them out instead of clamping.
+  // Gas particles that drift up past the (wavy) water surface escape
+  // to the atmosphere. Dump their molecules into world.atmosphere on
+  // the way out so the loop is mass-conserving and aeration can later
+  // re-introduce them as bubble contents.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const p = world.particles[i];
     if (p.material === "gas" && p.y - p.r < surfaceYAt(world, p.x)) {
+      const pm = p.molecules;
+      if (pm) {
+        for (const k of MOLECULE_IDS) {
+          const v = pm[k];
+          if (v > 0) world.atmosphere[k] += v;
+        }
+      }
       removeParticleAt(world, i);
     }
   }
@@ -4646,7 +4701,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:3:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:4:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -4699,6 +4754,7 @@ interface SavedWorld {
   anchorGenome: number[];
   liveLineageRoots: number[];
   obstacles: Obstacle[];
+  atmosphere?: Partial<Molecules>;
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
@@ -4782,6 +4838,7 @@ export function serializeWorld(w: World): string {
     extinctionCount: w.extinctionCount,
     founderTarget: w.founderTarget,
     dayPhase: w.dayPhase,
+    atmosphere: { ...w.atmosphere },
     disturbanceIntensity: w.disturbanceIntensity,
     disturbanceStartedAt: w.disturbanceStartedAt,
     disturbanceUntil: w.disturbanceUntil,
@@ -4879,6 +4936,10 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
   world.liveLineageRoots = new Set(saved.liveLineageRoots);
   world.obstacles = saved.obstacles;
+  if (saved.atmosphere) {
+    const atm = world.atmosphere;
+    for (const k of MOLECULE_IDS) atm[k] = saved.atmosphere[k] ?? 0;
+  }
   let maxLane = -1;
   for (const ss of saved.species) {
     if (ss.lane > maxLane) maxLane = ss.lane;
