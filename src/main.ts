@@ -1,6 +1,6 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
-import { disassemble, summarizeGenome, OP } from "./genome";
+import { disassemble, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -114,15 +114,38 @@ let viewOffsetY = 0;
 // totally different creature on the next tick.
 let selectedCell: Creature | null = null;
 let activeDisasm = "";
-let activeSummary = "";
 function refreshActiveDisasm(): void {
-  if (selectedCell) {
-    activeDisasm = disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED);
-    activeSummary = summarizeGenome(selectedCell.genome, MATERIAL_IDS_ORDERED).verdict;
-  } else {
-    activeDisasm = "";
-    activeSummary = "";
+  activeDisasm = selectedCell
+    ? formatDisasmColumns(disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED), DISASM_COL_LINES)
+    : "";
+}
+// Width budget for the disasm body. Higher = more columns. Tuned to
+// look right against the 9px monospace font in EXPANDED_FONT.
+const DISASM_COL_LINES = 12;
+
+function formatDisasmColumns(disasm: string, colLines: number): string {
+  // Lay out disasm lines in a fixed-rows-per-column grid, column-major.
+  // Each visual row contains one line from each column, padded to the
+  // widest line of the entire disasm so columns align.
+  const lines = disasm ? disasm.split("\n") : [];
+  if (lines.length === 0) return "";
+  const ncols = Math.max(1, Math.ceil(lines.length / colLines));
+  let maxLen = 0;
+  for (const ln of lines) if (ln.length > maxLen) maxLen = ln.length;
+  const gutter = 2;
+  const colWidth = maxLen + gutter;
+  const out: string[] = [];
+  for (let row = 0; row < colLines; row++) {
+    const parts: string[] = [];
+    for (let col = 0; col < ncols; col++) {
+      const idx = col * colLines + row;
+      if (idx >= lines.length) break;
+      parts.push(lines[idx].padEnd(col === ncols - 1 ? 0 : colWidth));
+    }
+    if (parts.length === 0) continue;
+    out.push(parts.join(""));
   }
+  return out.join("\n");
 }
 refreshActiveDisasm();
 
@@ -809,25 +832,33 @@ function drawGenomeStats(): void {
   ctx.lineWidth = 1;
   ctx.strokeRect(panelX + 0.5, panelY + 0.5, GS_PANEL_W - 1, panelH - 1);
 
-  ctx.fillStyle = "#9ee";
-  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.fillText(
-    `genome size  n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`,
-    panelX + 6, panelY + 4,
-  );
-
   // Minimize/maximize toggle in the top-right of the panel header.
+  // Draw the toggle BEFORE the header text so the text can be width-
+  // capped to end before the toggle's left edge (otherwise the text
+  // grows long enough to draw through the toggle box -- visible as
+  // "max=N[+]" overlap).
   const tw = 16, th = 14;
   const tx = panelX + GS_PANEL_W - tw - 4;
   const ty = panelY + 3;
   gsToggleRect = { x: tx, y: ty, w: tw, h: th };
   ctx.strokeStyle = "#9ee";
   ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
+  ctx.fillStyle = "#9ee";
+  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textBaseline = "top";
   ctx.textAlign = "center";
   ctx.fillText(gsMinimized ? "+" : "–", tx + tw / 2, ty + 2);
   ctx.textAlign = "left";
+
+  // Header text, truncated to leave room for the toggle.
+  const fullHdr = `genome size  n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`;
+  const headerBudget = tx - (panelX + 6) - 4;
+  let hdr = fullHdr;
+  if (ctx.measureText(hdr).width > headerBudget) {
+    while (hdr.length > 4 && ctx.measureText(hdr + "…").width > headerBudget) hdr = hdr.slice(0, -1);
+    hdr = hdr + "…";
+  }
+  ctx.fillText(hdr, panelX + 6, panelY + 4);
 
   if (gsMinimized) return;
 
@@ -1274,9 +1305,7 @@ function updateInspector(): void {
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} bio=${fmt(m.biomass)}\n` +
     `stomach: ${reserves}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
-    `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]\n` +
-    "—\n" +
-    activeSummary;
+    `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
   disasmBody.textContent = activeDisasm;
 }
 
@@ -1437,108 +1466,185 @@ function updateDiagBar(): void {
 }
 
 // Periodic genome-analysis dump. Once per ANALYSIS_INTERVAL_SEC of
-// sim-time, snapshot the live population: group by speciesKey, tag
-// each with its summarized capabilities, compare against the parent
-// species (from phylogenyEvents) to flag what the mutation changed,
-// and prepend a block to the right-side panel.
+// sim-time, snapshot the live population, describe each top species
+// in plain prose, and prepend a block to the right-side panel.
 const ANALYSIS_INTERVAL_SEC = 60;
 let lastAnalysisT = -Infinity;
 function maybeAnalyzeGenomes(): void {
   if (world.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
   lastAnalysisT = world.t;
   if (world.creatures.length === 0) return;
-  // Group live cells by speciesKey -> count + sample genome.
   const byKey = new Map<string, { count: number; genome: Uint8Array; sp: Species | undefined }>();
   for (const c of world.creatures) {
     const e = byKey.get(c.speciesKey);
     if (e) e.count++;
     else byKey.set(c.speciesKey, { count: 1, genome: c.genome, sp: world.species.get(c.speciesKey) });
   }
-  // Sort by population desc, take top 8 so the panel stays readable.
   const ranked = Array.from(byKey.entries())
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 8);
-  // Build a quick parent->latest-event map so we can classify each
-  // species as "founder", "first descendant", or "later mutation."
   const parentOf = new Map<string, string>();
   for (const ev of world.phylogenyEvents) parentOf.set(ev.to, ev.from);
 
-  const lines: string[] = [];
-  lines.push(`t=${formatAge(world.t)}  pop=${world.creatures.length}  species_alive=${byKey.size}`);
+  const blocks: string[] = [];
+  blocks.push(`t=${formatAge(world.t)}, pop=${world.creatures.length}, ${byKey.size} live species`);
   for (const [key, info] of ranked) {
-    const summary = summarizeGenome(info.genome, MATERIAL_IDS_ORDERED);
     const parentKey = parentOf.get(key);
-    let mutDesc = "";
-    let verdict = "neutral";
-    if (parentKey) {
-      const parentSp = world.species.get(parentKey);
-      // Sample a representative parent genome from a live parent cell
-      // if any survive; otherwise we can only describe what current
-      // descendant looks like.
-      const parentLive = world.creatures.find((c) => c.speciesKey === parentKey);
-      const parentGenome = parentLive ? parentLive.genome : undefined;
-      if (parentGenome) {
-        mutDesc = diffGenomeOps(parentGenome, info.genome);
-      }
-      // Beneficial / harmful heuristic: child species has more living
-      // members than its parent species (and parent is still alive),
-      // or has its own children -- counts as beneficial. If parent is
-      // alive but vastly outnumbers child, harmful.
+    const parentLive = parentKey ? world.creatures.find((c) => c.speciesKey === parentKey) : undefined;
+    let verdict: "founder" | "thriving" | "stable" | "struggling" = "stable";
+    if (!parentKey) verdict = "founder";
+    else {
       const pCount = parentLive
         ? Array.from(byKey.values()).find((v) => v.sp?.key === parentKey)?.count ?? 0
         : 0;
-      if (info.count > pCount * 1.5) verdict = "beneficial";
-      else if (parentSp && parentSp.alive > 0 && pCount > info.count * 3) verdict = "harmful";
-    } else {
-      verdict = "founder";
+      if (info.count > Math.max(2, pCount * 1.5)) verdict = "thriving";
+      else if (parentLive && pCount > info.count * 3) verdict = "struggling";
     }
-    const shortKey = key.slice(0, 6);
     const ageHint = info.sp ? formatAge(Math.max(0, world.t - info.sp.firstSeen)) : "?";
-    const caps = summary.capabilities.slice(0, 4).join(", ");
-    lines.push(
-      `  ${info.count.toString().padStart(3)}x ${shortKey}  age=${ageHint}  ` +
-      `[${verdict}]\n    bytes=${summary.totalBytes} ops=${summary.executableOps} ` +
-      `junk=${summary.unknownBytes}  ${caps}` +
-      (mutDesc ? `\n    mut: ${mutDesc}` : ""),
-    );
+    const head = `${info.count} cell${info.count === 1 ? "" : "s"} • age ${ageHint} • ${verdict}`;
+    const prose = describeGenomeProse(info.genome, MATERIAL_IDS_ORDERED);
+    const mut = parentLive ? mutationProse(parentLive.genome, info.genome) : "";
+    blocks.push("  " + head + "\n  " + prose + (mut ? "\n  Change from parent: " + mut : ""));
   }
-  // Prepend the new block so newest is on top; cap the visible log.
   const newBlock = document.createElement("div");
-  newBlock.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;";
-  newBlock.textContent = lines.join("\n");
+  newBlock.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
+  newBlock.textContent = blocks.join("\n\n");
   analysisBody.insertBefore(newBlock, analysisBody.firstChild);
   while (analysisBody.children.length > 20) analysisBody.removeChild(analysisBody.lastChild!);
 }
 
-// Diff two genomes (parent vs child) into a short human-readable
-// description of what changed: op-name level. Ignores trivial byte-
-// shifts; reports added / removed action ops + sensor ops + amp counts.
-function diffGenomeOps(a: Uint8Array, b: Uint8Array): string {
-  const counts = (g: Uint8Array): Record<string, number> => {
-    const c: Record<string, number> = {};
-    for (let i = 0; i < g.length; i++) {
-      const op = g[i];
-      const name = OP_NAME_BY_BYTE[op];
-      if (name) c[name] = (c[name] ?? 0) + 1;
+// Walk a genome and describe it in plain prose. Same fact extraction
+// the disasm uses, but emitted as a 1-2 sentence English summary that
+// a human can read at a glance.
+function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<string>): string {
+  let thrust = false, turn = false, reproduce = false;
+  let predate = false, engulf = false, emit = false, adhere = false;
+  let repair = false, selfModifies = false;
+  let hasJump = false, hasCmp = false;
+  let synthBio = false, synthAA = false, synthFA = false, synthEnz = false, synthChl = false;
+  const ingest = new Set<number>();
+  const excrete = new Set<number>();
+  const sensors = new Set<string>();
+  let i = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    const operandLen = (op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ
+      || op === OP.INGEST || op === OP.EXCRETE || op === OP.SELF_RESERVE) ? 1 : 0;
+    switch (op) {
+      case OP.THRUST: thrust = true; break;
+      case OP.TURN: turn = true; break;
+      case OP.REPRODUCE: reproduce = true; break;
+      case OP.PREDATE: predate = true; break;
+      case OP.ENGULF: engulf = true; break;
+      case OP.EMIT: emit = true; break;
+      case OP.ADHERE: adhere = true; break;
+      case OP.REPAIR: repair = true; break;
+      case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL: selfModifies = true; break;
+      case OP.SYNTH_BIO: synthBio = true; break;
+      case OP.SYNTH_AA: synthAA = true; break;
+      case OP.SYNTH_FA: synthFA = true; break;
+      case OP.SYNTH_ENZ: synthEnz = true; break;
+      case OP.SYNTH_CHL: synthChl = true; break;
+      case OP.INGEST: ingest.add((genome[i + 1] ?? 0) % 6); break;
+      case OP.EXCRETE: excrete.add((genome[i + 1] ?? 0) % 6); break;
+      case OP.JZ: case OP.JNZ: hasJump = true; break;
+      case OP.LT: case OP.GT: case OP.EQ: case OP.NOT: case OP.AND: case OP.OR: hasCmp = true; break;
+      case OP.SENSE_GRAD_X: case OP.SENSE_GRAD_Y: sensors.add("food gradient"); break;
+      case OP.SENSE_DENSITY: sensors.add("crowding"); break;
+      case OP.SENSE_LIGHT: sensors.add("light"); break;
+      case OP.SENSE_TEMP: sensors.add("temperature"); break;
+      case OP.SENSE_PHEROMONE: sensors.add("pheromone"); break;
+      case OP.SENSE_WALL_X: case OP.SENSE_WALL_Y: sensors.add("walls"); break;
+      case OP.SENSE_HEAD_X: case OP.SENSE_HEAD_Y: sensors.add("heading"); break;
+      case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
+      case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS: sensors.add("other cells"); break;
     }
+    i += 1 + operandLen;
+  }
+  const gated = hasJump && hasCmp;
+  const mat = (k: number) => materialNames[k] ?? String(k);
+
+  const parts: string[] = [];
+  // Trophic mode
+  if (predate || engulf) parts.push("Hunts other cells.");
+  else if (ingest.size > 0) {
+    const list = Array.from(ingest).map(mat).join(" + ");
+    parts.push(`Eats ${list}` + (thrust ? " — actively swims toward it." : "; doesn't pursue."));
+  } else if (thrust) parts.push("Swims but doesn't eat anything.");
+  else parts.push("Drifts passively; no food intake.");
+  // Synthesis
+  const synth: string[] = [];
+  if (synthAA && synthFA && synthBio) synth.push("builds full biomass");
+  else {
+    if (synthBio) synth.push("makes biomass");
+    if (synthAA) synth.push("amino acids");
+    if (synthFA) synth.push("fatty acids");
+  }
+  if (synthChl) synth.push("makes chlorophyll (photosynthesizes)");
+  if (synthEnz) synth.push("makes enzymes");
+  if (synth.length > 0) parts.push(`Internally ${synth.join(", ")}.`);
+  else parts.push("No biosynthesis ops — can't grow new structure.");
+  // Reproduction
+  if (reproduce) parts.push(gated ? "Divides when conditions are met." : "Divides reflexively every tick (lots of stillbirths).");
+  else parts.push("Has no REPRODUCE op — sterile.");
+  // Extras
+  const extras: string[] = [];
+  if (repair) extras.push("repairs DNA");
+  if (emit) extras.push("emits pheromone");
+  if (adhere) extras.push("forms colonies");
+  if (excrete.size > 0) extras.push("excretes " + Array.from(excrete).map(mat).join("/"));
+  if (selfModifies) extras.push("rewrites its own genome");
+  if (turn && !thrust) extras.push("turns in place");
+  if (extras.length > 0) parts.push("Also " + extras.join(", ") + ".");
+  // Sensors
+  if (sensors.size > 0) {
+    parts.push(`Senses ${Array.from(sensors).join(", ")}${gated ? " and gates behavior on it" : " but doesn't gate behavior on it"}.`);
+  } else {
+    parts.push("Blind — no sensor reads.");
+  }
+  return parts.join(" ");
+}
+
+// Diff parent vs child as a plain sentence: gained / lost / shifted.
+function mutationProse(parent: Uint8Array, child: Uint8Array): string {
+  const countOps = (g: Uint8Array): Record<number, number> => {
+    const c: Record<number, number> = {};
+    for (let i = 0; i < g.length; i++) c[g[i]] = (c[g[i]] ?? 0) + 1;
     return c;
   };
-  const ca = counts(a), cb = counts(b);
-  const keys = new Set([...Object.keys(ca), ...Object.keys(cb)]);
-  const added: string[] = [];
-  const removed: string[] = [];
-  for (const k of keys) {
-    const da = ca[k] ?? 0, db = cb[k] ?? 0;
-    if (db > da) added.push(`+${db - da} ${k}`);
-    else if (da > db) removed.push(`-${da - db} ${k}`);
+  const a = countOps(parent), b = countOps(child);
+  const gained: string[] = [];
+  const lost: string[] = [];
+  const allOps = new Set([...Object.keys(a), ...Object.keys(b)].map(Number));
+  for (const op of allOps) {
+    const d = (b[op] ?? 0) - (a[op] ?? 0);
+    if (d === 0) continue;
+    const label = OP_PRETTY_NAME[op] ?? OP_NAME_BY_BYTE[op] ?? `byte 0x${op.toString(16)}`;
+    if (d > 0) gained.push(d === 1 ? label : `${d}x ${label}`);
+    else lost.push(-d === 1 ? label : `${-d}x ${label}`);
   }
-  const lenDiff = b.length - a.length;
+  const lenDiff = child.length - parent.length;
   const parts: string[] = [];
-  if (lenDiff !== 0) parts.push(`len${lenDiff > 0 ? "+" : ""}${lenDiff}`);
-  if (added.length) parts.push(added.join(" "));
-  if (removed.length) parts.push(removed.join(" "));
-  return parts.length ? parts.join("  ") : "(silent point mutation)";
+  if (gained.length) parts.push("gained " + gained.join(", "));
+  if (lost.length) parts.push("lost " + lost.join(", "));
+  if (lenDiff !== 0 && parts.length === 0) parts.push(`length ${lenDiff > 0 ? "+" : ""}${lenDiff} bytes`);
+  if (parts.length === 0) return "silent (point mutation only).";
+  return parts.join("; ") + ".";
 }
+
+// Op-byte to human-friendly label. Falls back to the raw OP name if
+// not listed here.
+const OP_PRETTY_NAME: Record<number, string> = {
+  [OP.THRUST]: "thrust", [OP.TURN]: "turn",
+  [OP.REPRODUCE]: "reproduce gate", [OP.REPAIR]: "DNA repair",
+  [OP.INGEST]: "ingest", [OP.EXCRETE]: "excrete",
+  [OP.PREDATE]: "predation", [OP.ENGULF]: "engulf",
+  [OP.EMIT]: "pheromone emit", [OP.ADHERE]: "adhere",
+  [OP.SYNTH_BIO]: "biomass synth", [OP.SYNTH_AA]: "amino-acid synth",
+  [OP.SYNTH_FA]: "fatty-acid synth", [OP.SYNTH_ENZ]: "enzyme synth",
+  [OP.SYNTH_CHL]: "chlorophyll synth",
+  [OP.SENSE_AMP]: "sense amp", [OP.THRUST_AMP]: "thrust amp",
+};
 
 // Reverse of OP enum: byte -> short name. Built lazily; only includes
 // ops the genome.ts OP table knows about.
