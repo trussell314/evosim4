@@ -382,11 +382,7 @@ tooltip.style.cssText =
   "padding:4px 6px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;" +
   "border-radius:3px;white-space:pre;";
 document.body.appendChild(tooltip);
-// Mousemove can fire 200-1000Hz on some devices. We coalesce per
-// requestAnimationFrame so the cell scan + tooltip rewrite happens at
-// most once per render frame.
-let pendingMouseX = -1;
-let pendingMouseY = -1;
+// Mousemove sets the lock; the per-frame flusher just re-renders.
 let pendingMouseInside = false;
 let tooltipScheduled = false;
 // Sticky-follow: once the cursor lands on a cell we capture it here,
@@ -407,15 +403,12 @@ function worldToClientY(wy: number): number {
 function flushTooltip(): void {
   tooltipScheduled = false;
   // Drop the lock if the cell died or was eaten -- its slot may be
-  // reused, but the Creature reference itself isn't put back into
-  // world.creatures, so indexOf() is the reliable liveness check.
+  // reused for a freshly-born creature, but the Creature reference
+  // itself isn't put back into world.creatures, so indexOf() is the
+  // reliable liveness check. (We DON'T re-scan for a cell under the
+  // cursor here -- that caused phantom switches when a different
+  // cell drifted under the parked cursor.)
   if (lockedCell && world.creatures.indexOf(lockedCell) < 0) lockedCell = null;
-  // If the cursor is currently over a cell, prefer that cell -- a
-  // hover always wins, so the user can re-target by pointing.
-  if (pendingMouseInside) {
-    const idx = findCellAt(pendingMouseX, pendingMouseY);
-    if (idx >= 0) lockedCell = world.creatures[idx];
-  }
   const c = lockedCell;
   if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
@@ -452,9 +445,13 @@ function flushTooltip(): void {
 canvas.addEventListener("mousemove", (e) => {
   const rect = canvas.getBoundingClientRect();
   const wpt = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
-  pendingMouseX = wpt.x;
-  pendingMouseY = wpt.y;
   pendingMouseInside = true;
+  // The hover is the only place we *switch* the lock: pointing at a
+  // cell captures it; pointing at empty water leaves the existing
+  // lock alone (so a swimming cell can drift away and we still
+  // follow it). The per-frame flusher never re-targets.
+  const hovered = findCellAt(wpt.x, wpt.y);
+  if (hovered >= 0) lockedCell = world.creatures[hovered];
   if (!tooltipScheduled) {
     tooltipScheduled = true;
     requestAnimationFrame(flushTooltip);
