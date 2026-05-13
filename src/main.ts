@@ -415,11 +415,22 @@ function flushTooltip(): void {
   for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
   const age = formatAge(Math.max(0, world.t - c.bornAt));
+  // Surface engulfed + bonded counts so the user can tell a fat
+  // single cell from a host carrying endosymbionts from an adhered
+  // pair drifting close. Only render rows when nonzero to keep
+  // the box small for typical free-swimmers.
+  const engulfed = c.contents.length;
+  const bonded = c.bonds.length;
+  const assocLine =
+    (engulfed > 0 || bonded > 0)
+      ? `\nengulfed=${engulfed}  bonded=${bonded}`
+      : "";
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${c.speciesKey.slice(0, 6)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
-    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}`;
+    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}` +
+    assocLine;
   tooltip.style.display = "block";
   // Anchor at the cell's projected screen position with edge-flipping
   // so the box never spills off the visible viewport. visualViewport
