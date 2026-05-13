@@ -1346,10 +1346,11 @@ function advanceDisturbance(world: World, dt: number): void {
 }
 
 // Lay down the world's terrain: 25 heavy rocks dropped from above
-// at random x positions. Each rock falls straight down, hits the
-// bedrock or whatever rock is already there, and stops. That's it.
-// Result: a sparse rocky sea floor with the occasional pair stacked
-// where two rocks happened to land close.
+// at random x positions. Each rock falls until it hits the bedrock
+// or another rock, then slides sideways downhill if its initial
+// contact point isn't directly under the center -- a real rock
+// perched off-center on top of another rock tips and falls further
+// rather than balancing on a knife edge.
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
@@ -1361,32 +1362,63 @@ export function generateObstacles(world: World): void {
   const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
 
   // Heightmap: top-of-surface y at each integer x column. Each
-  // landed rock updates the columns it covers, so subsequent rocks
-  // settle on top of it when their footprints overlap.
+  // landed rock updates the columns it covers using its polygon's
+  // top edge (not a circle), so subsequent rocks see the jagged
+  // silhouette they're settling against.
   const heightmap = new Float32Array(W);
   heightmap.fill(floorY);
 
   for (let i = 0; i < ROCK_COUNT; i++) {
     const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
-    const rx = baseR + Math.random() * (W - 2 * baseR);
-
-    // Find resting y: the smallest ry such that the rock's circular
-    // bottom (ry + sqrt(R^2 - (x-rx)^2)) just touches the current
-    // surface for some x in its footprint. Effectively: how far it
-    // falls before contact stops it.
-    const xMin = Math.max(0, Math.floor(rx - baseR));
-    const xMax = Math.min(W - 1, Math.floor(rx + baseR));
-    let ry = floorY;
-    for (let x = xMin; x <= xMax; x++) {
-      const dx = x - rx;
-      const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
-      const candidate = heightmap[x] - dz;
-      if (candidate < ry) ry = candidate;
-    }
-
     const elong = 0.85 + Math.random() * 0.9;
     const tilt = -0.5 + Math.random() * 1.0;
-    const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
+
+    // Build the polygon ONCE around (0, 0) so its vertex jitter is
+    // fixed; we translate to (rx, ry) at placement time. Compute its
+    // per-column bottom/top profile so collision uses the actual
+    // jagged silhouette.
+    const protoPoly = buildRockPolygon(0, 0, baseR, elong, tilt);
+    const profile = buildPolygonProfile(protoPoly);
+    const halfW = Math.max(-profile.minXi, profile.bottom.length + profile.minXi);
+
+    // Where the rock rests if centered at world x = rx: the smallest
+    // ry such that profile.bottom[xi] + ry touches heightmap at world
+    // x = floor(rx) + minXi + xi, for some xi.
+    function supportY(rx: number): number {
+      let ry = floorY;
+      const baseX = Math.floor(rx) + profile.minXi;
+      for (let xi = 0; xi < profile.bottom.length; xi++) {
+        const b = profile.bottom[xi];
+        if (b === -Infinity) continue;
+        const wx = baseX + xi;
+        if (wx < 0 || wx >= W) continue;
+        const candidate = heightmap[wx] - b;
+        if (candidate < ry) ry = candidate;
+      }
+      return ry;
+    }
+
+    let rx = halfW + Math.random() * (W - 2 * halfW);
+
+    // Iteratively roll. Sample a 2-px shift each side; if either
+    // would let the rock drop further (larger ry = lower in the
+    // world), move there. Converges when neither direction improves
+    // -- the rock is supported under its center, or has hit a wide
+    // flat surface / the floor.
+    for (let iter = 0; iter < 80; iter++) {
+      const ry = supportY(rx);
+      const leftX = Math.max(halfW, rx - 2);
+      const rightX = Math.min(W - halfW, rx + 2);
+      const leftRy = supportY(leftX);
+      const rightRy = supportY(rightX);
+      if (leftRy > ry + 0.25 && leftRy >= rightRy) rx = leftX;
+      else if (rightRy > ry + 0.25) rx = rightX;
+      else break;
+    }
+    const ry = supportY(rx);
+
+    // Translate the prototype polygon into its final resting place.
+    const polygon = protoPoly.map((v) => ({ x: v.x + rx, y: v.y + ry }));
     const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
     const tone = tones[Math.floor(Math.random() * tones.length)];
     const ob = makeObstacleFromLobes(lobes, tone);
@@ -1399,15 +1431,64 @@ export function generateObstacles(world: World): void {
     }
     world.obstacles.push(ob);
 
-    // Update heightmap with this rock's top profile so subsequent
-    // rocks see it when they fall.
-    for (let x = xMin; x <= xMax; x++) {
-      const dx = x - rx;
-      const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
-      const top = ry - dz;
-      if (top < heightmap[x]) heightmap[x] = top;
+    // Update heightmap using the polygon's TOP profile so subsequent
+    // rocks see the jagged silhouette, not a smooth dome.
+    const baseX = Math.floor(rx) + profile.minXi;
+    for (let xi = 0; xi < profile.top.length; xi++) {
+      const t = profile.top[xi];
+      if (t === Infinity) continue;
+      const wx = baseX + xi;
+      if (wx < 0 || wx >= W) continue;
+      const topY = ry + t;
+      if (topY < heightmap[wx]) heightmap[wx] = topY;
     }
   }
+}
+
+// Rasterize a polygon's per-column vertical extent. For each integer
+// x in the polygon's footprint, walks the edges to find the lowest
+// (max-y) and highest (min-y) points where any edge crosses that
+// column. Used so rock collision uses the actual jagged silhouette
+// instead of treating the rock as a circle of radius baseR.
+function buildPolygonProfile(polygon: { x: number; y: number }[]): {
+  minXi: number; bottom: Float32Array; top: Float32Array;
+} {
+  let minX = Infinity, maxX = -Infinity;
+  for (const v of polygon) {
+    if (v.x < minX) minX = v.x;
+    if (v.x > maxX) maxX = v.x;
+  }
+  const minXi = Math.floor(minX);
+  const maxXi = Math.ceil(maxX);
+  const n = maxXi - minXi + 1;
+  const bottom = new Float32Array(n).fill(-Infinity);
+  const top = new Float32Array(n).fill(Infinity);
+  for (let i = 0; i < polygon.length; i++) {
+    const v1 = polygon[i];
+    const v2 = polygon[(i + 1) % polygon.length];
+    const dx = v2.x - v1.x;
+    if (Math.abs(dx) < 1e-6) {
+      const xi = Math.round(v1.x) - minXi;
+      if (xi >= 0 && xi < n) {
+        if (v1.y > bottom[xi]) bottom[xi] = v1.y;
+        if (v2.y > bottom[xi]) bottom[xi] = v2.y;
+        if (v1.y < top[xi]) top[xi] = v1.y;
+        if (v2.y < top[xi]) top[xi] = v2.y;
+      }
+      continue;
+    }
+    const xLo = Math.max(minXi, Math.floor(Math.min(v1.x, v2.x)));
+    const xHi = Math.min(maxXi, Math.ceil(Math.max(v1.x, v2.x)));
+    for (let x = xLo; x <= xHi; x++) {
+      const t = (x - v1.x) / dx;
+      if (t < 0 || t > 1) continue;
+      const y = v1.y + t * (v2.y - v1.y);
+      const xi = x - minXi;
+      if (y > bottom[xi]) bottom[xi] = y;
+      if (y < top[xi]) top[xi] = y;
+    }
+  }
+  return { minXi, bottom, top };
 }
 
 // Polygon vertices around a rock center. n vertices distributed around
