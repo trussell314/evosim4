@@ -9,51 +9,53 @@ const ctx = canvas.getContext("2d")!;
 
 // HUD: a wrapper holding a minimize button and the inspector pre. Click the
 // button to collapse to just the button; click again to expand.
+const HUD_FONT = "font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;";
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
-  "border-radius:4px;font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "border-radius:4px;" + HUD_FONT +
   "max-height:80vh;overflow:hidden;";
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
   "display:flex;justify-content:space-between;align-items:center;padding:2px 4px;" +
-  "cursor:pointer;user-select:none;color:#9ee;gap:8px;";
+  "cursor:pointer;user-select:none;color:#9ee;gap:8px;" + HUD_FONT;
 // Live stats shown on the bar even when the HUD body is collapsed.
 // Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
-hudStats.style.cssText = "padding:0 4px;font:inherit;";
+hudStats.style.cssText = "padding:0 4px;" + HUD_FONT;
 hudStats.textContent = "fps=--  sim=--x  t=0s";
 const hudToggle = document.createElement("span");
 hudToggle.textContent = "[+]";
-hudToggle.style.cssText = "padding:0 4px;";
+hudToggle.style.cssText = "padding:0 4px;" + HUD_FONT;
 hudBar.appendChild(hudStats);
 hudBar.appendChild(hudToggle);
 // Per-frame timing, always visible (even when the inspector body is
 // collapsed) so render/sim budget is glanceable while iterating.
 const hudTimings = document.createElement("div");
-hudTimings.style.cssText = "padding:0 8px 2px;color:#9ee;font:inherit;";
+hudTimings.style.cssText = "padding:0 8px 2px;color:#9ee;" + HUD_FONT;
 hudTimings.textContent = "r=--ms  s=--ms";
 // Stall + error indicator: visible from the bar so mobile users
 // can see at a glance whether sim is paused / world is empty /
 // last step threw. Hidden by default; shown only when something
 // useful is going on.
 const hudDiag = document.createElement("div");
-hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;font:inherit;display:none;";
-// Whole HUD is one font (9px). Everything in here inherits, so
-// expanding the disasm doesn't change apparent text sizes elsewhere.
+hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;display:none;" + HUD_FONT;
+// Whole HUD is one font (9px). Each element sets it explicitly
+// rather than via inherit, because user-agent styles for <pre> can
+// override font-size from cascade in some browsers.
 const inspector = document.createElement("pre");
 inspector.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;font:inherit;";
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;" + HUD_FONT;
 // Disasm gets its own collapsible section: it's much longer than the
 // rest of the inspector and almost never wanted at-a-glance. Click the
 // "[show disasm]" header to expand.
 const disasmHeader = document.createElement("div");
 disasmHeader.style.cssText =
-  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;font:inherit;";
+  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;" + HUD_FONT;
 disasmHeader.textContent = "[+] show disasm";
 const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;font:inherit;";
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;" + HUD_FONT;
 hud.appendChild(hudBar);
 hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
