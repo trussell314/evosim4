@@ -742,11 +742,12 @@ export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Ar
   for (let attempt = 0; attempt < MAX_REROLLS; attempt++) {
     const size = randomGenomeSize(rng);
     const bytes = new Uint8Array(size);
-    // randSeedByte uses the SEED_OP_POOL weighted toward "core useful"
-    // ops -- INGEST / REPRODUCE / SYNTH_BIO / THRUST / SENSE_GRAD --
-    // so a random founder lands more often on something that can
-    // actually sustain itself, without forbidding anything.
-    for (let i = 0; i < size; i++) bytes[i] = randSeedByte(rng);
+    // Each founder rolls a fresh op-bias in [0.5, 0.95] -- some land
+    // streamlined (5% noop, bacterium-like), some carry significant
+    // junk (~50% noop). The bias persists in the lineage because
+    // mutations use the parent's observed bias.
+    const opBias = randFounderOpBias(rng);
+    for (let i = 0; i < size; i++) bytes[i] = randSeedByte(rng, opBias);
     if (viableGenome(bytes)) return bytes;
   }
   return makeDefaultGenome();
@@ -814,9 +815,25 @@ const NOOP_BYTES: number[] = (() => {
   for (let i = 0; i < 256; i++) if (!seen.has(i)) out.push(i);
   return out;
 })();
+// Default OP-vs-noop bias used when a caller doesn't supply one. A
+// genome's *observed* op fraction is what propagates the lineage's
+// junk-tolerance through descent: mutations use the parent genome's
+// own ratio, so streamlined lineages stay streamlined and junky ones
+// keep adding junk. This default is only the bootstrap value.
 const OP_BYTE_BIAS = 2 / 3;
-function randMutByte(rng: () => number): number {
-  if (rng() < OP_BYTE_BIAS) return OP_BYTES[Math.floor(rng() * OP_BYTES.length)];
+const OP_BYTE_SET: Set<number> = new Set(OP_BYTES);
+
+// Fraction of bytes in the genome that decode to a real op. Empty
+// genomes fall back to the default bias.
+export function observedOpBias(genome: Uint8Array): number {
+  if (genome.length === 0) return OP_BYTE_BIAS;
+  let opCount = 0;
+  for (let i = 0; i < genome.length; i++) if (OP_BYTE_SET.has(genome[i])) opCount++;
+  return opCount / genome.length;
+}
+
+function randMutByte(rng: () => number, opBias: number = OP_BYTE_BIAS): number {
+  if (rng() < opBias) return OP_BYTES[Math.floor(rng() * OP_BYTES.length)];
   return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
 }
 
@@ -855,9 +872,21 @@ const SEED_OP_POOL: number[] = (() => {
   }
   return pool;
 })();
-function randSeedByte(rng: () => number): number {
-  if (rng() < OP_BYTE_BIAS) return SEED_OP_POOL[Math.floor(rng() * SEED_OP_POOL.length)];
+function randSeedByte(rng: () => number, opBias: number): number {
+  if (rng() < opBias) return SEED_OP_POOL[Math.floor(rng() * SEED_OP_POOL.length)];
   return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
+}
+
+// Founder op-bias range. Each new founder rolls a uniform value in
+// this interval; that becomes the genome's OP-vs-noop split for its
+// initial composition. Range covers tightly-packed bacteria-like
+// (0.95 = 5% noop) through moderately junky (0.5 = 50% noop). Within
+// the OP fraction, SEED_OP_POOL weights core useful ops higher; the
+// bias only controls the OP-vs-noop split, not which op gets picked.
+const FOUNDER_OP_BIAS_MIN = 0.50;
+const FOUNDER_OP_BIAS_MAX = 0.95;
+function randFounderOpBias(rng: () => number): number {
+  return FOUNDER_OP_BIAS_MIN + rng() * (FOUNDER_OP_BIAS_MAX - FOUNDER_OP_BIAS_MIN);
 }
 
 // Per-byte mutation rates at fission. Halved from the previous values
@@ -879,6 +908,11 @@ export function mutateGenome(
   genome: Uint8Array,
   rng: () => number = Math.random,
 ): Uint8Array {
+  // New bytes (inserts + point-mutation replacements) are drawn from
+  // the *parent's* observed op-bias. A lineage that's 30% noop keeps
+  // generating ~30% noop on mutation; a tight bacterium stays tight.
+  // The lineage's "junk tolerance" is heritable through descent.
+  const opBias = observedOpBias(genome);
   // Per-byte: roll DELETE first; if not deleted, optionally insert a
   // random byte just before it, then optionally point-mutate the byte
   // itself. A deleted byte short-circuits the rest of the slot, so
@@ -888,14 +922,14 @@ export function mutateGenome(
   for (let i = 0; i < genome.length; i++) {
     if (rng() < P_DELETE) continue;
     if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
-      out.push(randMutByte(rng));
+      out.push(randMutByte(rng, opBias));
     }
     let b = genome[i];
-    if (rng() < P_POINT) b = randMutByte(rng);
+    if (rng() < P_POINT) b = randMutByte(rng, opBias);
     if (out.length < MAX_GENOME_BYTES) out.push(b);
   }
   if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
-    out.push(randMutByte(rng));
+    out.push(randMutByte(rng, opBias));
   }
   if (out.length === 0) return makeDefaultGenome();
   return new Uint8Array(out);
@@ -910,18 +944,21 @@ export function somaticMutateOnce(
   rng: () => number = Math.random,
 ): Uint8Array {
   if (genome.length === 0) return makeDefaultGenome();
+  // Somatic edits use the cell's own observed op-bias too, so an
+  // aging cell drifts in a way consistent with its own composition.
+  const opBias = observedOpBias(genome);
   const r = rng();
   if (r < 0.7) {
     const idx = Math.floor(rng() * genome.length);
     const out = new Uint8Array(genome);
-    out[idx] = randMutByte(rng);
+    out[idx] = randMutByte(rng, opBias);
     return out;
   }
   if (r < 0.85 && genome.length < MAX_GENOME_BYTES) {
     const idx = Math.floor(rng() * (genome.length + 1));
     const out = new Uint8Array(genome.length + 1);
     out.set(genome.subarray(0, idx), 0);
-    out[idx] = randMutByte(rng);
+    out[idx] = randMutByte(rng, opBias);
     out.set(genome.subarray(idx), idx + 1);
     return out;
   }
