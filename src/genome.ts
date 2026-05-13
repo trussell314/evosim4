@@ -804,16 +804,22 @@ export function viableGenome(genome: Uint8Array): boolean {
   return hasMetabolism && hasReproduce && hasRibo;
 }
 
-// Sample a random genome size in [1, 50] with a *gradual* bias toward
-// smaller. P(size=k) is proportional to (51 - k), so size 1 is only
-// ~9% more likely than size 5 (gradual at the low end) but ~50x more
-// likely than size 50 (strong bias against bloat). Triangular CDF.
+// Sample a random genome size in [4, 100] with a gradual bias toward
+// smaller. P(size=k) ∝ (101 - k). Floor of 4 because the viability
+// filter requires 3 distinct ops + 1 operand byte, so sizes < 4
+// always fail and waste reroll budget. Ceiling raised from 50 to 100
+// to give evolved lineages room to accumulate complexity (multiple
+// sensors, conditional logic, multiple synth modes) without bumping
+// into the wall. Per-byte mutation + build cost still pressure
+// against bloat, so the upper bound mostly gates how complex an
+// evolved lineage *can* become, not what's typical. Median ~32.
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // CDF of P(k) ∝ (51 - k) is (101k - k^2) / 2550. Inverse:
-  // k = (101 - sqrt(10201 - 10200*u)) / 2.
-  const k = Math.floor((101 - Math.sqrt(Math.max(0, 10201 - 10200 * u))) / 2) + 1;
-  return Math.max(1, Math.min(50, k));
+  // CDF of P(k) ∝ (101 - k) for k in [4, 100] sums to 4753.
+  // Solving u * 4753 = (198-k)(k-3)/2 for k:
+  //   k = (201 - sqrt(38025 - 38024*u)) / 2
+  const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
+  return Math.max(4, Math.min(100, k));
 }
 
 // Generate a random viable genome. Size is sampled from the triangular
