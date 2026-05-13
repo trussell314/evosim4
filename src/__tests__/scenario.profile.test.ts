@@ -242,3 +242,61 @@ test.skip("lineage establishment", () => {
     if (tr.logBuf.length > 30) console.log(`  ... ${tr.logBuf.length - 30} more lines`);
   }
 }, 600_000);
+
+// Long-run particle-count audit. Watches whether particle count
+// stays near world.particleTarget or creeps over time. Reports
+// snapshots and ingest/birth/death/excretion rates between snapshots.
+test.skip("particle count trajectory", () => {
+  const FIXED_DT = 1 / 60;
+  const w = createWorld(800, 600);
+  const SIM_SEC = 1800; // 30 sim-minutes
+  const TICKS = Math.round(SIM_SEC / FIXED_DT);
+  const SNAP = 60; // snapshot every 60 sim-sec
+
+  let lastParts = w.particles.length;
+  let lastBirths = 0;
+  let lastDeaths = 0;
+  const records: Array<{ t: number; pop: number; parts: number; cap: number; deltaParts: number; ext: number; species: number; lineages: number }> = [];
+  let nextSnap = 0;
+  let lastExt = w.extinctionCount;
+
+  for (let i = 0; i < TICKS; i++) {
+    const popBefore = w.creatures.length;
+    step(w, FIXED_DT);
+    const popAfter = w.creatures.length;
+    if (popAfter > popBefore) lastBirths += popAfter - popBefore;
+    else if (popAfter < popBefore) lastDeaths += popBefore - popAfter;
+
+    if (w.t >= nextSnap) {
+      const liveSpecies = new Set<string>();
+      const liveLineages = new Set<number>();
+      for (const c of w.creatures) {
+        liveSpecies.add(c.speciesKey);
+        liveLineages.add(c.lineageRoot);
+      }
+      records.push({
+        t: w.t,
+        pop: w.creatures.length,
+        parts: w.particles.length,
+        cap: w.particleTarget,
+        deltaParts: w.particles.length - lastParts,
+        ext: w.extinctionCount - lastExt,
+        species: liveSpecies.size,
+        lineages: liveLineages.size,
+      });
+      lastParts = w.particles.length;
+      lastExt = w.extinctionCount;
+      nextSnap += SNAP;
+    }
+  }
+
+  console.log(`\n[parts] ${SIM_SEC}s sim, cap=${w.particleTarget}, total births=${lastBirths} deaths=${lastDeaths}`);
+  console.log(`  t=    pop  parts  /cap   d(parts)  ext  sp/li`);
+  for (const r of records) {
+    const ratio = (r.parts / r.cap).toFixed(2);
+    const d = r.deltaParts >= 0 ? `+${r.deltaParts}` : `${r.deltaParts}`;
+    console.log(
+      `  ${r.t.toFixed(0).padStart(5)}s ${String(r.pop).padStart(4)} ${String(r.parts).padStart(6)}  ${ratio.padStart(4)}x  ${d.padStart(7)}  ${String(r.ext).padStart(3)}  ${r.species}/${r.lineages}`,
+    );
+  }
+}, 600_000);
