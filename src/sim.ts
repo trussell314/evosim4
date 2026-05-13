@@ -2553,7 +2553,17 @@ function updateCreatures(world: World, dt: number): void {
     // can choose to invest energy into stability when it matters.
     if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
     if (age > 0 && Math.random() < mutP) {
-      c.genome = somaticMutateOnce(c.genome);
+      // Same viability guard the stillbirth filter uses at fission:
+      // reject in-place edits that would knock out the cell's last
+      // metabolism op or last REPRODUCE. Without this, an aging cell
+      // with no REPAIR slowly self-sterilizes -- the founder is alive
+      // and well, but its lineage quietly dies because its REPRODUCE
+      // byte was mutated away. Non-critical somatic drift still flows
+      // freely; survival-critical bytes are protected.
+      const candidate = somaticMutateOnce(c.genome);
+      if (viableGenome(candidate)) {
+        c.genome = candidate;
+      }
       // Sense range tracks the SENSE_AMP count in the live genome
       // and thrust accel tracks THRUST_AMP. Somatic mutations can
       // add or remove either, so recompute both here.
