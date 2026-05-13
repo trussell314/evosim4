@@ -96,8 +96,24 @@ export const OP = {
   SENSE_PRESSURE_X: 0x71, // horizontal mechanical force on cell (wave + current + contact)
   SENSE_PRESSURE_Y: 0x72, // vertical mechanical force + static depth pressure (gravity * depth)
 
+  // Generic catalyst synthesis. Operand picks which reaction the
+  // catalyst boosts. Each catalyst k accumulates in its own pool;
+  // the reaction's rate is multiplied by (1 + catalyst[k]/CAT_REF).
+  // Maps:
+  //   0 respirase  (aerobic respiration)
+  //   1 fermentase (fermentation)
+  //   2 lipase     (beta-oxidation of fatty acid)
+  //   3 catabase   (catabolism of ingested material)
+  SYNTH_CAT:     0x73,
+
   HALT:          0xFF,
 } as const;
+
+// Number of catalyst slots. Kept in genome.ts (not sim.ts) because
+// the VM dispatch mods the operand by this -- it's part of the
+// genome ABI. If you add a catalyst, bump this and add the entry in
+// sim.ts CATALYSTS table to match.
+export const CATALYST_COUNT = 4;
 
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
@@ -119,6 +135,7 @@ OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
 OPERANDS[OP.SENSE_CHEMICAL] = 1;
 OPERANDS[OP.SENSE_EM] = 1;
+OPERANDS[OP.SYNTH_CAT] = 1;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
 // executable op position. `operand` is `undefined` if the op takes
@@ -265,6 +282,10 @@ export interface VMOutputs {
   // what it actually wants to build instead of always trying every
   // product (and wasting ATP on chlorophyll it never uses).
   synthMask: number;
+  // Bit flags for generic catalyst synthesis this tick. Bit k is set
+  // by SYNTH_CAT with operand mod N_CATALYSTS == k. The
+  // sim runs catalyst synthesis for slot k iff bit k is set.
+  catSynthMask: number;
   // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
   // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
   // this after runTick returns: changing genome length mid-tick would
@@ -284,6 +305,7 @@ export function newOutputs(): VMOutputs {
     ingestMaterials: new Uint8Array(6),
     repair: 0,
     synthMask: 0,
+    catSynthMask: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     instructions: 0,
   };
@@ -320,6 +342,7 @@ export function runTick(
   out.ingestMaterials.fill(0);
   out.repair = 0;
   out.synthMask = 0;
+  out.catSynthMask = 0;
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
@@ -427,6 +450,16 @@ export function runTick(
       case OP.SYNTH_ENZ:      out.synthMask |= 1 << 3; break;
       case OP.SYNTH_CHL:      out.synthMask |= 1 << 4; break;
       case OP.SYNTH_RIBO:     out.synthMask |= 1 << 5; break;
+      case OP.SYNTH_CAT: {
+        // Operand picks which catalyst slot to build. Mod to the
+        // catalyst count keeps every operand byte targeting a real
+        // slot (no operand values waste). Sim keeps the catalyst
+        // table; the bit-mask handshake just tells it which to run.
+        const slot = genome[state.pc % L] % CATALYST_COUNT;
+        state.pc++;
+        out.catSynthMask |= 1 << slot;
+        break;
+      }
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
@@ -974,6 +1007,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_EM]:       1.5,
   [OP.SENSE_PRESSURE_X]: 1.5,
   [OP.SENSE_PRESSURE_Y]: 1.5,
+  [OP.SYNTH_CAT]:        1.5,
 };
 const SEED_OP_POOL: number[] = (() => {
   const pool: number[] = [];

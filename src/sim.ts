@@ -16,6 +16,7 @@ import {
   viableGenome,
   genomeSynthMask,
   mutateGenome,
+  CATALYST_COUNT,
   somaticMutateOnce,
   computeSenseRange,
   computeThrustAccel,
@@ -319,6 +320,12 @@ export class CreatureStore {
   r_organic: Float32Array;
   r_lipid: Float32Array;
   r_gas: Float32Array;
+  // Generic catalyst pool: one Float32Array per catalyst slot. Sized
+  // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
+  // reaction's rate via (1 + pool/CAT_REF). Storage is array-of-
+  // arrays (not a single 2D) so each slot has its own contiguous
+  // typed array, matching the rest of the SoA layout.
+  catalystCols!: Float32Array[];
   // Parallel arrays of column refs for indexed access in hot loops.
   // resCols[matIdx] -> r_<mat>; molCols[molKey] -> m_<key>. Initialized
   // once after the typed arrays exist.
@@ -339,6 +346,8 @@ export class CreatureStore {
     this.m_waste = blank; this.m_adp = blank; this.m_ribosome = blank;
     this.r_rock = blank; this.r_sand = blank; this.r_clay = blank;
     this.r_organic = blank; this.r_lipid = blank; this.r_gas = blank;
+    this.catalystCols = [];
+    for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols.push(blank);
     this.grow(initialCap);
   }
   grow(newCap: number): void {
@@ -378,6 +387,9 @@ export class CreatureStore {
     this.r_organic = grow1(this.r_organic);
     this.r_lipid = grow1(this.r_lipid);
     this.r_gas = grow1(this.r_gas);
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      this.catalystCols[k] = grow1(this.catalystCols[k]);
+    }
     this.cap = newCap;
     // Rebuild column-by-name arrays so chemistry hot loops can iterate
     // them by integer index. Order matches MATERIAL_IDS / MOLECULE_IDS.
@@ -419,6 +431,7 @@ export class CreatureStore {
     this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
     this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
     this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
+    for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
   }
 }
 
@@ -1165,6 +1178,32 @@ const RIBO_ATP_COST = 10;
 const RIBO_REF = 5;
 function riboMult(c: Creature): number {
   return c.molecules.ribosome / RIBO_REF;
+}
+
+// Generic catalysts. Each entry pairs a catalyst slot with the
+// reaction whose VMAX it multiplies via (1 + cat[k] / CAT_REF).
+// SYNTH_CAT <id> builds catalyst id (mod CATALYST_COUNT). Storage
+// is the catalystCols Float32Array per slot on CreatureStore.
+//
+// Unlike ribosomes (which are mandatory: r/REF, no +1), catalysts
+// are pure accelerators -- zero catalyst => base rate, more =>
+// faster -- so they're an evolutionary option rather than a
+// requirement. The viability filter doesn't require any of them.
+const CAT_REF = 5;
+const CAT_SYNTH_VMAX = 0.3;
+const CAT_ATP_COST = 4; // similar to enzyme; medium-complex protein
+const CAT_DECAY_PER_SEC = 0.005;
+// Slot -> human label, exported for UI / debug. Order is the
+// canonical catalyst id used by SYNTH_CAT's operand mod CATALYST_COUNT
+// and by catMult(c, slot).
+export const CATALYSTS = [
+  { name: "respirase",  boosts: "aerobic" },
+  { name: "fermentase", boosts: "ferment" },
+  { name: "lipase",     boosts: "betaOx" },
+  { name: "catabase",   boosts: "catabolize" },
+] as const;
+function catMult(c: Creature, slot: number): number {
+  return 1 + c.store.catalystCols[slot][c.idx] / CAT_REF;
 }
 
 // Maintenance: structural molecules turn over even when the cell isn't
@@ -1980,7 +2019,7 @@ function catabolize(c: Creature, dt: number): void {
     const rc = resCols[m];
     const avail = rc[i];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM));
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * catMult(c, 3);
     const rd = rate * dt;
     const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
@@ -2017,7 +2056,7 @@ function aerobicRespire(c: Creature, dt: number): void {
   const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
   if (g <= 0 || o <= 0 || a <= 0) return;
   const a10 = a / 10;
-  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT));
+  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT)) * catMult(c, 0);
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (o < amt) amt = o;
@@ -2038,7 +2077,7 @@ function ferment(c: Creature, dt: number): void {
   if (g <= 0 || a <= 0) return;
   const a2 = a / 2;
   const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
-  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression;
+  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression * catMult(c, 1);
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (a2 < amt) amt = a2;
@@ -2057,7 +2096,7 @@ function betaOxidize(c: Creature, dt: number): void {
   const f = s.m_fattyAcid[i], o = s.m_o2[i], a = s.m_adp[i];
   if (f <= 0 || o <= 0 || a <= 0) return;
   const a14 = a / 14;
-  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT));
+  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT)) * catMult(c, 2);
   const rdt = rate * dt;
   let amt = rdt < f ? rdt : f;
   if (o < amt) amt = o;
@@ -2142,6 +2181,38 @@ function biosynthesize(
   s.m_adp[i] += atpCost * amt;
 }
 
+// Build catalyst into the catalystCols[slot] pool. Same shape as
+// biosynthesize() but the product lives in the per-slot Float32Array
+// rather than a Molecules key. Substrate is 0.5 aa + 0.5 min, same as
+// enzymes / chlorophyll / ribosomes.
+function biosynthCatalyst(
+  c: Creature,
+  dt: number,
+  vmax: number,
+  atpCost: number,
+  slot: number,
+): void {
+  const s = c.store; const i = c.idx;
+  const colA = s.molCols[MOLECULE_INDEX["aminoAcid"]];
+  const colB = s.molCols[MOLECULE_INDEX["minerals"]];
+  const colP = s.catalystCols[slot];
+  const a = colA[i], b = colB[i], e = s.energy[i];
+  if (a <= 0 || b <= 0 || e <= BIOSYNTH_ATP_FLOOR) return;
+  const aFrac = a / 0.5, bFrac = b / 0.5;
+  const eAvail = (e - BIOSYNTH_ATP_FLOOR) / atpCost;
+  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(eAvail);
+  const rdt = rate * dt;
+  let amt = rdt < aFrac ? rdt : aFrac;
+  if (bFrac < amt) amt = bFrac;
+  if (eAvail < amt) amt = eAvail;
+  if (amt <= 0) return;
+  colA[i] = a - 0.5 * amt;
+  colB[i] = b - 0.5 * amt;
+  s.energy[i] = e - atpCost * amt;
+  colP[i] += amt;
+  s.m_adp[i] += atpCost * amt;
+}
+
 function autoExcrete(c: Creature, world: World): void {
   const s = c.store; const i = c.idx;
   const overFlow = world.particles.length >= world.particleTarget;
@@ -2216,6 +2287,16 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_ribosome[i] = rib - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
+  }
+  for (let k = 0; k < CATALYST_COUNT; k++) {
+    const col = s.catalystCols[k];
+    const v = col[i];
+    if (v > 0) {
+      const lost = v * CAT_DECAY_PER_SEC * stressMult * dt;
+      col[i] = v - lost;
+      s.m_aminoAcid[i] += 0.5 * lost;
+      s.m_minerals[i] += 0.5 * lost;
+    }
   }
 }
 
@@ -2873,6 +2954,15 @@ function updateCreatures(world: World, dt: number): void {
     // membrane only.
     if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
+    // Generic catalysts. SYNTH_CAT <id> sets a bit per slot; each one
+    // built scales with riboMult like every other biosynth product.
+    const cm = VM_OUT.catSynthMask;
+    if (cm) {
+      for (let k = 0; k < CATALYST_COUNT; k++) {
+        if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX * rm, CAT_ATP_COST, k);
+      }
+    }
+
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
 
@@ -3264,6 +3354,23 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
     }
   }
 
+  // Catalysts denature on death back to their substrates (0.5 aa +
+  // 0.5 min), same as enzymes / chlorophyll / ribosomes do during
+  // maintenance. Folded into the molecule pool so the bucket loop
+  // below releases them naturally.
+  {
+    const cols = c.store.catalystCols;
+    const ci = c.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = cols[k][ci];
+      if (v > 0) {
+        c.molecules.aminoAcid += 0.5 * v;
+        c.molecules.minerals += 0.5 * v;
+        cols[k][ci] = 0;
+      }
+    }
+  }
+
   // Group molecules by their natural bucket. ATP loses its terminal
   // phosphate on death, so we lump c.energy into the adp pool.
   const bucketContents: Record<MaterialId, Molecules> = {
@@ -3377,6 +3484,17 @@ function tryReproduce(parent: Creature, world: World): void {
     parent.reserves[id] -= give;
     childReserves[id] = give;
   }
+  const childCatalysts = new Float32Array(CATALYST_COUNT);
+  {
+    const cols = parent.store.catalystCols;
+    const pi = parent.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = cols[k][pi];
+      const give = v * childShare;
+      cols[k][pi] = v - give;
+      childCatalysts[k] = give;
+    }
+  }
   let energyGift = parent.energy * childShare;
   parent.energy -= energyGift;
   // "Yolk": a small free endowment of glucose + ATP to the newborn so
@@ -3425,6 +3543,11 @@ function tryReproduce(parent: Creature, world: World): void {
   // Inherit the parent's founding lineage. Mutated descendants stay
   // part of the same lineageRoot for top-up counting purposes.
   child.lineageRoot = parent.lineageRoot;
+  {
+    const cols = child.store.catalystCols;
+    const ci = child.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) cols[k][ci] = childCatalysts[k];
+  }
   updateCreatureRadius(child);
 
   // Endosymbiont propagation: each engulfed cell binary-fissions
