@@ -15,6 +15,7 @@ import {
   mutateGenome,
   genomeMaterialCost,
   makeDefaultGenome,
+  OPERANDS,
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
@@ -61,6 +62,22 @@ function makeSelf(overrides: Partial<{
   };
 }
 
+// HALT is now a NOP in the VM (the op was retired) but our tests
+// historically used it as a "stop after these ops" marker. Walk the
+// bytes counting opcodes up to the first HALT and use that as the
+// default budget, so tests that wrote `[OP.PUSH8, 42, OP.HALT]` keep
+// executing exactly one instruction without needing to specify budget.
+function budgetToHalt(bytes: number[]): number {
+  let pc = 0;
+  let count = 0;
+  while (pc < bytes.length) {
+    const op = bytes[pc++];
+    if (op === OP.HALT) return count;
+    count++;
+    pc += OPERANDS[op] ?? 0;
+  }
+  return Math.max(count, 1);
+}
 function exec(
   bytes: number[],
   opts: {
@@ -73,7 +90,7 @@ function exec(
   const state = opts.state ?? newVMState();
   const sensors = opts.sensors ?? makeSensors();
   const self = opts.self ?? makeSelf();
-  const budget = opts.budget ?? 64;
+  const budget = opts.budget ?? budgetToHalt(bytes);
   const out = newOutputs();
   runTick(new Uint8Array(bytes), state, sensors, self, budget, out);
   return { out, state };
@@ -120,8 +137,9 @@ describe("VM stack ops", () => {
   it("stack capped at 32 (drops oldest)", () => {
     const bytes: number[] = [];
     for (let i = 1; i <= 40; i++) bytes.push(OP.PUSH8, i);
-    bytes.push(OP.HALT);
-    const { state } = exec(bytes, { budget: 200 });
+    // budget=40 stops after the 40 PUSH8 instructions; without it
+    // (or with the old HALT) the VM would now wrap and keep pushing.
+    const { state } = exec(bytes, { budget: 40 });
     expect(state.stack.length).toBe(32);
     expect(state.stack[0]).toBe(9);
     expect(state.stack[31]).toBe(40);
@@ -177,12 +195,15 @@ describe("VM control flow", () => {
     exec([OP.PUSH8, 7], { state, budget: 6 });
     expect(state.stack.length).toBe(6);
   });
-  it("HALT yields, pc advances past HALT byte", () => {
+  it("HALT byte (0xFF) is now a NOP -- VM keeps executing past it", () => {
+    // budgetToHalt in the test helper stops counting at HALT, so by
+    // default the body executes up to the HALT and stops there. With
+    // an explicit budget the VM walks straight through.
     const state = newVMState();
-    const { out } = exec([OP.PUSH8, 1, OP.HALT, OP.PUSH8, 2], { state });
-    expect(state.stack).toEqual([1]);
-    expect(state.pc).toBe(3);
-    expect(out.instructions).toBe(2);
+    // 3 instructions = PUSH8 1, HALT-as-NOP, PUSH8 2.
+    const { out } = exec([OP.PUSH8, 1, OP.HALT, OP.PUSH8, 2], { state, budget: 3 });
+    expect(state.stack).toEqual([1, 2]);
+    expect(out.instructions).toBe(3);
   });
   it("budget caps even without HALT", () => {
     expect(exec([OP.NOP, OP.NOP, OP.NOP], { budget: 5 }).out.instructions).toBe(5);
@@ -196,10 +217,12 @@ describe("VM scratch registers (LOAD / STORE)", () => {
   it("registers persist across runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();
-    runTick(new Uint8Array([OP.PUSH8, 99, OP.STORE, 3, OP.HALT]), state, makeSensors(), makeSelf(), 32, out);
+    // Explicit budget = the number of instructions we want to run;
+    // HALT is no longer a yield.
+    runTick(new Uint8Array([OP.PUSH8, 99, OP.STORE, 3]), state, makeSensors(), makeSelf(), 2, out);
     // Reset stack + pc to simulate a fresh tick; regs deliberately persist.
     state.stack.length = 0; state.pc = 0;
-    runTick(new Uint8Array([OP.LOAD, 3, OP.HALT]), state, makeSensors(), makeSelf(), 32, out);
+    runTick(new Uint8Array([OP.LOAD, 3]), state, makeSensors(), makeSelf(), 1, out);
     expect(state.stack).toEqual([99]);
   });
   it("LOAD from an unset register reads zero", () => {
@@ -335,17 +358,18 @@ describe("VM edge cases", () => {
     expect(state.stack).toEqual([]);
   });
   it("unknown opcodes act as NOP", () => {
-    const { state, out } = exec([0x7F, OP.PUSH8, 9, OP.HALT]);
+    // budget covers the noop byte + the PUSH8 (2 instructions)
+    const { state, out } = exec([0x7F, OP.PUSH8, 9], { budget: 2 });
     expect(state.stack).toEqual([9]);
-    expect(out.instructions).toBe(3);
+    expect(out.instructions).toBe(2);
   });
   it("state persists across ticks", () => {
-    const genome = new Uint8Array([OP.PUSH8, 7, OP.HALT]);
+    const genome = new Uint8Array([OP.PUSH8, 7]);
     const state = newVMState();
     const out = newOutputs();
-    runTick(genome, state, makeSensors(), makeSelf(), 32, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
     expect(state.stack).toEqual([7]);
-    runTick(genome, state, makeSensors(), makeSelf(), 32, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
     expect(state.stack).toEqual([7, 7]);
   });
   it("operand-only-byte at end of genome wraps", () => {
@@ -452,9 +476,8 @@ describe("makeDefaultGenome", () => {
   it("contains the starter behavior bytes", () => {
     const g = makeDefaultGenome();
     expect(Array.from(g)).toContain(OP.SENSE_GRAD_X);
-    expect(g[g.length - 1]).toBe(OP.HALT);
+    expect(g[g.length - 1]).toBe(OP.REPRODUCE);
     expect(Array.from(g)).toContain(OP.THRUST);
-    expect(Array.from(g)).toContain(OP.REPRODUCE);
     expect(Array.from(g)).toContain(OP.SENSE_AMP);
   });
 });

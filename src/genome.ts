@@ -556,9 +556,11 @@ export function runTick(
       case OP.ENGULF:     out.engulf     = true; break;
       case OP.INGEST:     { const idx = m6(genome[state.pc % L]); state.pc++; out.ingestMaterials[idx] = 1; break; }
       case OP.TURN:       out.turn      += vmPop(stack); break;
-      case OP.HALT:
-        return;
-
+      // HALT (0xFF) is retired -- it was a programmer's escape hatch
+      // with no biological analog. Old genomes carrying the byte now
+      // fall through to the default branch (NOP), so the byte stays
+      // inert during a tick instead of cutting it short. The OP
+      // constant is kept for the disassembler.
       default: break;
     }
   }
@@ -970,7 +972,6 @@ export function makeDefaultGenome(): Uint8Array {
     OP.AND,
     OP.JZ, 1,
     OP.REPRODUCE,
-    OP.HALT,
   ]);
 }
 

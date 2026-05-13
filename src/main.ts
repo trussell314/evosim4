@@ -2007,12 +2007,10 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   // with the VM. Any future op added to genome.ts's OPERANDS table is
   // automatically picked up here.
   let reproducePc = -1;
-  let firstHaltPc = -1;
   walkGenome(genome, (op, pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
-      case OP.HALT: if (firstHaltPc < 0) firstHaltPc = pc; break;
       case OP.REPRODUCE: reproduce = true; if (reproducePc < 0) reproducePc = pc; break;
       case OP.PREDATE: predate = true; break;
       case OP.ENGULF: engulf = true; break;
@@ -2071,16 +2069,15 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   else parts.push("No biosynthesis ops — can't grow new structure.");
   // Reproduction. The PC isn't reset between ticks (it wraps mod L),
   // and HALT short-circuits the current tick early -- so a REPRODUCE
-  // op buried after the first HALT only fires once per ~full-genome
-  // cycle, not per tick. The describer reflects this so users don't
-  // confuse "has REPRODUCE" with "constantly succeeds at fission".
+  // op buried deep in the genome only fires once per ~full-genome
+  // cycle (L/budget ticks), not per tick. The describer reflects
+  // this so users don't confuse "has REPRODUCE" with "constantly
+  // succeeds at fission".
   if (reproduce) {
-    const haltBeforeReproduce = firstHaltPc >= 0 && firstHaltPc < reproducePc;
     if (gated) parts.push("Divides when conditions are met.");
-    else if (haltBeforeReproduce) parts.push(
-      `REPRODUCE sits at PC ${reproducePc} after a HALT at ${firstHaltPc}, so it only fires once the PC walks the whole genome (~every L/budget ticks). Every attempt still pays ATP -- most fail on build-block shortage or stillbirth.`
+    else parts.push(
+      `REPRODUCE has no JZ-style gating (sits at PC ${reproducePc} of ${genome.length}); fires whenever the PC walks past it. Each attempt pays ATP whether the daughter survives or not.`
     );
-    else parts.push("REPRODUCE has no JZ-style gating -- fires whenever the PC visits it, paying ATP each time whether build-blocks suffice or not.");
   } else parts.push("Has no REPRODUCE op — sterile.");
   // Extras
   const extras: string[] = [];
