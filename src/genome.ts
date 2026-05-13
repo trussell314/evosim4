@@ -678,11 +678,20 @@ export function makeDefaultGenome(): Uint8Array {
     OP.THRUST,
     OP.INGEST, 3,
     OP.INGEST, 2,
+    // Keep the genome stable as the cell ages. Costs 0.5 ATP per
+    // execution and refreshes a 30-tick window during which somatic
+    // mutation is suppressed.
+    OP.REPAIR,
+    // Reproduction gate: only fission when well-stocked. Old defaults
+    // (biomass>14, ATP>3) fired the instant the cell crossed minimum
+    // viability, so children were born with ~7 biomass and ~1.5 ATP --
+    // too thin to survive foraging. Higher thresholds let the parent
+    // stockpile and pass a meaningful endowment to the child.
     OP.SELF_BIOMASS,
-    OP.PUSH8, 14,
+    OP.PUSH8, 30,
     OP.GT,
     OP.SELF_ENERGY,
-    OP.PUSH8, 3,
+    OP.PUSH8, 15,
     OP.GT,
     OP.AND,
     OP.JZ, 1,
@@ -721,8 +730,13 @@ function randMutByte(rng: () => number): number {
   return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
 }
 
-const P_POINT  = 0.003;
-const P_INSERT = 0.0010;
+// Per-byte mutation rates at fission. Halved from the previous values
+// (0.003 / 0.0010) because the old rates produced ~7% of children with
+// a real mutation per fission and the 2/3 op-bias meant most of those
+// broke a working opcode. Mutation-load was killing newborn lineages
+// faster than they could establish.
+const P_POINT  = 0.0015;
+const P_INSERT = 0.0005;
 // Deletions are uniquely lossy in our genome: one deleted byte at the
 // wrong offset can remove REPRODUCE or break a gate, sterilizing the
 // lineage. Without functional redundancy or reading frames there's

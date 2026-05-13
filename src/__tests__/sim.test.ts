@@ -40,10 +40,11 @@ function flushDivisions(w: World): void {
 }
 
 // Step the world enough times for every cell to walk a full pass of
-// its genome. With vmInstrBudget=8 and the 14-op default genome a
-// single tick only executes ops 0..7; REPRODUCE (op 14) doesn't fire
-// until the second tick.
+// its genome. With vmInstrBudget=8 and the 18-op default genome
+// (SENSE_AMP..HALT incl. REPAIR + reproduction gate) REPRODUCE lives
+// past op 16, so three ticks are needed to reach it from a fresh PC.
 function stepFullCycle(w: World, dt: number = 1 / 60): void {
+  step(w, dt);
   step(w, dt);
   step(w, dt);
 }
@@ -110,7 +111,10 @@ function makeCreature(overrides: Partial<{
 }> = {}): Creature {
   const store = new CreatureStore(1);
   const reserves: Partial<Record<MaterialId, number>> = overrides.reserves ?? {};
-  const molecules: Partial<Molecules> = { biomass: 30, ...(overrides.molecules ?? {}) };
+  // Above the default genome's biomass > 30 reproduction gate so the
+  // mass-scaled REPRODUCE ATP fee fires in tests that walk the full
+  // default genome.
+  const molecules: Partial<Molecules> = { biomass: 50, ...(overrides.molecules ?? {}) };
   return newCreature(store, {
     x: overrides.x ?? 400,
     y: overrides.y ?? 300,
@@ -432,9 +436,12 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
       w.creatures.push(c);
       pushParticle(w, { x: 600, y: 300, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
       const e0 = c.energy;
-      // Two ticks so the VM completes a full default-genome pass and
-      // REPRODUCE fires (its mass-scaled ATP attempt fee is what makes
-      // this test's drainBig dominate drainSmall).
+      // Three ticks so the VM completes a full default-genome pass
+      // and REPRODUCE fires (its mass-scaled ATP attempt fee is what
+      // makes this test's drainBig dominate drainSmall). The default
+      // genome is 18 ops post-REPAIR; with vmInstrBudget=8 the
+      // REPRODUCE op lands on tick 3.
+      step(w, 0.1);
       step(w, 0.1);
       step(w, 0.1);
       return e0 - c.energy;
