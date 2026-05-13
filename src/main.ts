@@ -2067,7 +2067,10 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   if (synth.length > 0) parts.push(`Internally ${synth.join(", ")}.`);
   else parts.push("No biosynthesis ops — can't grow new structure.");
   // Reproduction
-  if (reproduce) parts.push(gated ? "Divides when conditions are met." : "Divides reflexively every tick (lots of stillbirths).");
+  if (reproduce) parts.push(gated
+    ? "Divides when conditions are met."
+    : "Fires REPRODUCE every tick (no gating) — burns ATP whether or not the build-block / viability checks pass, so most attempts fail silently."
+  );
   else parts.push("Has no REPRODUCE op — sterile.");
   // Extras
   const extras: string[] = [];
