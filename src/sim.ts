@@ -2322,13 +2322,13 @@ export function step(world: World, dt: number): void {
 
   // Top up founding lineages. If the live count is below
   // world.founderTarget, spawn fresh founders (each viability-filtered
-  // by makeRandomViableGenome) until we reach the target. Gated on
-  // particle count being under the cap -- death-released particles
-  // bypass the replenish/aerate caps (autolysis can't refuse to
-  // produce its mass), so when the world is over capacity we hold
-  // off on adding more lineages that would just contribute more
-  // corpse-mass when they cycle through.
-  const overCap = world.particles.length >= world.particleTarget;
+  // by makeRandomViableGenome) until we reach the target. Gated only
+  // when particles run way over cap (2x), to throttle the runaway
+  // corpse-mass case without choking respawns when a small overshoot
+  // is just a transient. Death-released particles bypass the
+  // replenish/aerate caps because autolysis can't refuse to produce
+  // its mass.
+  const overCap = world.particles.length >= world.particleTarget * 2;
   if (world.founderTarget > 0 && !overCap && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     const need = world.founderTarget - currentLineages.size;
