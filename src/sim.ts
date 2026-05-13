@@ -691,6 +691,17 @@ export interface Species {
   // species (a member's c.genome can drift somatically; this one
   // stays the canonical species signature).
   genome: Uint8Array;
+  // Per-position VM execution counter (length = MAX_GENOME_BYTES).
+  // Every tick that any cell of this species runs its VM, each PC
+  // the VM lands on increments the slot at that position. Hot
+  // positions = code that actually runs; zero slots = dead code or
+  // unreachable. Aggregated across the species' cells; somatic
+  // drift in any individual cell may slightly misalign its PCs vs.
+  // the canonical genome here, treated as noise.
+  execCounts: Uint32Array;
+  // World ticks during which at least one cell of this species ran
+  // its VM. Combined with execCounts gives per-position rates.
+  vmTicks: number;
 }
 
 export interface PhylogenyEvent {
@@ -1825,6 +1836,8 @@ function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefi
       parents: new Set<string>(),
       lane: world.nextSpeciesLane++,
       genome: new Uint8Array(c.genome),
+      execCounts: new Uint32Array(MAX_GENOME_BYTES),
+      vmTicks: 0,
     };
     world.species.set(key, sp);
   }
@@ -2869,7 +2882,14 @@ function updateCreatures(world: World, dt: number): void {
     VM_SELF.aminoAcid = c.molecules.aminoAcid;
     VM_SELF.waste = c.molecules.waste;
 
-    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, VM_OUT);
+    // Per-species execution counters: each PC the VM lands on this
+    // tick increments species.execCounts[pc]. species.vmTicks is
+    // bumped once per cell-run so we can divide for per-position
+    // rates.
+    const sp = world.species.get(c.speciesKey);
+    const ec = sp ? sp.execCounts : undefined;
+    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, VM_OUT, ec);
+    if (sp) sp.vmTicks++;
     spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
     if (VM_OUT.repair > 0) {
       // Pay per-op so spamming REPAIR is expensive; refresh the window.

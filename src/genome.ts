@@ -288,6 +288,12 @@ export function runTick(
   self: VMSelf,
   budget: number,
   out: VMOutputs,
+  // Optional per-position execution counter. If provided, each PC the
+  // VM hits this tick increments execCounts[pc]. Used by the species-
+  // level analysis to discover which positions of a genome are
+  // actually hot vs. dead code -- and to spot convergent patterns
+  // across independent lineages.
+  execCounts?: Uint32Array,
 ): void {
   out.thrustX = 0;
   out.thrustY = 0;
@@ -321,6 +327,7 @@ export function runTick(
 
   for (let n = 0; n < budget; n++) {
     state.pc = ((state.pc % L) + L) % L;
+    if (execCounts && state.pc < execCounts.length) execCounts[state.pc]++;
     const op = genome[state.pc];
     state.pc++;
     out.instructions++;
