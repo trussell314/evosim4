@@ -1578,6 +1578,9 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SENSE_HEAD_X: case OP.SENSE_HEAD_Y: sensors.add("heading"); break;
       case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
       case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS: sensors.add("other cells"); break;
+      case OP.SENSE_CHEMICAL: sensors.add("chemicals"); break;
+      case OP.SENSE_EM: sensors.add("EM/light"); break;
+      case OP.SENSE_PRESSURE_X: case OP.SENSE_PRESSURE_Y: sensors.add("pressure"); break;
     }
   });
   const gated = hasJump && hasCmp;
@@ -1669,6 +1672,8 @@ const OP_PRETTY_NAME: Record<number, string> = {
   [OP.SYNTH_CHL]: "chlorophyll synth",
   [OP.SYNTH_RIBO]: "ribosome synth",
   [OP.SENSE_AMP]: "sense amp", [OP.THRUST_AMP]: "thrust amp",
+  [OP.SENSE_CHEMICAL]: "chem sensor", [OP.SENSE_EM]: "EM sensor",
+  [OP.SENSE_PRESSURE_X]: "pressure-X", [OP.SENSE_PRESSURE_Y]: "pressure-Y",
 };
 
 // Reverse of OP enum: byte -> short name. Built lazily; only includes

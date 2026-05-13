@@ -288,6 +288,11 @@ export class CreatureStore {
   bornAt: Float32Array;
   ingestCooldown: Float32Array;
   repairTicks: Int32Array;
+  // Total mechanical force on the cell this tick, recorded by
+  // applyForces. Read by populateSensors to feed SENSE_PRESSURE_X/Y.
+  // pressureY also gets a static depth term added before VM read.
+  ax: Float32Array;
+  ay: Float32Array;
   // molecule pools (parallel to MOLECULE_IDS order)
   m_glucose: Float32Array;
   m_fattyAcid: Float32Array;
@@ -321,6 +326,7 @@ export class CreatureStore {
     this.r = blank; this.density = blank;
     this.energy = blank; this.senseRange = blank; this.thrustAccel = blank;
     this.bornAt = blank; this.ingestCooldown = blank; this.repairTicks = blanki;
+    this.ax = blank; this.ay = blank;
     this.m_glucose = blank; this.m_fattyAcid = blank; this.m_aminoAcid = blank;
     this.m_minerals = blank; this.m_chlorophyll = blank; this.m_enzyme = blank;
     this.m_o2 = blank; this.m_co2 = blank; this.m_biomass = blank;
@@ -346,6 +352,8 @@ export class CreatureStore {
     this.bornAt = grow1(this.bornAt);
     this.ingestCooldown = grow1(this.ingestCooldown);
     this.repairTicks = grow1i(this.repairTicks);
+    this.ax = grow1(this.ax);
+    this.ay = grow1(this.ay);
     this.m_glucose = grow1(this.m_glucose);
     this.m_fattyAcid = grow1(this.m_fattyAcid);
     this.m_aminoAcid = grow1(this.m_aminoAcid);
@@ -398,6 +406,7 @@ export class CreatureStore {
     this.bornAt[i] = 0;
     this.ingestCooldown[i] = 0;
     this.repairTicks[i] = 0;
+    this.ax[i] = 0; this.ay[i] = 0;
     this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
     this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
@@ -1004,6 +1013,11 @@ const BIRTH_OFFSET_MULT = 3.0;
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
 const LIGHT_DECAY = 250;
+// Static depth contribution to vertical pressure. Scales (y - surfaceY)
+// to a comparable magnitude with the wave / current force components
+// so the genome's threshold logic gets a meaningful spread across the
+// water column. Tuned to give ~100 at the bottom of an 800x600 world.
+const PRESSURE_PER_DEPTH = 0.2;
 
 const DRAG_REF_R = 4;
 const MIN_CREATURE_R = 4;
@@ -2649,6 +2663,10 @@ function applyForces(world: World, dt: number): void {
     vyi += (ayTot - dscaleDrag * vyi) * dt;
     vzi += (az - dscaleDrag * vzi) * dt;
     CVX[i] = vxi; CVY[i] = vyi; CVZ[i] = vzi;
+    // Record force vector for SENSE_PRESSURE_X/Y. Static depth term
+    // added in populateSensors, not here.
+    cs.ax[i] = ax;
+    cs.ay[i] = ayTot;
     CX[i] = xi + vxi * dt;
     CY[i] = yi + vyi * dt;
     CZ[i] = CZ[i] + vzi * dt;
@@ -2664,6 +2682,7 @@ const VM_SENSORS: VMSensors = {
   temp: 0, pheromone: 0,
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
+  pressureX: 0, pressureY: 0,
 };
 const VM_SELF: VMSelf = {
   energy: 0, vx: 0, vy: 0,
@@ -3479,6 +3498,14 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.creatureDy = 0;
   VM_SENSORS.creatureDist = range;
   VM_SENSORS.creatureMass = 0;
+  // Mechanical pressure on the cell. ax/ay are the per-tick force
+  // components recorded by applyForces; pressureY also picks up a
+  // static depth term so deep cells see a steady signal even when
+  // neutrally buoyant (otherwise gravity nets to zero against
+  // buoyancy and depth becomes invisible).
+  VM_SENSORS.pressureX = c.store.ax[c.idx];
+  const depthBelowSurface = Math.max(0, c.y - world.surfaceY);
+  VM_SENSORS.pressureY = c.store.ay[c.idx] + depthBelowSurface * PRESSURE_PER_DEPTH;
   let bestCreatureSq = rangeSq;
   forCreaturesNear(c.x, c.y, range, (other) => {
     if (other === c) return;

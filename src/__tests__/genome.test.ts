@@ -38,6 +38,8 @@ function makeSensors(overrides: Partial<{
     creatureDist: overrides.creatureDist ?? 0,
     creatureMass: overrides.creatureMass ?? 0,
     light: overrides.light ?? 0,
+    pressureX: 0,
+    pressureY: 0,
   };
 }
 

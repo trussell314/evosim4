@@ -87,6 +87,15 @@ export const OP = {
   SYNTH_CHL:     0x6D,
   SYNTH_RIBO:    0x6E,   // build ribosomes; their count multiplies biosynth rate
 
+  // Generalized primitive sensors. The operand selects which "receptor
+  // type" / which band to read -- analogous to how real chemoreceptors
+  // each bind a specific molecule. Evolution rolls operand bytes;
+  // useful ones get selected.
+  SENSE_CHEMICAL:0x6F,   // <id>: id mod 7. 0-5 = material density at cell, 6 = pheromone.
+  SENSE_EM:      0x70,   // <band>: band mod 1 currently = visible light intensity (forward-compat).
+  SENSE_PRESSURE_X: 0x71, // horizontal mechanical force on cell (wave + current + contact)
+  SENSE_PRESSURE_Y: 0x72, // vertical mechanical force + static depth pressure (gravity * depth)
+
   HALT:          0xFF,
 } as const;
 
@@ -108,6 +117,8 @@ OPERANDS[OP.EXCRETE] = 1;
 OPERANDS[OP.INGEST] = 1;
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
+OPERANDS[OP.SENSE_CHEMICAL] = 1;
+OPERANDS[OP.SENSE_EM] = 1;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
 // executable op position. `operand` is `undefined` if the op takes
@@ -190,6 +201,12 @@ export interface VMSensors {
   creatureDist: number;
   creatureMass: number;
   light: number;
+  // Mechanical force vector on the cell (waves + current + contact +
+  // gravity-buoyancy net). pressureY also includes a static-depth
+  // component so deep cells see a steady-state signal even when
+  // neutrally buoyant.
+  pressureX: number;
+  pressureY: number;
 }
 
 export interface VMSelf {
@@ -367,6 +384,23 @@ export function runTick(
       case OP.SENSE_HEAD_Y:   vmPush(stack, sensors.headY); break;
       case OP.SENSE_TEMP:     vmPush(stack, sensors.temp); break;
       case OP.SENSE_PHEROMONE: vmPush(stack, sensors.pheromone); break;
+      case OP.SENSE_CHEMICAL: {
+        // operand mod 7: 0-5 = material density, 6 = pheromone
+        const idx = genome[state.pc % L]; state.pc++;
+        const id = idx % 7;
+        vmPush(stack, id < 6 ? sensors.density[id] : sensors.pheromone);
+        break;
+      }
+      case OP.SENSE_EM: {
+        // operand currently mod 1; future: multiple frequency bands.
+        // Advance PC past the operand byte; band selection is no-op
+        // until SENSE_EM bands are added.
+        state.pc++;
+        vmPush(stack, sensors.light);
+        break;
+      }
+      case OP.SENSE_PRESSURE_X: vmPush(stack, sensors.pressureX); break;
+      case OP.SENSE_PRESSURE_Y: vmPush(stack, sensors.pressureY); break;
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
       case OP.REPAIR:         out.repair++; break;
@@ -904,6 +938,12 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.GT]:            1.5,
   [OP.JZ]:            1.5,
   [OP.PUSH8]:         1.5,
+  // Primitive sensors get a modest weight so founders sample them
+  // without crowding out the food-loop ops.
+  [OP.SENSE_CHEMICAL]: 1.5,
+  [OP.SENSE_EM]:       1.5,
+  [OP.SENSE_PRESSURE_X]: 1.5,
+  [OP.SENSE_PRESSURE_Y]: 1.5,
 };
 const SEED_OP_POOL: number[] = (() => {
   const pool: number[] = [];
