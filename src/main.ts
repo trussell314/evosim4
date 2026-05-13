@@ -1548,6 +1548,10 @@ function frame(): void {
   updateDroplets();
   render();
   updateInspector();
+  // Refresh the hover tooltip too -- otherwise it goes stale while
+  // the cursor is parked, since the only triggers are mousemove /
+  // mouseleave. Cheap: just rewrites a single DOM node.
+  if (pendingMouseInside) flushTooltip();
   maybeAnalyzeGenomes();
   const renderMs = performance.now() - tBeforeRender;
   updatePerfStats(advanced, renderMs, simMsLast);
