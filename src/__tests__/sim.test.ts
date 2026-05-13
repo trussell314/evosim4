@@ -170,8 +170,8 @@ describe("createWorld", () => {
     // replenishParticles at particleSpawnRate) but is seeded with
     // 5-10 random founders, each its own founding lineage.
     expect(w.particles.length).toBe(0);
-    expect(w.creatures.length).toBeGreaterThanOrEqual(5);
-    expect(w.creatures.length).toBeLessThanOrEqual(10);
+    expect(w.creatures.length).toBeGreaterThanOrEqual(15);
+    expect(w.creatures.length).toBeLessThanOrEqual(25);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
@@ -210,8 +210,8 @@ describe("createWorld", () => {
     const w = createWorld(800, 600);
     // 5-10 founders means 5-10 species (each random genome is its
     // own root). Founders are at firstSeen=0 with no parent.
-    expect(w.species.size).toBeGreaterThanOrEqual(5);
-    expect(w.species.size).toBeLessThanOrEqual(10);
+    expect(w.species.size).toBeGreaterThanOrEqual(15);
+    expect(w.species.size).toBeLessThanOrEqual(25);
     for (const sp of w.species.values()) {
       expect(sp.firstSeen).toBe(0);
       expect(sp.parents.size).toBe(0);

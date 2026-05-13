@@ -2086,8 +2086,8 @@ export function createWorld(width: number, height: number): World {
 // Founder spawn count + steady-state target. Initial world drops in
 // random[MIN, MAX] founders; later top-ups push the live count back
 // toward TARGET whenever it falls below.
-const INITIAL_FOUNDER_MIN = 5;
-const INITIAL_FOUNDER_MAX = 10;
+const INITIAL_FOUNDER_MIN = 15;
+const INITIAL_FOUNDER_MAX = 25;
 const FOUNDER_TARGET = 25;
 
 function spawnFounder(world: World): Creature {
@@ -4708,7 +4708,11 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.t = saved.t;
   world.nextLineageRoot = saved.nextLineageRoot;
   world.extinctionCount = saved.extinctionCount;
-  world.founderTarget = saved.founderTarget;
+  // Intentionally NOT restoring saved.founderTarget -- we want the
+  // current FOUNDER_TARGET constant to win so bumps in code take
+  // effect even when restoring from a snapshot taken under an older
+  // target. Tests / scripts that set founderTarget at runtime keep
+  // doing so via direct mutation after createWorld returns.
   world.dayPhase = saved.dayPhase;
   world.disturbanceIntensity = saved.disturbanceIntensity;
   world.disturbanceStartedAt = saved.disturbanceStartedAt;
