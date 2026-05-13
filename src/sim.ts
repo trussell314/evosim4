@@ -82,6 +82,12 @@ export interface Obstacle {
   // sets this to undefined and is rendered as a lobe union.
   polygon?: { x: number; y: number }[];
   color: string;
+  // Discrete depth layer (0..ROCK_Z_LAYERS-1). Rocks at different
+  // layers don't interact during placement -- letting them visually
+  // overlap simulates 3D depth on a 2D cross-section. Rendering
+  // sorts by z descending so foreground rocks (low z) paint over
+  // background rocks (high z).
+  z: number;
 }
 
 // Particle storage as Struct-of-Arrays. All hot fields live in a
@@ -1351,6 +1357,11 @@ function advanceDisturbance(world: World, dt: number): void {
 // contact point isn't directly under the center -- a real rock
 // perched off-center on top of another rock tips and falls further
 // rather than balancing on a knife edge.
+// Number of discrete depth layers rocks can occupy. Rocks at
+// different layers don't interact during placement -- they can
+// visually overlap, simulating 3D depth on a 2D cross-section.
+const ROCK_Z_LAYERS = 5;
+
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
@@ -1361,29 +1372,41 @@ export function generateObstacles(world: World): void {
   const ROCK_R_MAX = 42;
   const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
 
-  // Heightmap: top-of-surface y at each integer x column. Each
-  // landed rock updates the columns it covers using its polygon's
-  // top edge (not a circle), so subsequent rocks see the jagged
-  // silhouette they're settling against.
-  const heightmap = new Float32Array(W);
-  heightmap.fill(floorY);
+  // One heightmap per z layer. A rock at layer k only sees / updates
+  // heightmaps[k]; rocks at other layers pass through it during
+  // placement. Each layer starts flat at the bedrock.
+  const heightmaps: Float32Array[] = [];
+  for (let k = 0; k < ROCK_Z_LAYERS; k++) {
+    const hm = new Float32Array(W);
+    hm.fill(floorY);
+    heightmaps.push(hm);
+  }
 
   for (let i = 0; i < ROCK_COUNT; i++) {
+    const z = Math.floor(Math.random() * ROCK_Z_LAYERS);
+    const heightmap = heightmaps[z];
     const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
     const elong = 0.85 + Math.random() * 0.9;
-    const tilt = -0.5 + Math.random() * 1.0;
 
-    // Build the polygon ONCE around (0, 0) so its vertex jitter is
-    // fixed; we translate to (rx, ry) at placement time. Compute its
-    // per-column bottom/top profile so collision uses the actual
-    // jagged silhouette.
+    // Pick the random rest x first so we can sample the local slope
+    // there. The rock's settle tilt = atan(local slope), so a rock
+    // landing on a hillside lies along that hillside instead of
+    // being parallel to gravity. Plus a small random jitter so
+    // identical surfaces don't all produce identically-tilted rocks.
+    const rxInitial = baseR + Math.random() * (W - 2 * baseR);
+    const slopeWindow = Math.max(8, baseR * 0.5);
+    const hL = heightmap[Math.max(0, Math.floor(rxInitial - slopeWindow))];
+    const hR = heightmap[Math.min(W - 1, Math.floor(rxInitial + slopeWindow))];
+    const localSlope = (hR - hL) / (2 * slopeWindow);
+    const tilt = Math.atan(localSlope) + (Math.random() - 0.5) * 0.4;
+
+    // Build the polygon ONCE around (0, 0) with the chosen tilt; we
+    // translate to (rx, ry) at placement time. Compute its per-column
+    // bottom/top profile so collision uses the actual jagged shape.
     const protoPoly = buildRockPolygon(0, 0, baseR, elong, tilt);
     const profile = buildPolygonProfile(protoPoly);
     const halfW = Math.max(-profile.minXi, profile.bottom.length + profile.minXi);
 
-    // Where the rock rests if centered at world x = rx: the smallest
-    // ry such that profile.bottom[xi] + ry touches heightmap at world
-    // x = floor(rx) + minXi + xi, for some xi.
     function supportY(rx: number): number {
       let ry = floorY;
       const baseX = Math.floor(rx) + profile.minXi;
@@ -1398,13 +1421,11 @@ export function generateObstacles(world: World): void {
       return ry;
     }
 
-    let rx = halfW + Math.random() * (W - 2 * halfW);
+    let rx = Math.max(halfW, Math.min(W - halfW, rxInitial));
 
-    // Iteratively roll. Sample a 2-px shift each side; if either
-    // would let the rock drop further (larger ry = lower in the
-    // world), move there. Converges when neither direction improves
-    // -- the rock is supported under its center, or has hit a wide
-    // flat surface / the floor.
+    // Roll. Sample a 2-px shift each side; if either lets the rock
+    // drop further, move there. Converges when neither direction
+    // improves -- supported under center / wide flat / floor.
     for (let iter = 0; iter < 80; iter++) {
       const ry = supportY(rx);
       const leftX = Math.max(halfW, rx - 2);
@@ -1417,12 +1438,13 @@ export function generateObstacles(world: World): void {
     }
     const ry = supportY(rx);
 
-    // Translate the prototype polygon into its final resting place.
+    // Translate prototype polygon to final position.
     const polygon = protoPoly.map((v) => ({ x: v.x + rx, y: v.y + ry }));
     const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
     const tone = tones[Math.floor(Math.random() * tones.length)];
     const ob = makeObstacleFromLobes(lobes, tone);
     ob.polygon = polygon;
+    ob.z = z;
     for (const v of polygon) {
       if (v.x < ob.minX) ob.minX = v.x;
       if (v.y < ob.minY) ob.minY = v.y;
@@ -1431,8 +1453,7 @@ export function generateObstacles(world: World): void {
     }
     world.obstacles.push(ob);
 
-    // Update heightmap using the polygon's TOP profile so subsequent
-    // rocks see the jagged silhouette, not a smooth dome.
+    // Update this layer's heightmap using the polygon's top profile.
     const baseX = Math.floor(rx) + profile.minXi;
     for (let xi = 0; xi < profile.top.length; xi++) {
       const t = profile.top[xi];
@@ -1443,6 +1464,9 @@ export function generateObstacles(world: World): void {
       if (topY < heightmap[wx]) heightmap[wx] = topY;
     }
   }
+  // Sort obstacles back-to-front so rendering passes (terrain bitmap,
+  // any per-frame redraw) paint deepest rocks first.
+  world.obstacles.sort((a, b) => b.z - a.z);
 }
 
 // Rasterize a polygon's per-column vertical extent. For each integer
@@ -1540,7 +1564,7 @@ function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
     if (l.x + l.r > maxX) maxX = l.x + l.r;
     if (l.y + l.r > maxY) maxY = l.y + l.r;
   }
-  return { minX, minY, maxX, maxY, lobes, color };
+  return { minX, minY, maxX, maxY, lobes, color, z: 0 };
 }
 
 // Push particles + creatures out of any obstacle they overlap. Static

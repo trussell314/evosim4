@@ -1102,11 +1102,17 @@ function buildTerrainBitmap(): void {
   off.height = h;
   const octx = off.getContext("2d");
   if (!octx) return;
+  // Obstacles are already sorted by z descending in generateObstacles
+  // (deepest first). Painting in that order = back-to-front. Deeper
+  // rocks (higher z) are darkened to suggest depth fog; foreground
+  // rocks paint over them at full saturation.
   for (const ob of world.obstacles) {
+    const depthFade = 0.18 * (ob.z ?? 0); // 0 (front) .. 0.72 (back)
+    const baseColor = hexLerp(ob.color, 0, 0, 0, depthFade);
     const grad = octx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20));
-    grad.addColorStop(0.4, ob.color);
-    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, 0.45));
+    grad.addColorStop(0, hexLerp(baseColor, 255, 255, 255, 0.20 * (1 - depthFade)));
+    grad.addColorStop(0.4, baseColor);
+    grad.addColorStop(1, hexLerp(baseColor, 0, 0, 0, 0.45));
     octx.fillStyle = grad;
     octx.beginPath();
     if (ob.polygon && ob.polygon.length >= 3) {
@@ -1122,7 +1128,7 @@ function buildTerrainBitmap(): void {
       }
     }
     octx.fill();
-    octx.strokeStyle = hexLerp(ob.color, 0, 0, 0, 0.55);
+    octx.strokeStyle = hexLerp(baseColor, 0, 0, 0, 0.55);
     octx.lineWidth = 1;
     octx.stroke();
   }
