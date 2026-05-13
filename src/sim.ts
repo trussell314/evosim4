@@ -1195,12 +1195,31 @@ const CAT_ATP_COST = 4; // similar to enzyme; medium-complex protein
 const CAT_DECAY_PER_SEC = 0.005;
 // Slot -> human label, exported for UI / debug. Order is the
 // canonical catalyst id used by SYNTH_CAT's operand mod CATALYST_COUNT
-// and by catMult(c, slot).
+// and by catMult(c, slot). One slot per distinct cellular reaction --
+// every chemistry path the simulation runs is catalysable.
+const CAT_AEROBIC      = 0;
+const CAT_FERMENT      = 1;
+const CAT_BETAOX       = 2;
+const CAT_CATABOLIZE   = 3;
+const CAT_PHOTO        = 4;
+const CAT_SYNTH_AA     = 5;
+const CAT_SYNTH_FA     = 6;
+const CAT_SYNTH_CHLORO = 7;
+const CAT_SYNTH_ENZYME = 8;
+const CAT_SYNTH_RIBO   = 9;
+const CAT_BIOMASS      = 10;
 export const CATALYSTS = [
-  { name: "respirase",  boosts: "aerobic" },
-  { name: "fermentase", boosts: "ferment" },
-  { name: "lipase",     boosts: "betaOx" },
-  { name: "catabase",   boosts: "catabolize" },
+  { name: "respirase",     boosts: "aerobic respiration" },
+  { name: "fermentase",    boosts: "fermentation" },
+  { name: "lipase",        boosts: "beta-oxidation" },
+  { name: "catabase",      boosts: "food catabolism" },
+  { name: "carboxylase",   boosts: "photosynthesis" },
+  { name: "amino-synthase",boosts: "amino-acid synthesis" },
+  { name: "lipo-synthase", boosts: "fatty-acid synthesis" },
+  { name: "chloro-synthase", boosts: "chlorophyll synthesis" },
+  { name: "enzyme-synthase", boosts: "enzyme synthesis" },
+  { name: "ribo-synthase",  boosts: "ribosome synthesis" },
+  { name: "bio-synthase",   boosts: "biomass growth" },
 ] as const;
 function catMult(c: Creature, slot: number): number {
   return 1 + c.store.catalystCols[slot][c.idx] / CAT_REF;
@@ -2019,7 +2038,7 @@ function catabolize(c: Creature, dt: number): void {
     const rc = resCols[m];
     const avail = rc[i];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * catMult(c, 3);
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * catMult(c, CAT_CATABOLIZE);
     const rd = rate * dt;
     const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
@@ -2056,7 +2075,7 @@ function aerobicRespire(c: Creature, dt: number): void {
   const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
   if (g <= 0 || o <= 0 || a <= 0) return;
   const a10 = a / 10;
-  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT)) * catMult(c, 0);
+  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT)) * catMult(c, CAT_AEROBIC);
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (o < amt) amt = o;
@@ -2077,7 +2096,7 @@ function ferment(c: Creature, dt: number): void {
   if (g <= 0 || a <= 0) return;
   const a2 = a / 2;
   const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
-  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression * catMult(c, 1);
+  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression * catMult(c, CAT_FERMENT);
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (a2 < amt) amt = a2;
@@ -2096,7 +2115,7 @@ function betaOxidize(c: Creature, dt: number): void {
   const f = s.m_fattyAcid[i], o = s.m_o2[i], a = s.m_adp[i];
   if (f <= 0 || o <= 0 || a <= 0) return;
   const a14 = a / 14;
-  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT)) * catMult(c, 2);
+  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT)) * catMult(c, CAT_BETAOX);
   const rdt = rate * dt;
   let amt = rdt < f ? rdt : f;
   if (o < amt) amt = o;
@@ -2117,7 +2136,7 @@ function photosynthesize(c: Creature, dt: number, light: number): void {
   const chl = s.m_chlorophyll[i], co2 = s.m_co2[i], e = s.energy[i];
   if (chl <= 0 || co2 <= 0 || e <= 0 || light <= 0) return;
   const surface = s.r[i] / MIN_CREATURE_R;
-  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light;
+  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light * catMult(c, CAT_PHOTO);
   const rdt = rate * dt;
   let amt = rdt < co2 ? rdt : co2;
   if (e < amt) amt = e;
@@ -2325,12 +2344,12 @@ function runOrganelleChemistry(
   photosynthesize(inner, dtT, light);
   const sm = inner.organelleSynthMask;
   const rm = riboMult(inner);
-  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
-  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_AA),         0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_FA),         0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_CHLORO), 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_ENZYME), 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_RIBO),     0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
+  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm * catMult(inner, CAT_BIOMASS),      0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
   maintenanceDecay(inner, dt);
 
   // Bidirectional diffusion of small molecules + ATP between inner
@@ -2945,14 +2964,14 @@ function updateCreatures(world: World, dt: number): void {
     // ribosome production accelerates ribosome production -- once a
     // lineage invests, it scales fast.
     const rm = riboMult(c);
-    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
+    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_AA),         0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_FA),         0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_CHLORO), 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_ENZYME), 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_RIBO),     0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
     // Biomass is mostly protein (aa); the lipid fraction is structural
     // membrane only.
-    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm * catMult(c, CAT_BIOMASS),      0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
     // Generic catalysts. SYNTH_CAT <id> sets a bit per slot; each one
     // built scales with riboMult like every other biosynth product.

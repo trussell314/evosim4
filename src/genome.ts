@@ -113,7 +113,7 @@ export const OP = {
 // the VM dispatch mods the operand by this -- it's part of the
 // genome ABI. If you add a catalyst, bump this and add the entry in
 // sim.ts CATALYSTS table to match.
-export const CATALYST_COUNT = 4;
+export const CATALYST_COUNT = 11;
 
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
