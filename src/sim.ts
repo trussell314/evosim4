@@ -2322,19 +2322,20 @@ export function step(world: World, dt: number): void {
 
   // Top up founding lineages. If the live count is below
   // world.founderTarget, spawn fresh founders (each viability-filtered
-  // by makeRandomViableGenome) until we reach the target. Gated only
-  // when particles run way over cap (2x), to throttle the runaway
-  // corpse-mass case without choking respawns when a small overshoot
-  // is just a transient. Death-released particles bypass the
-  // replenish/aerate caps because autolysis can't refuse to produce
-  // its mass.
+  // by makeRandomViableGenome) until we reach the target.
   //
-  // The over-cap gate is bypassed when no lineages are alive at all:
-  // the gate exists to prevent successful lineages from worsening
-  // corpse mass downstream, but with zero cells nothing downstream
-  // happens. Locking the world dead-empty isn't the goal.
-  const overCap = world.particles.length >= world.particleTarget * 2;
+  // The over-cap gate's permissiveness scales with how depleted the
+  // lineage pool is. At a healthy full house of lineages, enforce a
+  // 2x particle cap as a real throttle on successful runs. As
+  // lineages die off, loosen toward "no throttle" -- when the world
+  // is down to one barely-alive lineage that can't possibly drain
+  // the surplus before dying, we shouldn't be the reason recovery
+  // can't start. Death-released particles bypass the replenish/aerate
+  // caps because autolysis can't refuse to produce its mass.
+  const deficit = Math.max(0, world.founderTarget - currentLineages.size);
+  const capMult = 2 + deficit * 0.8;
   const allDead = currentLineages.size === 0;
+  const overCap = world.particles.length >= world.particleTarget * capMult;
   if (world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     const need = world.founderTarget - currentLineages.size;
