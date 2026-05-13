@@ -591,6 +591,37 @@ function zoomAround(screenX: number, screenY: number, factor: number): void {
   viewZoom = newZoom;
 }
 function resetView(): void { viewZoom = 1; viewPanX = 0; viewPanY = 0; }
+// Keep the world drawing inside the visible canvas. At zoom=1 (or any
+// zoom where the world's drawn size is smaller than the available
+// area) we snap to centered, so pinching back out always lands on
+// the original auto-fit. When zoomed in, pan is clamped so an edge
+// of the world can never leave the canvas edge -- no more "dark
+// void" gutters when panning aggressively.
+function clampPan(): void {
+  const canvasW = canvas.clientWidth;
+  const canvasH = canvas.clientHeight;
+  const availH = Math.max(1, canvasH - PHYLO_STRIP_H);
+  const drawW = WORLD_SIZE.w * viewScale * viewZoom;
+  const drawH = WORLD_SIZE.h * viewScale * viewZoom;
+  const originX = viewOffsetX * viewZoom;
+  const originY = viewOffsetY * viewZoom;
+  if (drawW >= canvasW) {
+    const minPan = canvasW - originX - drawW;
+    const maxPan = -originX;
+    if (viewPanX < minPan) viewPanX = minPan;
+    else if (viewPanX > maxPan) viewPanX = maxPan;
+  } else {
+    viewPanX = (canvasW - drawW) / 2 - originX;
+  }
+  if (drawH >= availH) {
+    const minPan = availH - originY - drawH;
+    const maxPan = -originY;
+    if (viewPanY < minPan) viewPanY = minPan;
+    else if (viewPanY > maxPan) viewPanY = maxPan;
+  } else {
+    viewPanY = (availH - drawH) / 2 - originY;
+  }
+}
 
 // --- Touch gestures ---
 let pinchStartDistance = 0;
@@ -849,6 +880,10 @@ function drawDroplets(): void {
 const SURFACE_VIS_STEP = 3;
 
 function render(): void {
+  // Re-clamp pan every frame so any path that mutates viewPan / viewZoom
+  // (touch gestures, wheel, future hooks) gets the correction without
+  // having to remember to call clampPan itself.
+  clampPan();
   const { width, height, depth, surfaceY } = world;
   // Day/night tint applied to both surface and depth water colors so
   // the whole scene gets dimmer at night. 1 = full day, ~0.4 = deep
