@@ -18,6 +18,7 @@ import {
   mutateGenome,
   CATALYST_COUNT,
   N_REACTIONS,
+  OP,
   somaticMutateOnce,
   computeSenseRange,
   computeThrustAccel,
@@ -1215,6 +1216,19 @@ const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
 const CHEM_ADP = 7;
+// chlorophyll, enzyme, ribosome have specific roles as rate multipliers:
+//   chl   -> photosynth (mandatory: no chl -> no photosynth)
+//   ribo  -> all biosynth reactions (mandatory: no ribo -> no biosynth)
+//   enz   -> catabolize (optional boost; no enz still catabolizes slowly)
+// Real biology has matching analogs: pigment for carbon fixation, the
+// ribosomal machinery for protein synthesis, digestive enzymes for
+// breaking down ingested food.
+const CHEM_CHL = 9;
+const CHEM_ENZ = 10;
+const CHEM_RIBO = 11;
+const RIBO_REF = 5;
+const CHL_REF = 5;
+const ENZ_REF = 5;
 const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
 interface ChemicalDef {
   name: string;
@@ -1269,6 +1283,14 @@ interface Reaction {
   // Apply BIOSYNTH_ATP_FLOOR when this reaction consumes ATP. True for
   // biosynth slots so newborns don't burn their starting ATP on growth.
   atpFloor: boolean;
+  // Rate multiplied by chemCols[CHEM_RIBO][i] / RIBO_REF. Set on
+  // every biosynth reaction (real ribosomes drive protein synthesis).
+  // Mandatory -- zero ribosomes means zero biosynth.
+  riboScale: boolean;
+  // Rate multiplied by chemCols[CHEM_CHL][i] / CHL_REF. Set only on
+  // photosynth (real chlorophyll absorbs the photon). Mandatory --
+  // zero chlorophyll means no carbon fixation.
+  chlScale: boolean;
 }
 const REACTIONS: Reaction[] = buildReactionTable();
 
@@ -1336,6 +1358,7 @@ function buildReactionTable(): Reaction[] {
     out.push({
       sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax,
       uncatRate: 0, gateMask: 0, surfaceScale: false, atpFloor: false,
+      riboScale: false, chlScale: false,
     });
   }
   // Overwrite the first 10 generated entries with the named reactions.
@@ -1357,7 +1380,11 @@ function installNamedReactions(out: Reaction[]): void {
     pChem: number[], pCount: number[],
     atpDelta: number,
     rate: number,
-    opts: { lightIn?: number; gateMask?: number; surfaceScale?: boolean; atpFloor?: boolean } = {},
+    opts: {
+      lightIn?: number; gateMask?: number;
+      surfaceScale?: boolean; atpFloor?: boolean;
+      riboScale?: boolean; chlScale?: boolean;
+    } = {},
   ): Reaction => ({
     sChem: new Uint8Array(sChem),
     sCount: new Float32Array(sCount),
@@ -1370,21 +1397,26 @@ function installNamedReactions(out: Reaction[]): void {
     gateMask: opts.gateMask ?? 0,
     surfaceScale: opts.surfaceScale ?? false,
     atpFloor: opts.atpFloor ?? false,
+    riboScale: opts.riboScale ?? false,
+    chlScale: opts.chlScale ?? false,
   });
   // Slot index in NAMED_CHEMICALS: o2=0 co2=1 glu=2 aa=3 fa=4 min=5
   // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11.
-  // Energy reactions:
+  // Energy reactions: no riboScale (these aren't protein synthesis).
   out[0] = mk([2, 0], [1, 1], [1], [2], +10, 16);                // aerobic: glu+o2 -> 2 co2 + 10 atp
   out[1] = mk([2], [1], [1, 8], [0.5, 0.5], +2, 1.5);            // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
   out[2] = mk([4, 0], [1, 1], [1], [2], +14, 1.5);               // betaOx: fa+o2 -> 2 co2 + 14 atp
-  out[3] = mk([1], [1], [2, 0], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true }); // photosynth
-  // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0):
-  out[4] = mk([2, 5], [0.7, 0.3], [3], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true }); // synth_aa
-  out[5] = mk([2, 5], [0.9, 0.1], [4], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true }); // synth_fa
-  out[6] = mk([3, 5], [0.5, 0.5], [9], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true }); // synth_chl
-  out[7] = mk([3, 5], [0.5, 0.5], [10], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true }); // synth_enz
-  out[8] = mk([3, 5], [0.5, 0.5], [11], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true }); // synth_ribo
-  out[9] = mk([3, 4], [0.9, 0.1], [6], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true }); // synth_biomass
+  // Photosynth: requires chlorophyll molecule (mandatory multiplier).
+  out[3] = mk([1], [1], [2, 0], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
+  // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
+  // with ribosome count (mandatory) -- this is the cell's protein
+  // synthesis machinery, and zero ribosomes means zero growth.
+  out[4] = mk([2, 5], [0.7, 0.3], [3], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, riboScale: true }); // synth_aa
+  out[5] = mk([2, 5], [0.9, 0.1], [4], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, riboScale: true }); // synth_fa
+  out[6] = mk([3, 5], [0.5, 0.5], [9], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, riboScale: true }); // synth_chl
+  out[7] = mk([3, 5], [0.5, 0.5], [10], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, riboScale: true }); // synth_enz
+  out[8] = mk([3, 5], [0.5, 0.5], [11], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, riboScale: true }); // synth_ribo
+  out[9] = mk([3, 4], [0.9, 0.1], [6], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_biomass
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -1508,7 +1540,24 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
       satProduct *= adpAvail / (adpAvail + KM);
     }
     const surface = rxn.surfaceScale ? (s.r[i] / MIN_CREATURE_R) : 1;
-    const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface;
+    // Named-molecule multipliers: ribosomes are the cell's protein-
+    // synthesis machinery (mandatory on every biosynth reaction);
+    // chlorophyll is the photosynth pigment (mandatory on slot 3).
+    // Both gate hard at zero -- no pigment, no photosynth; no
+    // ribosomes, no biosynthesis. cells must build these molecules
+    // via SYNTH_RIBO / SYNTH_CHL to actually grow / fix carbon.
+    let machineryMult = 1;
+    if (rxn.riboScale) {
+      const r = s.chemCols[CHEM_RIBO][i];
+      if (r <= 0) continue;
+      machineryMult *= r / RIBO_REF;
+    }
+    if (rxn.chlScale) {
+      const ch = s.chemCols[CHEM_CHL][i];
+      if (ch <= 0) continue;
+      machineryMult *= ch / CHL_REF;
+    }
+    const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface * machineryMult;
     let amt = rate * dt;
     if (amt > limit) amt = limit;
     if (amt <= 0) continue;
@@ -2218,6 +2267,17 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
   // (heterotroph / photoautotroph / predator / etc.) -- natural
   // selection picks the survivors rather than the designer.
   const genome = makeRandomViableGenome();
+  // Photoautotroph founders (genome has SYNTH_CHL but no
+  // INGEST/PREDATE/ENGULF) need a chlorophyll bootstrap or they
+  // can't photosynth their first tick and starve before SYNTH_CHL
+  // builds any. Cheap: scan once.
+  let hasMass = false; let hasChl = false;
+  for (let i = 0; i < genome.length; i++) {
+    const b = genome[i];
+    if (b === OP.INGEST || b === OP.PREDATE || b === OP.ENGULF) hasMass = true;
+    else if (b === OP.SYNTH_CHL) hasChl = true;
+  }
+  const founderChl = hasChl && !hasMass ? 2 : (hasChl ? 1 : 0);
   const c = newCreature(world.creatureStore, {
     x, y, z,
     r: MIN_CREATURE_R,
@@ -2232,13 +2292,14 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     // Starter cell ships with a working metabolism: enough ATP to live, a
     // matched ADP pool, some glucose and O2 to run respiration, a little
     // amino-acid / minerals / fatty-acid for biosynthesis and movement,
-    // and biomass to give it physical body. Plus a few ribosomes so it
-    // can actually run biosynthesis from tick 1 (with the strict
-    // ribosome model, zero ribosomes means zero biosynth -- founders
-    // would die before they had a chance to bootstrap).
+    // and biomass to give it physical body. Ribosomes are mandatory
+    // for biosynth (rate = base * ribo/RIBO_REF), and chlorophyll is
+    // mandatory for photosynth (rate = base * chl/CHL_REF) -- so a
+    // photoautotroph founder gets a small chl yolk too.
     molecules: {
       adp: 50, glucose: 20, fattyAcid: 15, aminoAcid: 15,
       o2: 15, minerals: 15, biomass: 30, ribosome: 3,
+      chlorophyll: founderChl,
     },
     // Seed reserves across all materials so the cell can pay the per-byte
     // fission cost (genomeMaterialCost is spread across all 6 materials)
@@ -2351,13 +2412,17 @@ function sat(x: number, km: number = KM_DEFAULT): number {
 function catabolize(c: Creature, dt: number): void {
   const s = c.store; const i = c.idx;
   const surface = s.r[i] / MIN_CREATURE_R;
+  // Enzyme molecule boosts digestion -- not mandatory (uncat baseline
+  // still works) but a cell that builds enzymes catabolizes much
+  // faster. Mirrors digestive enzymes in real heterotroph cells.
+  const enzBoost = 1 + s.chemCols[CHEM_ENZ][i] / ENZ_REF;
   const resCols = s.resCols;
   const molCols = s.molCols;
   for (let m = 0; m < 6; m++) {
     const rc = resCols[m];
     const avail = rc[i];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM));
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * enzBoost;
     const rd = rate * dt;
     const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
@@ -4581,7 +4646,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:2:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:3:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

@@ -869,42 +869,59 @@ export function genomeSynthMask(genome: Uint8Array): number {
   return mask;
 }
 
+// Minimum-viable cell as of phase 2 + the chl/ribo machinery
+// restoration. A cell that's missing any of these can't sustain a
+// lineage on any meaningful timescale, so the founder generator
+// rerolls until it lands a candidate that has all of them.
+//
+//  - hasMass:      INGEST/PREDATE/ENGULF (heterotroph) or SYNTH_CHL
+//                  (photoautotroph; SYNTH_CHL builds chlorophyll which
+//                  is the mandatory multiplier on photosynth).
+//  - hasReproduce: REPRODUCE -- without it the lineage is sterile.
+//  - hasBio:       SYNTH_BIO -- biomass is what keeps the cell above
+//                  MIN_VIABLE_BIOMASS; without replenishment it
+//                  autolyzes in ~14 minutes regardless.
+//  - hasRibo:      SYNTH_RIBO -- ribosomes are the mandatory
+//                  multiplier on every biosynth reaction. Zero ribo
+//                  means zero biomass replenishment.
+//  - hasCat:       SYNTH_CAT -- per-reaction catalyst potential, kept
+//                  required so every lineage can in principle evolve
+//                  metabolic specialization.
 export function viableGenome(genome: Uint8Array): boolean {
-  let hasMetabolism = false;
+  let hasMass = false;
   let hasReproduce = false;
+  let hasBio = false;
   let hasRibo = false;
   let hasCat = false;
   walkGenome(genome, (op) => {
     if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
-      hasMetabolism = true;
+      hasMass = true;
     } else if (op === OP.REPRODUCE) {
       hasReproduce = true;
+    } else if (op === OP.SYNTH_BIO) {
+      hasBio = true;
     } else if (op === OP.SYNTH_RIBO) {
       hasRibo = true;
     } else if (op === OP.SYNTH_CAT) {
       hasCat = true;
     }
-    if (hasMetabolism && hasReproduce && hasRibo && hasCat) return "break";
+    if (hasMass && hasReproduce && hasBio && hasRibo && hasCat) return "break";
   });
-  return hasMetabolism && hasReproduce && hasRibo && hasCat;
+  return hasMass && hasReproduce && hasBio && hasRibo && hasCat;
 }
 
-// Sample a random genome size in [4, 100] with a gradual bias toward
-// smaller. P(size=k) ∝ (101 - k). Floor of 4 because the viability
-// filter requires 3 distinct ops + 1 operand byte, so sizes < 4
-// always fail and waste reroll budget. Ceiling raised from 50 to 100
-// to give evolved lineages room to accumulate complexity (multiple
-// sensors, conditional logic, multiple synth modes) without bumping
-// into the wall. Per-byte mutation + build cost still pressure
-// against bloat, so the upper bound mostly gates how complex an
-// evolved lineage *can* become, not what's typical. Median ~32.
+// Sample a random genome size in [8, 100] with a gradual bias toward
+// smaller. Floor raised to 8 because the viability filter now wants
+// 5 distinct required ops + 2 operand bytes (SYNTH_CAT, plus at
+// least one INGEST or other operand-bearing op). Sizes smaller than
+// that always fail the filter and waste reroll budget.
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // CDF of P(k) ∝ (101 - k) for k in [4, 100] sums to 4753.
-  // Solving u * 4753 = (198-k)(k-3)/2 for k:
-  //   k = (201 - sqrt(38025 - 38024*u)) / 2
+  // CDF of P(k) ∝ (101 - k) for k in [8, 100] sums to (93*94)/2 = 4371.
+  // Solving u * 4371 = (101-k)(94+(101-k))/2 inverts to:
+  //   k = (201 - sqrt(38025 - 37242*u)) / 2  (approx; we clamp anyway)
   const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(4, Math.min(100, k));
+  return Math.max(8, Math.min(100, k));
 }
 
 // Generate a random viable genome. Size is sampled from the triangular
