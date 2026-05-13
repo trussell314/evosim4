@@ -943,6 +943,16 @@ const THRUST_MASS_REF = 200;
 // one.
 const REPRODUCE_ATTEMPT_ATP_BASE = 0.4;
 const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
+// Newborn maternal investment ("yolk"). Free glucose + ATP injected
+// at fission so children survive the lag between birth and reaching
+// their first meal. Small enough not to invalidate metabolic accounting
+// at population scale.
+const NEWBORN_YOLK_GLUCOSE = 15;
+const NEWBORN_YOLK_ATP = 8;
+// Multiplier on (parent.r + child.r) for birth offset. >1 places the
+// child outside the parent's recently-eaten food zone so it can find
+// a food gradient. Was 1.1 (child inside parent's foraging range).
+const BIRTH_OFFSET_MULT = 3.0;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
@@ -2976,8 +2986,17 @@ function tryReproduce(parent: Creature, world: World): void {
     parent.reserves[id] -= give;
     childReserves[id] = give;
   }
-  const energyGift = parent.energy * childShare;
+  let energyGift = parent.energy * childShare;
   parent.energy -= energyGift;
+  // "Yolk": a small free endowment of glucose + ATP to the newborn so
+  // it has runway to find its first meal. Without this, the child
+  // starts with only what proportional split gives it -- often not
+  // enough to survive the lag between birth and reaching a food
+  // particle. Conservation is "violated" (mass appears from thin air)
+  // but this models maternal investment that isn't tracked elsewhere
+  // in our chemistry.
+  childMolecules.glucose += NEWBORN_YOLK_GLUCOSE;
+  energyGift += NEWBORN_YOLK_ATP;
 
   updateCreatureRadius(parent);
 
@@ -2986,7 +3005,11 @@ function tryReproduce(parent: Creature, world: World): void {
   for (const id of MATERIAL_IDS) childMassEstimate += childReserves[id];
   for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
   const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));
-  const offset = (parent.r + childRGuess) * 1.1;
+  // Place the child outside the parent's recent food-eating zone.
+  // The previous 1.1x offset dropped the daughter inside the parent's
+  // sense range of just-eaten particles, so the child saw no food
+  // gradient and drifted until starving.
+  const offset = (parent.r + childRGuess) * BIRTH_OFFSET_MULT;
   const child = newCreature(world.creatureStore, {
     x: parent.x + Math.cos(angle) * offset,
     y: parent.y + Math.sin(angle) * offset,
@@ -3042,8 +3065,9 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   }
   // Drop the daughter at the current separation point. Recomputing from
   // the parent's live position keeps the visual in sync even if the
-  // parent drifted during the second-long animation.
-  const offset = (c.r + child.r) * 1.1;
+  // parent drifted during the second-long animation. Matches the
+  // initial offset in tryReproduce().
+  const offset = (c.r + child.r) * BIRTH_OFFSET_MULT;
   child.x = c.x + Math.cos(ang) * offset;
   child.y = c.y + Math.sin(ang) * offset;
   child.vx = c.vx;

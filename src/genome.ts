@@ -213,7 +213,7 @@ export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0, turn: 0,
     excrete: new Float32Array(6),
-    reproduce: false, reproduceFraction: 0.5,
+    reproduce: false, reproduceFraction: 0.4,
     predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
     repair: 0,
@@ -235,7 +235,11 @@ export function runTick(
   out.turn = 0;
   out.excrete.fill(0);
   out.reproduce = false;
-  out.reproduceFraction = 0.5;
+  // Parent keeps 40%, child gets 60%. Skewed in favor of the newborn
+  // because the parent has had time to build reserves and can rebuild
+  // from a lower base, while the newborn faces an immediate
+  // foraging-or-die window.
+  out.reproduceFraction = 0.4;
   out.predate = false;
   out.engulf = false;
   out.emit = 0;

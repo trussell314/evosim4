@@ -774,7 +774,7 @@ describe("creature: reproduction", () => {
     flushDivisions(w);
     expect(w.creatures.length).toBe(2);
   });
-  it("energy split roughly in half", () => {
+  it("child receives more energy than parent (skewed-share + yolk)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
@@ -782,13 +782,13 @@ describe("creature: reproduction", () => {
     stepFullCycle(w);
     flushDivisions(w);
     const [p, ch] = w.creatures;
-    // Sum drops by the REPRODUCE_ATTEMPT ATP fee (~2 + 0.02 * parent mass),
-    // which is non-trivial when a stuffed cell fissions. Conservation is
-    // checked separately by the mass test; here just verify the two
-    // halves are close to equal.
-    expect(Math.abs(p.energy - ch.energy)).toBeLessThan(3);
+    // Default reproduceFraction=0.4 -> parent keeps 40%, child gets 60%
+    // of the parent's ATP. Plus the newborn yolk (~8 ATP free). So the
+    // child should consistently have noticeably more energy than the
+    // parent post-fission.
+    expect(ch.energy).toBeGreaterThan(p.energy);
   });
-  it("total cell mass approximately conserved across fission", () => {
+  it("cell mass approximately preserved across fission (modulo yolk)", () => {
     const w = quietWorld();
     const c = makeCreature();
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
@@ -798,7 +798,12 @@ describe("creature: reproduction", () => {
     stepFullCycle(w);
     flushDivisions(w);
     const [p, ch] = w.creatures;
-    expect(cellTotalMass(p) + cellTotalMass(ch)).toBeCloseTo(totalBefore, 0);
+    // Maternal investment ("yolk") adds NEWBORN_YOLK_GLUCOSE + ATP of
+    // mass from thin air to the daughter; the rest is conserved across
+    // parent + child (minus a small REPRODUCE attempt fee).
+    const totalAfter = cellTotalMass(p) + cellTotalMass(ch);
+    expect(totalAfter).toBeGreaterThan(totalBefore);
+    expect(totalAfter - totalBefore).toBeLessThan(40);
   });
   it("organic accounts for metabolism during tick", () => {
     const w = quietWorld();
