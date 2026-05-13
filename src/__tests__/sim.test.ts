@@ -53,7 +53,7 @@ function quietWorld(): World {
   return {
     width: 800, height: 600, depth: 24, t: 0,
     particles: [], particleStore: new ParticleStore(256), creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0,
+    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, nextLineageRoot: 0, founderTarget: 0,
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -166,10 +166,12 @@ afterEach(() => {
 describe("createWorld", () => {
   it("populated world with ecology fields", () => {
     const w = createWorld(800, 600);
-    // World starts empty -- particles trickle in via replenishParticles
-    // at particleSpawnRate. Just the seed cell exists at t=0.
+    // World starts empty of particles (they trickle in via
+    // replenishParticles at particleSpawnRate) but is seeded with
+    // 5-10 random founders, each its own founding lineage.
     expect(w.particles.length).toBe(0);
-    expect(w.creatures.length).toBe(1);
+    expect(w.creatures.length).toBeGreaterThanOrEqual(5);
+    expect(w.creatures.length).toBeLessThanOrEqual(10);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
@@ -204,13 +206,16 @@ describe("createWorld", () => {
     expect(w.particles.length).toBe(5);
   });
 
-  it("registers the initial creature's species", () => {
+  it("registers each initial founder as its own species (no parents)", () => {
     const w = createWorld(800, 600);
-    expect(w.species.size).toBe(1);
-    const sp = Array.from(w.species.values())[0];
-    expect(sp.alive).toBe(1);
-    expect(sp.firstSeen).toBe(0);
-    expect(sp.parents.size).toBe(0);
+    // 5-10 founders means 5-10 species (each random genome is its
+    // own root). Founders are at firstSeen=0 with no parent.
+    expect(w.species.size).toBeGreaterThanOrEqual(5);
+    expect(w.species.size).toBeLessThanOrEqual(10);
+    for (const sp of w.species.values()) {
+      expect(sp.firstSeen).toBe(0);
+      expect(sp.parents.size).toBe(0);
+    }
     expect(w.phylogenyEvents.length).toBe(0);
   });
 });
@@ -1064,6 +1069,7 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
 describe("ecology: extinction recovery", () => {
   it("counter ticks up on full die-off and respawns", () => {
     const w = quietWorld();
+    w.founderTarget = 1; // exercise respawn path
     const c = makeCreature({ energy: 0 });
     c.reserves.organic = 0;
     w.creatures.push(c);
@@ -1074,6 +1080,7 @@ describe("ecology: extinction recovery", () => {
   });
   it("respawned cell within world bounds", () => {
     const w = quietWorld();
+    w.founderTarget = 1; // exercise respawn path
     const c = makeCreature({ energy: 0 });
     c.reserves.organic = 0;
     w.creatures.push(c);

@@ -445,6 +445,12 @@ export class Creature {
   vm!: VMState;
   color!: string;
   speciesKey!: string;
+  // Founding-lineage ID: every founder gets a fresh unique ID, every
+  // descendant inherits it. Used to count distinct living lineages
+  // so the world can top up to a target founder count. Engulfed cells
+  // retain their original lineageRoot (they're alive, just confined
+  // to a vacuole) but only world.creatures contribute to the count.
+  lineageRoot: number = -1;
   division: { progress: number; axis: number; child: Creature } | null = null;
   contents: Creature[] = [];
   bonds: Creature[] = [];
@@ -677,6 +683,15 @@ export interface World {
   particleTarget: number;
   particleSpawnRate: number;
   extinctionCount: number;
+  // Monotonic counter used to assign a fresh lineageRoot ID each time
+  // a founder is spawned (initial seeding + top-up after extinctions).
+  nextLineageRoot: number;
+  // Steady-state target for distinct founding lineages alive in the
+  // world. Each step counts current lineages and spawns up to this
+  // many to top up. Real worlds use 10; tests usually set to 0 to
+  // disable spontaneous founder spawning while they assert specific
+  // population shapes.
+  founderTarget: number;
   gravity: number;
   drag: number;
   surfaceAmp: number;
@@ -1537,6 +1552,8 @@ export function createWorld(width: number, height: number): World {
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     extinctionCount: 0,
+    nextLineageRoot: 0,
+    founderTarget: FOUNDER_TARGET,
     gravity: 60,
     drag: 0.6,
     surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
@@ -1575,19 +1592,46 @@ export function createWorld(width: number, height: number): World {
   resizePheromone(world);
   generateObstacles(world);
   rebuildObstacleIndex(world);
-  // World starts empty: just water and the seed cell. Particles trickle
-  // in via replenishParticles() at world.particleSpawnRate until the
-  // target is reached, so the simulation has a visible "bootstrap"
-  // period instead of dumping thousands of particles all at once.
-  const first = makeCreature(world, world.width * 0.5, world.height * 0.3, world.depth * 0.5);
-  first.bornAt = 0;
-  // First cell defines the root: paint it white and use its genome as the
-  // anchor every other cell colors against until the next extinction.
-  world.anchorGenome = new Uint8Array(first.genome);
-  first.color = genomeColor(first.genome, world.anchorGenome);
-  world.creatures.push(first);
-  noteCreatureBirth(world, first, undefined);
+  // World starts empty: just water and a handful of founder cells.
+  // Each founder is independent (its own genome, its own lineageRoot
+  // id) so we get several parallel lineages to watch. Particles
+  // trickle in via replenishParticles() afterward.
+  const initialFounders = INITIAL_FOUNDER_MIN + Math.floor(Math.random() * (INITIAL_FOUNDER_MAX - INITIAL_FOUNDER_MIN + 1));
+  for (let i = 0; i < initialFounders; i++) {
+    const f = spawnFounder(world);
+    // The very first founder also anchors the color palette so other
+    // cells visually contrast with it.
+    if (i === 0) {
+      world.anchorGenome = new Uint8Array(f.genome);
+      f.color = genomeColor(f.genome, world.anchorGenome);
+    }
+  }
   return world;
+}
+
+// Founder spawn count + steady-state target. Initial world drops in
+// random[MIN, MAX] founders; later top-ups push the live count back
+// toward TARGET whenever it falls below.
+const INITIAL_FOUNDER_MIN = 5;
+const INITIAL_FOUNDER_MAX = 10;
+const FOUNDER_TARGET = 10;
+
+function spawnFounder(world: World): Creature {
+  const x = world.width * (0.1 + 0.8 * Math.random());
+  const y = world.height * (0.1 + 0.6 * Math.random());
+  const z = world.depth * 0.5;
+  const c = makeCreature(world, x, y, z);
+  c.bornAt = world.t;
+  c.lineageRoot = world.nextLineageRoot++;
+  world.creatures.push(c);
+  noteCreatureBirth(world, c, undefined);
+  return c;
+}
+
+function countLiveLineages(world: World): number {
+  const seen = new Set<number>();
+  for (const c of world.creatures) seen.add(c.lineageRoot);
+  return seen.size;
 }
 
 export function seedParticles(world: World, n: number): void {
@@ -2255,19 +2299,27 @@ export function step(world: World, dt: number): void {
     replenishParticles(world, dt);
     pruneSpecies(world);
   }
-  if (world.creatures.length === 0) {
-    const x = world.width * (0.1 + 0.8 * Math.random());
-    const y = world.height * (0.1 + 0.6 * Math.random());
-    const z = world.depth * 0.5;
-    const seed = makeCreature(world, x, y, z);
-    seed.bornAt = world.t;
-    // Reset the color anchor for the new lineage so descendants color
-    // relative to this new "Adam".
-    world.anchorGenome = new Uint8Array(seed.genome);
-    seed.color = genomeColor(seed.genome, world.anchorGenome);
-    world.creatures.push(seed);
-    world.extinctionCount++;
-    noteCreatureBirth(world, seed, undefined);
+  // Top up founding lineages. Every step we count distinct lineageRoot
+  // ids among live cells; if it's below world.founderTarget, spawn
+  // fresh founders (each viability-filtered by makeRandomViableGenome)
+  // to bring the count back up. World-empty is just the extreme case,
+  // which still bumps extinctionCount for the HUD.
+  if (world.creatures.length === 0) world.extinctionCount++;
+  if (world.founderTarget > 0) {
+    const liveLineages = world.creatures.length === 0 ? 0 : countLiveLineages(world);
+    if (liveLineages < world.founderTarget) {
+      const need = world.founderTarget - liveLineages;
+      for (let i = 0; i < need; i++) {
+        const f = spawnFounder(world);
+        // When the world had just gone fully empty, the first new
+        // founder also re-anchors the color palette so descendant
+        // coloring restarts relative to this new root.
+        if (liveLineages === 0 && i === 0) {
+          world.anchorGenome = new Uint8Array(f.genome);
+          f.color = genomeColor(f.genome, world.anchorGenome);
+        }
+      }
+    }
   }
 }
 
@@ -3128,6 +3180,9 @@ function tryReproduce(parent: Creature, world: World): void {
     molecules: childMolecules,
     reserves: childReserves,
   });
+  // Inherit the parent's founding lineage. Mutated descendants stay
+  // part of the same lineageRoot for top-up counting purposes.
+  child.lineageRoot = parent.lineageRoot;
   updateCreatureRadius(child);
 
   // Endosymbiont propagation: each engulfed cell binary-fissions
@@ -3186,6 +3241,11 @@ function fissionInner(inner: Creature, world: World): Creature | null {
     reserves: emptyReserves(),
   });
   daughter.organelleSynthMask = genomeSynthMask(daughterGenome);
+  // Endosymbiont daughters share the inner's lineageRoot. They live
+  // in host vacuoles and aren't counted toward FOUNDER_TARGET, but
+  // tagging them keeps the bookkeeping consistent if one is ever
+  // released back to the world.
+  daughter.lineageRoot = inner.lineageRoot;
   // Split molecules + reserves + ATP half / half.
   for (const k of MOLECULE_IDS) {
     const half = inner.molecules[k] * 0.5;
