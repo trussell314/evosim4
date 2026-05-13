@@ -2512,23 +2512,19 @@ function updateCreatures(world: World, dt: number): void {
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
     photosynthesize(c, dtT, ambientLight);
 
-    // Cell builds its own catalysts and structure as substrates allow.
-    // Amino acids and fatty acids are synthesized de novo from glucose
-    // (carbon source) + a small mineral cofactor charge (stand-in for
-    // nitrogen / sulfur / trace metals that aren't tracked individually).
-    // This unlocks true photoautotrophy: a cell with chlorophyll can run
-    // light + CO2 -> glu -> aa/fa -> biomass without ever ingesting
-    // organic particles. Minerals must still come from ingest or decay,
-    // matching the biological constraint that organisms can't transmute
-    // elements.
-    biosynthesize(c, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-    biosynthesize(c, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-    biosynthesize(c, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-    biosynthesize(c, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+    // Genome-gated biosynthesis. The VM sets bits in synthMask via
+    // SYNTH_BIO / SYNTH_AA / SYNTH_FA / SYNTH_ENZ / SYNTH_CHL ops.
+    // Each product is only built this tick if the cell asked for it.
+    // Substrates and ATP cost still apply. Cells that never run
+    // SYNTH_CHL no longer waste ATP making chlorophyll they don't use.
+    const synth = VM_OUT.synthMask;
+    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
     // Biomass is mostly protein (aa); the lipid fraction is structural
-    // membrane only. Old 0.7/0.3 mix made fa the limiting reagent because
-    // it competes with beta-oxidation for the same scarce pool.
-    biosynthesize(c, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+    // membrane only.
+    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);

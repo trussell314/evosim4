@@ -76,6 +76,15 @@ export const OP = {
   SPLICE_DUP:    0x66,   // pop (offset, length), duplicate that region in place
   SPLICE_DEL:    0x67,   // pop (offset, length), delete that region from genome
   THRUST_AMP:    0x68,   // passive: each copy boosts the cell's thrustAccel
+  // Active biosynthesis gates: a product is only built this tick if its
+  // SYNTH op was executed. Substrate + ATP cost still applies as before.
+  // Without these, biosynthesize() ran unconditionally every tick and
+  // newborns wasted ATP making chlorophyll/enzyme they didn't use.
+  SYNTH_BIO:     0x69,
+  SYNTH_AA:      0x6A,
+  SYNTH_FA:      0x6B,
+  SYNTH_ENZ:     0x6C,
+  SYNTH_CHL:     0x6D,
 
   HALT:          0xFF,
 } as const;
@@ -199,6 +208,13 @@ export interface VMOutputs {
   // Count of REPAIR ops that fired this tick. Sim multiplies by a fixed
   // ATP cost to debit the cell, and refreshes its repair window.
   repair: number;
+  // Bit flags for biosynthesis gates this tick. Bit positions:
+  //   0 biomass, 1 aa, 2 fa, 3 enzyme, 4 chlorophyll.
+  // updateCreatures() runs biosynthesize() for product k iff the
+  // corresponding bit is set. This makes the cell pay attention to
+  // what it actually wants to build instead of always trying every
+  // product (and wasting ATP on chlorophyll it never uses).
+  synthMask: number;
   // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
   // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
   // this after runTick returns: changing genome length mid-tick would
@@ -217,6 +233,7 @@ export function newOutputs(): VMOutputs {
     predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
     repair: 0,
+    synthMask: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     instructions: 0,
   };
@@ -246,6 +263,7 @@ export function runTick(
   out.adhere = false;
   out.ingestMaterials.fill(0);
   out.repair = 0;
+  out.synthMask = 0;
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
@@ -327,6 +345,11 @@ export function runTick(
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
       case OP.REPAIR:         out.repair++; break;
+      case OP.SYNTH_BIO:      out.synthMask |= 1 << 0; break;
+      case OP.SYNTH_AA:       out.synthMask |= 1 << 1; break;
+      case OP.SYNTH_FA:       out.synthMask |= 1 << 2; break;
+      case OP.SYNTH_ENZ:      out.synthMask |= 1 << 3; break;
+      case OP.SYNTH_CHL:      out.synthMask |= 1 << 4; break;
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
@@ -682,15 +705,22 @@ export function makeDefaultGenome(): Uint8Array {
     OP.THRUST,
     OP.INGEST, 3,
     OP.INGEST, 2,
+    // Biosynthesis is now genome-gated. The starter cell is a
+    // heterotroph: it intends to build amino acids and fatty acids
+    // from ingested glucose+minerals, and biomass from aa+fa. It
+    // does NOT make chlorophyll or enzyme by default -- those
+    // expensive products have to be evolved in once a lineage
+    // actually has a use for them.
+    OP.SYNTH_AA,
+    OP.SYNTH_FA,
+    OP.SYNTH_BIO,
     // Keep the genome stable as the cell ages. Costs 0.5 ATP per
     // execution and refreshes a 30-tick window during which somatic
     // mutation is suppressed.
     OP.REPAIR,
-    // Reproduction gate: only fission when well-stocked. Old defaults
-    // (biomass>14, ATP>3) fired the instant the cell crossed minimum
-    // viability, so children were born with ~7 biomass and ~1.5 ATP --
-    // too thin to survive foraging. Higher thresholds let the parent
-    // stockpile and pass a meaningful endowment to the child.
+    // Reproduction gate: only fission when well-stocked. Higher
+    // thresholds let the parent stockpile and pass a meaningful
+    // endowment to the child.
     OP.SELF_BIOMASS,
     OP.PUSH8, 30,
     OP.GT,
