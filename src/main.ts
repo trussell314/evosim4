@@ -362,6 +362,13 @@ canvas.addEventListener("click", (e) => {
   if (best >= 0) {
     selectedCell = world.creatures[best];
     refreshActiveDisasm();
+    // Tapping a cell also re-locks the follow-tooltip onto it; on
+    // touch devices there's no mousemove to set the initial lock.
+    lockedCell = world.creatures[best];
+  } else {
+    // Click on empty water clears the tooltip lock so the user can
+    // dismiss without waiting for the cell to die.
+    lockedCell = null;
   }
 });
 
@@ -381,14 +388,36 @@ document.body.appendChild(tooltip);
 let pendingMouseX = -1;
 let pendingMouseY = -1;
 let pendingMouseInside = false;
-let pendingMouseClient = { x: 0, y: 0 };
 let tooltipScheduled = false;
+// Sticky-follow: once the cursor lands on a cell we capture it here,
+// and the tooltip tracks that cell's screen position every frame
+// (whether the cursor stays put or wanders off) until the cell dies.
+// Hovering a different cell replaces the lock; moving the cursor over
+// empty water leaves the existing lock alone. Click an empty patch
+// to clear it manually.
+let lockedCell: Creature | null = null;
+function worldToClientX(wx: number): number {
+  const rect = canvas.getBoundingClientRect();
+  return wx * viewScale + viewOffsetX + rect.left;
+}
+function worldToClientY(wy: number): number {
+  const rect = canvas.getBoundingClientRect();
+  return wy * viewScale + viewOffsetY + rect.top;
+}
 function flushTooltip(): void {
   tooltipScheduled = false;
-  if (!pendingMouseInside) { tooltip.style.display = "none"; return; }
-  const idx = findCellAt(pendingMouseX, pendingMouseY);
-  if (idx < 0) { tooltip.style.display = "none"; return; }
-  const c = world.creatures[idx];
+  // Drop the lock if the cell died or was eaten -- its slot may be
+  // reused, but the Creature reference itself isn't put back into
+  // world.creatures, so indexOf() is the reliable liveness check.
+  if (lockedCell && world.creatures.indexOf(lockedCell) < 0) lockedCell = null;
+  // If the cursor is currently over a cell, prefer that cell -- a
+  // hover always wins, so the user can re-target by pointing.
+  if (pendingMouseInside) {
+    const idx = findCellAt(pendingMouseX, pendingMouseY);
+    if (idx >= 0) lockedCell = world.creatures[idx];
+  }
+  const c = lockedCell;
+  if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
   for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
@@ -399,28 +428,22 @@ function flushTooltip(): void {
     `age=${age}\n` +
     `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}`;
   tooltip.style.display = "block";
-  // Position with edge-flipping: default is below-right of cursor,
-  // but if that would push the box off the visible viewport (canvas
-  // edge near a window edge, or hovering near bottom-right where
-  // the analysis panel sits) we flip to above / left so the whole
-  // tooltip stays readable. visualViewport tracks the in-use area
-  // on mobile pinch-zoom too; falls back to window.inner* otherwise.
+  // Anchor at the cell's projected screen position with edge-flipping
+  // so the box never spills off the visible viewport. visualViewport
+  // tracks pinch-zoom on mobile; falls back to window.inner* otherwise.
   const OFFSET = 12;
   const MARGIN = 4;
   const vv = window.visualViewport;
   const vw = vv ? vv.width : window.innerWidth;
   const vh = vv ? vv.height : window.innerHeight;
-  // Measure after content + display is set so the box reports real size.
   const w = tooltip.offsetWidth;
   const h = tooltip.offsetHeight;
-  const cx = pendingMouseClient.x;
-  const cy = pendingMouseClient.y;
+  const cx = worldToClientX(c.x) + c.r * viewScale;
+  const cy = worldToClientY(c.y);
   let left = cx + OFFSET;
   let top = cy + OFFSET;
-  if (left + w + MARGIN > vw) left = cx - OFFSET - w;
+  if (left + w + MARGIN > vw) left = cx - OFFSET - w - c.r * viewScale * 2;
   if (top + h + MARGIN > vh) top = cy - OFFSET - h;
-  // Final clamp in case the cursor itself is near a corner and both
-  // flips still put the box off-screen.
   if (left < MARGIN) left = MARGIN;
   if (top < MARGIN) top = MARGIN;
   tooltip.style.left = `${left}px`;
@@ -431,7 +454,6 @@ canvas.addEventListener("mousemove", (e) => {
   const wpt = canvasToWorld(e.clientX - rect.left, e.clientY - rect.top);
   pendingMouseX = wpt.x;
   pendingMouseY = wpt.y;
-  pendingMouseClient = { x: e.clientX, y: e.clientY };
   pendingMouseInside = true;
   if (!tooltipScheduled) {
     tooltipScheduled = true;
@@ -439,11 +461,10 @@ canvas.addEventListener("mousemove", (e) => {
   }
 });
 canvas.addEventListener("mouseleave", () => {
+  // Don't drop pendingMouseInside's effect on the lock -- but the
+  // tooltip should keep following the locked cell once the cursor
+  // leaves the canvas. flushTooltip's render loop call still fires.
   pendingMouseInside = false;
-  if (!tooltipScheduled) {
-    tooltipScheduled = true;
-    requestAnimationFrame(flushTooltip);
-  }
 });
 
 // Dramatic depth: near particles are crisp and full-color, deep ones get
@@ -1572,10 +1593,11 @@ function frame(): void {
   updateDroplets();
   render();
   updateInspector();
-  // Refresh the hover tooltip too -- otherwise it goes stale while
-  // the cursor is parked, since the only triggers are mousemove /
-  // mouseleave. Cheap: just rewrites a single DOM node.
-  if (pendingMouseInside) flushTooltip();
+  // Refresh the tooltip every frame whenever there's a locked cell
+  // to follow OR the cursor is currently over the canvas. flushTooltip
+  // re-checks liveness and re-projects the locked cell's screen pos
+  // so the box tracks a swimming cell.
+  if (lockedCell || pendingMouseInside) flushTooltip();
   maybeAnalyzeGenomes();
   const renderMs = performance.now() - tBeforeRender;
   updatePerfStats(advanced, renderMs, simMsLast);
