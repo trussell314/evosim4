@@ -17,6 +17,7 @@ import {
   genomeSynthMask,
   mutateGenome,
   CATALYST_COUNT,
+  N_REACTIONS,
   somaticMutateOnce,
   computeSenseRange,
   computeThrustAccel,
@@ -331,6 +332,16 @@ export class CreatureStore {
   // once after the typed arrays exist.
   resCols!: Float32Array[];
   molCols!: Float32Array[];
+  // Unified chemical pool addressed by the generic-reaction engine.
+  // chemCols[0..7] alias molCols entries (the named chemicals) so a
+  // write through either path hits the same Float32Array. chemCols
+  // [8..63] are independent typed arrays for the abstract generic
+  // chemicals (no Molecules key, no particle representation in
+  // phase 1 -- they exist only as intracellular pools).
+  chemCols!: Float32Array[];
+  // Backing storage for the generic slice (chemCols[8..63]). Kept
+  // separate so grow() can resize them without touching molCols.
+  genericChemCols!: Float32Array[];
   constructor(initialCap = 256) {
     const blank = new Float32Array(0);
     const blanki = new Int32Array(0);
@@ -348,6 +359,9 @@ export class CreatureStore {
     this.r_organic = blank; this.r_lipid = blank; this.r_gas = blank;
     this.catalystCols = [];
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols.push(blank);
+    this.genericChemCols = [];
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) this.genericChemCols.push(blank);
+    this.chemCols = new Array(CHEMICAL_COUNT).fill(blank);
     this.grow(initialCap);
   }
   grow(newCap: number): void {
@@ -390,6 +404,9 @@ export class CreatureStore {
     for (let k = 0; k < CATALYST_COUNT; k++) {
       this.catalystCols[k] = grow1(this.catalystCols[k]);
     }
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+      this.genericChemCols[k] = grow1(this.genericChemCols[k]);
+    }
     this.cap = newCap;
     // Rebuild column-by-name arrays so chemistry hot loops can iterate
     // them by integer index. Order matches MATERIAL_IDS / MOLECULE_IDS.
@@ -401,6 +418,15 @@ export class CreatureStore {
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
       this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
     ];
+    // chemCols[0..7] alias the named slice of molCols (so writes via
+    // either reach the same array); chemCols[8..63] point into the
+    // independent genericChemCols storage.
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+      this.chemCols[k] = this.molCols[CHEM_NAMED_MOL_IDX[k]];
+    }
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+      this.chemCols[NAMED_CHEMICAL_COUNT + k] = this.genericChemCols[k];
+    }
   }
   // Returns a fresh slot. Reuses freed slots first; grows on overflow.
   alloc(): number {
@@ -432,6 +458,10 @@ export class CreatureStore {
     this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
     this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
+    // Named chemCols slots 0..7 are aliases of molCols and already
+    // cleared above; only the generic slice (8..63) needs its own
+    // zeroing here.
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) this.genericChemCols[k][i] = 0;
   }
 }
 
@@ -1180,49 +1210,207 @@ function riboMult(c: Creature): number {
   return c.molecules.ribosome / RIBO_REF;
 }
 
-// Generic catalysts. Each entry pairs a catalyst slot with the
-// reaction whose VMAX it multiplies via (1 + cat[k] / CAT_REF).
-// SYNTH_CAT <id> builds catalyst id (mod CATALYST_COUNT). Storage
-// is the catalystCols Float32Array per slot on CreatureStore.
-//
-// Unlike ribosomes (which are mandatory: r/REF, no +1), catalysts
-// are pure accelerators -- zero catalyst => base rate, more =>
-// faster -- so they're an evolutionary option rather than a
-// requirement. The viability filter doesn't require any of them.
+// Generic chemistry: 64 chemicals + 256 reactions. The named
+// chemistry (aerobic / ferment / betaOx / catabolize / photosynth /
+// biosynthesize) runs UNCATALYZED at its base rate -- it's the
+// bootstrap engine every cell gets for free. On top of that, the VM
+// can choose to build catalysts (SYNTH_CAT <id>) for any of 256
+// generated reactions that swap chemicals around. The 8 named
+// chemicals appear at slots 0..7 of the chemical table and alias
+// the existing m_* fields, so generic reactions can pull from /
+// dump into the named pool transparently. The other 56 are abstract
+// generic chemicals with random masses -- the "chemicals the cell
+// stumbles upon".
 const CAT_REF = 5;
 const CAT_SYNTH_VMAX = 0.3;
-const CAT_ATP_COST = 4; // similar to enzyme; medium-complex protein
+const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
-// Slot -> human label, exported for UI / debug. Order is the
-// canonical catalyst id used by SYNTH_CAT's operand mod CATALYST_COUNT
-// and by catMult(c, slot). One slot per distinct cellular reaction --
-// every chemistry path the simulation runs is catalysable.
-const CAT_AEROBIC      = 0;
-const CAT_FERMENT      = 1;
-const CAT_BETAOX       = 2;
-const CAT_CATABOLIZE   = 3;
-const CAT_PHOTO        = 4;
-const CAT_SYNTH_AA     = 5;
-const CAT_SYNTH_FA     = 6;
-const CAT_SYNTH_CHLORO = 7;
-const CAT_SYNTH_ENZYME = 8;
-const CAT_SYNTH_RIBO   = 9;
-const CAT_BIOMASS      = 10;
-export const CATALYSTS = [
-  { name: "respirase",     boosts: "aerobic respiration" },
-  { name: "fermentase",    boosts: "fermentation" },
-  { name: "lipase",        boosts: "beta-oxidation" },
-  { name: "catabase",      boosts: "food catabolism" },
-  { name: "carboxylase",   boosts: "photosynthesis" },
-  { name: "amino-synthase",boosts: "amino-acid synthesis" },
-  { name: "lipo-synthase", boosts: "fatty-acid synthesis" },
-  { name: "chloro-synthase", boosts: "chlorophyll synthesis" },
-  { name: "enzyme-synthase", boosts: "enzyme synthesis" },
-  { name: "ribo-synthase",  boosts: "ribosome synthesis" },
-  { name: "bio-synthase",   boosts: "biomass growth" },
-] as const;
-function catMult(c: Creature, slot: number): number {
-  return 1 + c.store.catalystCols[slot][c.idx] / CAT_REF;
+const CHEMICAL_COUNT = 64;
+const NAMED_CHEMICAL_COUNT = 8;
+// Order matches chemical slot 0..7. Each entry is a key of Molecules
+// and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
+const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
+  "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "biomass", "adp",
+];
+const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
+interface ChemicalDef {
+  name: string;
+  mass: number; // unit mass per "mole" -- 1 for named (matches existing model)
+}
+const CHEMICALS: ChemicalDef[] = buildChemicalTable();
+// CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
+// chemCols[k] (k < 8). Resolved against MOLECULE_INDEX which is
+// already populated above by the time this line evaluates.
+const CHEM_NAMED_MOL_IDX: number[] = NAMED_CHEMICALS.map((n) => MOLECULE_INDEX[n]);
+
+function buildChemicalTable(): ChemicalDef[] {
+  const out: ChemicalDef[] = [];
+  for (const n of NAMED_CHEMICALS) out.push({ name: n, mass: 1 });
+  // Deterministic per-chemical mass for the generic pool, drawn
+  // from a small set so reactions across runs have the same balance.
+  // Skew toward small masses (most biology is light chemistry).
+  const rng = mulberry32(0xC8E3_15CA);
+  for (let i = NAMED_CHEMICAL_COUNT; i < CHEMICAL_COUNT; i++) {
+    const u = rng();
+    const mass = 0.5 + u * u * 4.5; // 0.5 .. 5.0, skewed low
+    out.push({ name: `c${i.toString(16).padStart(2, "0")}`, mass });
+  }
+  return out;
+}
+
+// One reaction per catalyst slot. Generated deterministically at
+// module init so reactions are stable across runs (and across the
+// renderer/worker boundary, when we get there). Substrate /
+// product chemicals are picked from any of CHEMICAL_COUNT, counts
+// are scaled to keep mass balanced, atpDelta and lightIn are added
+// independently of mass.
+interface Reaction {
+  sChem: Uint8Array;    // length 1..3, substrate chem ids
+  sCount: Float32Array; // parallel, mass-units per unit reaction
+  pChem: Uint8Array;    // length 1..3, product chem ids
+  pCount: Float32Array; // parallel
+  atpDelta: number;     // signed energy delta per unit reaction (>0 = exergonic)
+  lightIn: number;      // 0 if not light-driven; else units of light per unit
+  vmax: number;         // base rate per (1 unit catalyst / CAT_REF)
+}
+const REACTIONS: Reaction[] = buildReactionTable();
+
+function buildReactionTable(): Reaction[] {
+  const rng = mulberry32(0xE2C4_BEEF);
+  const COUNT_POOL = [1, 1, 1, 1, 2, 2, 3, 5, 10];
+  const pickInt = (n: number): number => Math.floor(rng() * n);
+  const pickFrom = <T>(arr: ReadonlyArray<T>): T => arr[pickInt(arr.length)];
+  const out: Reaction[] = [];
+  for (let i = 0; i < N_REACTIONS; i++) {
+    const nS = 1 + pickInt(3); // 1..3
+    const nP = 1 + pickInt(3);
+    // Substrates: unique chem ids
+    const sChem = new Uint8Array(nS);
+    {
+      const used = new Set<number>();
+      for (let j = 0; j < nS; j++) {
+        let id: number;
+        do { id = pickInt(CHEMICAL_COUNT); } while (used.has(id));
+        used.add(id); sChem[j] = id;
+      }
+    }
+    // Products: unique chem ids, disjoint from substrates (no A -> A)
+    const pChem = new Uint8Array(nP);
+    {
+      const used = new Set<number>(Array.from(sChem));
+      for (let j = 0; j < nP; j++) {
+        let id: number;
+        do { id = pickInt(CHEMICAL_COUNT); } while (used.has(id));
+        used.add(id); pChem[j] = id;
+      }
+    }
+    // Substrate counts (raw small integers)
+    const sCount = new Float32Array(nS);
+    let sMass = 0;
+    for (let j = 0; j < nS; j++) {
+      const c = pickFrom(COUNT_POOL);
+      sCount[j] = c;
+      sMass += c * CHEMICALS[sChem[j]].mass;
+    }
+    // Product counts: pick raw integers, then scale so total product
+    // mass equals total substrate mass (mass conservation). The scale
+    // factor pushes counts away from integer values; that's fine --
+    // chemistry runs on floats anyway.
+    const pCountRaw = new Float32Array(nP);
+    let pMassRaw = 0;
+    for (let j = 0; j < nP; j++) {
+      const c = pickFrom(COUNT_POOL);
+      pCountRaw[j] = c;
+      pMassRaw += c * CHEMICALS[pChem[j]].mass;
+    }
+    const scale = sMass / pMassRaw;
+    const pCount = new Float32Array(nP);
+    for (let j = 0; j < nP; j++) pCount[j] = pCountRaw[j] * scale;
+    // ATP delta: roughly bell-shaped around 0, slight exergonic bias
+    // so on average reactions release a little energy. Range ~[-6, +8].
+    const atpDelta = ((rng() + rng() + rng()) / 3 - 0.4) * 14;
+    // Light: ~15% of reactions are light-driven, requiring 0.2..1.5
+    // units of ambient light to proceed (caps the rate).
+    const lightIn = rng() < 0.15 ? 0.2 + rng() * 1.3 : 0;
+    // VMAX: log-uniform 0.05 .. 1.5, so a few reactions are fast,
+    // most are middling. Cells that build the right catalyst can
+    // make the slow ones useful too.
+    const vmax = Math.exp(Math.log(0.05) + rng() * (Math.log(1.5) - Math.log(0.05)));
+    out.push({ sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax });
+  }
+  return out;
+}
+
+// Hot inner loop. Slot-major iteration so each catalystCols[k] is one
+// contiguous Float32Array per pass; the empty-pool branch is
+// predicted not-taken for the common case (cells express only a
+// handful of catalysts at a time).
+function runGenericReactions(c: Creature, dt: number, ambientLight: number): void {
+  const s = c.store; const i = c.idx;
+  for (let slot = 0; slot < N_REACTIONS; slot++) {
+    const pool = s.catalystCols[slot][i];
+    if (pool <= 0) continue;
+    const rxn = REACTIONS[slot];
+    // Light gate: light-driven reactions stall if there's not enough.
+    let lightMult = 1;
+    if (rxn.lightIn > 0) {
+      if (ambientLight <= 0) continue;
+      lightMult = ambientLight / rxn.lightIn;
+      if (lightMult > 1) lightMult = 1;
+    }
+    // Substrate gate: each substrate caps the reaction by what's
+    // available / its stoichiometric count. We collect the tightest
+    // cap (limit) so the inner update can never push any pool below 0.
+    let limit = Infinity;
+    const sChem = rxn.sChem;
+    const sCount = rxn.sCount;
+    for (let j = 0; j < sChem.length; j++) {
+      const have = s.chemCols[sChem[j]][i];
+      const ratio = have / sCount[j];
+      if (ratio < limit) limit = ratio;
+    }
+    if (limit <= 0) continue;
+    // ATP gate (endergonic reactions): can't deplete energy past 0.
+    const atpD = rxn.atpDelta;
+    if (atpD < 0) {
+      const eCap = s.energy[i] / -atpD;
+      if (eCap < limit) limit = eCap;
+      if (limit <= 0) continue;
+    }
+    // Rate. Saturates the catalyst term at v/CAT_REF (consistent with
+    // ribosomes); no +1 because uncatalyzed reactions don't run at
+    // all (the user-chosen design).
+    const rate = rxn.vmax * (pool / CAT_REF) * lightMult;
+    let amt = rate * dt;
+    if (amt > limit) amt = limit;
+    if (amt <= 0) continue;
+    // Apply. Mass-balanced by construction; ATP is the only extra
+    // book-keeping. We don't double-count ADP -- generic reactions
+    // operate on cell.energy directly. (Phase 1 abstraction; can
+    // unify with ADP later.)
+    for (let j = 0; j < sChem.length; j++) {
+      s.chemCols[sChem[j]][i] -= sCount[j] * amt;
+    }
+    const pChem = rxn.pChem;
+    const pCount = rxn.pCount;
+    for (let j = 0; j < pChem.length; j++) {
+      s.chemCols[pChem[j]][i] += pCount[j] * amt;
+    }
+    if (atpD !== 0) s.energy[i] += atpD * amt;
+  }
+}
+
+// Small deterministic RNG. Keep reaction tables reproducible across
+// runs / renderer reloads / future workers.
+function mulberry32(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // Maintenance: structural molecules turn over even when the cell isn't
@@ -2038,7 +2226,7 @@ function catabolize(c: Creature, dt: number): void {
     const rc = resCols[m];
     const avail = rc[i];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * catMult(c, CAT_CATABOLIZE);
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM));
     const rd = rate * dt;
     const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
@@ -2075,7 +2263,7 @@ function aerobicRespire(c: Creature, dt: number): void {
   const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
   if (g <= 0 || o <= 0 || a <= 0) return;
   const a10 = a / 10;
-  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT)) * catMult(c, CAT_AEROBIC);
+  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT));
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (o < amt) amt = o;
@@ -2096,7 +2284,7 @@ function ferment(c: Creature, dt: number): void {
   if (g <= 0 || a <= 0) return;
   const a2 = a / 2;
   const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
-  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression * catMult(c, CAT_FERMENT);
+  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression;
   const rdt = rate * dt;
   let amt = rdt < g ? rdt : g;
   if (a2 < amt) amt = a2;
@@ -2115,7 +2303,7 @@ function betaOxidize(c: Creature, dt: number): void {
   const f = s.m_fattyAcid[i], o = s.m_o2[i], a = s.m_adp[i];
   if (f <= 0 || o <= 0 || a <= 0) return;
   const a14 = a / 14;
-  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT)) * catMult(c, CAT_BETAOX);
+  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT));
   const rdt = rate * dt;
   let amt = rdt < f ? rdt : f;
   if (o < amt) amt = o;
@@ -2136,7 +2324,7 @@ function photosynthesize(c: Creature, dt: number, light: number): void {
   const chl = s.m_chlorophyll[i], co2 = s.m_co2[i], e = s.energy[i];
   if (chl <= 0 || co2 <= 0 || e <= 0 || light <= 0) return;
   const surface = s.r[i] / MIN_CREATURE_R;
-  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light * catMult(c, CAT_PHOTO);
+  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light;
   const rdt = rate * dt;
   let amt = rdt < co2 ? rdt : co2;
   if (e < amt) amt = e;
@@ -2344,12 +2532,12 @@ function runOrganelleChemistry(
   photosynthesize(inner, dtT, light);
   const sm = inner.organelleSynthMask;
   const rm = riboMult(inner);
-  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_AA),         0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_FA),         0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_CHLORO), 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_ENZYME), 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm * catMult(inner, CAT_SYNTH_RIBO),     0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
-  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm * catMult(inner, CAT_BIOMASS),      0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
+  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
   maintenanceDecay(inner, dt);
 
   // Bidirectional diffusion of small molecules + ATP between inner
@@ -2952,6 +3140,12 @@ function updateCreatures(world: World, dt: number): void {
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
     photosynthesize(c, dtT, ambientLight);
 
+    // Generic reaction engine. Iterates all 256 catalyst slots; only
+    // ones the cell has actually built advance. Mass-balanced
+    // chemical shuffles + energy from the atpDelta field, gated by
+    // ambient light for light-driven reactions.
+    runGenericReactions(c, dtT, ambientLight);
+
     // Genome-gated biosynthesis. The VM sets bits in synthMask via
     // SYNTH_BIO / SYNTH_AA / SYNTH_FA / SYNTH_ENZ / SYNTH_CHL ops.
     // Each product is only built this tick if the cell asked for it.
@@ -2964,14 +3158,14 @@ function updateCreatures(world: World, dt: number): void {
     // ribosome production accelerates ribosome production -- once a
     // lineage invests, it scales fast.
     const rm = riboMult(c);
-    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_AA),         0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_FA),         0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_CHLORO), 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_ENZYME), 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm * catMult(c, CAT_SYNTH_RIBO),     0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
+    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
     // Biomass is mostly protein (aa); the lipid fraction is structural
     // membrane only.
-    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm * catMult(c, CAT_BIOMASS),      0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
     // Generic catalysts. SYNTH_CAT <id> sets a bit per slot; each one
     // built scales with riboMult like every other biosynth product.
@@ -3389,6 +3583,23 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
       }
     }
   }
+  // Generic chemicals don't (yet) have a particle representation.
+  // On death they release as bulk organic, weighted by their per-
+  // chemical mass so cells that accumulated heavy generics drop a
+  // proportionally larger pile.
+  {
+    const cols = c.store.genericChemCols;
+    const ci = c.idx;
+    let organicMass = 0;
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+      const v = cols[k][ci];
+      if (v > 0) {
+        organicMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].mass;
+        cols[k][ci] = 0;
+      }
+    }
+    if (organicMass > 0) c.reserves.organic += organicMass;
+  }
 
   // Group molecules by their natural bucket. ATP loses its terminal
   // phosphate on death, so we lump c.energy into the adp pool.
@@ -3514,6 +3725,21 @@ function tryReproduce(parent: Creature, world: World): void {
       childCatalysts[k] = give;
     }
   }
+  // Same proportional split for the generic chemical pool. Named
+  // chemCols (0..7) are aliased onto molCols so they already split
+  // above via the molecules path; we only need to split the
+  // independent generic slice here.
+  const childGenericChem = new Float32Array(GENERIC_CHEMICAL_COUNT);
+  {
+    const cols = parent.store.genericChemCols;
+    const pi = parent.idx;
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+      const v = cols[k][pi];
+      const give = v * childShare;
+      cols[k][pi] = v - give;
+      childGenericChem[k] = give;
+    }
+  }
   let energyGift = parent.energy * childShare;
   parent.energy -= energyGift;
   // "Yolk": a small free endowment of glucose + ATP to the newborn so
@@ -3566,6 +3792,11 @@ function tryReproduce(parent: Creature, world: World): void {
     const cols = child.store.catalystCols;
     const ci = child.idx;
     for (let k = 0; k < CATALYST_COUNT; k++) cols[k][ci] = childCatalysts[k];
+  }
+  {
+    const cols = child.store.genericChemCols;
+    const ci = child.idx;
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) cols[k][ci] = childGenericChem[k];
   }
   updateCreatureRadius(child);
 

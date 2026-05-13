@@ -111,9 +111,12 @@ export const OP = {
 
 // Number of catalyst slots. Kept in genome.ts (not sim.ts) because
 // the VM dispatch mods the operand by this -- it's part of the
-// genome ABI. If you add a catalyst, bump this and add the entry in
-// sim.ts CATALYSTS table to match.
-export const CATALYST_COUNT = 11;
+// genome ABI. Catalyst slot k IS reaction k from sim.ts's generated
+// reaction table; bumping this and the table size together extends
+// the reaction space the genome can address.
+export const CATALYST_COUNT = 256;
+// Alias for code that reads more naturally with "reaction" wording.
+export const N_REACTIONS = CATALYST_COUNT;
 
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
@@ -834,6 +837,7 @@ export function viableGenome(genome: Uint8Array): boolean {
   let hasMetabolism = false;
   let hasReproduce = false;
   let hasRibo = false;
+  let hasCat = false;
   walkGenome(genome, (op) => {
     if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
       hasMetabolism = true;
@@ -841,10 +845,12 @@ export function viableGenome(genome: Uint8Array): boolean {
       hasReproduce = true;
     } else if (op === OP.SYNTH_RIBO) {
       hasRibo = true;
+    } else if (op === OP.SYNTH_CAT) {
+      hasCat = true;
     }
-    if (hasMetabolism && hasReproduce && hasRibo) return "break";
+    if (hasMetabolism && hasReproduce && hasRibo && hasCat) return "break";
   });
-  return hasMetabolism && hasReproduce && hasRibo;
+  return hasMetabolism && hasReproduce && hasRibo && hasCat;
 }
 
 // Sample a random genome size in [4, 100] with a gradual bias toward
@@ -908,6 +914,12 @@ export function makeDefaultGenome(): Uint8Array {
     // Ribosomes are mandatory: without them, every other SYNTH_* runs
     // at zero rate. Required by viableGenome.
     OP.SYNTH_RIBO,
+    // Generic catalyst synthesis. Required by viableGenome -- a cell
+    // that can't catalyze any of the 256 generic reactions has no
+    // future even if its named-chemistry path looks fine. Operand
+    // picks one of the 256 reaction slots; the default heterotroph
+    // doesn't care which, evolution will tune it.
+    OP.SYNTH_CAT, 0,
     // Keep the genome stable as the cell ages. Costs 0.5 ATP per
     // execution and refreshes a 30-tick window during which somatic
     // mutation is suppressed.
@@ -1007,7 +1019,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_EM]:       1.5,
   [OP.SENSE_PRESSURE_X]: 1.5,
   [OP.SENSE_PRESSURE_Y]: 1.5,
-  [OP.SYNTH_CAT]:        1.5,
+  [OP.SYNTH_CAT]:        3, // mandatory in viableGenome -- seed it hard so founders pass
 };
 const SEED_OP_POOL: number[] = (() => {
   const pool: number[] = [];
