@@ -1323,92 +1323,109 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
-// Lay down the world's terrain: a wide crescent floor (covers ~25% of
-// world height, sweeping up at the edges) plus a handful of irregular
-// boulders scattered along the bottom. Each obstacle is a cluster of
-// overlapping circle "lobes" so it reads as an irregular rock outline
-// rather than a perfect circle.
+// Lay down the world's terrain: rocks scattered along the bottom,
+// placed by ballistic deposition with gravity + angle-of-repose
+// settling. Each rock falls onto whatever's beneath it and rolls
+// downhill until the local surface slope is below the repose angle.
+// Result: irregular piles, taller toward the center where collisions
+// accumulate, shorter at the edges -- looks like a real seabed.
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
   const H = world.height;
+  const floorY = H - 4;                  // bedrock level (rocks sit on/above)
+  const ceiling = H * 0.70;              // rocks cannot pile higher than this
+  // Target rock count scales with world area. The old grid generator
+  // produced ~120 rocks at 800x600; match that density.
+  const ROCK_COUNT = Math.round((W * (H - ceiling)) / 1500);
 
-  // Continuous rocky floor across the bottom of the world, with:
-  //   * 2 sandy gaps (vertical strips with no rocks; sand piles there)
-  //   * 1 C-shaped alcove off one of the gaps -- a curved hollow cove
-  //     opening into the sandy strip so cells can swim in and shelter.
-  const floorTopY = H * 0.76;
-  const floorBotY = H - 4;
-  const floorDepth = floorBotY - floorTopY;
+  // Heightmap: top-of-pile y at each integer x column. Smaller y = taller
+  // pile. Start flat at the bedrock.
+  const heightmap = new Float32Array(W);
+  heightmap.fill(floorY);
 
-  // Sandy gap A: near the cove. Cells use this as the corridor to enter.
-  const gapACx = W * (0.30 + Math.random() * 0.20);
-  const gapAHw = W * 0.035;
-  // Sandy gap B: just for variety, somewhere else.
-  const gapBCx = W * (0.65 + Math.random() * 0.20);
-  const gapBHw = W * 0.028;
+  // tan(35°) ≈ 0.7 -- a realistic angle of repose for loose gravel.
+  // Slope is measured as |Δheightmap / Δx|; a steeper slope makes a
+  // rock roll downhill toward the lower side.
+  const REPOSE_SLOPE = 0.7;
+  const ROCK_R_MIN = 8;
+  const ROCK_R_MAX = 22;
+  const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
 
-  // Cove: a curved circular hollow attached to gap A. Opens into the
-  // gap on one side. Roughly 50% of floor depth in radius -- big enough
-  // to hold a few cells but not so big it eats the floor.
-  const coveSide = gapACx < W * 0.5 ? 1 : -1; // open the cove into world center
-  const coveR = floorDepth * 0.45;
-  const coveCx = gapACx + coveSide * (gapAHw + coveR * 0.65);
-  const coveCy = floorTopY + floorDepth * 0.55;
+  let placed = 0;
+  let attempts = 0;
+  const MAX_ATTEMPTS = ROCK_COUNT * 6;
+  while (placed < ROCK_COUNT && attempts < MAX_ATTEMPTS) {
+    attempts++;
+    const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
+    let rx = baseR + Math.random() * (W - 2 * baseR);
+    let ry = 0;
 
-  const inGap = (px: number): boolean =>
-    Math.abs(px - gapACx) < gapAHw || Math.abs(px - gapBCx) < gapBHw;
-
-  // Cove exclusion: inside the cove disc, PLUS a narrow bridge of width
-  // ~half coveR connecting the cove's inner edge to the gap. The bridge
-  // is what makes it a C (open side) instead of a sealed circle.
-  const bridgeY0 = coveCy - coveR * 0.32;
-  const bridgeY1 = coveCy + coveR * 0.32;
-  const bridgeX0 = coveSide > 0 ? gapACx + gapAHw : coveCx + coveSide * coveR;
-  const bridgeX1 = coveSide > 0 ? coveCx - coveR : gapACx - gapAHw;
-  const bx0 = Math.min(bridgeX0, bridgeX1);
-  const bx1 = Math.max(bridgeX0, bridgeX1);
-  const inCove = (px: number, py: number, pad: number): boolean => {
-    const dx = px - coveCx;
-    const dy = py - coveCy;
-    if (dx * dx + dy * dy < (coveR - pad) * (coveR - pad)) return true;
-    if (px >= bx0 - pad && px <= bx1 + pad &&
-        py >= bridgeY0 - pad && py <= bridgeY1 + pad) return true;
-    return false;
-  };
-
-  // Distribute rocks across the floor. For each column x, drop 1-3
-  // rocks stacked downward. Skip columns that overlap gaps or the cove.
-  // Per-rock jitter in x/y breaks the grid so the surface reads natural.
-  const colSpacing = 28;
-  for (let xPos = 8; xPos < W - 8; xPos += colSpacing) {
-    for (let yPos = floorTopY + 8; yPos < floorBotY; yPos += 26) {
-      const baseR = 13 + Math.random() * 14;
-      const rx = xPos + (Math.random() - 0.5) * colSpacing * 0.7;
-      const ry = yPos + (Math.random() - 0.5) * 10;
-      // Top row: jiggle Y so the rocky surface undulates.
-      if (yPos < floorTopY + 14) {
-        // Skip a small fraction of top-row rocks to add silhouette gaps.
-        if (Math.random() < 0.15) continue;
+    // Settle: alternately find the support y at the current rx, then
+    // check the local slope; if it's steeper than the repose angle the
+    // rock rolls downhill (toward the lower heightmap). Converges in a
+    // handful of iterations; bail after a hard cap if it diverges.
+    let settled = false;
+    for (let iter = 0; iter < 24; iter++) {
+      const xMin = Math.max(0, Math.floor(rx - baseR));
+      const xMax = Math.min(W - 1, Math.floor(rx + baseR));
+      // For each x in footprint, the rock's bottom curve at that x is
+      // ry + sqrt(baseR^2 - (x-rx)^2). For the rock to just touch the
+      // surface there, ry must be heightmap[x] - sqrt(...). The rock's
+      // resting y is the *smallest* such candidate over the footprint
+      // (i.e. the rock rests on the highest contact point).
+      let supportY = floorY;
+      for (let x = xMin; x <= xMax; x++) {
+        const dx = x - rx;
+        const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
+        const candidate = heightmap[x] - dz;
+        if (candidate < supportY) supportY = candidate;
       }
-      if (inGap(rx)) continue;
-      if (inCove(rx, ry, -baseR * 0.4)) continue;
-      const elong = 0.85 + Math.random() * 0.9;
-      const tilt = -0.5 + Math.random() * 1.0;
-      const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
-      const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
-      const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
-      const tone = tones[Math.floor(Math.random() * tones.length)];
-      const ob = makeObstacleFromLobes(lobes, tone);
-      ob.polygon = polygon;
-      for (const v of polygon) {
-        if (v.x < ob.minX) ob.minX = v.x;
-        if (v.y < ob.minY) ob.minY = v.y;
-        if (v.x > ob.maxX) ob.maxX = v.x;
-        if (v.y > ob.maxY) ob.maxY = v.y;
-      }
-      world.obstacles.push(ob);
+      ry = supportY;
+
+      // Slope across the rock's footprint (left-to-right). Positive
+      // slope means right side is lower (larger heightmap y); rock
+      // rolls right. Negative: rolls left.
+      const leftX = Math.max(0, Math.floor(rx - baseR));
+      const rightX = Math.min(W - 1, Math.floor(rx + baseR));
+      const slope = (heightmap[rightX] - heightmap[leftX]) / (2 * baseR);
+      if (Math.abs(slope) < REPOSE_SLOPE) { settled = true; break; }
+      // Roll toward the lower side. Step is proportional to slope so
+      // gentle slopes nudge a little, steep slopes nudge a lot.
+      const step = Math.sign(slope) * baseR * 0.4;
+      rx = Math.max(baseR, Math.min(W - baseR, rx + step));
     }
+    if (!settled) continue; // couldn't find a stable spot; try a fresh rock
+    // Reject if the rock would sit above the ceiling (pile too tall).
+    if (ry < ceiling) continue;
+
+    // Build the rock geometry around its settled center.
+    const elong = 0.85 + Math.random() * 0.9;
+    const tilt = -0.5 + Math.random() * 1.0;
+    const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
+    const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
+    const tone = tones[Math.floor(Math.random() * tones.length)];
+    const ob = makeObstacleFromLobes(lobes, tone);
+    ob.polygon = polygon;
+    for (const v of polygon) {
+      if (v.x < ob.minX) ob.minX = v.x;
+      if (v.y < ob.minY) ob.minY = v.y;
+      if (v.x > ob.maxX) ob.maxX = v.x;
+      if (v.y > ob.maxY) ob.maxY = v.y;
+    }
+    world.obstacles.push(ob);
+
+    // Update heightmap: top of rock at each x in footprint becomes the
+    // new surface if it's higher (smaller y) than the existing one.
+    const xMin = Math.max(0, Math.floor(rx - baseR));
+    const xMax = Math.min(W - 1, Math.floor(rx + baseR));
+    for (let x = xMin; x <= xMax; x++) {
+      const dx = x - rx;
+      const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
+      const top = ry - dz;
+      if (top < heightmap[x]) heightmap[x] = top;
+    }
+    placed++;
   }
 }
 
