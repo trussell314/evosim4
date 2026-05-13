@@ -1334,68 +1334,53 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
-// Lay down the world's terrain: rocks scattered along the bottom,
-// placed by ballistic deposition with gravity + angle-of-repose
-// settling. Each rock falls onto whatever's beneath it and rolls
-// downhill until the local surface slope is below the repose angle.
-// Result: irregular piles, taller toward the center where collisions
-// accumulate, shorter at the edges -- looks like a real seabed.
+// Lay down the world's terrain: rocks falling straight down at
+// random x positions. Each rock lands on the current top surface
+// (heightmap of the existing pile) and stops there -- no rolling.
+// The natural variability of random sampling produces undulating
+// peaks and valleys, the way real ballistic piles form.
 //
-// Two-pass placement to avoid water-column gaps:
-//   1. Main pass: drop ROCK_COUNT rocks at uniformly random x.
-//      Settles them with the rolling rule.
-//   2. Gap-fill pass: scan the resulting heightmap; any x column
-//      that's still at bedrock (no rock landed nearby) gets a
-//      rock forced into it. Eliminates the dark-water columns you
-//      get when random sampling misses a region.
+// Gap-fill afterward only plugs columns where the bedrock is still
+// completely exposed (no rock landed within +/-STRIDE px); it does
+// NOT level the top, so peaks survive.
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
   const H = world.height;
   const floorY = H - 4;
-  const ceiling = H * 0.55;
-  // Density: roughly 1 rock per 600 px^2 of usable terrain area.
-  // Higher than the deposition-only version was using, so piles
-  // overlap and gaps at the top get filled in.
-  const ROCK_COUNT = Math.round((W * (H - ceiling)) / 600);
 
+  // Rock count scales with usable area. ~1 rock per 500 px^2 of the
+  // bottom third of the world gives dense piles with visible relief.
+  const usableArea = W * (H * 0.45);
+  const ROCK_COUNT = Math.round(usableArea / 500);
+
+  // Heightmap: top surface y at each x column (smaller y = taller).
   const heightmap = new Float32Array(W);
   heightmap.fill(floorY);
 
-  const REPOSE_SLOPE = 0.7; // tan(35°) ≈ realistic gravel
-  const ROCK_R_MIN = 8;
-  const ROCK_R_MAX = 22;
+  // Wider radius distribution than before -- mix small gravel with
+  // occasional big boulders. Real seabeds aren't sorted by size.
+  const ROCK_R_MIN = 5;
+  const ROCK_R_MAX = 28;
   const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
 
-  function tryPlace(targetRx: number, baseR: number, forceColumn: boolean): boolean {
-    let rx = targetRx;
-    let ry = 0;
-    let settled = false;
-    for (let iter = 0; iter < 24; iter++) {
-      const xMin = Math.max(0, Math.floor(rx - baseR));
-      const xMax = Math.min(W - 1, Math.floor(rx + baseR));
-      let supportY = floorY;
-      for (let x = xMin; x <= xMax; x++) {
-        const dx = x - rx;
-        const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
-        const candidate = heightmap[x] - dz;
-        if (candidate < supportY) supportY = candidate;
-      }
-      ry = supportY;
-      const leftX = Math.max(0, Math.floor(rx - baseR));
-      const rightX = Math.min(W - 1, Math.floor(rx + baseR));
-      const slope = (heightmap[rightX] - heightmap[leftX]) / (2 * baseR);
-      if (Math.abs(slope) < REPOSE_SLOPE) { settled = true; break; }
-      // Gap-fill rocks don't roll -- they're explicitly placed at the
-      // target column to plug a hole, and rolling away would defeat
-      // the purpose. They just settle at supportY for that column.
-      if (forceColumn) { settled = true; break; }
-      const step = Math.sign(slope) * baseR * 0.4;
-      rx = Math.max(baseR, Math.min(W - baseR, rx + step));
+  function dropRock(rx: number, baseR: number): void {
+    // Find resting y: the highest contact point in the rock's
+    // footprint. For each x in [rx-baseR, rx+baseR], the rock's
+    // bottom curve sits at ry + sqrt(baseR^2 - (x-rx)^2). The rock
+    // rests at the smallest ry such that its bottom curve touches
+    // heightmap[x] for the limiting x in the footprint.
+    const xMin = Math.max(0, Math.floor(rx - baseR));
+    const xMax = Math.min(W - 1, Math.floor(rx + baseR));
+    let ry = floorY;
+    for (let x = xMin; x <= xMax; x++) {
+      const dx = x - rx;
+      const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
+      const candidate = heightmap[x] - dz;
+      if (candidate < ry) ry = candidate;
     }
-    if (!settled) return false;
-    if (!forceColumn && ry < ceiling) return false;
 
+    // Build the rock geometry.
     const elong = 0.85 + Math.random() * 0.9;
     const tilt = -0.5 + Math.random() * 1.0;
     const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
@@ -1411,45 +1396,37 @@ export function generateObstacles(world: World): void {
     }
     world.obstacles.push(ob);
 
-    const xMin = Math.max(0, Math.floor(rx - baseR));
-    const xMax = Math.min(W - 1, Math.floor(rx + baseR));
+    // Update heightmap with this rock's top profile.
     for (let x = xMin; x <= xMax; x++) {
       const dx = x - rx;
       const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
       const top = ry - dz;
       if (top < heightmap[x]) heightmap[x] = top;
     }
-    return true;
   }
 
-  // Pass 1: random ballistic deposition.
-  let placed = 0;
-  let attempts = 0;
-  const MAX_ATTEMPTS = ROCK_COUNT * 6;
-  while (placed < ROCK_COUNT && attempts < MAX_ATTEMPTS) {
-    attempts++;
-    const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
+  // Pass 1: drop rocks at uniformly-random x positions. Skewed-small
+  // radius distribution (square gives a clear long tail) so most
+  // rocks are gravel-sized but occasional boulders anchor piles.
+  for (let i = 0; i < ROCK_COUNT; i++) {
+    const t = Math.random() * Math.random(); // square: favor small values
+    const baseR = ROCK_R_MIN + t * (ROCK_R_MAX - ROCK_R_MIN);
     const rx = baseR + Math.random() * (W - 2 * baseR);
-    if (tryPlace(rx, baseR, false)) placed++;
+    dropRock(rx, baseR);
   }
 
-  // Pass 2: gap-fill. Scan for x columns where the surface is still
-  // bedrock (no rock has landed in this region). Force a small rock
-  // there so the seabed reads as a continuous floor instead of
-  // showing through to dark water.
-  const STRIDE = 12; // sample every 12 px
+  // Pass 2: plug columns that are still bedrock. Doesn't touch
+  // anywhere a rock has already landed, so peaks survive.
+  const STRIDE = 14;
   for (let x = STRIDE; x < W - STRIDE; x += STRIDE) {
-    // "Empty" = heightmap is still essentially at floor level within
-    // a small window centered here. Threshold of 6 px catches places
-    // where no rock has covered this column.
     let minH = floorY;
     for (let s = -STRIDE; s <= STRIDE; s++) {
       const xi = Math.max(0, Math.min(W - 1, x + s));
       if (heightmap[xi] < minH) minH = heightmap[xi];
     }
-    if (floorY - minH > 6) continue;
-    const baseR = ROCK_R_MIN + Math.random() * 6;
-    tryPlace(x, baseR, true);
+    if (floorY - minH > 4) continue; // already covered
+    const baseR = ROCK_R_MIN + Math.random() * 5;
+    dropRock(x, baseR);
   }
 }
 
