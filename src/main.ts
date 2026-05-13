@@ -1059,6 +1059,13 @@ function drawPhylogeny(): void {
   for (const c of world.creatures) {
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.biomass);
   }
+  // Update each species' all-time-peak biomass from this sample. The
+  // phylogeny render runs every frame, so peak tracks tightly without
+  // needing per-tick work in the sim core.
+  for (const [key, b] of bioByKey) {
+    const sp = world.species.get(key);
+    if (sp && b > sp.peakBiomass) sp.peakBiomass = b;
+  }
   let maxBio = 0;
   for (const sp of visible) {
     const b = bioByKey.get(sp.key) ?? 0;
@@ -1590,13 +1597,11 @@ function maybeAnalyzeGenomes(): void {
   if (world.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
   lastAnalysisT = world.t;
 
-  // Per-species live biomass aggregation. world.species.alive already
-  // tracks cell counts; we walk world.creatures to sum biomass.
-  const liveBiomass = new Map<string, number>();
-  for (const c of world.creatures) {
-    liveBiomass.set(c.speciesKey, (liveBiomass.get(c.speciesKey) ?? 0) + c.molecules.biomass);
-  }
-
+  // Rank by all-time-peak biomass, which the phylogeny render keeps
+  // updated each frame. Live-only biomass swings wildly (cells
+  // momentarily drain their biomass on fission), so a top-5 keyed on
+  // it would flicker / report 0 for extinct lineages. Peak is the
+  // honest "how big did this lineage ever get".
   type Row = {
     sp: Species;
     alive: boolean;
@@ -1612,13 +1617,13 @@ function maybeAnalyzeGenomes(): void {
       sp,
       alive,
       duration,
-      biomass: liveBiomass.get(sp.key) ?? 0,
+      biomass: sp.peakBiomass,
       cells: sp.alive,
     });
   }
   rows.sort((a, b) => {
-    if (b.duration !== a.duration) return b.duration - a.duration;
     if (b.biomass !== a.biomass) return b.biomass - a.biomass;
+    if (b.duration !== a.duration) return b.duration - a.duration;
     if (b.cells !== a.cells) return b.cells - a.cells;
     return a.sp.firstSeen - b.sp.firstSeen; // oldest first as final tiebreaker
   });
@@ -1641,7 +1646,7 @@ function maybeAnalyzeGenomes(): void {
     const block = document.createElement("div");
     block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
     const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
-    const headLine = `${dot}<b>#${i + 1}</b>  ${sp.key.slice(0, 6)}  duration=${formatAge(row.duration)}  bio=${row.biomass.toFixed(0)}  cells=${row.cells}  ${status}`;
+    const headLine = `${dot}<b>#${i + 1}</b>  ${sp.key.slice(0, 6)}  duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}  ${status}`;
     const prose = describeGenomeProse(sp.genome, MATERIAL_IDS_ORDERED);
     const proseDiv = document.createElement("div");
     proseDiv.style.cssText = "padding-top:3px;";

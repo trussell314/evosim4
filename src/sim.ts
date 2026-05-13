@@ -751,6 +751,13 @@ export interface Species {
   // World ticks during which at least one cell of this species ran
   // its VM. Combined with execCounts gives per-position rates.
   vmTicks: number;
+  // Highest summed-across-living-members biomass this species has
+  // ever reached. Sampled by the renderer each frame and monotonically
+  // increased. Survives extinction so the sidebar can rank species
+  // by peak rather than current-instant biomass (the latter is often
+  // 0 -- extinct species, or alive cells that just spent their stock
+  // on a division).
+  peakBiomass: number;
 }
 
 export interface PhylogenyEvent {
@@ -2208,6 +2215,7 @@ function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefi
       genome: new Uint8Array(c.genome),
       execCounts: new Uint32Array(MAX_GENOME_BYTES),
       vmTicks: 0,
+      peakBiomass: 0,
     };
     world.species.set(key, sp);
   }
@@ -4527,6 +4535,7 @@ interface SavedSpecies {
   alive: number; lane: number; vmTicks: number;
   parents: string[];
   genome: number[];
+  peakBiomass: number;
 }
 interface SavedWorld {
   schema: string;
@@ -4614,6 +4623,7 @@ export function serializeWorld(w: World): string {
       alive: s.alive, lane: s.lane, vmTicks: s.vmTicks,
       parents: Array.from(s.parents),
       genome: Array.from(s.genome),
+      peakBiomass: s.peakBiomass,
     });
   }
   const saved: SavedWorld = {
@@ -4717,6 +4727,7 @@ export function applySavedWorld(world: World, json: string): boolean {
       parents: new Set(ss.parents),
       genome: new Uint8Array(ss.genome),
       execCounts: new Uint32Array(MAX_GENOME_BYTES),
+      peakBiomass: ss.peakBiomass ?? 0,
     });
   }
   world.nextSpeciesLane = maxLane + 1;
