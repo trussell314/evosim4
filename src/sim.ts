@@ -1345,42 +1345,35 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
-// Lay down the world's terrain: rocks falling straight down at
-// random x positions. Each rock lands on the current top surface
-// (heightmap of the existing pile) and stops there -- no rolling.
-// The natural variability of random sampling produces undulating
-// peaks and valleys, the way real ballistic piles form.
-//
-// Gap-fill afterward only plugs columns where the bedrock is still
-// completely exposed (no rock landed within +/-STRIDE px); it does
-// NOT level the top, so peaks survive.
+// Lay down the world's terrain: 25 heavy rocks dropped from above
+// at random x positions. Each rock falls straight down, hits the
+// bedrock or whatever rock is already there, and stops. That's it.
+// Result: a sparse rocky sea floor with the occasional pair stacked
+// where two rocks happened to land close.
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
   const H = world.height;
   const floorY = H - 4;
+  const ROCK_COUNT = 25;
+  const ROCK_R_MIN = 22;
+  const ROCK_R_MAX = 42;
+  const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
 
-  // Rock count scales with usable area. ~1 rock per 500 px^2 of the
-  // bottom third of the world gives dense piles with visible relief.
-  const usableArea = W * (H * 0.45);
-  const ROCK_COUNT = Math.round(usableArea / 500);
-
-  // Heightmap: top surface y at each x column (smaller y = taller).
+  // Heightmap: top-of-surface y at each integer x column. Each
+  // landed rock updates the columns it covers, so subsequent rocks
+  // settle on top of it when their footprints overlap.
   const heightmap = new Float32Array(W);
   heightmap.fill(floorY);
 
-  // Wider radius distribution than before -- mix small gravel with
-  // occasional big boulders. Real seabeds aren't sorted by size.
-  const ROCK_R_MIN = 5;
-  const ROCK_R_MAX = 28;
-  const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
+  for (let i = 0; i < ROCK_COUNT; i++) {
+    const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
+    const rx = baseR + Math.random() * (W - 2 * baseR);
 
-  function dropRock(rx: number, baseR: number): void {
-    // Find resting y: the highest contact point in the rock's
-    // footprint. For each x in [rx-baseR, rx+baseR], the rock's
-    // bottom curve sits at ry + sqrt(baseR^2 - (x-rx)^2). The rock
-    // rests at the smallest ry such that its bottom curve touches
-    // heightmap[x] for the limiting x in the footprint.
+    // Find resting y: the smallest ry such that the rock's circular
+    // bottom (ry + sqrt(R^2 - (x-rx)^2)) just touches the current
+    // surface for some x in its footprint. Effectively: how far it
+    // falls before contact stops it.
     const xMin = Math.max(0, Math.floor(rx - baseR));
     const xMax = Math.min(W - 1, Math.floor(rx + baseR));
     let ry = floorY;
@@ -1391,7 +1384,6 @@ export function generateObstacles(world: World): void {
       if (candidate < ry) ry = candidate;
     }
 
-    // Build the rock geometry.
     const elong = 0.85 + Math.random() * 0.9;
     const tilt = -0.5 + Math.random() * 1.0;
     const polygon = buildRockPolygon(rx, ry, baseR, elong, tilt);
@@ -1407,37 +1399,14 @@ export function generateObstacles(world: World): void {
     }
     world.obstacles.push(ob);
 
-    // Update heightmap with this rock's top profile.
+    // Update heightmap with this rock's top profile so subsequent
+    // rocks see it when they fall.
     for (let x = xMin; x <= xMax; x++) {
       const dx = x - rx;
       const dz = Math.sqrt(Math.max(0, baseR * baseR - dx * dx));
       const top = ry - dz;
       if (top < heightmap[x]) heightmap[x] = top;
     }
-  }
-
-  // Pass 1: drop rocks at uniformly-random x positions. Skewed-small
-  // radius distribution (square gives a clear long tail) so most
-  // rocks are gravel-sized but occasional boulders anchor piles.
-  for (let i = 0; i < ROCK_COUNT; i++) {
-    const t = Math.random() * Math.random(); // square: favor small values
-    const baseR = ROCK_R_MIN + t * (ROCK_R_MAX - ROCK_R_MIN);
-    const rx = baseR + Math.random() * (W - 2 * baseR);
-    dropRock(rx, baseR);
-  }
-
-  // Pass 2: plug columns that are still bedrock. Doesn't touch
-  // anywhere a rock has already landed, so peaks survive.
-  const STRIDE = 14;
-  for (let x = STRIDE; x < W - STRIDE; x += STRIDE) {
-    let minH = floorY;
-    for (let s = -STRIDE; s <= STRIDE; s++) {
-      const xi = Math.max(0, Math.min(W - 1, x + s));
-      if (heightmap[xi] < minH) minH = heightmap[xi];
-    }
-    if (floorY - minH > 4) continue; // already covered
-    const baseR = ROCK_R_MIN + Math.random() * 5;
-    dropRock(x, baseR);
   }
 }
 
