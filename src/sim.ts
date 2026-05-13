@@ -342,6 +342,12 @@ export class CreatureStore {
   // Backing storage for the generic slice (chemCols[8..63]). Kept
   // separate so grow() can resize them without touching molCols.
   genericChemCols!: Float32Array[];
+  // Surface fingerprint -- the cell's "phenotype on display" used for
+  // contact recognition by ADHERE / ENGULF. Each cell's top 8
+  // chemicals by mass are packed into a 64-bit set (two Uint32Arrays
+  // because JS bitops are 32-bit). Refreshed once per tick.
+  fpLo!: Uint32Array;
+  fpHi!: Uint32Array;
   constructor(initialCap = 256) {
     const blank = new Float32Array(0);
     const blanki = new Int32Array(0);
@@ -350,6 +356,8 @@ export class CreatureStore {
     this.r = blank; this.density = blank;
     this.energy = blank; this.senseRange = blank; this.thrustAccel = blank;
     this.bornAt = blank; this.ingestCooldown = blank; this.repairTicks = blanki;
+    const blanku = new Uint32Array(0);
+    this.fpLo = blanku; this.fpHi = blanku;
     this.ax = blank; this.ay = blank;
     this.m_glucose = blank; this.m_fattyAcid = blank; this.m_aminoAcid = blank;
     this.m_minerals = blank; this.m_chlorophyll = blank; this.m_enzyme = blank;
@@ -381,6 +389,13 @@ export class CreatureStore {
     this.bornAt = grow1(this.bornAt);
     this.ingestCooldown = grow1(this.ingestCooldown);
     this.repairTicks = grow1i(this.repairTicks);
+    {
+      const grow1u = (a: Uint32Array): Uint32Array => {
+        const n = new Uint32Array(newCap); n.set(a); return n;
+      };
+      this.fpLo = grow1u(this.fpLo);
+      this.fpHi = grow1u(this.fpHi);
+    }
     this.ax = grow1(this.ax);
     this.ay = grow1(this.ay);
     this.m_glucose = grow1(this.m_glucose);
@@ -450,6 +465,7 @@ export class CreatureStore {
     this.bornAt[i] = 0;
     this.ingestCooldown[i] = 0;
     this.repairTicks[i] = 0;
+    this.fpLo[i] = 0; this.fpHi[i] = 0;
     this.ax[i] = 0; this.ay[i] = 0;
     this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
@@ -1398,6 +1414,70 @@ function installNamedReactions(out: Reaction[]): void {
 // ATP/ADP mass conservation is engine-managed via atpDelta: exergonic
 // reactions deduct |atpDelta| ADP per unit; endergonic deduct
 // |atpDelta| ATP (energy) and credit |atpDelta| ADP.
+// Surface fingerprint: each cell's top FP_SIZE chemicals by current
+// concentration, packed as a bitmask over CHEMICAL_COUNT. Other
+// cells read this on contact to gate ADHERE (kin recognition) and
+// ENGULF (non-self recognition). No genome inspection involved --
+// this is the cell's phenotype "on display": its actual chemistry
+// pool. Kin recognition emerges naturally because related lineages
+// run similar genomes -> produce similar chemistry -> carry
+// overlapping fingerprints. Refreshed once per tick before VM /
+// reactions.
+const FP_SIZE = 8;
+const FP_MATCH_THRESHOLD = 4; // bits needed to count as "matching"
+const fpScratchIds = new Uint8Array(FP_SIZE);
+const fpScratchVals = new Float32Array(FP_SIZE);
+function popcount32(x: number): number {
+  x = (x | 0) - ((x >>> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  return ((((x + (x >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24) | 0;
+}
+function fingerprintOverlap(a: Creature, b: Creature): number {
+  const sa = a.store; const sb = b.store;
+  const ai = a.idx; const bi = b.idx;
+  return popcount32(sa.fpLo[ai] & sb.fpLo[bi]) + popcount32(sa.fpHi[ai] & sb.fpHi[bi]);
+}
+function updateSurfaceFingerprint(c: Creature): void {
+  const s = c.store; const i = c.idx;
+  const cols = s.chemCols;
+  // Selection: keep top FP_SIZE entries in fpScratch.
+  for (let k = 0; k < FP_SIZE; k++) { fpScratchVals[k] = -1; fpScratchIds[k] = 0; }
+  for (let chem = 0; chem < CHEMICAL_COUNT; chem++) {
+    const v = cols[chem][i];
+    if (v <= 0) continue;
+    // Find slot with smallest value; evict if v is bigger.
+    let minIdx = 0;
+    let minVal = fpScratchVals[0];
+    for (let k = 1; k < FP_SIZE; k++) {
+      if (fpScratchVals[k] < minVal) { minVal = fpScratchVals[k]; minIdx = k; }
+    }
+    if (v > minVal) {
+      fpScratchVals[minIdx] = v;
+      fpScratchIds[minIdx] = chem;
+    }
+  }
+  // Pack ids into a 64-bit set (lo: ids 0..31, hi: ids 32..63).
+  let lo = 0, hi = 0;
+  for (let k = 0; k < FP_SIZE; k++) {
+    if (fpScratchVals[k] < 0) continue; // unfilled slot
+    const id = fpScratchIds[k];
+    if (id < 32) lo |= (1 << id);
+    else hi |= (1 << (id - 32));
+  }
+  s.fpLo[i] = lo >>> 0;
+  s.fpHi[i] = hi >>> 0;
+}
+function refreshSurfaceFingerprints(world: World): void {
+  for (const c of world.creatures) {
+    updateSurfaceFingerprint(c);
+    // Inner cells get fingerprints too so a host's engulfment of a new
+    // prey reads the prey's fingerprint correctly; engulfed cells
+    // already inside don't need to be checked (recognition is at
+    // contact time, but cheap to keep them updated).
+    for (const inner of c.contents) updateSurfaceFingerprint(inner);
+  }
+}
+
 function runGenericReactions(c: Creature, dt: number, ambientLight: number, synthMask: number): void {
   const s = c.store; const i = c.idx;
   const KM = KM_DEFAULT;
@@ -3051,6 +3131,10 @@ function updateCreatures(world: World, dt: number): void {
   // particles/creatures inside per-cell loops with O(neighborhood) scans.
   buildCreatureGrid(world);
   rebuildSensorBins(world);
+  // Snapshot each cell's surface fingerprint up front so ADHERE /
+  // ENGULF in the per-cell loop below see consistent values for
+  // both self and neighbor (rather than mid-update mixes).
+  refreshSurfaceFingerprints(world);
   for (let cIdx = 0; cIdx < n; cIdx++) {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
@@ -3218,10 +3302,17 @@ function updateCreatures(world: World, dt: number): void {
     // already bonded. Cap each cell at MAX_BONDS to keep the spring
     // pass cheap and bounded.
     if (VM_OUT.adhere && c.bonds.length < MAX_BONDS) {
+      // ADHERE now requires surface-chemistry recognition: only cells
+      // whose displayed top-FP_SIZE chemicals overlap >= threshold
+      // count as kin. Related lineages produce similar chemistry so
+      // this filter naturally rejects strangers; somatic drift /
+      // metabolic specialization can break recognition between
+      // distant relatives, which is biologically correct.
       let nearest: Creature | null = null;
       let bestSq = (c.r + 24) * (c.r + 24);
       forCreaturesNear(c.x, c.y, c.r + 24, (other) => {
         if (other === c || eaten.has(other) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
+        if (fingerprintOverlap(c, other) < FP_MATCH_THRESHOLD) return;
         const dx = other.x - c.x;
         const dy = other.y - c.y;
         const dsq = dx * dx + dy * dy;
@@ -3285,6 +3376,11 @@ function updateCreatures(world: World, dt: number): void {
           const dz = other.z - c.z;
           const minD = c.r + other.r;
           if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
+          // ENGULF gates on non-self recognition: refuse to take in a
+          // cell whose surface chemistry looks too much like our own,
+          // matching how phagocytes ignore body cells displaying
+          // self-markers. Kin survives, strangers go in the vacuole.
+          if (fingerprintOverlap(c, other) >= FP_MATCH_THRESHOLD) return;
           const otherMass = creatureTotalMass(other);
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;

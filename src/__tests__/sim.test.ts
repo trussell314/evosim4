@@ -1455,10 +1455,17 @@ describe("aeration & surface escape", () => {
 });
 
 describe("adhesion (multicell bonds)", () => {
+  // ADHERE now requires surface-chemistry recognition (top-8 chem
+  // fingerprint overlap >= 4 bits). Test cells need matching
+  // chemistry profiles to count as kin.
+  const kinChem = {
+    biomass: 50, glucose: 30, o2: 10, aminoAcid: 20,
+    fattyAcid: 15, minerals: 25, adp: 12, co2: 8,
+  };
   it("ADHERE bonds with the nearest other cell in range", () => {
     const w = quietWorld();
-    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.ADHERE, OP.HALT]) });
-    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const a = makeCreature({ x: 400, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.ADHERE, OP.HALT]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.HALT]) });
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds).toContain(b);
