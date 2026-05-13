@@ -2344,19 +2344,23 @@ function applyForces(world: World, dt: number): void {
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
-    // Travelling waves -- horizontal ax uses sin(kx - wt), matching the
-    // visible surface in surfaceYAt(). The previous cos(kx)*sin(wt) form
-    // was a *standing* wave with fixed nodes/antinodes; particles got
-    // pushed toward stable equilibria and clustered along ~3 vertical
-    // lines in portrait orientation. Splash (vertical near surface) is
-    // 90 degrees out of phase, consistent with deep-water orbital motion.
-    const surfPhase = kS * xi - wS * t;
-    const swellPhase = kL * xi - wL * t;
-    const surface = surfAmp * Math.sin(surfPhase) * Math.exp(-depth / surfDecay);
-    const swell   = swellAmp * Math.sin(swellPhase) * Math.exp(-depth / swellDecay);
+    // Balanced sum of rightward + leftward travelling waves. A single
+    // travelling wave produces Stokes drift in its propagation direction;
+    // particles slowly migrate to one side of the world. A pair with
+    // opposite directions but *different* (k, w) cancels the drift
+    // without collapsing back to a standing wave (which would re-create
+    // fixed accumulation nodes -- equal-(k,w) opposing waves sum to a
+    // standing wave). Splash is the 90-degree-out-of-phase vertical
+    // companion of the dominant horizontal component.
+    const surfPR = kS * xi - wS * t;
+    const surfPL = 1.3 * kS * xi + 0.9 * wS * t + 1.1;
+    const swellPR = kL * xi - wL * t;
+    const swellPL = 1.4 * kL * xi + 0.7 * wL * t + 0.4;
+    const surface = surfAmp * 0.5 * (Math.sin(surfPR) + Math.sin(surfPL)) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * 0.5 * (Math.sin(swellPR) + Math.sin(swellPL)) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
     const splash = depth < SPLASH_DEPTH
-      ? surfAmp * SPLASH_GAIN * Math.cos(surfPhase) * Math.exp(-depth / SPLASH_DEPTH)
+      ? surfAmp * SPLASH_GAIN * 0.5 * (Math.cos(surfPR) + Math.cos(surfPL)) * Math.exp(-depth / SPLASH_DEPTH)
       : 0;
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
@@ -2392,14 +2396,17 @@ function applyForces(world: World, dt: number): void {
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
-    // Travelling waves -- see particle loop above for rationale.
-    const surfPhase = kS * xi - wS * t;
-    const swellPhase = kL * xi - wL * t;
-    const surface = surfAmp * Math.sin(surfPhase) * Math.exp(-depth / surfDecay);
-    const swell   = swellAmp * Math.sin(swellPhase) * Math.exp(-depth / swellDecay);
+    // Balanced rightward + leftward travelling waves -- see particle
+    // loop above for rationale (no Stokes drift, no fixed nodes).
+    const surfPR = kS * xi - wS * t;
+    const surfPL = 1.3 * kS * xi + 0.9 * wS * t + 1.1;
+    const swellPR = kL * xi - wL * t;
+    const swellPL = 1.4 * kL * xi + 0.7 * wL * t + 0.4;
+    const surface = surfAmp * 0.5 * (Math.sin(surfPR) + Math.sin(surfPL)) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * 0.5 * (Math.sin(swellPR) + Math.sin(swellPL)) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
     const splash = depth < SPLASH_DEPTH
-      ? surfAmp * SPLASH_GAIN * Math.cos(surfPhase) * Math.exp(-depth / SPLASH_DEPTH)
+      ? surfAmp * SPLASH_GAIN * 0.5 * (Math.cos(surfPR) + Math.cos(surfPL)) * Math.exp(-depth / SPLASH_DEPTH)
       : 0;
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
