@@ -176,6 +176,17 @@ function getDpr(): number {
 let viewScale = 1;
 let viewOffsetX = 0;
 let viewOffsetY = 0;
+// User-controlled view: in-app pinch/scroll zoom + drag pan applied
+// only to the world drawing area. HUD / sidebar / phylogeny stay at
+// their CSS-fixed positions regardless. Composed on top of the
+// world-fit transform: finalScreenX = canvasX * viewZoom + viewPanX,
+// where canvasX = worldX * viewScale + viewOffsetX. zoom 1 + pan 0
+// = original auto-fit.
+let viewZoom = 1;
+let viewPanX = 0;
+let viewPanY = 0;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 12;
 
 // Track the selected cell by reference, not index. world.creatures
 // gets fully rebuilt each tick (death/engulf removes plus released
@@ -388,9 +399,11 @@ function findCellAt(x: number, y: number): number {
 // transform set in resize(). Used by click + hover so cells under
 // the pointer match regardless of browser zoom / window size.
 function canvasToWorld(cx: number, cy: number): { x: number; y: number } {
+  // Invert both the world-fit and the user zoom/pan layers.
+  const tScale = viewScale * viewZoom;
   return {
-    x: (cx - viewOffsetX) / viewScale,
-    y: (cy - viewOffsetY) / viewScale,
+    x: (cx - viewOffsetX * viewZoom - viewPanX) / tScale,
+    y: (cy - viewOffsetY * viewZoom - viewPanY) / tScale,
   };
 }
 canvas.addEventListener("click", (e) => {
@@ -441,11 +454,11 @@ let tooltipScheduled = false;
 let lockedCell: Creature | null = null;
 function worldToClientX(wx: number): number {
   const rect = canvas.getBoundingClientRect();
-  return wx * viewScale + viewOffsetX + rect.left;
+  return wx * viewScale * viewZoom + viewOffsetX * viewZoom + viewPanX + rect.left;
 }
 function worldToClientY(wy: number): number {
   const rect = canvas.getBoundingClientRect();
-  return wy * viewScale + viewOffsetY + rect.top;
+  return wy * viewScale * viewZoom + viewOffsetY * viewZoom + viewPanY + rect.top;
 }
 function flushTooltip(): void {
   tooltipScheduled = false;
@@ -489,11 +502,12 @@ function flushTooltip(): void {
   const vh = vv ? vv.height : window.innerHeight;
   const w = tooltip.offsetWidth;
   const h = tooltip.offsetHeight;
-  const cx = worldToClientX(c.x) + c.r * viewScale;
+  const rPix = c.r * viewScale * viewZoom;
+  const cx = worldToClientX(c.x) + rPix;
   const cy = worldToClientY(c.y);
   let left = cx + OFFSET;
   let top = cy + OFFSET;
-  if (left + w + MARGIN > vw) left = cx - OFFSET - w - c.r * viewScale * 2;
+  if (left + w + MARGIN > vw) left = cx - OFFSET - w - rPix * 2;
   if (top + h + MARGIN > vh) top = cy - OFFSET - h;
   if (left < MARGIN) left = MARGIN;
   if (top < MARGIN) top = MARGIN;
@@ -521,6 +535,127 @@ canvas.addEventListener("mouseleave", () => {
   // leaves the canvas. flushTooltip's render loop call still fires.
   pendingMouseInside = false;
 });
+
+// ---------------------------------------------------------------------
+// In-app canvas zoom + pan. iOS Safari/Brave's page-level pinch zoom
+// is disabled in index.html so the HUD stays put; this re-implements
+// the gesture but applies it only to the world drawing area via the
+// viewZoom / viewPan state.
+//
+// Pinch (2 touches): scale around the midpoint, like a normal pinch.
+// Drag (1 touch when zoomed in): pan. We skip drag at zoom 1 so a
+// regular tap-to-select still fires (preventDefault would swallow it).
+// Wheel: desktop trackpad pinch (ctrl-wheel from Mac trackpad too) +
+// scroll to zoom around the cursor.
+// Double-tap / double-click: reset to fit.
+// ---------------------------------------------------------------------
+const clampZoom = (z: number): number => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+function zoomAround(screenX: number, screenY: number, factor: number): void {
+  const oldZoom = viewZoom;
+  const newZoom = clampZoom(oldZoom * factor);
+  if (newZoom === oldZoom) return;
+  // Keep the world point under (screenX, screenY) anchored as the
+  // zoom changes. Pan adjusts by how much the post-zoom view of
+  // that anchor has slid.
+  const ratio = newZoom / oldZoom;
+  viewPanX = screenX - (screenX - viewPanX) * ratio;
+  viewPanY = screenY - (screenY - viewPanY) * ratio;
+  viewZoom = newZoom;
+}
+function resetView(): void { viewZoom = 1; viewPanX = 0; viewPanY = 0; }
+
+// --- Touch gestures ---
+let pinchStartDistance = 0;
+let pinchStartMidpoint = { x: 0, y: 0 };
+let pinchStartZoom = 1;
+let pinchStartPan = { x: 0, y: 0 };
+let pinchActive = false;
+let dragLastX = 0;
+let dragLastY = 0;
+let dragActive = false;
+let dragMoved = false;
+let lastTapAt = 0;
+function touchMid(touches: TouchList, rect: DOMRect): { x: number; y: number } {
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+    y: (touches[0].clientY + touches[1].clientY) / 2 - rect.top,
+  };
+}
+function touchDist(touches: TouchList): number {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+canvas.addEventListener("touchstart", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  if (e.touches.length === 2) {
+    pinchActive = true;
+    dragActive = false;
+    pinchStartDistance = touchDist(e.touches);
+    pinchStartMidpoint = touchMid(e.touches, rect);
+    pinchStartZoom = viewZoom;
+    pinchStartPan = { x: viewPanX, y: viewPanY };
+    e.preventDefault();
+  } else if (e.touches.length === 1 && !pinchActive) {
+    dragActive = true;
+    dragMoved = false;
+    dragLastX = e.touches[0].clientX;
+    dragLastY = e.touches[0].clientY;
+  }
+}, { passive: false });
+canvas.addEventListener("touchmove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  if (pinchActive && e.touches.length === 2) {
+    const dist = touchDist(e.touches);
+    const mid = touchMid(e.touches, rect);
+    const zf = dist / Math.max(1, pinchStartDistance);
+    const newZoom = clampZoom(pinchStartZoom * zf);
+    const ratio = newZoom / pinchStartZoom;
+    viewZoom = newZoom;
+    // Anchor the original midpoint's world point at the live midpoint.
+    viewPanX = mid.x - (pinchStartMidpoint.x - pinchStartPan.x) * ratio;
+    viewPanY = mid.y - (pinchStartMidpoint.y - pinchStartPan.y) * ratio;
+    e.preventDefault();
+  } else if (dragActive && e.touches.length === 1 && viewZoom > 1) {
+    const dx = e.touches[0].clientX - dragLastX;
+    const dy = e.touches[0].clientY - dragLastY;
+    if (Math.hypot(dx, dy) > 1) dragMoved = true;
+    viewPanX += dx;
+    viewPanY += dy;
+    dragLastX = e.touches[0].clientX;
+    dragLastY = e.touches[0].clientY;
+    if (dragMoved) e.preventDefault();
+  }
+}, { passive: false });
+canvas.addEventListener("touchend", (e) => {
+  if (pinchActive && e.touches.length < 2) pinchActive = false;
+  if (dragActive && e.touches.length === 0) {
+    dragActive = false;
+    // Double-tap (within 300ms, no drag) resets the zoom.
+    if (!dragMoved) {
+      const now = performance.now();
+      if (now - lastTapAt < 300) { resetView(); lastTapAt = 0; }
+      else lastTapAt = now;
+    }
+  }
+});
+
+// --- Wheel / trackpad pinch ---
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  // ctrlKey is what Mac trackpad pinches set on wheel events. Use a
+  // gentler factor for plain scroll-wheel so a single notch doesn't
+  // overshoot.
+  const sensitivity = e.ctrlKey ? 0.01 : 0.0015;
+  const factor = Math.exp(-e.deltaY * sensitivity);
+  zoomAround(cx, cy, factor);
+}, { passive: false });
+
+// --- Desktop double-click resets ---
+canvas.addEventListener("dblclick", () => { resetView(); });
 
 // Dramatic depth: near particles are crisp and full-color, deep ones get
 // heavy blur, low alpha, and shift toward the water-color background --
@@ -701,7 +836,16 @@ function render(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-  ctx.setTransform(dpr * viewScale, 0, 0, dpr * viewScale, dpr * viewOffsetX, dpr * viewOffsetY);
+  // Compose world-fit transform with user pinch/scroll zoom + pan.
+  // After zoom: x' = canvasX * viewZoom + viewPanX where canvasX is
+  // the world-fit value. So the combined scale is viewScale*viewZoom
+  // and the translation is viewOffset*viewZoom + viewPan.
+  const tScale = viewScale * viewZoom;
+  ctx.setTransform(
+    dpr * tScale, 0, 0, dpr * tScale,
+    dpr * (viewOffsetX * viewZoom + viewPanX),
+    dpr * (viewOffsetY * viewZoom + viewPanY),
+  );
 
   // Atmosphere band -- fill above the wavy surface line. Darkened with
   // the same day/night multiplier as the water so the whole scene dims.
