@@ -1107,12 +1107,19 @@ function buildTerrainBitmap(): void {
   // rocks (higher z) are darkened to suggest depth fog; foreground
   // rocks paint over them at full saturation.
   for (const ob of world.obstacles) {
-    const depthFade = 0.18 * (ob.z ?? 0); // 0 (front) .. 0.72 (back)
-    const baseColor = hexLerp(ob.color, 0, 0, 0, depthFade);
+    // depthFade in 0 (foreground) .. 0.72 (back layer). Apply as an
+    // additional darkening to each gradient stop and the stroke.
+    // All hexLerp calls work off ob.color (a hex string) directly --
+    // composing hexLerp on its own output produces NaN colors
+    // because hexLerp returns "rgb(...)" and re-parses as hex.
+    const depthFade = 0.18 * (ob.z ?? 0);
     const grad = octx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    grad.addColorStop(0, hexLerp(baseColor, 255, 255, 255, 0.20 * (1 - depthFade)));
-    grad.addColorStop(0.4, baseColor);
-    grad.addColorStop(1, hexLerp(baseColor, 0, 0, 0, 0.45));
+    // Top highlight: less bright when deeper.
+    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20 * (1 - depthFade)));
+    // Mid: original color darkened by depthFade.
+    grad.addColorStop(0.4, hexLerp(ob.color, 0, 0, 0, depthFade));
+    // Bottom shadow: existing darkening plus depth.
+    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, Math.min(0.85, 0.45 + 0.4 * depthFade)));
     octx.fillStyle = grad;
     octx.beginPath();
     if (ob.polygon && ob.polygon.length >= 3) {
@@ -1128,7 +1135,7 @@ function buildTerrainBitmap(): void {
       }
     }
     octx.fill();
-    octx.strokeStyle = hexLerp(baseColor, 0, 0, 0, 0.55);
+    octx.strokeStyle = hexLerp(ob.color, 0, 0, 0, Math.min(0.95, 0.55 + 0.3 * depthFade));
     octx.lineWidth = 1;
     octx.stroke();
   }
