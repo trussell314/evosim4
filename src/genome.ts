@@ -869,45 +869,74 @@ export function genomeSynthMask(genome: Uint8Array): number {
   return mask;
 }
 
-// Minimum-viable cell as of phase 2 + the chl/ribo machinery
-// restoration. A cell that's missing any of these can't sustain a
-// lineage on any meaningful timescale, so the founder generator
-// rerolls until it lands a candidate that has all of them.
+// Set of every SENSE_* / SELF_* op the VM exposes. A genome with no
+// member of this set has no way to read state and can only emit
+// constant-conditioned behavior -- useless. Used by viableGenome
+// below; kept here so adding a new sensor op only requires touching
+// the OP table + this set.
+const SENSE_OPS: ReadonlySet<number> = new Set([
+  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY,
+  OP.SELF_ENERGY, OP.SELF_RESERVE, OP.SELF_VX, OP.SELF_VY,
+  OP.SENSE_CRE_DX, OP.SENSE_CRE_DY, OP.SENSE_CRE_DIST, OP.SENSE_CRE_MASS,
+  OP.SELF_MASS, OP.SENSE_LIGHT, OP.SELF_BIOMASS, OP.SELF_AGE,
+  OP.SELF_GLUCOSE, OP.SELF_O2, OP.SELF_FATTY, OP.SELF_AMINO, OP.SELF_WASTE,
+  OP.SENSE_WALL_X, OP.SENSE_WALL_Y, OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y,
+  OP.SENSE_TEMP, OP.SENSE_PHEROMONE,
+  OP.SENSE_CHEMICAL, OP.SENSE_EM, OP.SENSE_PRESSURE_X, OP.SENSE_PRESSURE_Y,
+  OP.SENSE_KIN, OP.SENSE_NEIGHBOR_HASH,
+]);
+
+// Minimum viable cell after all the chemistry restoration.  Branches
+// by trophic mode -- photoautotrophs need to make their own building
+// blocks; heterotrophs need to digest what they catch.  SYNTH_CAT
+// is no longer required (the named pathways suffice without it).
 //
-//  - hasMass:      INGEST/PREDATE/ENGULF (heterotroph) or SYNTH_CHL
-//                  (photoautotroph; SYNTH_CHL builds chlorophyll which
-//                  is the mandatory multiplier on photosynth).
-//  - hasReproduce: REPRODUCE -- without it the lineage is sterile.
-//  - hasBio:       SYNTH_BIO -- biomass is what keeps the cell above
-//                  MIN_VIABLE_BIOMASS; without replenishment it
-//                  autolyzes in ~14 minutes regardless.
-//  - hasRibo:      SYNTH_RIBO -- ribosomes are the mandatory
-//                  multiplier on every biosynth reaction. Zero ribo
-//                  means zero biomass replenishment.
-//  - hasCat:       SYNTH_CAT -- per-reaction catalyst potential, kept
-//                  required so every lineage can in principle evolve
-//                  metabolic specialization.
+//  Universal:
+//    - hasMass:      INGEST/PREDATE/ENGULF (heterotroph) or
+//                    SYNTH_CHL (photoautotroph; chl is the mandatory
+//                    multiplier on photosynth).
+//    - hasReproduce: REPRODUCE.
+//    - hasBio:       SYNTH_BIO -- builds biomass; without it the cell
+//                    autolyzes from maintenance decay.
+//    - hasRibo:      SYNTH_RIBO -- ribosomes are mandatory on every
+//                    biosynth reaction.
+//    - hasSense:     any SENSE_* / SELF_* op -- a cell that can't
+//                    read state can only emit constant behavior.
+//  Heterotroph (INGEST/PREDATE/ENGULF present):
+//    - hasEnz:       SYNTH_ENZ -- enzymes are mandatory on catabolize;
+//                    without them the cell stomachs food but can't
+//                    actually digest it into molecules.
+//  Photoautotroph-only (SYNTH_CHL, no INGEST/PREDATE/ENGULF):
+//    - hasAA + hasFA: cell makes its own building blocks from
+//                    photosynth glucose; without these SYNTH_BIO
+//                    starves once the yolk runs out.
 export function viableGenome(genome: Uint8Array): boolean {
-  let hasMass = false;
+  let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
   let hasReproduce = false;
-  let hasBio = false;
-  let hasRibo = false;
-  let hasCat = false;
+  let hasBio = false, hasRibo = false;
+  let hasAA = false, hasFA = false, hasEnz = false;
+  let hasSense = false;
   walkGenome(genome, (op) => {
-    if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
-      hasMass = true;
-    } else if (op === OP.REPRODUCE) {
-      hasReproduce = true;
-    } else if (op === OP.SYNTH_BIO) {
-      hasBio = true;
-    } else if (op === OP.SYNTH_RIBO) {
-      hasRibo = true;
-    } else if (op === OP.SYNTH_CAT) {
-      hasCat = true;
-    }
-    if (hasMass && hasReproduce && hasBio && hasRibo && hasCat) return "break";
+    if (op === OP.INGEST) hasIngest = true;
+    else if (op === OP.PREDATE) hasPredate = true;
+    else if (op === OP.ENGULF) hasEngulf = true;
+    else if (op === OP.SYNTH_CHL) hasChl = true;
+    else if (op === OP.REPRODUCE) hasReproduce = true;
+    else if (op === OP.SYNTH_BIO) hasBio = true;
+    else if (op === OP.SYNTH_RIBO) hasRibo = true;
+    else if (op === OP.SYNTH_AA) hasAA = true;
+    else if (op === OP.SYNTH_FA) hasFA = true;
+    else if (op === OP.SYNTH_ENZ) hasEnz = true;
+    if (!hasSense && SENSE_OPS.has(op)) hasSense = true;
   });
-  return hasMass && hasReproduce && hasBio && hasRibo && hasCat;
+  const isHeterotroph = hasIngest || hasPredate || hasEngulf;
+  const hasMass = isHeterotroph || hasChl;
+  if (!hasMass || !hasReproduce || !hasBio || !hasRibo || !hasSense) return false;
+  // Heterotrophs need digestive enzymes to convert reserves -> molecules.
+  if (isHeterotroph && !hasEnz) return false;
+  // Pure photoautotrophs need their own building-block factory.
+  if (hasChl && !isHeterotroph && (!hasAA || !hasFA)) return false;
+  return true;
 }
 
 // Sample a random genome size in [8, 100] with a gradual bias toward
@@ -956,22 +985,15 @@ export function makeDefaultGenome(): Uint8Array {
     OP.INGEST, 3,
     OP.INGEST, 2,
     // Biosynthesis is now genome-gated. The starter cell is a
-    // heterotroph: it intends to build amino acids and fatty acids
-    // from ingested glucose+minerals, and biomass from aa+fa. It
-    // does NOT make chlorophyll or enzyme by default -- those
-    // expensive products have to be evolved in once a lineage
-    // actually has a use for them.
-    OP.SYNTH_AA,
-    OP.SYNTH_FA,
+    // heterotroph: it intends to digest ingested food into building
+    // blocks (enzyme + catabolize), then builds biomass directly
+    // from the catabolized aa + fa. Doesn't make chlorophyll.
+    OP.SYNTH_ENZ,      // mandatory for catabolize to fire (gates digestion)
     OP.SYNTH_BIO,
-    // Ribosomes are mandatory: without them, every other SYNTH_* runs
-    // at zero rate. Required by viableGenome.
+    // Ribosomes mandatory on every biosynth reaction's rate.
     OP.SYNTH_RIBO,
-    // Generic catalyst synthesis. Required by viableGenome -- a cell
-    // that can't catalyze any of the 256 generic reactions has no
-    // future even if its named-chemistry path looks fine. Operand
-    // picks one of the 256 reaction slots; the default heterotroph
-    // doesn't care which, evolution will tune it.
+    // Generic catalyst synthesis. Optional now -- evolution can tune
+    // which reaction slot benefits. Operand picks one of 256.
     OP.SYNTH_CAT, 0,
     // Keep the genome stable as the cell ages. Costs 0.5 ATP per
     // execution and refreshes a 30-tick window during which somatic
@@ -1054,12 +1076,13 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.REPRODUCE]:     3,
   [OP.SYNTH_BIO]:     3,
   [OP.SYNTH_RIBO]:    3, // mandatory for biosynthesis under strict ribosome model
+  [OP.SYNTH_ENZ]:     3, // mandatory for heterotroph digestion (catabolize gates on enz)
+  [OP.SYNTH_AA]:      3, // mandatory for photoautotrophs (no INGEST -> no aa from food)
+  [OP.SYNTH_FA]:      3, // mandatory for photoautotrophs
   [OP.THRUST]:        2,
   [OP.SENSE_GRAD_X]:  2,
   [OP.SENSE_GRAD_Y]:  2,
   [OP.REPAIR]:        2,
-  [OP.SYNTH_AA]:      2,
-  [OP.SYNTH_FA]:      2,
   [OP.SELF_BIOMASS]:  1.5,
   [OP.SELF_ENERGY]:   1.5,
   [OP.GT]:            1.5,
@@ -1073,7 +1096,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_PRESSURE_Y]: 1.5,
   [OP.SENSE_KIN]:           1.5,
   [OP.SENSE_NEIGHBOR_HASH]: 1,
-  [OP.SYNTH_CAT]:        3, // mandatory in viableGenome -- seed it hard so founders pass
+  [OP.SYNTH_CAT]:        1.5, // optional now -- evolutionary potential, not a viability gate
 };
 const SEED_OP_POOL: number[] = (() => {
   const pool: number[] = [];

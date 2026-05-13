@@ -361,7 +361,11 @@ describe("physics: waves", () => {
 describe("creature: chemistry - catabolism + respiration", () => {
   it("organic catabolizes into glucose / amino-acid / fatty-acid molecules", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
+    // Catabolize is gated on enzyme molecule (zero enz -> no digestion).
+    const c = makeCreature({
+      energy: 100, genome: new Uint8Array([OP.HALT]),
+      molecules: { enzyme: 5 },
+    });
     c.reserves.organic = 50;
     w.creatures.push(c);
     step(w, 1.0);
@@ -839,6 +843,7 @@ describe("creature: reproduction", () => {
     const c = makeCreature();
     for (const id of M) c.reserves[id] = 200; readyToFission(c);
     c.energy = 200;
+    c.molecules.enzyme = 5; // catabolize gates on enzyme now
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);

@@ -2297,13 +2297,18 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
   // INGEST/PREDATE/ENGULF) need a chlorophyll bootstrap or they
   // can't photosynth their first tick and starve before SYNTH_CHL
   // builds any. Cheap: scan once.
-  let hasMass = false; let hasChl = false;
+  let hasMass = false; let hasChl = false; let hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
     if (b === OP.INGEST || b === OP.PREDATE || b === OP.ENGULF) hasMass = true;
     else if (b === OP.SYNTH_CHL) hasChl = true;
+    else if (b === OP.SYNTH_ENZ) hasEnz = true;
   }
   const founderChl = hasChl && !hasMass ? 2 : (hasChl ? 1 : 0);
+  // Heterotrophs need enzymes to digest; without a tick-1 enzyme
+  // yolk they can't catabolize their starter reserves and starve
+  // before SYNTH_ENZ builds any.
+  const founderEnz = hasMass ? 2 : (hasEnz ? 1 : 0);
   const c = newCreature(world.creatureStore, {
     x, y, z,
     r: MIN_CREATURE_R,
@@ -2325,7 +2330,7 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     molecules: {
       adp: 50, glucose: 20, fattyAcid: 15, aminoAcid: 15,
       o2: 15, minerals: 15, biomass: 30, ribosome: 3,
-      chlorophyll: founderChl,
+      chlorophyll: founderChl, enzyme: founderEnz,
     },
     // Seed reserves across all materials so the cell can pay the per-byte
     // fission cost (genomeMaterialCost is spread across all 6 materials)
@@ -2437,18 +2442,22 @@ function sat(x: number, km: number = KM_DEFAULT): number {
 // each row of CATAB_FRACTIONS sums to 1.
 function catabolize(c: Creature, dt: number): void {
   const s = c.store; const i = c.idx;
+  // Enzyme molecule is mandatory: zero enzymes => zero digestion. Real
+  // heterotrophs can't process ingested food without proteases /
+  // lipases / etc. Symmetric with ribosome (biosynth) and chlorophyll
+  // (photosynth) -- each named pathway has its own machinery
+  // molecule and gates hard at zero.
+  const enz = s.chemCols[CHEM_ENZ][i];
+  if (enz <= 0) return;
   const surface = s.r[i] / MIN_CREATURE_R;
-  // Enzyme molecule boosts digestion -- not mandatory (uncat baseline
-  // still works) but a cell that builds enzymes catabolizes much
-  // faster. Mirrors digestive enzymes in real heterotroph cells.
-  const enzBoost = 1 + s.chemCols[CHEM_ENZ][i] / ENZ_REF;
+  const enzMult = enz / ENZ_REF;
   const resCols = s.resCols;
   const molCols = s.molCols;
   for (let m = 0; m < 6; m++) {
     const rc = resCols[m];
     const avail = rc[i];
     if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * enzBoost;
+    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * enzMult;
     const rd = rate * dt;
     const amt = rd < avail ? rd : avail;
     if (amt <= 0) continue;
