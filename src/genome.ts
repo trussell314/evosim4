@@ -726,6 +726,23 @@ export function computeThrustAccel(genome: Uint8Array): number {
 // either are dead-end lineages: a no-metabolism cell starves in
 // ~30s; a no-REPRODUCE cell can't perpetuate. Filtering them out at
 // spawn time saves us from watching long sterile lives.
+
+// Static synthMask derived from genome op set. Used for engulfed
+// cells whose VM doesn't run -- their biosynthesis intent is locked
+// to whichever SYNTH_* ops happen to exist in their genome. Bits:
+//   0 SYNTH_BIO, 1 SYNTH_AA, 2 SYNTH_FA, 3 SYNTH_ENZ, 4 SYNTH_CHL.
+export function genomeSynthMask(genome: Uint8Array): number {
+  let mask = 0;
+  walkGenome(genome, (op) => {
+    if (op === OP.SYNTH_BIO) mask |= 1 << 0;
+    else if (op === OP.SYNTH_AA) mask |= 1 << 1;
+    else if (op === OP.SYNTH_FA) mask |= 1 << 2;
+    else if (op === OP.SYNTH_ENZ) mask |= 1 << 3;
+    else if (op === OP.SYNTH_CHL) mask |= 1 << 4;
+  });
+  return mask;
+}
+
 export function viableGenome(genome: Uint8Array): boolean {
   let hasMetabolism = false;
   let hasReproduce = false;

@@ -14,6 +14,7 @@ import {
   runTick,
   makeRandomViableGenome,
   viableGenome,
+  genomeSynthMask,
   mutateGenome,
   somaticMutateOnce,
   computeSenseRange,
@@ -447,6 +448,12 @@ export class Creature {
   division: { progress: number; axis: number; child: Creature } | null = null;
   contents: Creature[] = [];
   bonds: Creature[] = [];
+  // Cached synthMask used when this cell is an endosymbiont in some
+  // host's contents. Its VM doesn't run while engulfed, so its
+  // biosynthesis intent is locked to whichever SYNTH_* ops exist in
+  // its genome. Recomputed on engulfment and on inner-cell fission.
+  // Meaningful only when this cell is inside someone's `contents`.
+  organelleSynthMask: number = 0;
   // Views cached on first access. `molecules.glucose` etc. proxy into
   // store.m_glucose[this.idx].
   private _m?: MoleculesView;
@@ -2000,6 +2007,55 @@ function maintenanceDecay(c: Creature, dt: number): void {
   }
 }
 
+// Chemistry for an engulfed cell (endosymbiont). No VM, no motion,
+// no excretion to world particles. Same metabolic reactions a free
+// cell runs, gated by the inner's static organelleSynthMask. Then
+// small molecules diffuse bidirectionally between inner and host so
+// surplus ATP / glucose / etc. flows where it's useful. This is the
+// whole "subsumed cell becomes organelle" mechanic.
+const ORGANELLE_DIFFUSE_PER_SEC = 0.5;   // fraction of (inner - host) gap that crosses per sec
+const ORGANELLE_DIFFUSE_KEYS: (keyof Molecules)[] = [
+  "glucose", "fattyAcid", "aminoAcid", "minerals", "o2", "co2", "adp", "waste",
+];
+function runOrganelleChemistry(
+  inner: Creature,
+  host: Creature,
+  dt: number,
+  dtT: number,
+  light: number,
+): void {
+  // Metabolic reactions. Same as the outer loop minus VM-gated bits.
+  catabolize(inner, dtT);
+  aerobicRespire(inner, dtT);
+  ferment(inner, dtT);
+  betaOxidize(inner, dtT);
+  photosynthesize(inner, dtT, light);
+  const sm = inner.organelleSynthMask;
+  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+  maintenanceDecay(inner, dt);
+
+  // Bidirectional diffusion of small molecules + ATP between inner
+  // and host. Net flow toward the lower concentration -- surplus
+  // products leak out, scarce substrates leak in. Mass-conserving.
+  const rate = ORGANELLE_DIFFUSE_PER_SEC * dt;
+  // ATP
+  const dAtp = (inner.energy - host.energy) * rate;
+  inner.energy -= dAtp;
+  host.energy += dAtp;
+  // Tracked molecules
+  const innerMol = inner.molecules;
+  const hostMol = host.molecules;
+  for (const k of ORGANELLE_DIFFUSE_KEYS) {
+    const d = (innerMol[k] - hostMol[k]) * rate;
+    innerMol[k] = innerMol[k] - d;
+    hostMol[k] = hostMol[k] + d;
+  }
+}
+
 // Oxidative damage from accumulated waste / CO2. Above the excretion
 // thresholds, biomass is converted directly to waste at a rate scaling
 // with the excess. Net effect: a cell that can pay the excretion ATP
@@ -2534,6 +2590,17 @@ function updateCreatures(world: World, dt: number): void {
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
 
+    // Endosymbionts: run chemistry on each engulfed cell and let
+    // small molecules diffuse between inner and host pools. Inner
+    // cells have no VM (motion / ingest / reproduce make no sense in
+    // a vacuole); their biosynthesis runs on the static synthMask
+    // captured at engulfment.
+    if (c.contents.length > 0) {
+      for (let ic = 0; ic < c.contents.length; ic++) {
+        runOrganelleChemistry(c.contents[ic], c, dt, dtT, ambientLight);
+      }
+    }
+
     // Vent CO2 / waste back to the world if accumulating. Costs ATP, so a
     // stalled cell will fail to flush and start accumulating toxins.
     autoExcrete(c, world);
@@ -2709,6 +2776,10 @@ function updateCreatures(world: World, dt: number): void {
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
           if (c.energy < cost) return;
+          // Engulfed cell becomes an endosymbiont: its VM no longer
+          // runs, but its chemistry continues each tick driven by a
+          // static synthMask derived from its genome's SYNTH_* op set.
+          other.organelleSynthMask = genomeSynthMask(other.genome);
           c.contents.push(other);
           spendATP(c, cost);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
@@ -3059,6 +3130,22 @@ function tryReproduce(parent: Creature, world: World): void {
   });
   updateCreatureRadius(child);
 
+  // Endosymbiont propagation: each engulfed cell binary-fissions
+  // alongside the host. One half stays in the parent's contents,
+  // the other goes to the child. Mutation runs on each daughter
+  // (organelle DNA drifts faster than host DNA in real biology --
+  // we don't enforce a viability filter on inner cells since they
+  // don't need their own REPRODUCE / metabolism to perpetuate).
+  if (parent.contents.length > 0) {
+    const innerOriginals = parent.contents.slice();
+    parent.contents.length = 0;
+    for (const inner of innerOriginals) {
+      const sibling = fissionInner(inner, world);
+      parent.contents.push(inner);
+      if (sibling) child.contents.push(sibling);
+    }
+  }
+
   // Don't commit the child to the world yet -- stash it in the parent's
   // division state and animate the separation. advanceDivision() will
   // push the child into world.creatures when the visual completes.
@@ -3067,6 +3154,55 @@ function tryReproduce(parent: Creature, world: World): void {
     axis: angle,
     child,
   };
+}
+
+// Binary fission of an engulfed (endosymbiont) cell. Halves its mass
+// and molecule pools, mutates the daughter's genome, recomputes its
+// static synthMask. Returns the new sibling, which the caller hands
+// to the host's child cell. Returns null if there isn't enough mass
+// to make a viable split (the original inner keeps everything).
+function fissionInner(inner: Creature, world: World): Creature | null {
+  const bio = inner.molecules.biomass;
+  if (bio < 2 * MIN_VIABLE_BIOMASS) return null;
+  // Mutate the genome -- endosymbionts drift; no viability gate
+  // because they don't need autonomous viability inside a host.
+  const daughterGenome = mutateGenome(inner.genome);
+  const daughter = newCreature(world.creatureStore, {
+    x: inner.x, y: inner.y, z: inner.z,
+    vx: 0, vy: 0, vz: 0,
+    r: inner.r,
+    density: inner.density,
+    energy: 0,
+    senseRange: 0,
+    thrustAccel: 0,
+    genome: daughterGenome,
+    vm: newVMState(),
+    color: inner.color,
+    ingestCooldown: 0,
+    repairTicks: 0,
+    bornAt: world.t,
+    speciesKey: genomeKey(daughterGenome),
+    molecules: emptyMolecules(),
+    reserves: emptyReserves(),
+  });
+  daughter.organelleSynthMask = genomeSynthMask(daughterGenome);
+  // Split molecules + reserves + ATP half / half.
+  for (const k of MOLECULE_IDS) {
+    const half = inner.molecules[k] * 0.5;
+    inner.molecules[k] -= half;
+    daughter.molecules[k] = half;
+  }
+  for (const id of MATERIAL_IDS) {
+    const half = inner.reserves[id] * 0.5;
+    inner.reserves[id] -= half;
+    daughter.reserves[id] = half;
+  }
+  const eHalf = inner.energy * 0.5;
+  inner.energy -= eHalf;
+  daughter.energy = eHalf;
+  updateCreatureRadius(inner);
+  updateCreatureRadius(daughter);
+  return daughter;
 }
 
 // Mitosis takes about a second to play out visually. The child has already
