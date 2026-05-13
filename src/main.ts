@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
 import { disassemble, summarizeGenome, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -408,6 +408,71 @@ function tempToColor(T: number): string {
   return `rgb(${r},${g},${b2})`;
 }
 
+// Spray droplets: transient render-only entities that spawn at wave
+// crests, arc above the water line under gravity, and disappear when
+// they fall back into the surface. Pure visual; the splash physics
+// in sim.ts still kicks particles upward, this just makes the effect
+// readable. Lives in render so it doesn't fight the sim's fixed dt.
+type Droplet = { x: number; y: number; vx: number; vy: number; r: number; life: number };
+const droplets: Droplet[] = [];
+const DROPLET_RATE_PER_SEC = 30;     // spawn budget at activity = 1
+const DROPLET_MIN_CREST = 1;         // px above mean surface
+const DROPLET_GRAVITY = 280;         // px/s^2; independent of world.gravity
+let lastDropletTime = performance.now();
+
+function updateDroplets(): void {
+  const nowWall = performance.now();
+  let dt = (nowWall - lastDropletTime) / 1000;
+  if (dt > 0.1) dt = 0.1; // clamp after pauses / tab returns
+  lastDropletTime = nowWall;
+
+  const act = surfaceActivity(world);
+  const expected = DROPLET_RATE_PER_SEC * act * dt;
+  let n = Math.floor(expected);
+  if (Math.random() < expected - n) n++;
+  for (let i = 0; i < n; i++) {
+    // Sample a random x; only spawn if that point is above mean
+    // surface (i.e., on a crest). Otherwise skip -- keeps spray
+    // visually correlated with where the waves actually peak.
+    const x = Math.random() * world.width;
+    const surfY = surfaceYAt(world, x);
+    if (surfY > world.surfaceY - DROPLET_MIN_CREST) continue;
+    droplets.push({
+      x,
+      y: surfY,
+      vx: (Math.random() - 0.5) * 50,
+      vy: -50 - Math.random() * 80,
+      r: 0.8 + Math.random() * 1.4,
+      life: 1.2 + Math.random() * 0.6,
+    });
+  }
+  for (let i = droplets.length - 1; i >= 0; i--) {
+    const d = droplets[i];
+    d.vy += DROPLET_GRAVITY * dt;
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+    d.life -= dt;
+    // Pop if life ran out or droplet fell back into the surface.
+    const surfHere = surfaceYAt(world, d.x);
+    if (d.life <= 0 || d.y > surfHere) {
+      droplets[i] = droplets[droplets.length - 1];
+      droplets.pop();
+    }
+  }
+}
+
+function drawDroplets(): void {
+  if (droplets.length === 0) return;
+  // Single beginPath/fill batches all droplets into one draw call.
+  ctx.fillStyle = "rgba(220, 240, 255, 0.85)";
+  ctx.beginPath();
+  for (const d of droplets) {
+    ctx.moveTo(d.x + d.r, d.y);
+    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+  }
+  ctx.fill();
+}
+
 // Sample the wavy surface at intervals; sim.surfaceYAt is the shared
 // source of truth so the rendered line matches the physical wall.
 const SURFACE_VIS_STEP = 3;
@@ -523,6 +588,10 @@ function render(): void {
   }
   ctx.filter = "none";
   ctx.globalAlpha = 1;
+
+  // Spray droplets render above particles (they're flying above the
+  // water line) but below cells.
+  drawDroplets();
 
   for (let i = 0; i < world.creatures.length; i++) {
     drawCreature(world.creatures[i], world.creatures[i] === selectedCell);
@@ -1329,6 +1398,7 @@ function frame(): void {
   const advanced = advancedThisFrame;
   advancedThisFrame = 0;
   const tBeforeRender = performance.now();
+  updateDroplets();
   render();
   updateInspector();
   maybeAnalyzeGenomes();
