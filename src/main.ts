@@ -1322,7 +1322,7 @@ function updateInspector(): void {
     `ingestCD=${c.ingestCooldown.toFixed(2)}s\n` +
     `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
-    `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} bio=${fmt(m.biomass)}\n` +
+    `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} rib=${fmt(m.ribosome)} bio=${fmt(m.biomass)}\n` +
     `stomach: ${reserves}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
@@ -1541,7 +1541,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   let predate = false, engulf = false, emit = false, adhere = false;
   let repair = false, selfModifies = false;
   let hasJump = false, hasCmp = false;
-  let synthBio = false, synthAA = false, synthFA = false, synthEnz = false, synthChl = false;
+  let synthBio = false, synthAA = false, synthFA = false, synthEnz = false, synthChl = false, synthRibo = false;
   const ingest = new Set<number>();
   const excrete = new Set<number>();
   const sensors = new Set<string>();
@@ -1564,6 +1564,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SYNTH_FA: synthFA = true; break;
       case OP.SYNTH_ENZ: synthEnz = true; break;
       case OP.SYNTH_CHL: synthChl = true; break;
+      case OP.SYNTH_RIBO: synthRibo = true; break;
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
       case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
@@ -1601,6 +1602,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   }
   if (synthChl) synth.push("makes chlorophyll (photosynthesizes)");
   if (synthEnz) synth.push("makes enzymes");
+  if (synthRibo) synth.push("builds ribosomes (faster all-around growth)");
   if (synth.length > 0) parts.push(`Internally ${synth.join(", ")}.`);
   else parts.push("No biosynthesis ops — can't grow new structure.");
   // Reproduction
@@ -1665,6 +1667,7 @@ const OP_PRETTY_NAME: Record<number, string> = {
   [OP.SYNTH_BIO]: "biomass synth", [OP.SYNTH_AA]: "amino-acid synth",
   [OP.SYNTH_FA]: "fatty-acid synth", [OP.SYNTH_ENZ]: "enzyme synth",
   [OP.SYNTH_CHL]: "chlorophyll synth",
+  [OP.SYNTH_RIBO]: "ribosome synth",
   [OP.SENSE_AMP]: "sense amp", [OP.THRUST_AMP]: "thrust amp",
 };
 

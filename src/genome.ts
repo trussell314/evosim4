@@ -85,6 +85,7 @@ export const OP = {
   SYNTH_FA:      0x6B,
   SYNTH_ENZ:     0x6C,
   SYNTH_CHL:     0x6D,
+  SYNTH_RIBO:    0x6E,   // build ribosomes; their count multiplies biosynth rate
 
   HALT:          0xFF,
 } as const;
@@ -374,6 +375,7 @@ export function runTick(
       case OP.SYNTH_FA:       out.synthMask |= 1 << 2; break;
       case OP.SYNTH_ENZ:      out.synthMask |= 1 << 3; break;
       case OP.SYNTH_CHL:      out.synthMask |= 1 << 4; break;
+      case OP.SYNTH_RIBO:     out.synthMask |= 1 << 5; break;
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
@@ -730,7 +732,7 @@ export function computeThrustAccel(genome: Uint8Array): number {
 // Static synthMask derived from genome op set. Used for engulfed
 // cells whose VM doesn't run -- their biosynthesis intent is locked
 // to whichever SYNTH_* ops happen to exist in their genome. Bits:
-//   0 SYNTH_BIO, 1 SYNTH_AA, 2 SYNTH_FA, 3 SYNTH_ENZ, 4 SYNTH_CHL.
+//   0 BIO, 1 AA, 2 FA, 3 ENZ, 4 CHL, 5 RIBO.
 export function genomeSynthMask(genome: Uint8Array): number {
   let mask = 0;
   walkGenome(genome, (op) => {
@@ -739,6 +741,7 @@ export function genomeSynthMask(genome: Uint8Array): number {
     else if (op === OP.SYNTH_FA) mask |= 1 << 2;
     else if (op === OP.SYNTH_ENZ) mask |= 1 << 3;
     else if (op === OP.SYNTH_CHL) mask |= 1 << 4;
+    else if (op === OP.SYNTH_RIBO) mask |= 1 << 5;
   });
   return mask;
 }

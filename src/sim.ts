@@ -300,6 +300,7 @@ export class CreatureStore {
   m_biomass: Float32Array;
   m_waste: Float32Array;
   m_adp: Float32Array;
+  m_ribosome: Float32Array;
   // reserves (parallel to MATERIAL_IDS order)
   r_rock: Float32Array;
   r_sand: Float32Array;
@@ -323,7 +324,7 @@ export class CreatureStore {
     this.m_glucose = blank; this.m_fattyAcid = blank; this.m_aminoAcid = blank;
     this.m_minerals = blank; this.m_chlorophyll = blank; this.m_enzyme = blank;
     this.m_o2 = blank; this.m_co2 = blank; this.m_biomass = blank;
-    this.m_waste = blank; this.m_adp = blank;
+    this.m_waste = blank; this.m_adp = blank; this.m_ribosome = blank;
     this.r_rock = blank; this.r_sand = blank; this.r_clay = blank;
     this.r_organic = blank; this.r_lipid = blank; this.r_gas = blank;
     this.grow(initialCap);
@@ -356,6 +357,7 @@ export class CreatureStore {
     this.m_biomass = grow1(this.m_biomass);
     this.m_waste = grow1(this.m_waste);
     this.m_adp = grow1(this.m_adp);
+    this.m_ribosome = grow1(this.m_ribosome);
     this.r_rock = grow1(this.r_rock);
     this.r_sand = grow1(this.r_sand);
     this.r_clay = grow1(this.r_clay);
@@ -366,11 +368,12 @@ export class CreatureStore {
     // Rebuild column-by-name arrays so chemistry hot loops can iterate
     // them by integer index. Order matches MATERIAL_IDS / MOLECULE_IDS.
     this.resCols = [this.r_rock, this.r_sand, this.r_clay, this.r_organic, this.r_lipid, this.r_gas];
-    // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll, enzyme, o2, co2, minerals, biomass, waste
+    // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll,
+    // enzyme, o2, co2, minerals, biomass, waste, ribosome
     this.molCols = [
       this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
-      this.m_minerals, this.m_biomass, this.m_waste,
+      this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
     ];
   }
   // Returns a fresh slot. Reuses freed slots first; grows on overflow.
@@ -398,7 +401,7 @@ export class CreatureStore {
     this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
     this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
-    this.m_waste[i] = 0; this.m_adp[i] = 0;
+    this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
     this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
     this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
   }
@@ -428,6 +431,8 @@ export class MoleculesView {
   set waste(v: number) { this.c.store.m_waste[this.c.idx] = v; }
   get adp(): number { return this.c.store.m_adp[this.c.idx]; }
   set adp(v: number) { this.c.store.m_adp[this.c.idx] = v; }
+  get ribosome(): number { return this.c.store.m_ribosome[this.c.idx]; }
+  set ribosome(v: number) { this.c.store.m_ribosome[this.c.idx] = v; }
 }
 
 export class ReservesView {
@@ -622,11 +627,12 @@ export interface Molecules {
   minerals: number;     // mineral cofactor / structural input
   biomass: number;      // structural; part of cell volume
   waste: number;        // toxic byproduct of fermentation
+  ribosome: number;     // protein-synthesis machinery; multiplies biosynth rate
 }
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
-  "o2", "co2", "minerals", "biomass", "waste",
+  "o2", "co2", "minerals", "biomass", "waste", "ribosome",
 ];
 
 // Building-block molecules: the substrates a cell actually consumes to
@@ -640,7 +646,7 @@ export function genomeMoleculeCost(genome: Uint8Array, massPerByte: number): Rec
   const cost = {
     adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
     chlorophyll: 0, enzyme: 0, o2: 0, co2: 0,
-    minerals: 0, biomass: 0, waste: 0,
+    minerals: 0, biomass: 0, waste: 0, ribosome: 0,
   };
   for (let i = 0; i < genome.length; i++) {
     const k = BUILD_KEYS[genome[i] % BUILD_KEYS.length];
@@ -653,7 +659,7 @@ export function emptyMolecules(): Molecules {
   return {
     adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
     chlorophyll: 0, enzyme: 0,
-    o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0,
+    o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0, ribosome: 0,
   };
 }
 
@@ -1088,6 +1094,7 @@ const ENZYME_SYNTH_VMAX = 0.4;
 const BIOMASS_GROW_VMAX = 0.8;
 const AA_SYNTH_VMAX = 0.4;
 const FA_SYNTH_VMAX = 0.2;
+const RIBO_SYNTH_VMAX = 0.15;
 
 // ATP cost per unit product built by biosynthesize(). Reflects product
 // complexity. Biomass is bulk structural mass (cheap); enzymes and
@@ -1096,21 +1103,36 @@ const FA_SYNTH_VMAX = 0.2;
 // post-translational steps). Amino-acid synthesis (transamination +
 // carbon-skeleton work) is moderate; fatty-acid synthesis is expensive
 // per the real fatty-acid-synthase pathway (~7 ATP per palmitate).
+// Ribosomes are large protein+RNA complexes -- expensive to build but
+// then catalyze all future protein production, so they pay back.
 const BIOMASS_ATP_COST = 1;
 const ENZYME_ATP_COST = 4;
 const CHLORO_ATP_COST = 8;
 const AA_ATP_COST = 2;
 const FA_ATP_COST = 6;
+const RIBO_ATP_COST = 10;
+
+// Ribosome multiplier on biosynthesis rate. A cell with `r` ribosomes
+// runs each SYNTH_* reaction at (1 + r / RIBO_REF) times the base
+// VMAX. RIBO_REF = 5 means 5 ribosomes doubles the rate. Pays for
+// itself within a few seconds at full saturation if invested in
+// early, but expensive newborns wait until they have spare ATP.
+const RIBO_REF = 5;
+function riboMult(c: Creature): number {
+  return 1 + c.molecules.ribosome / RIBO_REF;
+}
 
 // Maintenance: structural molecules turn over even when the cell isn't
 // reproducing. Each tick a small fraction of biomass / enzyme / chloro
-// degrades back into the substrates it was synthesized from -- no ATP
-// recovered, but mass-conserving. A cell that stops biosynthesizing
-// (because it has no ATP) bleeds structure and eventually drops below
-// MIN_VIABLE_BIOMASS, at which point it autolyzes.
+// / ribosome degrades back into the substrates it was synthesized
+// from -- no ATP recovered, but mass-conserving. A cell that stops
+// biosynthesizing (because it has no ATP) bleeds structure and
+// eventually drops below MIN_VIABLE_BIOMASS, at which point it
+// autolyzes.
 const BIOMASS_DECAY_PER_SEC = 0.005;
 const ENZYME_DECAY_PER_SEC = 0.005;
 const CHLORO_DECAY_PER_SEC = 0.005;
+const RIBO_DECAY_PER_SEC = 0.003;
 const MIN_VIABLE_BIOMASS = 0.5;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
@@ -2062,6 +2084,13 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
   }
+  const rib = s.m_ribosome[i];
+  if (rib > 0) {
+    const lost = rib * RIBO_DECAY_PER_SEC * stressMult * dt;
+    s.m_ribosome[i] = rib - lost;
+    s.m_aminoAcid[i] += 0.5 * lost;
+    s.m_minerals[i] += 0.5 * lost;
+  }
 }
 
 // Chemistry for an engulfed cell (endosymbiont). No VM, no motion,
@@ -2088,11 +2117,13 @@ function runOrganelleChemistry(
   betaOxidize(inner, dtT);
   photosynthesize(inner, dtT, light);
   const sm = inner.organelleSynthMask;
-  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+  const rm = riboMult(inner);
+  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
+  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
   maintenanceDecay(inner, dt);
 
   // Bidirectional diffusion of small molecules + ATP between inner
@@ -2695,13 +2726,20 @@ function updateCreatures(world: World, dt: number): void {
     // Substrates and ATP cost still apply. Cells that never run
     // SYNTH_CHL no longer waste ATP making chlorophyll they don't use.
     const synth = VM_OUT.synthMask;
-    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX,      0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX,      0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX,  0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+    // Ribosomes (built via SYNTH_RIBO) multiply every biosynth rate.
+    // A cell with `r` ribosomes runs each reaction at (1 + r/RIBO_REF)
+    // times the base VMAX. SYNTH_RIBO itself is multiplied too so
+    // ribosome production accelerates ribosome production -- once a
+    // lineage invests, it scales fast.
+    const rm = riboMult(c);
+    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
+    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
+    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
+    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
+    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
     // Biomass is mostly protein (aa); the lipid fraction is structural
     // membrane only.
-    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX,  0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
