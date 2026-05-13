@@ -2088,7 +2088,7 @@ export function createWorld(width: number, height: number): World {
 // toward TARGET whenever it falls below.
 const INITIAL_FOUNDER_MIN = 5;
 const INITIAL_FOUNDER_MAX = 10;
-const FOUNDER_TARGET = 10;
+const FOUNDER_TARGET = 15;
 
 function spawnFounder(world: World): Creature {
   const x = world.width * (0.1 + 0.8 * Math.random());
