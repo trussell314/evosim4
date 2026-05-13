@@ -1873,6 +1873,14 @@ function photosynthesize(c: Creature, dt: number, light: number): void {
   s.m_adp[i] += amt;
 }
 
+// ATP floor: biosynthesis tapers off as the cell's ATP approaches
+// this value, and stops entirely below it. Without this, a newborn
+// with limited ATP burns through it building expensive products
+// (chlorophyll at 8 ATP/unit, enzyme at 4) it doesn't actually need
+// yet, and starves before respiration can refill the pool. Real cells
+// downregulate growth under energy stress; this is the same idea.
+const BIOSYNTH_ATP_FLOOR = 4;
+
 // Generic biosynthesis helper: combine two substrate molecules (by their
 // mass fractions in the product) with atpCost atp, producing 1 unit of
 // product and atpCost adp. Mass-conserving: fracA + fracB + atpCost = 1
@@ -1896,12 +1904,14 @@ function biosynthesize(
   const colB = s.molCols[MOLECULE_INDEX[subB]];
   const colP = s.molCols[MOLECULE_INDEX[product]];
   const a = colA[i], b = colB[i], e = s.energy[i];
-  if (a <= 0 || b <= 0 || e <= 0) return;
+  if (a <= 0 || b <= 0 || e <= BIOSYNTH_ATP_FLOOR) return;
   const aFrac = a / fracA, bFrac = b / fracB;
-  // ATP saturation gates on amount of ATP available *per unit product*.
-  // A cell with 2 ATP trying to build an 8-ATP product runs as if it
-  // had 0.25 ATP per unit, not as if it were well-fueled.
-  const eAvail = e / atpCost;
+  // ATP saturation gates on *spendable* ATP -- the amount above the
+  // safety floor -- per unit product. A cell at e = BIOSYNTH_ATP_FLOOR
+  // can spend nothing on growth; at e = floor + 10*atpCost, the gate is
+  // ~91% open. Keeps newborns from burning their starting ATP into
+  // products they don't need before respiration catches up.
+  const eAvail = (e - BIOSYNTH_ATP_FLOOR) / atpCost;
   const rate = vmax * sat(aFrac) * sat(bFrac) * sat(eAvail);
   const rdt = rate * dt;
   let amt = rdt < aFrac ? rdt : aFrac;
