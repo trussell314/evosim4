@@ -2328,8 +2328,14 @@ export function step(world: World, dt: number): void {
   // is just a transient. Death-released particles bypass the
   // replenish/aerate caps because autolysis can't refuse to produce
   // its mass.
+  //
+  // The over-cap gate is bypassed when no lineages are alive at all:
+  // the gate exists to prevent successful lineages from worsening
+  // corpse mass downstream, but with zero cells nothing downstream
+  // happens. Locking the world dead-empty isn't the goal.
   const overCap = world.particles.length >= world.particleTarget * 2;
-  if (world.founderTarget > 0 && !overCap && currentLineages.size < world.founderTarget) {
+  const allDead = currentLineages.size === 0;
+  if (world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     const need = world.founderTarget - currentLineages.size;
     for (let i = 0; i < need; i++) {
