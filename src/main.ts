@@ -1,6 +1,6 @@
 import "./style.css";
 import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
-import { disassemble, OP } from "./genome";
+import { disassemble, walkGenome, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -1535,19 +1535,10 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   const ingest = new Set<number>();
   const excrete = new Set<number>();
   const sensors = new Set<string>();
-  let i = 0;
-  while (i < genome.length) {
-    const op = genome[i];
-    // Operand list must match the canonical OPERANDS table in
-    // genome.ts -- otherwise the walker drifts out of alignment with
-    // the VM and starts mis-attributing operand bytes as standalone
-    // ops, inflating sensor lists / hallucinating actions, etc.
-    const operandLen = (
-      op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ ||
-      op === OP.SENSE_GRAD_X || op === OP.SENSE_GRAD_Y || op === OP.SENSE_DENSITY ||
-      op === OP.SELF_RESERVE || op === OP.EXCRETE || op === OP.INGEST ||
-      op === OP.LOAD || op === OP.STORE
-    ) ? 1 : 0;
+  // Uses the canonical walker from genome.ts so this stays in lockstep
+  // with the VM. Any future op added to genome.ts's OPERANDS table is
+  // automatically picked up here.
+  walkGenome(genome, (op, _pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
@@ -1563,8 +1554,8 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SYNTH_FA: synthFA = true; break;
       case OP.SYNTH_ENZ: synthEnz = true; break;
       case OP.SYNTH_CHL: synthChl = true; break;
-      case OP.INGEST: ingest.add((genome[i + 1] ?? 0) % 6); break;
-      case OP.EXCRETE: excrete.add((genome[i + 1] ?? 0) % 6); break;
+      case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
+      case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
       case OP.LT: case OP.GT: case OP.EQ: case OP.NOT: case OP.AND: case OP.OR: hasCmp = true; break;
       case OP.SENSE_GRAD_X: case OP.SENSE_GRAD_Y: sensors.add("food gradient"); break;
@@ -1577,8 +1568,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
       case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS: sensors.add("other cells"); break;
     }
-    i += 1 + operandLen;
-  }
+  });
   const gated = hasJump && hasCmp;
   const mat = (k: number) => materialNames[k] ?? String(k);
 
@@ -1626,9 +1616,12 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
 
 // Diff parent vs child as a plain sentence: gained / lost / shifted.
 function mutationProse(parent: Uint8Array, child: Uint8Array): string {
+  // Count by op-position so "gained/lost X" reflects what actually
+  // executes. Counting raw byte values would inflate "+1 SENSE_GRAD_X"
+  // every time the byte happens to land as some other op's operand.
   const countOps = (g: Uint8Array): Record<number, number> => {
     const c: Record<number, number> = {};
-    for (let i = 0; i < g.length; i++) c[g[i]] = (c[g[i]] ?? 0) + 1;
+    walkGenome(g, (op) => { c[op] = (c[op] ?? 0) + 1; });
     return c;
   };
   const a = countOps(parent), b = countOps(child);

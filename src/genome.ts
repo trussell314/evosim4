@@ -89,7 +89,12 @@ export const OP = {
   HALT:          0xFF,
 } as const;
 
-const OPERANDS = new Uint8Array(256);
+// Single source of truth for operand widths. Every code path that
+// walks a genome MUST consult this table -- duplicating an op list
+// in a separate walker introduces drift bugs where the VM and the
+// describer (or the filter, etc.) disagree about op alignment.
+// Exported so main.ts (describer, inspector) can use it directly.
+export const OPERANDS = new Uint8Array(256);
 OPERANDS[OP.PUSH8] = 1;
 OPERANDS[OP.JMP] = 1;
 OPERANDS[OP.JZ] = 1;
@@ -102,6 +107,25 @@ OPERANDS[OP.EXCRETE] = 1;
 OPERANDS[OP.INGEST] = 1;
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
+
+// Walk the genome and call `visit(op, pc, operand)` for each
+// executable op position. `operand` is `undefined` if the op takes
+// no operand. Centralizes the iteration pattern that used to be
+// repeated (with subtle differences) in viableGenome / disassemble /
+// summarizeGenome / describeGenomeProse / observedOpBias.
+export function walkGenome(
+  genome: Uint8Array,
+  visit: (op: number, pc: number, operand: number | undefined) => void | "break",
+): void {
+  let i = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    const operandLen = OPERANDS[op];
+    const operand = operandLen === 1 && i + 1 < genome.length ? genome[i + 1] : undefined;
+    if (visit(op, i, operand) === "break") return;
+    i += 1 + operandLen;
+  }
+}
 
 
 const NAME_BY_OP: Record<number, string> = {};
@@ -705,17 +729,14 @@ export function computeThrustAccel(genome: Uint8Array): number {
 export function viableGenome(genome: Uint8Array): boolean {
   let hasMetabolism = false;
   let hasReproduce = false;
-  let i = 0;
-  while (i < genome.length) {
-    const op = genome[i];
+  walkGenome(genome, (op) => {
     if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
       hasMetabolism = true;
     } else if (op === OP.REPRODUCE) {
       hasReproduce = true;
     }
-    if (hasMetabolism && hasReproduce) return true;
-    i += 1 + (OPERANDS[op] ?? 0);
-  }
+    if (hasMetabolism && hasReproduce) return "break";
+  });
   return hasMetabolism && hasReproduce;
 }
 
@@ -823,12 +844,16 @@ const NOOP_BYTES: number[] = (() => {
 const OP_BYTE_BIAS = 2 / 3;
 const OP_BYTE_SET: Set<number> = new Set(OP_BYTES);
 
-// Fraction of bytes in the genome that decode to a real op. Empty
-// genomes fall back to the default bias.
+// Fraction of bytes in the genome that *actually execute* as a real
+// op. Counts each op-position byte once; operand bytes don't count
+// toward the op fraction (they're data, not code). Empty genomes
+// fall back to the default bias.
 export function observedOpBias(genome: Uint8Array): number {
   if (genome.length === 0) return OP_BYTE_BIAS;
   let opCount = 0;
-  for (let i = 0; i < genome.length; i++) if (OP_BYTE_SET.has(genome[i])) opCount++;
+  walkGenome(genome, (op) => {
+    if (OP_BYTE_SET.has(op)) opCount++;
+  });
   return opCount / genome.length;
 }
 
