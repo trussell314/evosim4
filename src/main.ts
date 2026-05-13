@@ -399,8 +399,32 @@ function flushTooltip(): void {
     `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
     `genome=${c.genome.length}b`;
   tooltip.style.display = "block";
-  tooltip.style.left = `${pendingMouseClient.x + 12}px`;
-  tooltip.style.top = `${pendingMouseClient.y + 12}px`;
+  // Position with edge-flipping: default is below-right of cursor,
+  // but if that would push the box off the visible viewport (canvas
+  // edge near a window edge, or hovering near bottom-right where
+  // the analysis panel sits) we flip to above / left so the whole
+  // tooltip stays readable. visualViewport tracks the in-use area
+  // on mobile pinch-zoom too; falls back to window.inner* otherwise.
+  const OFFSET = 12;
+  const MARGIN = 4;
+  const vv = window.visualViewport;
+  const vw = vv ? vv.width : window.innerWidth;
+  const vh = vv ? vv.height : window.innerHeight;
+  // Measure after content + display is set so the box reports real size.
+  const w = tooltip.offsetWidth;
+  const h = tooltip.offsetHeight;
+  const cx = pendingMouseClient.x;
+  const cy = pendingMouseClient.y;
+  let left = cx + OFFSET;
+  let top = cy + OFFSET;
+  if (left + w + MARGIN > vw) left = cx - OFFSET - w;
+  if (top + h + MARGIN > vh) top = cy - OFFSET - h;
+  // Final clamp in case the cursor itself is near a corner and both
+  // flips still put the box off-screen.
+  if (left < MARGIN) left = MARGIN;
+  if (top < MARGIN) top = MARGIN;
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
 }
 canvas.addEventListener("mousemove", (e) => {
   const rect = canvas.getBoundingClientRect();
