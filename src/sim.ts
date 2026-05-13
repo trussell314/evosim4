@@ -682,7 +682,16 @@ export interface World {
   creatureStore: CreatureStore;
   particleTarget: number;
   particleSpawnRate: number;
+  // extinctionCount counts founding-lineage extinction events. Each
+  // step we diff the previous live-lineage set against the current
+  // one; any lineage that was alive last step but not this step
+  // increments the counter. Whole-world wipeouts contribute too
+  // (every lineage dies at once), but a single lineage going extinct
+  // while others survive also counts.
   extinctionCount: number;
+  // Set of lineageRoot ids alive at the end of the previous step.
+  // Used to compute lineage extinctions per step.
+  liveLineageRoots: Set<number>;
   // Monotonic counter used to assign a fresh lineageRoot ID each time
   // a founder is spawned (initial seeding + top-up after extinctions).
   nextLineageRoot: number;
@@ -1552,6 +1561,7 @@ export function createWorld(width: number, height: number): World {
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     extinctionCount: 0,
+    liveLineageRoots: new Set(),
     nextLineageRoot: 0,
     founderTarget: FOUNDER_TARGET,
     gravity: 60,
@@ -1626,12 +1636,6 @@ function spawnFounder(world: World): Creature {
   world.creatures.push(c);
   noteCreatureBirth(world, c, undefined);
   return c;
-}
-
-function countLiveLineages(world: World): number {
-  const seen = new Set<number>();
-  for (const c of world.creatures) seen.add(c.lineageRoot);
-  return seen.size;
 }
 
 export function seedParticles(world: World, n: number): void {
@@ -2255,6 +2259,12 @@ function radiusForMass(m: number, density: number): number {
 
 export function step(world: World, dt: number): void {
   world.t += dt;
+  // Snapshot living lineages at the *start* of this step so we can
+  // count lineage extinctions at the end (any lineageRoot that was
+  // alive going in but isn't alive coming out has gone extinct this
+  // step). Includes lineages from cells manually pushed by tests.
+  world.liveLineageRoots.clear();
+  for (const c of world.creatures) world.liveLineageRoots.add(c.lineageRoot);
   advanceDayCycle(world, dt);
   advanceDisturbance(world, dt);
   const p = world.profile;
@@ -2299,25 +2309,31 @@ export function step(world: World, dt: number): void {
     replenishParticles(world, dt);
     pruneSpecies(world);
   }
-  // Top up founding lineages. Every step we count distinct lineageRoot
-  // ids among live cells; if it's below world.founderTarget, spawn
-  // fresh founders (each viability-filtered by makeRandomViableGenome)
-  // to bring the count back up. World-empty is just the extreme case,
-  // which still bumps extinctionCount for the HUD.
-  if (world.creatures.length === 0) world.extinctionCount++;
-  if (world.founderTarget > 0) {
-    const liveLineages = world.creatures.length === 0 ? 0 : countLiveLineages(world);
-    if (liveLineages < world.founderTarget) {
-      const need = world.founderTarget - liveLineages;
-      for (let i = 0; i < need; i++) {
-        const f = spawnFounder(world);
-        // When the world had just gone fully empty, the first new
-        // founder also re-anchors the color palette so descendant
-        // coloring restarts relative to this new root.
-        if (liveLineages === 0 && i === 0) {
-          world.anchorGenome = new Uint8Array(f.genome);
-          f.color = genomeColor(f.genome, world.anchorGenome);
-        }
+  // Count lineage extinctions. Any lineageRoot that was alive at the
+  // *start* of this step but isn't alive now has gone extinct in this
+  // tick. A lone lineage dying counts as 1, a full world wipeout
+  // counts as N. Done before top-up so freshly spawned replacement
+  // founders don't show up in the post-set.
+  const currentLineages = new Set<number>();
+  for (const c of world.creatures) currentLineages.add(c.lineageRoot);
+  for (const id of world.liveLineageRoots) {
+    if (!currentLineages.has(id)) world.extinctionCount++;
+  }
+
+  // Top up founding lineages. If the live count is below
+  // world.founderTarget, spawn fresh founders (each viability-filtered
+  // by makeRandomViableGenome) until we reach the target.
+  if (world.founderTarget > 0 && currentLineages.size < world.founderTarget) {
+    const wasEmpty = currentLineages.size === 0;
+    const need = world.founderTarget - currentLineages.size;
+    for (let i = 0; i < need; i++) {
+      const f = spawnFounder(world);
+      // When the world had just gone fully empty, the first new
+      // founder also re-anchors the color palette so descendant
+      // coloring restarts relative to this new root.
+      if (wasEmpty && i === 0) {
+        world.anchorGenome = new Uint8Array(f.genome);
+        f.color = genomeColor(f.genome, world.anchorGenome);
       }
     }
   }
