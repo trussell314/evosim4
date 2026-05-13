@@ -2794,6 +2794,7 @@ const VM_SENSORS: VMSensors = {
   temp: 0, pheromone: 0,
   creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
   light: 0,
+  emBands: new Float32Array(3),
   pressureX: 0, pressureY: 0,
 };
 const VM_SELF: VMSelf = {
@@ -3611,7 +3612,19 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.headX = 0;
     VM_SENSORS.headY = 0;
   }
-  VM_SENSORS.light = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
+  // Single scalar for legacy SENSE_LIGHT.
+  const surfaceSun = solarLight(world);
+  const visible = Math.exp(-c.y / LIGHT_DECAY) * surfaceSun;
+  VM_SENSORS.light = visible;
+  // Three EM bands with different attenuation profiles. Band 0 = visible
+  // (same as legacy `light`); band 1 = long-penetrating (3x slower
+  // depth falloff -- a depth ratio signal when divided into band 0);
+  // band 2 = depth-invariant surface sun (constant regardless of how
+  // deep the cell is, so the genome can read "is the sun out" without
+  // depth interference).
+  VM_SENSORS.emBands[0] = visible;
+  VM_SENSORS.emBands[1] = Math.exp(-c.y / (LIGHT_DECAY * 3)) * surfaceSun;
+  VM_SENSORS.emBands[2] = surfaceSun;
   VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
   VM_SENSORS.pheromone = world.pheromone[pheromoneIndex(world, c.x, c.y)];
   VM_SENSORS.creatureDx = 0;

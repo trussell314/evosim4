@@ -201,6 +201,14 @@ export interface VMSensors {
   creatureDist: number;
   creatureMass: number;
   light: number;
+  // Three EM bands with different depth-attenuation profiles, sampled
+  // by SENSE_EM <band>. Band 0 = visible (matches `light`), band 1 =
+  // long-penetrating (attenuates 3x slower with depth), band 2 = a
+  // depth-invariant surface signal (just the sun's intensity).
+  // Genome can derive depth from band ratios (band1/band0 grows with
+  // depth), get a depth-invariant "is the sun out" from band 2, or
+  // gate photosynth on visible specifically.
+  emBands: Float32Array;
   // Mechanical force vector on the cell (waves + current + contact +
   // gravity-buoyancy net). pressureY also includes a static-depth
   // component so deep cells see a steady-state signal even when
@@ -399,11 +407,13 @@ export function runTick(
         break;
       }
       case OP.SENSE_EM: {
-        // operand currently mod 1; future: multiple frequency bands.
-        // Advance PC past the operand byte; band selection is no-op
-        // until SENSE_EM bands are added.
+        // Operand picks a band; emBands has 3 distinct attenuation
+        // profiles so the genome can read multiple signals from one
+        // op. Cells with different operand bytes will read different
+        // values, letting evolution discover what's useful.
+        const band = genome[state.pc % L] % sensors.emBands.length;
         state.pc++;
-        vmPush(stack, sensors.light);
+        vmPush(stack, sensors.emBands[band]);
         break;
       }
       case OP.SENSE_PRESSURE_X: vmPush(stack, sensors.pressureX); break;

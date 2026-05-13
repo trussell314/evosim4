@@ -40,6 +40,7 @@ function makeSensors(overrides: Partial<{
     light: overrides.light ?? 0,
     pressureX: 0,
     pressureY: 0,
+    emBands: new Float32Array(3),
   };
 }
 
