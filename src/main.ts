@@ -1650,14 +1650,25 @@ function maybeAnalyzeGenomes(): void {
     const block = document.createElement("div");
     block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
     const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
-    const headLine = `${dot}<b>#${i + 1}</b>  ${sp.key.slice(0, 6)}  duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}  ${status}`;
+    // Genome id + size up front in a bigger weight so the eye lands
+    // there first; the rest is the supporting stats line.
+    const headLine =
+      `${dot}<b>#${i + 1}</b>  ` +
+      `<b style="font-size:13px;letter-spacing:0.5px;">${sp.key.slice(0, 6)}</b>` +
+      `<span style="opacity:.7"> (${sp.genome.length}b)</span>  ${status}`;
+    const statsLine =
+      `duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}`;
     const prose = describeGenomeProse(sp.genome, MATERIAL_IDS_ORDERED);
     const proseDiv = document.createElement("div");
     proseDiv.style.cssText = "padding-top:3px;";
     proseDiv.textContent = prose;
     const headDiv = document.createElement("div");
     headDiv.innerHTML = headLine;
+    const statsDiv = document.createElement("div");
+    statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
+    statsDiv.textContent = statsLine;
     block.appendChild(headDiv);
+    block.appendChild(statsDiv);
     block.appendChild(proseDiv);
     analysisBody.appendChild(block);
   }
