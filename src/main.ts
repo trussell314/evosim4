@@ -176,13 +176,19 @@ analysisPanel.style.cssText =
   "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
 const analysisHeader = document.createElement("div");
 analysisHeader.style.cssText =
-  "display:flex;align-items:center;justify-content:space-between;gap:6px;" +
-  "padding:6px 8px;cursor:pointer;user-select:none;border-bottom:1px solid #1a3340;";
+  "display:flex;align-items:center;justify-content:center;gap:6px;" +
+  "padding:6px 4px;cursor:pointer;user-select:none;border-bottom:1px solid #1a3340;";
+// `justify-content` is switched to space-between when expanded so the
+// title sits left and the toggle sits right; in the 26px minimized
+// tab there's only the toggle, and centered looks right.
 const analysisTitle = document.createElement("span");
 analysisTitle.textContent = "genome analysis";
 analysisTitle.style.cssText = "font-weight:bold;font-size:11px;";
 const analysisToggle = document.createElement("span");
-analysisToggle.textContent = "[+]";
+analysisToggle.textContent = "+";
+// Bracketed forms ([+]/[–]) didn't fit inside the 26px minimized tab
+// and got clipped on the right edge. Use the bare glyph; the box on
+// the tab itself is the affordance.
 analysisToggle.style.cssText = "padding:0 4px;";
 analysisHeader.appendChild(analysisTitle);
 analysisHeader.appendChild(analysisToggle);
@@ -199,8 +205,10 @@ analysisHeader.addEventListener("click", () => {
   analysisMinimized = !analysisMinimized;
   analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
   analysisBody.style.display = analysisMinimized ? "none" : "";
-  analysisToggle.textContent = analysisMinimized ? "[+]" : "[–]";
+  analysisToggle.textContent = analysisMinimized ? "+" : "–";
   analysisTitle.style.display = analysisMinimized ? "none" : "";
+  analysisHeader.style.justifyContent = analysisMinimized ? "center" : "space-between";
+  analysisHeader.style.padding = analysisMinimized ? "6px 4px" : "6px 8px";
   resize();
 });
 
@@ -1261,10 +1269,12 @@ function formatAge(sec: number): string {
 // Best-effort plain-English summary of a cell, inferred from genome ops it
 function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
-  // fps + sim/wall ratio + elapsed sim time + species count there.
+  // fps + sim/wall ratio + elapsed sim time + pop (species) +
+  // extinction count there.
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(world.t)}  sp=${world.species.size}`;
+    `t=${formatAge(world.t)}  pop=${world.creatures.length} (${world.species.size})  ` +
+    `extinct=${world.extinctionCount}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // If the selected cell has died or been eaten, fall back to the first
