@@ -4522,6 +4522,10 @@ interface SavedCreature {
   catalysts: SavedSparse[];
   // Sparse: 56 wide for generic chemicals.
   generics: SavedSparse[];
+  // Engulfed inner cells (endosymbionts). Recursive: an inner cell can
+  // itself carry contents in real biology, so we snapshot the same
+  // structure -- though the sim currently only nests one level deep.
+  contents?: SavedCreature[];
 }
 interface SavedParticle {
   x: number; y: number; z: number;
@@ -4592,6 +4596,7 @@ function snapshotCreature(c: Creature): SavedCreature {
     molecules: mol, reserves: res,
     catalysts: snapshotSparseCol(s.catalystCols, i, CATALYST_COUNT),
     generics: snapshotSparseCol(s.genericChemCols, i, GENERIC_CHEMICAL_COUNT),
+    contents: c.contents.length > 0 ? c.contents.map(snapshotCreature) : undefined,
   };
 }
 
@@ -4681,6 +4686,16 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
   const s = c.store;
   for (const e of sc.catalysts) s.catalystCols[e.i][c.idx] = e.v;
   for (const e of sc.generics) s.genericChemCols[e.i][c.idx] = e.v;
+  // Restore engulfed cells. They get their own creature slot (alloc'd
+  // by restoreCreature) but are NOT pushed onto world.creatures --
+  // they live in the host's contents[] until the host dies. Same
+  // invariant the live engulf path maintains.
+  if (sc.contents) {
+    for (const sub of sc.contents) {
+      const inner = restoreCreature(world, sub);
+      c.contents.push(inner);
+    }
+  }
   return c;
 }
 
@@ -4744,6 +4759,9 @@ export function applySavedWorld(world: World, json: string): boolean {
       molecules: sp.molecules ? { ...emptyMolecules(), ...sp.molecules } : undefined,
     });
   }
-  for (const sc of saved.creatures) restoreCreature(world, sc);
+  for (const sc of saved.creatures) {
+    const c = restoreCreature(world, sc);
+    world.creatures.push(c);
+  }
   return true;
 }

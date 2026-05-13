@@ -140,8 +140,13 @@ function forceSave(): void {
     lastSaveAt = world.t;
   } catch { /* quota / private mode -- ignore */ }
 }
+// Reset uses a two-tap arm/fire pattern. confirm() turned out to be
+// silently suppressed in some iOS in-app webviews (Brave/Edge),
+// which made the button look broken. The first tap turns the button
+// label into a red "tap again to wipe" prompt that times out after
+// 3s; the second tap inside that window actually clears the save
+// and reloads.
 function hardReset(): void {
-  if (!confirm("Reset the world? All evolved lineages will be lost.")) return;
   try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
   location.reload();
 }
@@ -305,7 +310,30 @@ const resetBtn = document.createElement("button");
 resetBtn.textContent = "reset";
 resetBtn.title = "Clear saved world and start fresh";
 resetBtn.style.cssText = WORLD_BTN_STYLE;
-resetBtn.addEventListener("click", hardReset);
+let resetArmedUntil = 0;
+let resetArmTimer: ReturnType<typeof setTimeout> | null = null;
+function disarmReset(): void {
+  resetArmedUntil = 0;
+  resetBtn.textContent = "reset";
+  resetBtn.style.cssText = WORLD_BTN_STYLE;
+  positionWorldButtons();
+  if (resetArmTimer) { clearTimeout(resetArmTimer); resetArmTimer = null; }
+}
+resetBtn.addEventListener("click", () => {
+  const now = performance.now();
+  if (now < resetArmedUntil) {
+    hardReset();
+    return;
+  }
+  resetArmedUntil = now + 3000;
+  resetBtn.textContent = "tap again to wipe";
+  resetBtn.style.cssText =
+    WORLD_BTN_STYLE +
+    "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
+  positionWorldButtons();
+  if (resetArmTimer) clearTimeout(resetArmTimer);
+  resetArmTimer = setTimeout(disarmReset, 3000);
+});
 root.appendChild(resetBtn);
 
 const exportBtn = document.createElement("button");
