@@ -686,6 +686,11 @@ export interface Species {
   alive: number;
   parents: Set<string>;
   lane: number;
+  // Representative genome captured at first creation. Used to render
+  // plain-English behavior summaries for both alive and extinct
+  // species (a member's c.genome can drift somatically; this one
+  // stays the canonical species signature).
+  genome: Uint8Array;
 }
 
 export interface PhylogenyEvent {
@@ -1842,6 +1847,7 @@ function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefi
       alive: 0,
       parents: new Set<string>(),
       lane: world.nextSpeciesLane++,
+      genome: new Uint8Array(c.genome),
     };
     world.species.set(key, sp);
   }

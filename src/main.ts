@@ -1485,52 +1485,82 @@ function updateDiagBar(): void {
   }
 }
 
-// Periodic genome-analysis dump. Once per ANALYSIS_INTERVAL_SEC of
-// sim-time, snapshot the live population, describe each top species
-// in plain prose, and prepend a block to the right-side panel.
+// Sidebar panel: this run's top 5 species (past and current),
+// refreshed every ANALYSIS_INTERVAL_SEC of sim-time.
+//
+// Sort key (descending):
+//   1. Duration (sp.alive>0 ? now - firstSeen : lastSeen - firstSeen)
+//   2. Total biomass across living members (0 for extinct)
+//   3. Cell count (sp.alive)
+//   4. firstSeen ascending (older species win ties)
 const ANALYSIS_INTERVAL_SEC = 60;
 let lastAnalysisT = -Infinity;
 function maybeAnalyzeGenomes(): void {
   if (world.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
   lastAnalysisT = world.t;
-  if (world.creatures.length === 0) return;
-  const byKey = new Map<string, { count: number; genome: Uint8Array; sp: Species | undefined }>();
-  for (const c of world.creatures) {
-    const e = byKey.get(c.speciesKey);
-    if (e) e.count++;
-    else byKey.set(c.speciesKey, { count: 1, genome: c.genome, sp: world.species.get(c.speciesKey) });
-  }
-  const ranked = Array.from(byKey.entries())
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 8);
-  const parentOf = new Map<string, string>();
-  for (const ev of world.phylogenyEvents) parentOf.set(ev.to, ev.from);
 
-  const blocks: string[] = [];
-  blocks.push(`t=${formatAge(world.t)}, pop=${world.creatures.length}, ${byKey.size} live species`);
-  for (const [key, info] of ranked) {
-    const parentKey = parentOf.get(key);
-    const parentLive = parentKey ? world.creatures.find((c) => c.speciesKey === parentKey) : undefined;
-    let verdict: "founder" | "thriving" | "stable" | "struggling" = "stable";
-    if (!parentKey) verdict = "founder";
-    else {
-      const pCount = parentLive
-        ? Array.from(byKey.values()).find((v) => v.sp?.key === parentKey)?.count ?? 0
-        : 0;
-      if (info.count > Math.max(2, pCount * 1.5)) verdict = "thriving";
-      else if (parentLive && pCount > info.count * 3) verdict = "struggling";
-    }
-    const ageHint = info.sp ? formatAge(Math.max(0, world.t - info.sp.firstSeen)) : "?";
-    const head = `${info.count} cell${info.count === 1 ? "" : "s"} • age ${ageHint} • ${verdict}`;
-    const prose = describeGenomeProse(info.genome, MATERIAL_IDS_ORDERED);
-    const mut = parentLive ? mutationProse(parentLive.genome, info.genome) : "";
-    blocks.push("  " + head + "\n  " + prose + (mut ? "\n  Change from parent: " + mut : ""));
+  // Per-species live biomass aggregation. world.species.alive already
+  // tracks cell counts; we walk world.creatures to sum biomass.
+  const liveBiomass = new Map<string, number>();
+  for (const c of world.creatures) {
+    liveBiomass.set(c.speciesKey, (liveBiomass.get(c.speciesKey) ?? 0) + c.molecules.biomass);
   }
-  const newBlock = document.createElement("div");
-  newBlock.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
-  newBlock.textContent = blocks.join("\n\n");
-  analysisBody.insertBefore(newBlock, analysisBody.firstChild);
-  while (analysisBody.children.length > 20) analysisBody.removeChild(analysisBody.lastChild!);
+
+  type Row = {
+    sp: Species;
+    alive: boolean;
+    duration: number;
+    biomass: number;
+    cells: number;
+  };
+  const rows: Row[] = [];
+  for (const sp of world.species.values()) {
+    const alive = sp.alive > 0;
+    const duration = (alive ? world.t : sp.lastSeen) - sp.firstSeen;
+    rows.push({
+      sp,
+      alive,
+      duration,
+      biomass: liveBiomass.get(sp.key) ?? 0,
+      cells: sp.alive,
+    });
+  }
+  rows.sort((a, b) => {
+    if (b.duration !== a.duration) return b.duration - a.duration;
+    if (b.biomass !== a.biomass) return b.biomass - a.biomass;
+    if (b.cells !== a.cells) return b.cells - a.cells;
+    return a.sp.firstSeen - b.sp.firstSeen; // oldest first as final tiebreaker
+  });
+  const top = rows.slice(0, 5);
+
+  // Render the panel content fresh each cycle (no append/history --
+  // the panel is a current top-5 snapshot, not a log).
+  analysisBody.innerHTML = "";
+  const header = document.createElement("div");
+  header.style.cssText = "padding:6px 0 8px;font-weight:bold;border-bottom:1px solid #1a3340;";
+  header.textContent = `Top 5 species at t=${formatAge(world.t)} (across ${world.species.size} tracked)`;
+  analysisBody.appendChild(header);
+
+  for (let i = 0; i < top.length; i++) {
+    const row = top[i];
+    const sp = row.sp;
+    const status = row.alive
+      ? `ALIVE`
+      : `EXTINCT ${formatAge(world.t - sp.lastSeen)} ago`;
+    const block = document.createElement("div");
+    block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
+    const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
+    const headLine = `${dot}<b>#${i + 1}</b>  ${sp.key.slice(0, 6)}  duration=${formatAge(row.duration)}  bio=${row.biomass.toFixed(0)}  cells=${row.cells}  ${status}`;
+    const prose = describeGenomeProse(sp.genome, MATERIAL_IDS_ORDERED);
+    const proseDiv = document.createElement("div");
+    proseDiv.style.cssText = "padding-top:3px;";
+    proseDiv.textContent = prose;
+    const headDiv = document.createElement("div");
+    headDiv.innerHTML = headLine;
+    block.appendChild(headDiv);
+    block.appendChild(proseDiv);
+    analysisBody.appendChild(block);
+  }
 }
 
 // Walk a genome and describe it in plain prose. Same fact extraction
@@ -1629,57 +1659,3 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   return parts.join(" ");
 }
 
-// Diff parent vs child as a plain sentence: gained / lost / shifted.
-function mutationProse(parent: Uint8Array, child: Uint8Array): string {
-  // Count by op-position so "gained/lost X" reflects what actually
-  // executes. Counting raw byte values would inflate "+1 SENSE_GRAD_X"
-  // every time the byte happens to land as some other op's operand.
-  const countOps = (g: Uint8Array): Record<number, number> => {
-    const c: Record<number, number> = {};
-    walkGenome(g, (op) => { c[op] = (c[op] ?? 0) + 1; });
-    return c;
-  };
-  const a = countOps(parent), b = countOps(child);
-  const gained: string[] = [];
-  const lost: string[] = [];
-  const allOps = new Set([...Object.keys(a), ...Object.keys(b)].map(Number));
-  for (const op of allOps) {
-    const d = (b[op] ?? 0) - (a[op] ?? 0);
-    if (d === 0) continue;
-    const label = OP_PRETTY_NAME[op] ?? OP_NAME_BY_BYTE[op] ?? `byte 0x${op.toString(16)}`;
-    if (d > 0) gained.push(d === 1 ? label : `${d}x ${label}`);
-    else lost.push(-d === 1 ? label : `${-d}x ${label}`);
-  }
-  const lenDiff = child.length - parent.length;
-  const parts: string[] = [];
-  if (gained.length) parts.push("gained " + gained.join(", "));
-  if (lost.length) parts.push("lost " + lost.join(", "));
-  if (lenDiff !== 0 && parts.length === 0) parts.push(`length ${lenDiff > 0 ? "+" : ""}${lenDiff} bytes`);
-  if (parts.length === 0) return "silent (point mutation only).";
-  return parts.join("; ") + ".";
-}
-
-// Op-byte to human-friendly label. Falls back to the raw OP name if
-// not listed here.
-const OP_PRETTY_NAME: Record<number, string> = {
-  [OP.THRUST]: "thrust", [OP.TURN]: "turn",
-  [OP.REPRODUCE]: "reproduce gate", [OP.REPAIR]: "DNA repair",
-  [OP.INGEST]: "ingest", [OP.EXCRETE]: "excrete",
-  [OP.PREDATE]: "predation", [OP.ENGULF]: "engulf",
-  [OP.EMIT]: "pheromone emit", [OP.ADHERE]: "adhere",
-  [OP.SYNTH_BIO]: "biomass synth", [OP.SYNTH_AA]: "amino-acid synth",
-  [OP.SYNTH_FA]: "fatty-acid synth", [OP.SYNTH_ENZ]: "enzyme synth",
-  [OP.SYNTH_CHL]: "chlorophyll synth",
-  [OP.SYNTH_RIBO]: "ribosome synth",
-  [OP.SENSE_AMP]: "sense amp", [OP.THRUST_AMP]: "thrust amp",
-  [OP.SENSE_CHEMICAL]: "chem sensor", [OP.SENSE_EM]: "EM sensor",
-  [OP.SENSE_PRESSURE_X]: "pressure-X", [OP.SENSE_PRESSURE_Y]: "pressure-Y",
-};
-
-// Reverse of OP enum: byte -> short name. Built lazily; only includes
-// ops the genome.ts OP table knows about.
-const OP_NAME_BY_BYTE: Record<number, string> = (() => {
-  const m: Record<number, string> = {};
-  for (const [name, byte] of Object.entries(OP)) m[byte as number] = name;
-  return m;
-})();
