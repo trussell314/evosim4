@@ -469,14 +469,19 @@ describe("creature: chemistry - photosynthesis", () => {
     expect(c.molecules.glucose).toBeGreaterThan(0);
     expect(c.molecules.o2).toBeGreaterThan(0);
   });
-  it("without chlorophyll, no photosynthesis happens", () => {
+  it("photosynth runs at baseline even without chlorophyll (phase 2)", () => {
+    // Phase 2 unified the chemistry: photosynth has uncatRate > 0 so
+    // every cell can fix some carbon at the surface. Chlorophyll's
+    // gating role retired; cells boost the rate by building catalyst
+    // at slot 3 instead. This test just sanity-checks that the
+    // baseline reaction fires.
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    c.molecules.co2 = 1;
+    c.molecules.co2 = 5;
     w.creatures.push(c);
     const glu0 = c.molecules.glucose;
     step(w, 1.0);
-    expect(c.molecules.glucose).toBeCloseTo(glu0, 3);
+    expect(c.molecules.glucose).toBeGreaterThan(glu0);
   });
   it("at depth, much less light -> much less photosynthesis", () => {
     const wS = quietWorld(), wD = quietWorld();

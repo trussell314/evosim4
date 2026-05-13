@@ -1169,46 +1169,17 @@ const CATAB_TARGETS_FRAC: Float32Array[] = MATERIAL_IDS.map((id) => {
 
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
+// The named-reaction VMAX values (formerly AEROBIC_VMAX etc.) now live
+// inline in installNamedReactions() since each one belongs to a single
+// slot in the REACTIONS table. KM_DEFAULT is still used by the engine.
 const KM_DEFAULT = 1;
-const AEROBIC_VMAX = 16;    // glucose-mass consumed per sec per cell at saturation
-const FERMENT_VMAX = 1.5;
-const BETAOX_VMAX = 1.5;    // fatty-acid mass per sec; tame so fa survives for biosynth
-const PHOTO_VMAX_PER_R = 1.2;   // photosynth scales with surface (~r)
-const CHLORO_SYNTH_VMAX = 0.2;
-const ENZYME_SYNTH_VMAX = 0.4;
-const BIOMASS_GROW_VMAX = 0.8;
-const AA_SYNTH_VMAX = 0.4;
-const FA_SYNTH_VMAX = 0.2;
-const RIBO_SYNTH_VMAX = 0.15;
 
-// ATP cost per unit product built by biosynthesize(). Reflects product
-// complexity. Biomass is bulk structural mass (cheap); enzymes and
-// chlorophyll are catalytic / pigment molecules (per real biology,
-// dozens of ATP per molecule when accounting for cofactors and
-// post-translational steps). Amino-acid synthesis (transamination +
-// carbon-skeleton work) is moderate; fatty-acid synthesis is expensive
-// per the real fatty-acid-synthase pathway (~7 ATP per palmitate).
-// Ribosomes are large protein+RNA complexes -- expensive to build but
-// then catalyze all future protein production, so they pay back.
-const BIOMASS_ATP_COST = 1;
-const ENZYME_ATP_COST = 4;
-const CHLORO_ATP_COST = 8;
-const AA_ATP_COST = 2;
-const FA_ATP_COST = 6;
-const RIBO_ATP_COST = 10;
-
-// Ribosome multiplier on biosynthesis rate. A cell with `r` ribosomes
-// runs each SYNTH_* reaction at (r / RIBO_REF) times the base VMAX.
-// **Ribosomes are mandatory** -- zero ribosomes means zero biosynth,
-// matching real biology (ribosomes are *the* protein-synthesis
-// machinery, not an accelerator on something else). A lineage without
-// SYNTH_RIBO can't grow new structure and starves quickly; the
-// viability filter rejects founders / mutated children that lack
-// SYNTH_RIBO so this path doesn't pollute the world.
-const RIBO_REF = 5;
-function riboMult(c: Creature): number {
-  return c.molecules.ribosome / RIBO_REF;
-}
+// Phase 2: riboMult retired. Biosynth rates are uniform across cells;
+// ribosome accumulation no longer multiplies them. Cells that want to
+// out-build their peers do it via catalyst pools on the specific
+// biosynth slots (REACTIONS[4..9]). Ribosomes still exist as a
+// tracked molecule and can be synthesized via the synth_ribo
+// reaction, but they're inert -- a future cleanup will retire them.
 
 // Generic chemistry: 64 chemicals + 256 reactions. The named
 // chemistry (aerobic / ferment / betaOx / catabolize / photosynth /
@@ -1226,12 +1197,17 @@ const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
 const CHEMICAL_COUNT = 64;
-const NAMED_CHEMICAL_COUNT = 8;
-// Order matches chemical slot 0..7. Each entry is a key of Molecules
+const NAMED_CHEMICAL_COUNT = 12;
+// Order matches chemical slot 0..11. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
+// Phase 2 promotes all current Molecules to named chemicals so the
+// reaction engine can address every cellular species directly.
 const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "biomass", "adp",
+  "waste", "chlorophyll", "enzyme", "ribosome",
 ];
+// Slot indices for special handling (engine-managed ATP/ADP, etc.).
+const CHEM_ADP = 7;
 const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
 interface ChemicalDef {
   name: string;
@@ -1271,7 +1247,21 @@ interface Reaction {
   pCount: Float32Array; // parallel
   atpDelta: number;     // signed energy delta per unit reaction (>0 = exergonic)
   lightIn: number;      // 0 if not light-driven; else units of light per unit
-  vmax: number;         // base rate per (1 unit catalyst / CAT_REF)
+  vmax: number;         // boost rate added on top of uncatRate per (pool/CAT_REF)
+  // Baseline rate when catalyst pool is 0. Named reactions set this > 0
+  // (the bootstrap chemistry every cell gets free); generic reactions
+  // leave it 0 -- they only fire when a cell has built the catalyst.
+  uncatRate: number;
+  // Optional synthMask bit: reaction only runs if (VM_OUT.synthMask & gateMask).
+  // 0 = no gate (always eligible). Biosynth reactions use this so the
+  // SYNTH_AA / SYNTH_FA / SYNTH_BIO ops still gate what gets built.
+  gateMask: number;
+  // If true, rate also scales with cell surface area (r / MIN_R) -- only
+  // photosynth uses this today, modeling pigment membrane area.
+  surfaceScale: boolean;
+  // Apply BIOSYNTH_ATP_FLOOR when this reaction consumes ATP. True for
+  // biosynth slots so newborns don't burn their starting ATP on growth.
+  atpFloor: boolean;
 }
 const REACTIONS: Reaction[] = buildReactionTable();
 
@@ -1336,67 +1326,137 @@ function buildReactionTable(): Reaction[] {
     // most are middling. Cells that build the right catalyst can
     // make the slow ones useful too.
     const vmax = Math.exp(Math.log(0.05) + rng() * (Math.log(1.5) - Math.log(0.05)));
-    out.push({ sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax });
+    out.push({
+      sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax,
+      uncatRate: 0, gateMask: 0, surfaceScale: false, atpFloor: false,
+    });
   }
+  // Overwrite the first 10 generated entries with the named reactions.
+  // Catalyst slots 0..9 correspond to the named reactions, so a cell
+  // that builds catalyst[k] is boosting one of these specific
+  // pathways. Subsequent slots (10..255) remain the generated generics.
+  installNamedReactions(out);
   return out;
+}
+
+// Stoichiometric coefficients mirror the previously hand-coded reaction
+// functions. Mass conservation is handled implicitly: substrates +
+// products + (atpDelta worth of ADP <-> ATP conversion) sum to zero,
+// because the engine deducts |atpDelta| ADP and credits |atpDelta|
+// ATP (energy) on every exergonic reaction (and vice versa).
+function installNamedReactions(out: Reaction[]): void {
+  const mk = (
+    sChem: number[], sCount: number[],
+    pChem: number[], pCount: number[],
+    atpDelta: number,
+    rate: number,
+    opts: { lightIn?: number; gateMask?: number; surfaceScale?: boolean; atpFloor?: boolean } = {},
+  ): Reaction => ({
+    sChem: new Uint8Array(sChem),
+    sCount: new Float32Array(sCount),
+    pChem: new Uint8Array(pChem),
+    pCount: new Float32Array(pCount),
+    atpDelta,
+    lightIn: opts.lightIn ?? 0,
+    vmax: rate,             // catalyst boost: another `rate` at full pool
+    uncatRate: rate,         // bootstrap rate every cell gets free
+    gateMask: opts.gateMask ?? 0,
+    surfaceScale: opts.surfaceScale ?? false,
+    atpFloor: opts.atpFloor ?? false,
+  });
+  // Slot index in NAMED_CHEMICALS: o2=0 co2=1 glu=2 aa=3 fa=4 min=5
+  // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11.
+  // Energy reactions:
+  out[0] = mk([2, 0], [1, 1], [1], [2], +10, 16);                // aerobic: glu+o2 -> 2 co2 + 10 atp
+  out[1] = mk([2], [1], [1, 8], [0.5, 0.5], +2, 1.5);            // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
+  out[2] = mk([4, 0], [1, 1], [1], [2], +14, 1.5);               // betaOx: fa+o2 -> 2 co2 + 14 atp
+  out[3] = mk([1], [1], [2, 0], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true }); // photosynth
+  // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0):
+  out[4] = mk([2, 5], [0.7, 0.3], [3], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true }); // synth_aa
+  out[5] = mk([2, 5], [0.9, 0.1], [4], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true }); // synth_fa
+  out[6] = mk([3, 5], [0.5, 0.5], [9], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true }); // synth_chl
+  out[7] = mk([3, 5], [0.5, 0.5], [10], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true }); // synth_enz
+  out[8] = mk([3, 5], [0.5, 0.5], [11], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true }); // synth_ribo
+  out[9] = mk([3, 4], [0.9, 0.1], [6], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true }); // synth_biomass
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
 // contiguous Float32Array per pass; the empty-pool branch is
 // predicted not-taken for the common case (cells express only a
 // handful of catalysts at a time).
-function runGenericReactions(c: Creature, dt: number, ambientLight: number): void {
+//
+// Phase 2: also drives the named reactions. Slot 0..9 have
+// uncatRate > 0 so they fire even with zero catalyst -- the bootstrap
+// chemistry every cell gets free. Catalyst pools boost on top.
+// ATP/ADP mass conservation is engine-managed via atpDelta: exergonic
+// reactions deduct |atpDelta| ADP per unit; endergonic deduct
+// |atpDelta| ATP (energy) and credit |atpDelta| ADP.
+function runGenericReactions(c: Creature, dt: number, ambientLight: number, synthMask: number): void {
   const s = c.store; const i = c.idx;
+  const KM = KM_DEFAULT;
   for (let slot = 0; slot < N_REACTIONS; slot++) {
-    const pool = s.catalystCols[slot][i];
-    if (pool <= 0) continue;
     const rxn = REACTIONS[slot];
-    // Light gate: light-driven reactions stall if there's not enough.
+    if (rxn.gateMask !== 0 && (synthMask & rxn.gateMask) === 0) continue;
+    const pool = s.catalystCols[slot][i];
+    if (rxn.uncatRate <= 0 && pool <= 0) continue;
+    // Light gate
     let lightMult = 1;
     if (rxn.lightIn > 0) {
       if (ambientLight <= 0) continue;
       lightMult = ambientLight / rxn.lightIn;
       if (lightMult > 1) lightMult = 1;
     }
-    // Substrate gate: each substrate caps the reaction by what's
-    // available / its stoichiometric count. We collect the tightest
-    // cap (limit) so the inner update can never push any pool below 0.
+    // Substrate gate + MM saturation
     let limit = Infinity;
+    let satProduct = 1;
     const sChem = rxn.sChem;
     const sCount = rxn.sCount;
     for (let j = 0; j < sChem.length; j++) {
       const have = s.chemCols[sChem[j]][i];
-      const ratio = have / sCount[j];
+      const need = sCount[j];
+      const ratio = have / need;
       if (ratio < limit) limit = ratio;
+      satProduct *= ratio / (ratio + KM);
     }
     if (limit <= 0) continue;
-    // ATP gate (endergonic reactions): can't deplete energy past 0.
+    // ATP / ADP handling.
     const atpD = rxn.atpDelta;
     if (atpD < 0) {
-      const eCap = s.energy[i] / -atpD;
-      if (eCap < limit) limit = eCap;
-      if (limit <= 0) continue;
+      // Endergonic: pulls from cell energy. atpFloor reactions keep
+      // BIOSYNTH_ATP_FLOOR ATP in reserve so newborns don't drain
+      // themselves dry growing.
+      const floor = rxn.atpFloor ? BIOSYNTH_ATP_FLOOR : 0;
+      const eAvail = (s.energy[i] - floor) / -atpD;
+      if (eAvail <= 0) continue;
+      if (eAvail < limit) limit = eAvail;
+      satProduct *= eAvail / (eAvail + KM);
+    } else if (atpD > 0) {
+      // Exergonic: phosphorylates ADP back to ATP. Need ADP available.
+      const adpAvail = s.chemCols[CHEM_ADP][i] / atpD;
+      if (adpAvail <= 0) continue;
+      if (adpAvail < limit) limit = adpAvail;
+      satProduct *= adpAvail / (adpAvail + KM);
     }
-    // Rate. Saturates the catalyst term at v/CAT_REF (consistent with
-    // ribosomes); no +1 because uncatalyzed reactions don't run at
-    // all (the user-chosen design).
-    const rate = rxn.vmax * (pool / CAT_REF) * lightMult;
+    const surface = rxn.surfaceScale ? (s.r[i] / MIN_CREATURE_R) : 1;
+    const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface;
     let amt = rate * dt;
     if (amt > limit) amt = limit;
     if (amt <= 0) continue;
-    // Apply. Mass-balanced by construction; ATP is the only extra
-    // book-keeping. We don't double-count ADP -- generic reactions
-    // operate on cell.energy directly. (Phase 1 abstraction; can
-    // unify with ADP later.)
+    // Apply substrates
     for (let j = 0; j < sChem.length; j++) {
       s.chemCols[sChem[j]][i] -= sCount[j] * amt;
     }
+    // Apply products
     const pChem = rxn.pChem;
     const pCount = rxn.pCount;
     for (let j = 0; j < pChem.length; j++) {
       s.chemCols[pChem[j]][i] += pCount[j] * amt;
     }
-    if (atpD !== 0) s.energy[i] += atpD * amt;
+    // ATP / ADP conversion (mass-conserving)
+    if (atpD !== 0) {
+      s.energy[i] += atpD * amt;
+      s.chemCols[CHEM_ADP][i] -= atpD * amt;
+    }
   }
 }
 
@@ -2255,86 +2315,13 @@ function diffuseGases(c: Creature, dt: number): void {
   }
 }
 
-// Aerobic respiration: 1 glu + 1 o2 + 10 adp -> 2 co2 + 10 atp.
-// sat() inlined here and below: avoids the default-argument fast path
-// in the generic helper which the JIT doesn't always specialize.
-function aerobicRespire(c: Creature, dt: number): void {
-  const s = c.store; const i = c.idx;
-  const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
-  if (g <= 0 || o <= 0 || a <= 0) return;
-  const a10 = a / 10;
-  const rate = AEROBIC_VMAX * (g / (g + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a10 / (a10 + KM_DEFAULT));
-  const rdt = rate * dt;
-  let amt = rdt < g ? rdt : g;
-  if (o < amt) amt = o;
-  if (a10 < amt) amt = a10;
-  if (amt <= 0) return;
-  s.m_glucose[i] = g - amt;
-  s.m_o2[i] = o - amt;
-  s.m_co2[i] += 2 * amt;
-  s.m_adp[i] = a - 10 * amt;
-  s.energy[i] += 10 * amt;
-}
-
-// Fermentation: 1 glu + 2 adp -> 0.5 co2 + 0.5 waste + 2 atp. Suppressed
-// when O2 is abundant so it acts as the anaerobic fallback path.
-function ferment(c: Creature, dt: number): void {
-  const s = c.store; const i = c.idx;
-  const g = s.m_glucose[i], o = s.m_o2[i], a = s.m_adp[i];
-  if (g <= 0 || a <= 0) return;
-  const a2 = a / 2;
-  const o2Suppression = KM_DEFAULT / (KM_DEFAULT + o);
-  const rate = FERMENT_VMAX * (g / (g + KM_DEFAULT)) * (a2 / (a2 + KM_DEFAULT)) * o2Suppression;
-  const rdt = rate * dt;
-  let amt = rdt < g ? rdt : g;
-  if (a2 < amt) amt = a2;
-  if (amt <= 0) return;
-  s.m_glucose[i] = g - amt;
-  s.m_adp[i] = a - 2 * amt;
-  s.m_co2[i] += 0.5 * amt;
-  s.m_waste[i] += 0.5 * amt;
-  s.energy[i] += 2 * amt;
-}
-
-// Beta-oxidation of fatty acid: 1 fa + 1 o2 + 14 adp -> 2 co2 + 14 atp.
-// Much higher ATP yield per gram than glucose -- fatty acids are dense fuel.
-function betaOxidize(c: Creature, dt: number): void {
-  const s = c.store; const i = c.idx;
-  const f = s.m_fattyAcid[i], o = s.m_o2[i], a = s.m_adp[i];
-  if (f <= 0 || o <= 0 || a <= 0) return;
-  const a14 = a / 14;
-  const rate = BETAOX_VMAX * (f / (f + KM_DEFAULT)) * (o / (o + KM_DEFAULT)) * (a14 / (a14 + KM_DEFAULT));
-  const rdt = rate * dt;
-  let amt = rdt < f ? rdt : f;
-  if (o < amt) amt = o;
-  if (a14 < amt) amt = a14;
-  if (amt <= 0) return;
-  s.m_fattyAcid[i] = f - amt;
-  s.m_o2[i] = o - amt;
-  s.m_co2[i] += 2 * amt;
-  s.m_adp[i] = a - 14 * amt;
-  s.energy[i] += 14 * amt;
-}
-
-// Photosynthesis: 1 co2 + 1 atp + light -> 0.5 glu + 0.5 o2 + 1 adp.
-// Requires chlorophyll catalyst (not consumed). Scales with surface area
-// (perimeter ~ r) and with the local ambient light.
-function photosynthesize(c: Creature, dt: number, light: number): void {
-  const s = c.store; const i = c.idx;
-  const chl = s.m_chlorophyll[i], co2 = s.m_co2[i], e = s.energy[i];
-  if (chl <= 0 || co2 <= 0 || e <= 0 || light <= 0) return;
-  const surface = s.r[i] / MIN_CREATURE_R;
-  const rate = PHOTO_VMAX_PER_R * surface * sat(chl) * sat(co2) * light;
-  const rdt = rate * dt;
-  let amt = rdt < co2 ? rdt : co2;
-  if (e < amt) amt = e;
-  if (amt <= 0) return;
-  s.m_co2[i] = co2 - amt;
-  s.energy[i] = e - amt;
-  s.m_glucose[i] += 0.5 * amt;
-  s.m_o2[i] += 0.5 * amt;
-  s.m_adp[i] += amt;
-}
+// Aerobic respiration / fermentation / beta-oxidation / photosynthesis
+// were each a dedicated function reading m_* fields and mutating
+// them in place. In phase 2 they're all entries in REACTIONS[0..3]
+// driven by runGenericReactions(), with uncatRate matching the old
+// VMAX -- catalyst pool only adds on top. ATP/ADP mass conservation
+// is handled by the engine (atpDelta is the energy delta; the same
+// magnitude flows the other way through chemCols[CHEM_ADP]).
 
 // ATP floor: biosynthesis tapers off as the cell's ATP approaches
 // this value, and stops entirely below it. Without this, a newborn
@@ -2344,49 +2331,8 @@ function photosynthesize(c: Creature, dt: number, light: number): void {
 // downregulate growth under energy stress; this is the same idea.
 const BIOSYNTH_ATP_FLOOR = 4;
 
-// Generic biosynthesis helper: combine two substrate molecules (by their
-// mass fractions in the product) with atpCost atp, producing 1 unit of
-// product and atpCost adp. Mass-conserving: fracA + fracB + atpCost = 1
-// + atpCost (substrates must sum to 1).
-//
-// atpCost reflects how energetically expensive the product is to build.
-// Storage-grade biomass is cheap (~1 ATP per peptide bond would be
-// idealized, but this is per mass unit not per bond). Catalysts and
-// complex pigments cost more.
-function biosynthesize(
-  c: Creature,
-  dt: number,
-  vmax: number,
-  fracA: number, subA: keyof Molecules,
-  fracB: number, subB: keyof Molecules,
-  atpCost: number,
-  product: keyof Molecules,
-): void {
-  const s = c.store; const i = c.idx;
-  const colA = s.molCols[MOLECULE_INDEX[subA]];
-  const colB = s.molCols[MOLECULE_INDEX[subB]];
-  const colP = s.molCols[MOLECULE_INDEX[product]];
-  const a = colA[i], b = colB[i], e = s.energy[i];
-  if (a <= 0 || b <= 0 || e <= BIOSYNTH_ATP_FLOOR) return;
-  const aFrac = a / fracA, bFrac = b / fracB;
-  // ATP saturation gates on *spendable* ATP -- the amount above the
-  // safety floor -- per unit product. A cell at e = BIOSYNTH_ATP_FLOOR
-  // can spend nothing on growth; at e = floor + 10*atpCost, the gate is
-  // ~91% open. Keeps newborns from burning their starting ATP into
-  // products they don't need before respiration catches up.
-  const eAvail = (e - BIOSYNTH_ATP_FLOOR) / atpCost;
-  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(eAvail);
-  const rdt = rate * dt;
-  let amt = rdt < aFrac ? rdt : aFrac;
-  if (bFrac < amt) amt = bFrac;
-  if (eAvail < amt) amt = eAvail;
-  if (amt <= 0) return;
-  colA[i] = a - fracA * amt;
-  colB[i] = b - fracB * amt;
-  s.energy[i] = e - atpCost * amt;
-  colP[i] += amt;
-  s.m_adp[i] += atpCost * amt;
-}
+// biosynthesize() retired in phase 2 -- all biosynth pathways are now
+// table entries in REACTIONS[4..9] driven by runGenericReactions().
 
 // Build catalyst into the catalystCols[slot] pool. Same shape as
 // biosynthesize() but the product lives in the per-slot Float32Array
@@ -2524,20 +2470,10 @@ function runOrganelleChemistry(
   dtT: number,
   light: number,
 ): void {
-  // Metabolic reactions. Same as the outer loop minus VM-gated bits.
+  // Reserve catabolism still hand-coded (it operates on the reserves
+  // side, not chemCols). Everything else goes through the table.
   catabolize(inner, dtT);
-  aerobicRespire(inner, dtT);
-  ferment(inner, dtT);
-  betaOxidize(inner, dtT);
-  photosynthesize(inner, dtT, light);
-  const sm = inner.organelleSynthMask;
-  const rm = riboMult(inner);
-  if (sm & (1 << 1)) biosynthesize(inner, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-  if (sm & (1 << 2)) biosynthesize(inner, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-  if (sm & (1 << 4)) biosynthesize(inner, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-  if (sm & (1 << 3)) biosynthesize(inner, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-  if (sm & (1 << 5)) biosynthesize(inner, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
-  if (sm & (1 << 0)) biosynthesize(inner, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
+  runGenericReactions(inner, dtT, light, inner.organelleSynthMask);
   maintenanceDecay(inner, dt);
 
   // Bidirectional diffusion of small molecules + ATP between inner
@@ -3131,49 +3067,21 @@ function updateCreatures(world: World, dt: number): void {
     // physical, not enzymatic -- left at the base dt.
     diffuseGases(c, dt);
 
-    // Energy production. All three pathways may run in parallel; rates
-    // self-balance via substrate availability (Michaelis-Menten).
-    aerobicRespire(c, dtT);
-    ferment(c, dtT);
-    betaOxidize(c, dtT);
-
-    // Carbon fixation if the cell has chlorophyll and reaches light.
+    // All in-cell chemistry runs through one unified loop: named
+    // reactions live at REACTIONS[0..9] with uncatRate > 0, so they
+    // fire on every cell every tick; generic reactions at [10..255]
+    // only fire when the cell has built the relevant catalyst.
+    // Biosynth gateMasks honour VM_OUT.synthMask so SYNTH_AA / FA /
+    // BIO / CHL / ENZ / RIBO ops still gate what gets built.
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
-    photosynthesize(c, dtT, ambientLight);
+    runGenericReactions(c, dtT, ambientLight, VM_OUT.synthMask);
 
-    // Generic reaction engine. Iterates all 256 catalyst slots; only
-    // ones the cell has actually built advance. Mass-balanced
-    // chemical shuffles + energy from the atpDelta field, gated by
-    // ambient light for light-driven reactions.
-    runGenericReactions(c, dtT, ambientLight);
-
-    // Genome-gated biosynthesis. The VM sets bits in synthMask via
-    // SYNTH_BIO / SYNTH_AA / SYNTH_FA / SYNTH_ENZ / SYNTH_CHL ops.
-    // Each product is only built this tick if the cell asked for it.
-    // Substrates and ATP cost still apply. Cells that never run
-    // SYNTH_CHL no longer waste ATP making chlorophyll they don't use.
-    const synth = VM_OUT.synthMask;
-    // Ribosomes (built via SYNTH_RIBO) multiply every biosynth rate.
-    // A cell with `r` ribosomes runs each reaction at (1 + r/RIBO_REF)
-    // times the base VMAX. SYNTH_RIBO itself is multiplied too so
-    // ribosome production accelerates ribosome production -- once a
-    // lineage invests, it scales fast.
-    const rm = riboMult(c);
-    if (synth & (1 << 1)) biosynthesize(c, dtT, AA_SYNTH_VMAX * rm,     0.7, "glucose",   0.3, "minerals",   AA_ATP_COST,      "aminoAcid");
-    if (synth & (1 << 2)) biosynthesize(c, dtT, FA_SYNTH_VMAX * rm,     0.9, "glucose",   0.1, "minerals",   FA_ATP_COST,      "fattyAcid");
-    if (synth & (1 << 4)) biosynthesize(c, dtT, CHLORO_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   CHLORO_ATP_COST,  "chlorophyll");
-    if (synth & (1 << 3)) biosynthesize(c, dtT, ENZYME_SYNTH_VMAX * rm, 0.5, "aminoAcid", 0.5, "minerals",   ENZYME_ATP_COST,  "enzyme");
-    if (synth & (1 << 5)) biosynthesize(c, dtT, RIBO_SYNTH_VMAX * rm,   0.5, "aminoAcid", 0.5, "minerals",   RIBO_ATP_COST,    "ribosome");
-    // Biomass is mostly protein (aa); the lipid fraction is structural
-    // membrane only.
-    if (synth & (1 << 0)) biosynthesize(c, dtT, BIOMASS_GROW_VMAX * rm, 0.9, "aminoAcid", 0.1, "fattyAcid", BIOMASS_ATP_COST, "biomass");
-
-    // Generic catalysts. SYNTH_CAT <id> sets a bit per slot; each one
-    // built scales with riboMult like every other biosynth product.
+    // Generic catalyst synthesis. SYNTH_CAT <id> sets a bit per slot;
+    // each catalyst built is its own protein.
     const cm = VM_OUT.catSynthMask;
     if (cm) {
       for (let k = 0; k < CATALYST_COUNT; k++) {
-        if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX * rm, CAT_ATP_COST, k);
+        if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
       }
     }
 
@@ -4587,7 +4495,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:1:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:2:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
