@@ -855,7 +855,13 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
 const MASS_PER_GENOME_BYTE = 0.1;
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5) / (800 * 600);
+// Particle population: doubled from the earlier cap. Half of the
+// extra (= 25% of the total) is reserved for sand to fill space
+// between the gravity-piled rocks at the bottom; the other half
+// follows SEED_WEIGHTS like the rest. Net effect: more total
+// particles, much more sand, same composition for everything else.
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 2) / (800 * 600);
+const SAND_BIAS = 0.25; // fraction of particles forced to sand at spawn
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
@@ -1740,6 +1746,10 @@ function rollDensity(material: MaterialId): number | undefined {
 }
 
 function pickMaterial(): MaterialId {
+  // SAND_BIAS chance of forcing sand (the "half of the extra cap"
+  // reserved as bottom-filler between rocks). Otherwise sample by
+  // SEED_WEIGHTS as before.
+  if (Math.random() < SAND_BIAS) return "sand";
   let total = 0;
   for (const [, w] of SEED_WEIGHTS) total += w;
   let pick = Math.random() * total;
