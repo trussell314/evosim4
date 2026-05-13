@@ -1270,14 +1270,20 @@ function formatAge(sec: number): string {
 function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
   // fps + sim/wall ratio + elapsed sim time + pop (species) +
-  // extinction count there. pop= shows cells / species / lineages:
-  // total live cells, distinct genomes (species), distinct founding
-  // lineages (lineageRoot ids).
+  // extinction count there. pop= shows cells / living species /
+  // lineages: total live cells, distinct genomes among currently-
+  // alive cells, distinct founding lineages (lineageRoot ids).
+  // world.species.size would over-count -- it includes extinct
+  // species still in the 4-minute prune grace window.
   const liveLineages = new Set<number>();
-  for (const c of world.creatures) liveLineages.add(c.lineageRoot);
+  const liveSpecies = new Set<string>();
+  for (const c of world.creatures) {
+    liveLineages.add(c.lineageRoot);
+    liveSpecies.add(c.speciesKey);
+  }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(world.t)}  pop=${world.creatures.length}/${world.species.size}/${liveLineages.size}  ` +
+    `t=${formatAge(world.t)}  pop=${world.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
     `extinct=${world.extinctionCount}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
