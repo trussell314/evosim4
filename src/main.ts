@@ -153,18 +153,11 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", forceSave);
 
-// Reset button: bottom-left corner. Same font sizing as the HUD so it
-// reads as part of the same UI surface.
-const resetBtn = document.createElement("button");
-resetBtn.textContent = "reset";
-resetBtn.title = "Clear saved world and start fresh";
-resetBtn.style.cssText =
-  "position:fixed;left:8px;bottom:8px;z-index:10;" +
-  "padding:4px 10px;border:1px solid #356;border-radius:4px;" +
-  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" +
-  HUD_FONT;
-resetBtn.addEventListener("click", hardReset);
-root.appendChild(resetBtn);
+// Reset + export buttons live in the world-area corners. They're
+// created and positioned later (positionWorldButtons), once the
+// phylogeny-strip height and analysis-panel width constants are
+// available, because the right-side button has to dodge the
+// analysis panel when it expands.
 
 // Cap the device pixel ratio used for canvas backing-store size. At
 // DPR=3 (high-end phones, some retina displays) the backing store has
@@ -287,7 +280,60 @@ analysisHeader.addEventListener("click", () => {
   analysisHeader.style.justifyContent = analysisMinimized ? "center" : "space-between";
   analysisHeader.style.padding = analysisMinimized ? "6px 4px" : "6px 8px";
   resize();
+  positionWorldButtons();
 });
+
+// Reset (bottom-left) + export (bottom-right) sit inside the world
+// area, just above the phylogeny strip. The right button tracks the
+// analysis-panel width so it never disappears behind it.
+const WORLD_BTN_STYLE =
+  "position:fixed;z-index:10;padding:4px 10px;border:1px solid #356;" +
+  "border-radius:4px;background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" +
+  HUD_FONT;
+const resetBtn = document.createElement("button");
+resetBtn.textContent = "reset";
+resetBtn.title = "Clear saved world and start fresh";
+resetBtn.style.cssText = WORLD_BTN_STYLE;
+resetBtn.addEventListener("click", hardReset);
+root.appendChild(resetBtn);
+
+const exportBtn = document.createElement("button");
+exportBtn.textContent = "export";
+exportBtn.title = "Download the saved world as JSON";
+exportBtn.style.cssText = WORLD_BTN_STYLE;
+exportBtn.addEventListener("click", () => {
+  let json: string;
+  try {
+    // Snapshot the live world rather than reading localStorage so the
+    // export is always current, even between autosaves.
+    json = serializeWorld(world);
+  } catch (err) {
+    alert("export failed: " + (err instanceof Error ? err.message : String(err)));
+    return;
+  }
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  // Filename includes sim time so consecutive exports don't overwrite.
+  a.download = `evosim4-save-t${Math.floor(world.t)}s.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke after a delay so the share sheet has time to read the blob.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+});
+root.appendChild(exportBtn);
+
+function positionWorldButtons(): void {
+  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
+  const bottom = PHYLO_STRIP_H + 8;
+  resetBtn.style.bottom = `${bottom}px`;
+  resetBtn.style.left = "8px";
+  exportBtn.style.bottom = `${bottom}px`;
+  exportBtn.style.right = `${panelW + 8}px`;
+}
+positionWorldButtons();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -315,6 +361,7 @@ function resize(): void {
   viewScale = Math.min(sx, sy);
   viewOffsetX = (availW - WORLD_SIZE.w * viewScale) / 2;
   viewOffsetY = (availH - WORLD_SIZE.h * viewScale) / 2;
+  positionWorldButtons();
 }
 resize();
 window.addEventListener("resize", resize);
