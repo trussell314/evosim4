@@ -1,5 +1,5 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, type Particle, type Creature, type Species } from "./sim";
+import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, serializeWorld, applySavedWorld, type Particle, type Creature, type Species } from "./sim";
 import { disassemble, walkGenome, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -97,6 +97,74 @@ const WORLD_LANDSCAPE = { w: 800, h: 600 };
 const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const world = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
+
+// Try to restore a saved world from localStorage. Schema mismatch
+// (chemistry constants bumped, etc.) or any parse error -> stay with
+// the freshly-created world. Mobile Safari kills backgrounded tabs
+// aggressively; we autosave every game minute so a returning user
+// keeps their lineage.
+const SAVE_KEY = "evosim4:save";
+const SAVE_INTERVAL_SEC = 60;
+(function tryRestore(): void {
+  const raw = (() => {
+    try { return localStorage.getItem(SAVE_KEY); }
+    catch { return null; }
+  })();
+  if (!raw) return;
+  try {
+    if (!applySavedWorld(world, raw)) {
+      // Schema mismatch or malformed. Wipe the bad save so we don't
+      // re-attempt it on every refresh.
+      try { localStorage.removeItem(SAVE_KEY); } catch { /* private mode */ }
+    }
+  } catch (err) {
+    console.warn("evosim4: restore failed", err);
+    try { localStorage.removeItem(SAVE_KEY); } catch { /* private mode */ }
+  }
+})();
+
+let lastSaveAt = world.t;
+function maybeAutosave(): void {
+  if (world.t - lastSaveAt < SAVE_INTERVAL_SEC) return;
+  lastSaveAt = world.t;
+  try {
+    localStorage.setItem(SAVE_KEY, serializeWorld(world));
+  } catch (err) {
+    // Quota exceeded, private mode, etc. Don't crash the sim.
+    console.warn("evosim4: autosave failed", err);
+  }
+}
+function forceSave(): void {
+  try {
+    localStorage.setItem(SAVE_KEY, serializeWorld(world));
+    lastSaveAt = world.t;
+  } catch { /* quota / private mode -- ignore */ }
+}
+function hardReset(): void {
+  if (!confirm("Reset the world? All evolved lineages will be lost.")) return;
+  try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+  location.reload();
+}
+// Force-save when the tab gets backgrounded (mobile Safari frequently
+// reaps tabs without firing further events). pagehide is the most
+// reliable cross-browser signal for "we may not run again".
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") forceSave();
+});
+window.addEventListener("pagehide", forceSave);
+
+// Reset button: bottom-left corner. Same font sizing as the HUD so it
+// reads as part of the same UI surface.
+const resetBtn = document.createElement("button");
+resetBtn.textContent = "reset";
+resetBtn.title = "Clear saved world and start fresh";
+resetBtn.style.cssText =
+  "position:fixed;left:8px;bottom:8px;z-index:10;" +
+  "padding:4px 10px;border:1px solid #356;border-radius:4px;" +
+  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" +
+  HUD_FONT;
+resetBtn.addEventListener("click", hardReset);
+root.appendChild(resetBtn);
 
 // Cap the device pixel ratio used for canvas backing-store size. At
 // DPR=3 (high-end phones, some retina displays) the backing store has
@@ -1443,6 +1511,7 @@ simChannel.port1.onmessage = () => {
     if (ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     try {
       step(world, FIXED_DT);
+      maybeAutosave();
     } catch (err) {
       lastSimError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       lastSimErrorAt = world.t;

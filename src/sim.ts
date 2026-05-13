@@ -3084,6 +3084,7 @@ const VM_SENSORS: VMSensors = {
   light: 0,
   emBands: new Float32Array(3),
   pressureX: 0, pressureY: 0,
+  chemConc: new Float32Array(CHEMICAL_COUNT),
 };
 const VM_SELF: VMSelf = {
   energy: 0, vx: 0, vy: 0,
@@ -4000,6 +4001,14 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.emBands[2] = surfaceSun;
   VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
   VM_SENSORS.pheromone = world.pheromone[pheromoneIndex(world, c.x, c.y)];
+  // Internal chemistry sense: snapshot the cell's own chemical pool
+  // so SENSE_CHEMICAL <id> can read any of the 64 chemicals.
+  {
+    const cols = c.store.chemCols;
+    const i = c.idx;
+    const cc = VM_SENSORS.chemConc;
+    for (let k = 0; k < CHEMICAL_COUNT; k++) cc[k] = cols[k][i];
+  }
   VM_SENSORS.creatureDx = 0;
   VM_SENSORS.creatureDy = 0;
   VM_SENSORS.creatureDist = range;
@@ -4556,4 +4565,262 @@ function applyWalls(world: World): void {
   };
   for (const p of world.particles) wallEach(p);
   for (const c of world.creatures) wallEach(c);
+}
+
+// ---------------------------------------------------------------------
+// Persistence: serialize the live world to a JSON-friendly object and
+// restore it. Used by main.ts to auto-save to localStorage every game
+// minute so a mobile tab that gets reaped doesn't lose progress.
+//
+// The schema string bakes in ABI-affecting constants -- bumping any of
+// them (CATALYST_COUNT, CHEMICAL_COUNT, MAX_GENOME_BYTES) invalidates
+// older saves automatically. main.ts treats schema mismatch as
+// "fresh world", matching the user's preference for hard-reset over
+// migration.
+//
+// What we DON'T save (acceptable cosmetic loss):
+//   - pheromone field (re-zeros; cells re-emit)
+//   - phylogenyEvents (timeline starts fresh)
+//   - per-cell bonds + engulfed `contents` + in-flight `division`
+//   - species.execCounts (per-position VM trace, re-accumulates)
+// What we DO save: enough to keep the population, terrain, day phase,
+// and named/generic chemistry pools intact.
+// ---------------------------------------------------------------------
+
+export const SAVE_SCHEMA = `evosim4:1:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+
+interface SavedSparse { i: number; v: number }
+interface SavedCreature {
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  r: number; density: number; energy: number;
+  senseRange: number; thrustAccel: number;
+  bornAt: number; ingestCooldown: number; repairTicks: number;
+  genome: number[];
+  vmPc: number; vmStack: number[];
+  color: string; speciesKey: string; lineageRoot: number;
+  organelleSynthMask: number;
+  molecules: Record<string, number>;
+  reserves: Record<string, number>;
+  // Sparse: only nonzero entries -- catalystCols is 256 wide, most slots empty.
+  catalysts: SavedSparse[];
+  // Sparse: 56 wide for generic chemicals.
+  generics: SavedSparse[];
+}
+interface SavedParticle {
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  r: number; material: MaterialId;
+  density?: number;
+  molecules?: Record<string, number>;
+}
+interface SavedSpecies {
+  key: string; color: string; firstSeen: number; lastSeen: number;
+  alive: number; lane: number; vmTicks: number;
+  parents: string[];
+  genome: number[];
+}
+interface SavedWorld {
+  schema: string;
+  width: number; height: number; depth: number;
+  t: number;
+  nextLineageRoot: number;
+  extinctionCount: number;
+  founderTarget: number;
+  dayPhase: number;
+  disturbanceIntensity: number;
+  disturbanceStartedAt: number;
+  disturbanceUntil: number;
+  nextDisturbanceAt: number;
+  anchorGenome: number[];
+  liveLineageRoots: number[];
+  obstacles: Obstacle[];
+  species: SavedSpecies[];
+  particles: SavedParticle[];
+  creatures: SavedCreature[];
+}
+
+function snapshotSparseCol(cols: Float32Array[], i: number, n: number): SavedSparse[] {
+  const out: SavedSparse[] = [];
+  for (let k = 0; k < n; k++) {
+    const v = cols[k][i];
+    if (v > 0) out.push({ i: k, v });
+  }
+  return out;
+}
+
+function snapshotCreature(c: Creature): SavedCreature {
+  const s = c.store; const i = c.idx;
+  const mol: Record<string, number> = {};
+  for (const k of MOLECULE_IDS) {
+    const v = c.molecules[k];
+    if (v !== 0) mol[k] = v;
+  }
+  const res: Record<string, number> = {};
+  for (const id of MATERIAL_IDS) {
+    const v = c.reserves[id];
+    if (v !== 0) res[id] = v;
+  }
+  return {
+    x: s.x[i], y: s.y[i], z: s.z[i],
+    vx: s.vx[i], vy: s.vy[i], vz: s.vz[i],
+    r: s.r[i], density: s.density[i], energy: s.energy[i],
+    senseRange: s.senseRange[i], thrustAccel: s.thrustAccel[i],
+    bornAt: s.bornAt[i], ingestCooldown: s.ingestCooldown[i],
+    repairTicks: s.repairTicks[i],
+    genome: Array.from(c.genome),
+    vmPc: c.vm.pc, vmStack: Array.from(c.vm.stack),
+    color: c.color, speciesKey: c.speciesKey, lineageRoot: c.lineageRoot,
+    organelleSynthMask: c.organelleSynthMask,
+    molecules: mol, reserves: res,
+    catalysts: snapshotSparseCol(s.catalystCols, i, CATALYST_COUNT),
+    generics: snapshotSparseCol(s.genericChemCols, i, GENERIC_CHEMICAL_COUNT),
+  };
+}
+
+function snapshotParticle(p: Particle): SavedParticle {
+  const out: SavedParticle = {
+    x: p.x, y: p.y, z: p.z,
+    vx: p.vx, vy: p.vy, vz: p.vz,
+    r: p.r, material: p.material,
+  };
+  if (p.density !== undefined) out.density = p.density;
+  if (p.molecules) {
+    const m: Record<string, number> = {};
+    let any = false;
+    for (const k of MOLECULE_IDS) {
+      const v = p.molecules[k];
+      if (v !== 0) { m[k] = v; any = true; }
+    }
+    if (any) out.molecules = m;
+  }
+  return out;
+}
+
+export function serializeWorld(w: World): string {
+  const speciesList: SavedSpecies[] = [];
+  for (const s of w.species.values()) {
+    speciesList.push({
+      key: s.key, color: s.color,
+      firstSeen: s.firstSeen, lastSeen: s.lastSeen,
+      alive: s.alive, lane: s.lane, vmTicks: s.vmTicks,
+      parents: Array.from(s.parents),
+      genome: Array.from(s.genome),
+    });
+  }
+  const saved: SavedWorld = {
+    schema: SAVE_SCHEMA,
+    width: w.width, height: w.height, depth: w.depth,
+    t: w.t,
+    nextLineageRoot: w.nextLineageRoot,
+    extinctionCount: w.extinctionCount,
+    founderTarget: w.founderTarget,
+    dayPhase: w.dayPhase,
+    disturbanceIntensity: w.disturbanceIntensity,
+    disturbanceStartedAt: w.disturbanceStartedAt,
+    disturbanceUntil: w.disturbanceUntil,
+    nextDisturbanceAt: w.nextDisturbanceAt,
+    anchorGenome: Array.from(w.anchorGenome),
+    liveLineageRoots: Array.from(w.liveLineageRoots),
+    obstacles: w.obstacles,
+    species: speciesList,
+    particles: w.particles.map(snapshotParticle),
+    creatures: w.creatures.map(snapshotCreature),
+  };
+  return JSON.stringify(saved);
+}
+
+function restoreCreature(world: World, sc: SavedCreature): Creature {
+  const mol = emptyMolecules();
+  for (const k of MOLECULE_IDS) {
+    const v = sc.molecules[k];
+    if (v !== undefined) mol[k] = v;
+  }
+  const res = emptyReserves();
+  for (const id of MATERIAL_IDS) {
+    const v = sc.reserves[id];
+    if (v !== undefined) res[id] = v;
+  }
+  const c = newCreature(world.creatureStore, {
+    x: sc.x, y: sc.y, z: sc.z,
+    vx: sc.vx, vy: sc.vy, vz: sc.vz,
+    r: sc.r, density: sc.density, energy: sc.energy,
+    senseRange: sc.senseRange, thrustAccel: sc.thrustAccel,
+    genome: new Uint8Array(sc.genome),
+    vm: newVMState(),
+    color: sc.color,
+    ingestCooldown: sc.ingestCooldown,
+    repairTicks: sc.repairTicks,
+    bornAt: sc.bornAt,
+    speciesKey: sc.speciesKey,
+    molecules: mol,
+    reserves: res,
+  });
+  c.lineageRoot = sc.lineageRoot;
+  c.organelleSynthMask = sc.organelleSynthMask;
+  c.vm.pc = sc.vmPc;
+  for (const v of sc.vmStack) c.vm.stack.push(v);
+  const s = c.store;
+  for (const e of sc.catalysts) s.catalystCols[e.i][c.idx] = e.v;
+  for (const e of sc.generics) s.genericChemCols[e.i][c.idx] = e.v;
+  return c;
+}
+
+// Mutates `world` in place: replaces particles + creatures + species
+// + scalar state from the snapshot. Returns true on success, false on
+// schema mismatch or malformed JSON (in which case `world` is left
+// untouched).
+export function applySavedWorld(world: World, json: string): boolean {
+  let saved: SavedWorld;
+  try {
+    saved = JSON.parse(json);
+  } catch {
+    return false;
+  }
+  if (!saved || saved.schema !== SAVE_SCHEMA) return false;
+  // Drop fresh world state and rebuild from snapshot.
+  for (const c of world.creatures) {
+    c.store.release(c.idx);
+  }
+  world.creatures.length = 0;
+  while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
+  world.species.clear();
+  world.phylogenyEvents.length = 0;
+  world.pheromone.fill(0);
+  world.t = saved.t;
+  world.nextLineageRoot = saved.nextLineageRoot;
+  world.extinctionCount = saved.extinctionCount;
+  world.founderTarget = saved.founderTarget;
+  world.dayPhase = saved.dayPhase;
+  world.disturbanceIntensity = saved.disturbanceIntensity;
+  world.disturbanceStartedAt = saved.disturbanceStartedAt;
+  world.disturbanceUntil = saved.disturbanceUntil;
+  world.nextDisturbanceAt = saved.nextDisturbanceAt;
+  world.anchorGenome = new Uint8Array(saved.anchorGenome);
+  world.liveLineageRoots = new Set(saved.liveLineageRoots);
+  world.obstacles = saved.obstacles;
+  let maxLane = -1;
+  for (const ss of saved.species) {
+    if (ss.lane > maxLane) maxLane = ss.lane;
+    world.species.set(ss.key, {
+      key: ss.key, color: ss.color,
+      firstSeen: ss.firstSeen, lastSeen: ss.lastSeen,
+      alive: ss.alive, lane: ss.lane, vmTicks: ss.vmTicks,
+      parents: new Set(ss.parents),
+      genome: new Uint8Array(ss.genome),
+      execCounts: new Uint32Array(MAX_GENOME_BYTES),
+    });
+  }
+  world.nextSpeciesLane = maxLane + 1;
+  for (const sp of saved.particles) {
+    pushParticle(world, {
+      x: sp.x, y: sp.y, z: sp.z,
+      vx: sp.vx, vy: sp.vy, vz: sp.vz,
+      r: sp.r, material: sp.material,
+      density: sp.density,
+      molecules: sp.molecules ? { ...emptyMolecules(), ...sp.molecules } : undefined,
+    });
+  }
+  for (const sc of saved.creatures) restoreCreature(world, sc);
+  return true;
 }

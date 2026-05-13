@@ -117,6 +117,10 @@ export const OP = {
 export const CATALYST_COUNT = 256;
 // Alias for code that reads more naturally with "reaction" wording.
 export const N_REACTIONS = CATALYST_COUNT;
+// Number of distinct chemical species the cell pool tracks (8 named
+// + 56 generic, defined in sim.ts). Exposed here because the VM mods
+// SENSE_CHEMICAL's operand by it -- part of the genome ABI.
+export const CHEMICAL_COUNT = 64;
 
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
@@ -235,6 +239,12 @@ export interface VMSensors {
   // neutrally buoyant.
   pressureX: number;
   pressureY: number;
+  // Internal chemical concentration, indexed by chemical id. SENSE_CHEMICAL
+  // <id> mod CHEMICAL_COUNT reads this. Slots 0..7 are the named chemicals
+  // (o2, co2, glucose, aa, fa, min, biomass, adp); 8..63 are abstract
+  // generics built by reactions. This is the cell's own pool, not the
+  // environment -- so feedback loops on internal state become evolvable.
+  chemConc: Float32Array;
 }
 
 export interface VMSelf {
@@ -426,10 +436,14 @@ export function runTick(
       case OP.SENSE_TEMP:     vmPush(stack, sensors.temp); break;
       case OP.SENSE_PHEROMONE: vmPush(stack, sensors.pheromone); break;
       case OP.SENSE_CHEMICAL: {
-        // operand mod 7: 0-5 = material density, 6 = pheromone
-        const idx = genome[state.pc % L]; state.pc++;
-        const id = idx % 7;
-        vmPush(stack, id < 6 ? sensors.density[id] : sensors.pheromone);
+        // operand mod CHEMICAL_COUNT. Returns the cell's internal
+        // concentration of that chemical id (slots 0..7 = named,
+        // 8..63 = abstract generics built by reactions). External
+        // particle density is sensed via SENSE_GRAD_X/Y instead;
+        // pheromone has its own dedicated op.
+        const id = genome[state.pc % L] % CHEMICAL_COUNT;
+        state.pc++;
+        vmPush(stack, sensors.chemConc[id]);
         break;
       }
       case OP.SENSE_EM: {
