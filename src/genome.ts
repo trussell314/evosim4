@@ -96,6 +96,18 @@ export const OP = {
   SENSE_PRESSURE_X: 0x71, // horizontal mechanical force on cell (wave + current + contact)
   SENSE_PRESSURE_Y: 0x72, // vertical mechanical force + static depth pressure (gravity * depth)
 
+  // Cell-recognition primitives. Returns information ABOUT a nearby
+  // cell so the genome can decide what to do with it. SENSE_KIN
+  // pushes the bit-overlap (0..8) between this cell's surface
+  // fingerprint (top 8 chems by mass) and the nearest cell's --
+  // higher = more chemically similar = more likely a relative.
+  // SENSE_NEIGHBOR_HASH pushes a single byte hash of the nearest
+  // cell's fingerprint, letting the genome recognize specific
+  // signatures and not just kinship-by-overlap. Both return 0 when
+  // no cell is in sense range.
+  SENSE_KIN:           0x74,
+  SENSE_NEIGHBOR_HASH: 0x75,
+
   // Generic catalyst synthesis. Operand picks which reaction the
   // catalyst boosts. Each catalyst k accumulates in its own pool;
   // the reaction's rate is multiplied by (1 + catalyst[k]/CAT_REF).
@@ -245,6 +257,12 @@ export interface VMSensors {
   // generics built by reactions. This is the cell's own pool, not the
   // environment -- so feedback loops on internal state become evolvable.
   chemConc: Float32Array;
+  // Surface-recognition values for the nearest in-range cell, sampled
+  // each tick. kinOverlap is 0..8 (bit overlap of top-8 chem
+  // fingerprints); neighborHash is a 0..255 byte hash of the
+  // neighbor's fingerprint. Both are 0 when nothing is in range.
+  kinOverlap: number;
+  neighborHash: number;
 }
 
 export interface VMSelf {
@@ -458,6 +476,8 @@ export function runTick(
       }
       case OP.SENSE_PRESSURE_X: vmPush(stack, sensors.pressureX); break;
       case OP.SENSE_PRESSURE_Y: vmPush(stack, sensors.pressureY); break;
+      case OP.SENSE_KIN:           vmPush(stack, sensors.kinOverlap); break;
+      case OP.SENSE_NEIGHBOR_HASH: vmPush(stack, sensors.neighborHash); break;
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
       case OP.REPAIR:         out.repair++; break;
@@ -1033,6 +1053,8 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_EM]:       1.5,
   [OP.SENSE_PRESSURE_X]: 1.5,
   [OP.SENSE_PRESSURE_Y]: 1.5,
+  [OP.SENSE_KIN]:           1.5,
+  [OP.SENSE_NEIGHBOR_HASH]: 1,
   [OP.SYNTH_CAT]:        3, // mandatory in viableGenome -- seed it hard so founders pass
 };
 const SEED_OP_POOL: number[] = (() => {

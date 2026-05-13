@@ -125,6 +125,7 @@ const SAVE_INTERVAL_SEC = 60;
 
 let lastSaveAt = world.t;
 function maybeAutosave(): void {
+  if (resetting) return;
   if (world.t - lastSaveAt < SAVE_INTERVAL_SEC) return;
   lastSaveAt = world.t;
   try {
@@ -135,11 +136,18 @@ function maybeAutosave(): void {
   }
 }
 function forceSave(): void {
+  // pagehide / visibilitychange both fire during a reset reload --
+  // without this guard we'd write the soon-to-be-discarded world
+  // right back to localStorage, defeating the reset.
+  if (resetting) return;
   try {
     localStorage.setItem(SAVE_KEY, serializeWorld(world));
     lastSaveAt = world.t;
   } catch { /* quota / private mode -- ignore */ }
 }
+// Set in hardReset(), checked by every save path. Survives until
+// the page actually unloads.
+let resetting = false;
 // Reset uses a two-tap arm/fire pattern. confirm() turned out to be
 // silently suppressed in some iOS in-app webviews (Brave/Edge),
 // which made the button look broken. The first tap turns the button
@@ -147,6 +155,7 @@ function forceSave(): void {
 // 3s; the second tap inside that window actually clears the save
 // and reloads.
 function hardReset(): void {
+  resetting = true;
   try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
   location.reload();
 }

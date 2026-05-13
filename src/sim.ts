@@ -1424,7 +1424,6 @@ function installNamedReactions(out: Reaction[]): void {
 // overlapping fingerprints. Refreshed once per tick before VM /
 // reactions.
 const FP_SIZE = 8;
-const FP_MATCH_THRESHOLD = 4; // bits needed to count as "matching"
 const fpScratchIds = new Uint8Array(FP_SIZE);
 const fpScratchVals = new Float32Array(FP_SIZE);
 function popcount32(x: number): number {
@@ -3109,6 +3108,8 @@ const VM_SENSORS: VMSensors = {
   emBands: new Float32Array(3),
   pressureX: 0, pressureY: 0,
   chemConc: new Float32Array(CHEMICAL_COUNT),
+  kinOverlap: 0,
+  neighborHash: 0,
 };
 const VM_SELF: VMSelf = {
   energy: 0, vx: 0, vy: 0,
@@ -3302,17 +3303,14 @@ function updateCreatures(world: World, dt: number): void {
     // already bonded. Cap each cell at MAX_BONDS to keep the spring
     // pass cheap and bounded.
     if (VM_OUT.adhere && c.bonds.length < MAX_BONDS) {
-      // ADHERE now requires surface-chemistry recognition: only cells
-      // whose displayed top-FP_SIZE chemicals overlap >= threshold
-      // count as kin. Related lineages produce similar chemistry so
-      // this filter naturally rejects strangers; somatic drift /
-      // metabolic specialization can break recognition between
-      // distant relatives, which is biologically correct.
+      // No engine-side recognition gate: the genome decides via
+      // SENSE_KIN / SENSE_NEIGHBOR_HASH before issuing ADHERE. The
+      // engine just wires up whatever the cell asked for. Same
+      // pattern as ENGULF / PREDATE.
       let nearest: Creature | null = null;
       let bestSq = (c.r + 24) * (c.r + 24);
       forCreaturesNear(c.x, c.y, c.r + 24, (other) => {
         if (other === c || eaten.has(other) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
-        if (fingerprintOverlap(c, other) < FP_MATCH_THRESHOLD) return;
         const dx = other.x - c.x;
         const dy = other.y - c.y;
         const dsq = dx * dx + dy * dy;
@@ -3376,11 +3374,8 @@ function updateCreatures(world: World, dt: number): void {
           const dz = other.z - c.z;
           const minD = c.r + other.r;
           if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
-          // ENGULF gates on non-self recognition: refuse to take in a
-          // cell whose surface chemistry looks too much like our own,
-          // matching how phagocytes ignore body cells displaying
-          // self-markers. Kin survives, strangers go in the vacuole.
-          if (fingerprintOverlap(c, other) >= FP_MATCH_THRESHOLD) return;
+          // No engine-side recognition gate: the genome decides
+          // (SENSE_KIN / SENSE_NEIGHBOR_HASH) before issuing ENGULF.
           const otherMass = creatureTotalMass(other);
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
@@ -4025,6 +4020,8 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.creatureDy = 0;
   VM_SENSORS.creatureDist = range;
   VM_SENSORS.creatureMass = 0;
+  VM_SENSORS.kinOverlap = 0;
+  VM_SENSORS.neighborHash = 0;
   // Mechanical pressure on the cell. ax/ay are the per-tick force
   // components recorded by applyForces; pressureY also picks up a
   // static depth term so deep cells see a steady signal even when
@@ -4034,6 +4031,7 @@ function populateSensors(c: Creature, world: World): void {
   const depthBelowSurface = Math.max(0, c.y - world.surfaceY);
   VM_SENSORS.pressureY = c.store.ay[c.idx] + depthBelowSurface * PRESSURE_PER_DEPTH;
   let bestCreatureSq = rangeSq;
+  let nearestOther: Creature | null = null;
   forCreaturesNear(c.x, c.y, range, (other) => {
     if (other === c) return;
     const dx = other.x - c.x;
@@ -4045,8 +4043,21 @@ function populateSensors(c: Creature, world: World): void {
       VM_SENSORS.creatureDy = dy;
       VM_SENSORS.creatureDist = Math.sqrt(dsq);
       VM_SENSORS.creatureMass = creatureTotalMass(other);
+      nearestOther = other;
     }
   });
+  if (nearestOther !== null) {
+    const o = nearestOther as Creature;
+    VM_SENSORS.kinOverlap = fingerprintOverlap(c, o);
+    // Cheap byte hash of the neighbor's full fingerprint -- xor low
+    // and high words byte-by-byte so the genome can use it as a
+    // tribe / signature recognizer.
+    const lo = o.store.fpLo[o.idx];
+    const hi = o.store.fpHi[o.idx];
+    const xored = (lo ^ hi) >>> 0;
+    VM_SENSORS.neighborHash =
+      ((xored & 0xFF) ^ ((xored >>> 8) & 0xFF) ^ ((xored >>> 16) & 0xFF) ^ ((xored >>> 24) & 0xFF)) & 0xFF;
+  }
 }
 
 function creatureTotalMass(c: Creature): number {

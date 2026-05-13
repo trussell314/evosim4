@@ -42,6 +42,8 @@ function makeSensors(overrides: Partial<{
     pressureY: 0,
     emBands: new Float32Array(3),
     chemConc: new Float32Array(64),
+    kinOverlap: 0,
+    neighborHash: 0,
   };
 }
 
