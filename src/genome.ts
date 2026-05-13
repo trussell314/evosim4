@@ -696,6 +696,58 @@ export function computeThrustAccel(genome: Uint8Array): number {
   return THRUST_BASE + THRUST_PER_AMP * Math.sqrt(amps);
 }
 
+// Viability predicate. A genome is "viable enough to bother
+// spawning" if it has at least one metabolism op (food intake or
+// photosynthesis) and at least one reproduction op. Cells failing
+// either are dead-end lineages: a no-metabolism cell starves in
+// ~30s; a no-REPRODUCE cell can't perpetuate. Filtering them out at
+// spawn time saves us from watching long sterile lives.
+export function viableGenome(genome: Uint8Array): boolean {
+  let hasMetabolism = false;
+  let hasReproduce = false;
+  let i = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
+      hasMetabolism = true;
+    } else if (op === OP.REPRODUCE) {
+      hasReproduce = true;
+    }
+    if (hasMetabolism && hasReproduce) return true;
+    i += 1 + (OPERANDS[op] ?? 0);
+  }
+  return hasMetabolism && hasReproduce;
+}
+
+// Sample a random genome size in [1, 50] with a *gradual* bias toward
+// smaller. P(size=k) is proportional to (51 - k), so size 1 is only
+// ~9% more likely than size 5 (gradual at the low end) but ~50x more
+// likely than size 50 (strong bias against bloat). Triangular CDF.
+function randomGenomeSize(rng: () => number): number {
+  const u = rng();
+  // CDF of P(k) ∝ (51 - k) is (101k - k^2) / 2550. Inverse:
+  // k = (101 - sqrt(10201 - 10200*u)) / 2.
+  const k = Math.floor((101 - Math.sqrt(Math.max(0, 10201 - 10200 * u))) / 2) + 1;
+  return Math.max(1, Math.min(50, k));
+}
+
+// Generate a random viable genome. Size is sampled from the triangular
+// distribution above; each byte is drawn from the same OP/noop bias as
+// mutations (~2/3 chance of an executable op). The result is then
+// checked for viability (metabolism + reproduce); nonviable rolls are
+// rejected and re-rolled, with a hard cap so we can never spin
+// forever. After MAX_REROLLS, we fall back to makeDefaultGenome().
+const MAX_REROLLS = 64;
+export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Array {
+  for (let attempt = 0; attempt < MAX_REROLLS; attempt++) {
+    const size = randomGenomeSize(rng);
+    const bytes = new Uint8Array(size);
+    for (let i = 0; i < size; i++) bytes[i] = randMutByte(rng);
+    if (viableGenome(bytes)) return bytes;
+  }
+  return makeDefaultGenome();
+}
+
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_AMP,             // one sense amplifier -> 80px range

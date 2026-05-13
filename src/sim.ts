@@ -12,7 +12,8 @@ import {
   newVMState,
   newOutputs,
   runTick,
-  makeDefaultGenome,
+  makeRandomViableGenome,
+  viableGenome,
   mutateGenome,
   somaticMutateOnce,
   computeSenseRange,
@@ -1630,7 +1631,11 @@ function emptyReserves(): Record<MaterialId, number> {
 }
 
 function makeCreature(world: World, x: number, y: number, z: number): Creature {
-  const genome = makeDefaultGenome();
+  // Founders get a random viable genome instead of the hand-crafted
+  // default. Each reseed explores a different starting strategy
+  // (heterotroph / photoautotroph / predator / etc.) -- natural
+  // selection picks the survivors rather than the designer.
+  const genome = makeRandomViableGenome();
   const c = newCreature(world.creatureStore, {
     x, y, z,
     r: MIN_CREATURE_R,
@@ -2965,6 +2970,12 @@ function tryReproduce(parent: Creature, world: World): void {
     parentGenome = crossoverGenomes(parent.genome, partner.genome);
   }
   const childGenome = mutateGenome(parentGenome);
+  // Stillbirth filter: a mutation that knocks out every metabolism op
+  // or knocks out REPRODUCE produces a sterile / starving child. Skip
+  // the fission entirely -- parent keeps its mass, no cell is spawned,
+  // saves us watching a doomed lineage. The REPRODUCE ATP fee above
+  // is still spent because the attempt itself happened.
+  if (!viableGenome(childGenome)) return;
   // Genome cost is paid in building-block molecules (aa / fa / min / bio).
   // Genome-controlled split ratio: f = parent's share of mass after
   // fission, 1-f = child's share. Symmetric (0.5) by default; the genome
