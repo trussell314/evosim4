@@ -1005,6 +1005,12 @@ const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
 // at population scale.
 const NEWBORN_YOLK_GLUCOSE = 15;
 const NEWBORN_YOLK_ATP = 8;
+// Starter ribosome endowment for newborns. With the strict ribosome
+// model (zero ribosomes -> zero biosynth), a child that inherited
+// only a fractional ribosome from a small parent could stall before
+// it ever gets going. A small free bump guarantees biosynth runs
+// from tick 1.
+const NEWBORN_YOLK_RIBO = 2;
 // Multiplier on (parent.r + child.r) for birth offset. >1 places the
 // child outside the parent's recently-eaten food zone so it can find
 // a food gradient. Was 1.1 (child inside parent's foraging range).
@@ -1127,13 +1133,16 @@ const FA_ATP_COST = 6;
 const RIBO_ATP_COST = 10;
 
 // Ribosome multiplier on biosynthesis rate. A cell with `r` ribosomes
-// runs each SYNTH_* reaction at (1 + r / RIBO_REF) times the base
-// VMAX. RIBO_REF = 5 means 5 ribosomes doubles the rate. Pays for
-// itself within a few seconds at full saturation if invested in
-// early, but expensive newborns wait until they have spare ATP.
+// runs each SYNTH_* reaction at (r / RIBO_REF) times the base VMAX.
+// **Ribosomes are mandatory** -- zero ribosomes means zero biosynth,
+// matching real biology (ribosomes are *the* protein-synthesis
+// machinery, not an accelerator on something else). A lineage without
+// SYNTH_RIBO can't grow new structure and starves quickly; the
+// viability filter rejects founders / mutated children that lack
+// SYNTH_RIBO so this path doesn't pollute the world.
 const RIBO_REF = 5;
 function riboMult(c: Creature): number {
-  return 1 + c.molecules.ribosome / RIBO_REF;
+  return c.molecules.ribosome / RIBO_REF;
 }
 
 // Maintenance: structural molecules turn over even when the cell isn't
@@ -1750,10 +1759,13 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     // Starter cell ships with a working metabolism: enough ATP to live, a
     // matched ADP pool, some glucose and O2 to run respiration, a little
     // amino-acid / minerals / fatty-acid for biosynthesis and movement,
-    // and biomass to give it physical body.
+    // and biomass to give it physical body. Plus a few ribosomes so it
+    // can actually run biosynthesis from tick 1 (with the strict
+    // ribosome model, zero ribosomes means zero biosynth -- founders
+    // would die before they had a chance to bootstrap).
     molecules: {
       adp: 50, glucose: 20, fattyAcid: 15, aminoAcid: 15,
-      o2: 15, minerals: 15, biomass: 30,
+      o2: 15, minerals: 15, biomass: 30, ribosome: 3,
     },
     // Seed reserves across all materials so the cell can pay the per-byte
     // fission cost (genomeMaterialCost is spread across all 6 materials)
@@ -3267,6 +3279,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // but this models maternal investment that isn't tracked elsewhere
   // in our chemistry.
   childMolecules.glucose += NEWBORN_YOLK_GLUCOSE;
+  childMolecules.ribosome += NEWBORN_YOLK_RIBO;
   energyGift += NEWBORN_YOLK_ATP;
 
   updateCreatureRadius(parent);

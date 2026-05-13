@@ -783,15 +783,18 @@ export function genomeSynthMask(genome: Uint8Array): number {
 export function viableGenome(genome: Uint8Array): boolean {
   let hasMetabolism = false;
   let hasReproduce = false;
+  let hasRibo = false;
   walkGenome(genome, (op) => {
     if (op === OP.INGEST || op === OP.PREDATE || op === OP.ENGULF || op === OP.SYNTH_CHL) {
       hasMetabolism = true;
     } else if (op === OP.REPRODUCE) {
       hasReproduce = true;
+    } else if (op === OP.SYNTH_RIBO) {
+      hasRibo = true;
     }
-    if (hasMetabolism && hasReproduce) return "break";
+    if (hasMetabolism && hasReproduce && hasRibo) return "break";
   });
-  return hasMetabolism && hasReproduce;
+  return hasMetabolism && hasReproduce && hasRibo;
 }
 
 // Sample a random genome size in [1, 50] with a *gradual* bias toward
@@ -846,6 +849,9 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SYNTH_AA,
     OP.SYNTH_FA,
     OP.SYNTH_BIO,
+    // Ribosomes are mandatory: without them, every other SYNTH_* runs
+    // at zero rate. Required by viableGenome.
+    OP.SYNTH_RIBO,
     // Keep the genome stable as the cell ages. Costs 0.5 ATP per
     // execution and refreshes a 30-tick window during which somatic
     // mutation is suppressed.
@@ -927,6 +933,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.INGEST]:        3,
   [OP.REPRODUCE]:     3,
   [OP.SYNTH_BIO]:     3,
+  [OP.SYNTH_RIBO]:    3, // mandatory for biosynthesis under strict ribosome model
   [OP.THRUST]:        2,
   [OP.SENSE_GRAD_X]:  2,
   [OP.SENSE_GRAD_Y]:  2,
