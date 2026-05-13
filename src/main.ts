@@ -2006,11 +2006,14 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   // Uses the canonical walker from genome.ts so this stays in lockstep
   // with the VM. Any future op added to genome.ts's OPERANDS table is
   // automatically picked up here.
-  walkGenome(genome, (op, _pc, operand) => {
+  let reproducePc = -1;
+  let firstHaltPc = -1;
+  walkGenome(genome, (op, pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
-      case OP.REPRODUCE: reproduce = true; break;
+      case OP.HALT: if (firstHaltPc < 0) firstHaltPc = pc; break;
+      case OP.REPRODUCE: reproduce = true; if (reproducePc < 0) reproducePc = pc; break;
       case OP.PREDATE: predate = true; break;
       case OP.ENGULF: engulf = true; break;
       case OP.EMIT: emit = true; break;
@@ -2066,12 +2069,19 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   if (synthRibo) synth.push("builds ribosomes (faster all-around growth)");
   if (synth.length > 0) parts.push(`Internally ${synth.join(", ")}.`);
   else parts.push("No biosynthesis ops — can't grow new structure.");
-  // Reproduction
-  if (reproduce) parts.push(gated
-    ? "Divides when conditions are met."
-    : "Fires REPRODUCE every tick (no gating) — burns ATP whether or not the build-block / viability checks pass, so most attempts fail silently."
-  );
-  else parts.push("Has no REPRODUCE op — sterile.");
+  // Reproduction. The PC isn't reset between ticks (it wraps mod L),
+  // and HALT short-circuits the current tick early -- so a REPRODUCE
+  // op buried after the first HALT only fires once per ~full-genome
+  // cycle, not per tick. The describer reflects this so users don't
+  // confuse "has REPRODUCE" with "constantly succeeds at fission".
+  if (reproduce) {
+    const haltBeforeReproduce = firstHaltPc >= 0 && firstHaltPc < reproducePc;
+    if (gated) parts.push("Divides when conditions are met.");
+    else if (haltBeforeReproduce) parts.push(
+      `REPRODUCE sits at PC ${reproducePc} after a HALT at ${firstHaltPc}, so it only fires once the PC walks the whole genome (~every L/budget ticks). Every attempt still pays ATP -- most fail on build-block shortage or stillbirth.`
+    );
+    else parts.push("REPRODUCE has no JZ-style gating -- fires whenever the PC visits it, paying ATP each time whether build-blocks suffice or not.");
+  } else parts.push("Has no REPRODUCE op — sterile.");
   // Extras
   const extras: string[] = [];
   if (repair) extras.push("repairs DNA");
