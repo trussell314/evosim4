@@ -1538,8 +1538,16 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   let i = 0;
   while (i < genome.length) {
     const op = genome[i];
-    const operandLen = (op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ
-      || op === OP.INGEST || op === OP.EXCRETE || op === OP.SELF_RESERVE) ? 1 : 0;
+    // Operand list must match the canonical OPERANDS table in
+    // genome.ts -- otherwise the walker drifts out of alignment with
+    // the VM and starts mis-attributing operand bytes as standalone
+    // ops, inflating sensor lists / hallucinating actions, etc.
+    const operandLen = (
+      op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ ||
+      op === OP.SENSE_GRAD_X || op === OP.SENSE_GRAD_Y || op === OP.SENSE_DENSITY ||
+      op === OP.SELF_RESERVE || op === OP.EXCRETE || op === OP.INGEST ||
+      op === OP.LOAD || op === OP.STORE
+    ) ? 1 : 0;
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
@@ -1580,7 +1588,8 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   else if (ingest.size > 0) {
     const list = Array.from(ingest).map(mat).join(" + ");
     parts.push(`Eats ${list}` + (thrust ? " — actively swims toward it." : "; doesn't pursue."));
-  } else if (thrust) parts.push("Swims but doesn't eat anything.");
+  } else if (synthChl) parts.push("Photoautotroph: fixes CO2 via chlorophyll, no ingestion.");
+  else if (thrust) parts.push("Swims but doesn't eat anything.");
   else parts.push("Drifts passively; no food intake.");
   // Synthesis
   const synth: string[] = [];
