@@ -435,17 +435,19 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   it("thrust energy cost scales with mass", () => {
     function run(rockMass: number): number {
       const w = quietWorld();
-      const c = makeCreature({ x: 100, y: 300, energy: 100 });
+      // Use a thrust-only genome so the drain measures thrust cost
+      // directly. The old version leaned on REPRODUCE's mass-scaled
+      // attempt fee, but post-fission-gate-removal the first attempt
+      // succeeds and parent.division blocks further attempts -- only
+      // one fee per run, which no longer separates big from small.
+      const c = makeCreature({
+        x: 100, y: 300, energy: 100,
+        genome: new Uint8Array([OP.PUSH8, 80, OP.THRUST, OP.HALT]),
+      });
       c.reserves.organic = 0;
       c.reserves.rock = rockMass;
       w.creatures.push(c);
-      pushParticle(w, { x: 600, y: 300, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
       const e0 = c.energy;
-      // Three ticks so the VM completes a full default-genome pass
-      // and REPRODUCE fires (its mass-scaled ATP attempt fee is what
-      // makes this test's drainBig dominate drainSmall). The default
-      // genome is 18 ops post-REPAIR; with vmInstrBudget=8 the
-      // REPRODUCE op lands on tick 3.
       step(w, 0.1);
       step(w, 0.1);
       step(w, 0.1);
@@ -453,7 +455,10 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     }
     const drainSmall = run(0);
     const drainBig = run(5000);
-    expect(drainBig).toBeGreaterThan(drainSmall * 5);
+    // Thrust cost scales as cube root of mass (~Stokes drag), so a
+    // 26x mass ratio (200 -> 5200) yields ~3x drain, not 26x. The
+    // old 5x threshold leaned on REPRODUCE's linear mass-fee.
+    expect(drainBig).toBeGreaterThan(drainSmall * 2);
   });
 });
 

@@ -709,25 +709,10 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "minerals", "biomass", "waste", "ribosome",
 ];
 
-// Building-block molecules: the substrates a cell actually consumes to
-// synthesize a copy of itself. Genome bytes are charged per-byte against
-// one of these four; bytes % 4 picks which.
-const BUILD_KEYS: ReadonlyArray<keyof Molecules> = [
-  "aminoAcid", "fattyAcid", "minerals", "biomass",
-];
-
-export function genomeMoleculeCost(genome: Uint8Array, massPerByte: number): Record<keyof Molecules, number> {
-  const cost = {
-    adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
-    chlorophyll: 0, enzyme: 0, o2: 0, co2: 0,
-    minerals: 0, biomass: 0, waste: 0, ribosome: 0,
-  };
-  for (let i = 0; i < genome.length; i++) {
-    const k = BUILD_KEYS[genome[i] % BUILD_KEYS.length];
-    cost[k] += massPerByte;
-  }
-  return cost;
-}
+// Per-byte genome cost (BUILD_KEYS, genomeMoleculeCost,
+// MASS_PER_GENOME_BYTE) retired with the build-block sufficiency gate
+// in tryReproduce. Fission now splits whatever the parent has; if
+// the daughter can't survive she autolyzes via the normal death pass.
 
 export function emptyMolecules(): Molecules {
   return {
@@ -942,7 +927,6 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const MASS_PER_GENOME_BYTE = 0.1;
 const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
@@ -3689,27 +3673,18 @@ function tryReproduce(parent: Creature, world: World): void {
     parentGenome = crossoverGenomes(parent.genome, partner.genome);
   }
   const childGenome = mutateGenome(parentGenome);
-  // Stillbirth filter: a mutation that knocks out every metabolism op
-  // or knocks out REPRODUCE produces a sterile / starving child. Skip
-  // the fission entirely -- parent keeps its mass, no cell is spawned,
-  // saves us watching a doomed lineage. The REPRODUCE ATP fee above
-  // is still spent because the attempt itself happened.
-  if (!viableGenome(childGenome)) return;
-  // Genome cost is paid in building-block molecules (aa / fa / min / bio).
-  // Genome-controlled split ratio: f = parent's share of mass after
-  // fission, 1-f = child's share. Symmetric (0.5) by default; the genome
-  // can push a different value before REPRODUCE to evolve r-strategist
-  // (small frequent daughters, f -> 0.9) or K-strategist (rare big
-  // splits, f -> 0.5) styles. Both daughters need a viable copy, so we
-  // require the smaller side has at least the genome cost in each
-  // build-block.
+  // No engine-side stillbirth filter. If the mutation knocks out a
+  // required op, that's the cell's problem -- the resulting daughter
+  // will autolyze through the normal death pass (which conserves
+  // mass back to particles). "Started mitosis, no undo button" was
+  // the user's explicit design call.
   const parentShare = VM_OUT.reproduceFraction;
   const childShare = 1 - parentShare;
-  const minShare = Math.min(parentShare, childShare);
-  const cost = genomeMoleculeCost(childGenome, MASS_PER_GENOME_BYTE);
-  for (const k of BUILD_KEYS) {
-    if (parent.molecules[k] * minShare < cost[k]) return;
-  }
+  // Build-block sufficiency check is also gone -- the parent commits
+  // whatever proportional share its current pool gives the child,
+  // and if either daughter ends up below MIN_VIABLE_BIOMASS the
+  // standard autolyze handles cleanup with mass returned to the
+  // environment. Bad timing has real consequences now.
   const childMolecules = emptyMolecules();
   const childReserves = emptyReserves();
   for (const mk of MOLECULE_IDS) {
@@ -3900,15 +3875,11 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   const child = c.division.child;
   const ang = c.division.axis;
   c.division = null;
-  // Stillbirth check: the child must clear the autolyze floor at commit
-  // time. Otherwise we'd record a birth in the species table and
-  // immediately autolyze the cell, producing phantom +1/-1 churn.
-  // Release the child's store slot since nothing else will -- the
-  // child was never pushed into world.creatures.
-  if (child.molecules.biomass < MIN_VIABLE_BIOMASS) {
-    child.store.release(child.idx);
-    return;
-  }
+  // No commit-time stillbirth abort either. A daughter that opens
+  // below MIN_VIABLE_BIOMASS gets pushed to world.creatures anyway
+  // and is caught by the normal autolyze pass on the next tick,
+  // which releases its mass as particles. Brief +1/-1 churn in the
+  // species table is the cost of dumb fission timing.
   // Drop the daughter at the current separation point. Recomputing from
   // the parent's live position keeps the visual in sync even if the
   // parent drifted during the second-long animation. Matches the
