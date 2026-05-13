@@ -106,6 +106,12 @@ export class ParticleStore {
   density = new Float32Array(0);   // 0 -> use MATERIALS[material].density
   material = new Uint8Array(0);    // index into MATERIAL_IDS
   quietTicks = new Int32Array(0);
+  // Particle age in sim-seconds. Used by the decay pass: old particles
+  // gradually lose mass (radius shrinks) and disappear once below a
+  // minimum size. Models decomposition by unmodeled microbiota and
+  // prevents corpse-spillage from autolysis from accumulating
+  // indefinitely.
+  age = new Float32Array(0);
   molecules: (Molecules | null)[] = [];
   constructor(initialCap = 256) { this.grow(initialCap); }
   grow(newCap: number): void {
@@ -121,6 +127,7 @@ export class ParticleStore {
     const nd = new Float32Array(newCap); nd.set(old.density); this.density = nd;
     const nm = new Uint8Array(newCap); nm.set(old.material); this.material = nm;
     const nq = new Int32Array(newCap); nq.set(old.quietTicks); this.quietTicks = nq;
+    const na = new Float32Array(newCap); na.set(old.age); this.age = na;
     while (this.molecules.length < newCap) this.molecules.push(null);
     this.cap = newCap;
   }
@@ -146,6 +153,7 @@ export class ParticleStore {
       this.density[i] = this.density[last];
       this.material[i] = this.material[last];
       this.quietTicks[i] = this.quietTicks[last];
+      this.age[i] = this.age[last];
       this.molecules[i] = this.molecules[last];
     }
     this.molecules[last] = null;
@@ -218,6 +226,7 @@ export function pushParticle(
   store.density[i] = opts.density ?? 0;
   store.material[i] = MATERIAL_INDEX[opts.material];
   store.quietTicks[i] = opts.quietTicks ?? 0;
+  store.age[i] = 0;
   store.molecules[i] = opts.molecules ?? null;
   const h = new Particle(store, i);
   world.particles.push(h);
@@ -2292,6 +2301,8 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
+    decayParticles(world, dt);
+    n = performance.now(); p.replenish += n - m; m = n;
     pruneSpecies(world);
     n = performance.now(); p.prune += n - m;
     p.ticks++;
@@ -2307,6 +2318,7 @@ export function step(world: World, dt: number): void {
     applyWalls(world);
     aerate(world, dt);
     replenishParticles(world, dt);
+    decayParticles(world, dt);
     pruneSpecies(world);
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
@@ -2349,6 +2361,29 @@ export function step(world: World, dt: number): void {
         f.color = genomeColor(f.genome, world.anchorGenome);
       }
     }
+  }
+}
+
+// Particle aging + decay. Every particle accumulates age every tick.
+// After PARTICLE_DECAY_START_AGE seconds of grace, its radius shrinks
+// at PARTICLE_DECAY_HALF_LIFE (exponential half-life). When it falls
+// below PARTICLE_MIN_R the particle is removed. Models decomposition
+// by unmodeled microbiota -- corpse mass that no cell ate has to go
+// somewhere or particle counts creep monotonically up.
+const PARTICLE_DECAY_START_AGE = 300; // sim-seconds before decay begins
+const PARTICLE_DECAY_HALF_LIFE = 60;  // sim-seconds; r halves every 60s once decaying
+const PARTICLE_MIN_R = 0.4;
+function decayParticles(world: World, dt: number): void {
+  const ps = world.particleStore;
+  const age = ps.age;
+  const r = ps.r;
+  // Same exponential factor for every decaying particle this tick.
+  const decayFactor = Math.pow(0.5, dt / PARTICLE_DECAY_HALF_LIFE);
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    age[i] += dt;
+    if (age[i] <= PARTICLE_DECAY_START_AGE) continue;
+    r[i] *= decayFactor;
+    if (r[i] < PARTICLE_MIN_R) removeParticleAt(world, i);
   }
 }
 
