@@ -395,9 +395,9 @@ function flushTooltip(): void {
   const age = formatAge(Math.max(0, world.t - c.bornAt));
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
+    `<b>${c.speciesKey.slice(0, 6)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
-    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
-    `genome=${c.genome.length}b`;
+    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}`;
   tooltip.style.display = "block";
   // Position with edge-flipping: default is below-right of cursor,
   // but if that would push the box off the visible viewport (canvas
