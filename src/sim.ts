@@ -1542,7 +1542,7 @@ export function createWorld(width: number, height: number): World {
     phylogenyEvents: [],
     nextSpeciesLane: 0,
     anchorGenome: new Uint8Array(0),
-    brownianAmp: 12,
+    brownianAmp: 18,
     dayPhase: 0.2, // start a bit before noon so first day shows
     dayPeriod: 90,
     disturbanceIntensity: 0,
@@ -2344,11 +2344,19 @@ function applyForces(world: World, dt: number): void {
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
-    const surface = surfAmp * Math.cos(kS * xi) * Math.sin(wS * t) * Math.exp(-depth / surfDecay);
-    const swell   = swellAmp * Math.cos(kL * xi) * Math.sin(wL * t) * Math.exp(-depth / swellDecay);
+    // Travelling waves -- horizontal ax uses sin(kx - wt), matching the
+    // visible surface in surfaceYAt(). The previous cos(kx)*sin(wt) form
+    // was a *standing* wave with fixed nodes/antinodes; particles got
+    // pushed toward stable equilibria and clustered along ~3 vertical
+    // lines in portrait orientation. Splash (vertical near surface) is
+    // 90 degrees out of phase, consistent with deep-water orbital motion.
+    const surfPhase = kS * xi - wS * t;
+    const swellPhase = kL * xi - wL * t;
+    const surface = surfAmp * Math.sin(surfPhase) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * Math.sin(swellPhase) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
     const splash = depth < SPLASH_DEPTH
-      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * xi) * Math.cos(wS * t) * Math.exp(-depth / SPLASH_DEPTH)
+      ? surfAmp * SPLASH_GAIN * Math.cos(surfPhase) * Math.exp(-depth / SPLASH_DEPTH)
       : 0;
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
@@ -2384,11 +2392,14 @@ function applyForces(world: World, dt: number): void {
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
-    const surface = surfAmp * Math.cos(kS * xi) * Math.sin(wS * t) * Math.exp(-depth / surfDecay);
-    const swell   = swellAmp * Math.cos(kL * xi) * Math.sin(wL * t) * Math.exp(-depth / swellDecay);
+    // Travelling waves -- see particle loop above for rationale.
+    const surfPhase = kS * xi - wS * t;
+    const swellPhase = kL * xi - wL * t;
+    const surface = surfAmp * Math.sin(surfPhase) * Math.exp(-depth / surfDecay);
+    const swell   = swellAmp * Math.sin(swellPhase) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
     const splash = depth < SPLASH_DEPTH
-      ? -surfAmp * SPLASH_GAIN * Math.sin(kS * xi) * Math.cos(wS * t) * Math.exp(-depth / SPLASH_DEPTH)
+      ? surfAmp * SPLASH_GAIN * Math.cos(surfPhase) * Math.exp(-depth / SPLASH_DEPTH)
       : 0;
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
