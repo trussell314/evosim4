@@ -9,7 +9,15 @@ const ctx = canvas.getContext("2d")!;
 
 // HUD: a wrapper holding a minimize button and the inspector pre. Click the
 // button to collapse to just the button; click again to expand.
-const HUD_FONT = "font:9px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;";
+// Split the font into individual properties rather than the `font:`
+// shorthand. The shorthand resets font-stretch / font-variant-* in some
+// engines, and a few browsers were quietly bumping <pre> back to their
+// UA default size when only the shorthand was present. Explicit
+// properties + a top-level reset on the wrapping HUD makes the size
+// stick everywhere, every time.
+const HUD_FONT =
+  "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  "font-size:9px;line-height:1.3;font-weight:normal;font-style:normal;";
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
