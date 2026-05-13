@@ -742,7 +742,11 @@ export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Ar
   for (let attempt = 0; attempt < MAX_REROLLS; attempt++) {
     const size = randomGenomeSize(rng);
     const bytes = new Uint8Array(size);
-    for (let i = 0; i < size; i++) bytes[i] = randMutByte(rng);
+    // randSeedByte uses the SEED_OP_POOL weighted toward "core useful"
+    // ops -- INGEST / REPRODUCE / SYNTH_BIO / THRUST / SENSE_GRAD --
+    // so a random founder lands more often on something that can
+    // actually sustain itself, without forbidding anything.
+    for (let i = 0; i < size; i++) bytes[i] = randSeedByte(rng);
     if (viableGenome(bytes)) return bytes;
   }
   return makeDefaultGenome();
@@ -813,6 +817,46 @@ const NOOP_BYTES: number[] = (() => {
 const OP_BYTE_BIAS = 2 / 3;
 function randMutByte(rng: () => number): number {
   if (rng() < OP_BYTE_BIAS) return OP_BYTES[Math.floor(rng() * OP_BYTES.length)];
+  return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
+}
+
+// Seed-time byte distribution: same OP/noop bias as mutations, but
+// the OP pool is weighted toward ops a thriving cell typically wants.
+// A random founder is more likely to roll INGEST + REPRODUCE +
+// SYNTH_BIO + a food sensor than the truly uniform distribution
+// would produce, so we waste less time on viable-but-doomed
+// "barely passes the filter" founders. Other ops still appear at
+// their base weight; nothing is forbidden.
+const SEED_OP_WEIGHT: Record<number, number> = {
+  [OP.INGEST]:        3,
+  [OP.REPRODUCE]:     3,
+  [OP.SYNTH_BIO]:     3,
+  [OP.THRUST]:        2,
+  [OP.SENSE_GRAD_X]:  2,
+  [OP.SENSE_GRAD_Y]:  2,
+  [OP.REPAIR]:        2,
+  [OP.SYNTH_AA]:      2,
+  [OP.SYNTH_FA]:      2,
+  [OP.SELF_BIOMASS]:  1.5,
+  [OP.SELF_ENERGY]:   1.5,
+  [OP.GT]:            1.5,
+  [OP.JZ]:            1.5,
+  [OP.PUSH8]:         1.5,
+};
+const SEED_OP_POOL: number[] = (() => {
+  const pool: number[] = [];
+  for (const op of OP_BYTES) {
+    const w = SEED_OP_WEIGHT[op] ?? 1;
+    // Integer weight: emit each op `Math.round(w * 2)` times so 1.5
+    // gives 3 copies vs base 2, etc. Resolution good enough; the bias
+    // is supposed to be "light" anyway.
+    const n = Math.max(1, Math.round(w * 2));
+    for (let i = 0; i < n; i++) pool.push(op);
+  }
+  return pool;
+})();
+function randSeedByte(rng: () => number): number {
+  if (rng() < OP_BYTE_BIAS) return SEED_OP_POOL[Math.floor(rng() * SEED_OP_POOL.length)];
   return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
 }
 
