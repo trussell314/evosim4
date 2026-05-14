@@ -2563,12 +2563,13 @@ function spawnFounder(world: World): Creature {
 // cost for fewer big sand misses -- not worth it at current scale.
 const SAND_BIG_R_MIN = 5;
 const SAND_BIG_R_MAX = 8;
-// Target: roughly 10% bottom-row visual coverage. With pebble diameter
-// ~10-16px and world width 800px, that's ~20-30 pebbles spread across
-// the floor (some stacked). Sand is ~23% of all particle spawns, the
-// steady-state target population is ~2300, so we want ~0.011 of all
-// spawns to be big sand -> 0.011/0.23 ≈ 0.05 of sand spawns.
-const SAND_BIG_FRACTION = 0.05;
+// Target: a visibly continuous sandy floor (not just a sparse dotted
+// line). With pebble diameter ~10-16px and world width 800px, that's
+// ~100-130 pebbles spread across the bottom -- enough to read as a
+// proper sediment surface with light stacking. Sand is ~23% of all
+// particle spawns, steady-state target population is ~2300, so we
+// need ~0.04-0.05 of all spawns to be big sand -> ~0.20 of sand spawns.
+const SAND_BIG_FRACTION = 0.20;
 
 function spawnRadius(mat: MaterialId): number {
   if (mat === "sand" && Math.random() < SAND_BIG_FRACTION) {
