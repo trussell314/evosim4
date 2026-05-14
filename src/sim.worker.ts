@@ -43,6 +43,23 @@ let world: World | null = null;
 let running = false;
 let turbo = false;
 let pendingSimError: { message: string; at: number } | null = null;
+
+// Pool / step profiling. Tick-level accumulators flushed every
+// PROFILE_LOG_MS as an averaged line so we can see where the per-tick
+// budget actually goes. Costs ~6 performance.now() calls per tick;
+// cheap enough to leave on while tuning. Disable by setting
+// PROFILE_LOG_MS to 0.
+const PROFILE_LOG_MS = 3000;
+let profForceDispatchMs = 0;
+let profForceBarrierMs = 0;
+let profCollisionDispatchMs = 0;
+let profCollisionBarrierMs = 0;
+let profStepMs = 0;
+let profSnapshotMs = 0;
+let profTickMs = 0;
+let profTicks = 0;
+let profPoolTicks = 0;
+let profLastLogAt = 0;
 let lastSnapshotPostAt = 0;
 let lastSaveSimT = 0;
 let advancedSinceSnapshot = 0;
@@ -148,10 +165,11 @@ function tick(): void {
     schedule();
     return;
   }
+  const tickEntry = performance.now();
   // Per-scheduling-slot budget. In normal mode we cap at a few ms so
   // incoming messages stay responsive; in turbo we go longer per slot
   // and lean on the snapshot-post rate to keep main responsive.
-  const sliceStart = performance.now();
+  const sliceStart = tickEntry;
   const sliceBudgetMs = turbo ? 12 : 4;
   while (performance.now() - sliceStart < sliceBudgetMs) {
     const t0 = performance.now();
@@ -169,10 +187,53 @@ function tick(): void {
     const elapsed = performance.now() - t0;
     advancedSinceSnapshot += FIXED_DT;
     simMsSinceSnapshot += elapsed;
+    profStepMs += elapsed;
+    profTicks += 1;
+    if (pool) profPoolTicks += 1;
   }
+  const tBeforeSnap = performance.now();
   maybePostSnapshot();
+  profSnapshotMs += performance.now() - tBeforeSnap;
   maybePostSave();
+  profTickMs += performance.now() - tickEntry;
+  maybeLogProfile();
   schedule();
+}
+
+function maybeLogProfile(): void {
+  if (PROFILE_LOG_MS <= 0 || profTicks === 0) return;
+  const now = performance.now();
+  if (profLastLogAt === 0) { profLastLogAt = now; return; }
+  if (now - profLastLogAt < PROFILE_LOG_MS) return;
+  const n = profTicks;
+  const np = world ? world.particles.length : 0;
+  const pop = world ? world.creatures.length : 0;
+  // Sim worker creature-loop time is roughly step minus the dispatch
+  // and barrier time, since those are the only synchronous "wait for
+  // workers" sub-paths inside step().
+  const creature = profStepMs - profForceDispatchMs - profForceBarrierMs
+    - profCollisionDispatchMs - profCollisionBarrierMs;
+  const fmt = (v: number) => (v / n).toFixed(2);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[prof] ticks=${n} pool=${profPoolTicks}/${n} np=${np} pop=${pop} | `
+    + `step=${fmt(profStepMs)}ms `
+    + `force[disp=${fmt(profForceDispatchMs)} bar=${fmt(profForceBarrierMs)}] `
+    + `coll[disp=${fmt(profCollisionDispatchMs)} bar=${fmt(profCollisionBarrierMs)}] `
+    + `creature=${fmt(creature)} `
+    + `snap=${fmt(profSnapshotMs)} `
+    + `tick=${fmt(profTickMs)}`,
+  );
+  profForceDispatchMs = 0;
+  profForceBarrierMs = 0;
+  profCollisionDispatchMs = 0;
+  profCollisionBarrierMs = 0;
+  profStepMs = 0;
+  profSnapshotMs = 0;
+  profTickMs = 0;
+  profTicks = 0;
+  profPoolTicks = 0;
+  profLastLogAt = now;
 }
 
 function maybePostSnapshot(): void {
@@ -344,6 +405,7 @@ function poolDiagSnapshot(): string {
 
 function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   if (!pool) return;
+  const tStart = performance.now();
   const { ctrl, params, nWorkers } = pool;
   // Pack params into the Float64 block in the layout particle.worker
   // expects (mirrors readParams there).
@@ -380,11 +442,16 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
-  if (!waitForBarrier(ctrl, nWorkers, "force")) return;
+  const tBarrier = performance.now();
+  profForceDispatchMs += tBarrier - tStart;
+  const ok = waitForBarrier(ctrl, nWorkers, "force");
+  profForceBarrierMs += performance.now() - tBarrier;
+  if (!ok) return;
 }
 
 function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): void {
   if (!pool) return;
+  const tStart = performance.now();
   const { ctrl, nWorkers } = pool;
   Atomics.store(ctrl, CTRL_CMD, CMD_COLLISIONS);
   Atomics.store(ctrl, CTRL_C_COLS, cols);
@@ -397,7 +464,11 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
-  if (!waitForBarrier(ctrl, nWorkers, "collision")) return;
+  const tBarrier = performance.now();
+  profCollisionDispatchMs += tBarrier - tStart;
+  const ok = waitForBarrier(ctrl, nWorkers, "collision");
+  profCollisionBarrierMs += performance.now() - tBarrier;
+  if (!ok) return;
 }
 
 // Bounded barrier wait. Returns true on success, false if the deadline
