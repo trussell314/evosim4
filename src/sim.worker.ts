@@ -110,7 +110,7 @@ self.addEventListener("message", (e: MessageEvent) => {
       return;
     }
     case "init": {
-      world = createWorld(m.width, m.height);
+      world = createWorld(m.width, m.height, { delayedSpawn: true });
       // Enable in-engine sub-step profile by default so the [prof] log
       // can break down the "creature" bucket into pheromone / bonds /
       // forces / updateCreatures / particleColl / etc. The toggleProfile

@@ -346,6 +346,11 @@ export function pushParticle(
   store.density[i] = opts.density ?? 0;
   store.material[i] = MATERIAL_INDEX[opts.material];
   store.quietTicks[i] = opts.quietTicks ?? 0;
+  // Slot reuse (swap-pop) means COLLISION_ASLEEP may carry a stale 1
+  // from the previous occupant. Force-clear it so the freshly-pushed
+  // particle isn't treated as asleep until the next resolveCollisions
+  // pass classifies it for real.
+  COLLISION_ASLEEP[i] = 0;
   store.age[i] = 0;
   store.molecules[i] = opts.molecules ?? null;
   store.genericChem[i] = opts.genericChem ?? null;
@@ -2453,7 +2458,11 @@ function tempMult(T: number): number {
   return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
 }
 
-export function createWorld(width: number, height: number): World {
+export function createWorld(
+  width: number,
+  height: number,
+  opts?: { delayedSpawn?: boolean },
+): World {
   const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
   const world: World = {
     width, height,
@@ -2515,10 +2524,26 @@ export function createWorld(width: number, height: number): World {
   // id) so we get several parallel lineages to watch. Particles
   // trickle in via replenishParticles() afterward.
   //
-  // Founder spawning is held off until FOUNDER_SPAWN_DELAY_SEC of sim
-  // time has passed so the pebble bed forms, waves develop, and the
-  // water column populates before any life enters the world. The
-  // continuous top-up loop in step() gates on world.t as well.
+  // Production paths (sim.worker.ts main world init) pass
+  // { delayedSpawn: true } so the user-facing experience gets a
+  // warmup window: pebbles drop first, water column fills around
+  // WATER_FILL_DELAY_SEC, founders enter around
+  // FOUNDER_SPAWN_DELAY_SEC. Tests + direct callers use the default
+  // (no warmup) and get founders synchronously here so existing
+  // unit tests keep working.
+  if (!opts?.delayedSpawn) {
+    const initialFounders = 15 + Math.floor(Math.random() * 11); // 15-25
+    for (let i = 0; i < initialFounders; i++) {
+      const f = spawnFounder(world);
+      if (i === 0) {
+        world.anchorGenome = new Uint8Array(f.genome);
+        f.color = genomeColor(f.genome, world.anchorGenome);
+      }
+    }
+    // Skip ahead past the spawn-delay gates so replenish + aerate
+    // also work immediately for direct callers.
+    world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
+  }
   return world;
 }
 
@@ -3439,6 +3464,11 @@ function decayParticles(world: World, dt: number): void {
 }
 
 function replenishParticles(world: World, dt: number): void {
+  // particleSpawnRate <= 0 disables ALL spawning (used by tests that
+  // want a frozen world). founderTarget == 0 marks a test-style world
+  // that doesn't want the pebble sediment bed either.
+  if (world.particleSpawnRate <= 0) return;
+  const wantPebbles = world.founderTarget > 0;
   // Dedicated pebble path: maintain PEBBLE_TARGET large sand grains
   // for the sediment floor, independent of the normal per-material
   // replenish below. Cached count refreshed every N ticks to avoid
@@ -3448,7 +3478,7 @@ function replenishParticles(world: World, dt: number): void {
     pebbleCountCache = countPebbles(world);
     pebbleCountStaleTicks = 0;
   }
-  if (pebbleCountCache < PEBBLE_TARGET) {
+  if (wantPebbles && pebbleCountCache < PEBBLE_TARGET) {
     const pebbleExpected = PEBBLE_SPAWN_RATE * dt;
     let pebbleSpawn = Math.floor(pebbleExpected);
     if (Math.random() < pebbleExpected - pebbleSpawn) pebbleSpawn++;
@@ -3471,7 +3501,7 @@ function replenishParticles(world: World, dt: number): void {
   // on top of particleTarget so the biology mix isn't squeezed by
   // the sediment bed.
   if (world.t < WATER_FILL_DELAY_SEC) return;
-  const replenishCap = world.particleTarget + PEBBLE_TARGET;
+  const replenishCap = world.particleTarget + (wantPebbles ? PEBBLE_TARGET : 0);
   if (world.particles.length >= replenishCap) return;
   const expected = world.particleSpawnRate * dt;
   let toSpawn = Math.floor(expected);
@@ -3630,6 +3660,7 @@ export function applyParticleForcesRange(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array, PDENS: Float32Array, PMAT: Uint8Array,
+  ASLEEP: Uint8Array,
   matBase: Float32Array,
   from: number, to: number,
   p: ParticleForceParams,
@@ -3654,6 +3685,15 @@ export function applyParticleForcesRange(
   const colDepth = p.colDepth;
   const currentDrift = p.currentDrift;
   for (let i = from; i < to; i++) {
+    // Asleep particles (set in the previous tick's collision pass)
+    // are frozen: skip force application and zero out velocity so
+    // they don't accumulate gravity tick after tick. Wakes back up
+    // automatically when a collision sets velocity above
+    // SLEEP_SPEED_SQ and resolveCollisions flips ASLEEP back to 0.
+    if (ASLEEP[i]) {
+      PVX[i] = 0; PVY[i] = 0; PVZ[i] = 0;
+      continue;
+    }
     const xi = PX[i], yi = PY[i], ri = PR[i];
     let vxi = PVX[i], vyi = PVY[i], vzi = PVZ[i];
     const overrideD = PDENS[i];
@@ -3768,6 +3808,7 @@ function applyForces(world: World, dt: number): void {
     applyParticleForcesRange(
       ps.x, ps.y, ps.z, ps.vx, ps.vy, ps.vz,
       ps.r, ps.density, ps.material,
+      COLLISION_ASLEEP,
       MATERIAL_BASE_DENSITY,
       0, np,
       params,

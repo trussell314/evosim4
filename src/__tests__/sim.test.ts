@@ -51,7 +51,10 @@ function stepFullCycle(w: World, dt: number = 1 / 60): void {
 
 function quietWorld(): World {
   return {
-    width: 800, height: 600, depth: 24, t: 0,
+    // t starts past the warmup delays so tests using step()
+    // immediately exercise the post-delay code paths (founder
+    // respawn, water-column replenish, aeration).
+    width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), creatures: [], creatureStore: new CreatureStore(64),
     particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0,
     gravity: 0, drag: 0,

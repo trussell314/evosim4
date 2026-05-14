@@ -177,6 +177,7 @@ function loop(): void {
           pviews.PX, pviews.PY, pviews.PZ,
           pviews.PVX, pviews.PVY, pviews.PVZ,
           pviews.PR, pviews.PDENS, pviews.PMAT,
+          cviews!.asleep,
           matBase, from, to, params,
         );
       }
