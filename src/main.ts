@@ -1,5 +1,23 @@
 import "./style.css";
-import { createWorld, MATERIALS, MATERIAL_IDS_ORDERED, MOLECULE_IDS, step, surfaceYAt, surfaceActivity, temperatureAt, makeProfile, solarLight, serializeWorld, applySavedWorld, type Particle, type Creature, type Species } from "./sim";
+import {
+  createWorld,
+  MATERIALS,
+  MATERIAL_IDS_ORDERED,
+  MOLECULE_IDS,
+  step,
+  surfaceYAt,
+  surfaceActivity,
+  temperatureAt,
+  makeProfile,
+  solarLight,
+  serializeWorld,
+  applySavedWorld,
+  takeSnapshot,
+  type RenderSnapshot,
+  type ParticleSnapshot,
+  type CreatureSnapshot,
+  type SpeciesSnapshot,
+} from "./sim";
 import { disassemble, walkGenome, OP } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -123,11 +141,28 @@ const SAVE_INTERVAL_SEC = 60;
   }
 })();
 
-let lastSaveAt = world.t;
+// View of the simulation that all render/HUD code reads from. Refreshed
+// after each sim slice via refreshSnapshot(). Lives separately from the
+// live `world` so stage C3 can swap the sim into a worker without the
+// renderer noticing -- it just starts receiving snapshots via
+// postMessage instead of building them locally.
+let snapshot: RenderSnapshot = takeSnapshot(world);
+let snapshotSpeciesByKey: Map<string, SpeciesSnapshot> = new Map();
+let snapshotCreatureById: Map<number, CreatureSnapshot> = new Map();
+function refreshSnapshot(): void {
+  snapshot = takeSnapshot(world);
+  snapshotSpeciesByKey.clear();
+  for (const sp of snapshot.species) snapshotSpeciesByKey.set(sp.key, sp);
+  snapshotCreatureById.clear();
+  for (const c of snapshot.creatures) snapshotCreatureById.set(c.id, c);
+}
+refreshSnapshot();
+
+let lastSaveAt = snapshot.t;
 function maybeAutosave(): void {
   if (resetting) return;
-  if (world.t - lastSaveAt < SAVE_INTERVAL_SEC) return;
-  lastSaveAt = world.t;
+  if (snapshot.t - lastSaveAt < SAVE_INTERVAL_SEC) return;
+  lastSaveAt = snapshot.t;
   try {
     localStorage.setItem(SAVE_KEY, serializeWorld(world));
   } catch (err) {
@@ -142,7 +177,7 @@ function forceSave(): void {
   if (resetting) return;
   try {
     localStorage.setItem(SAVE_KEY, serializeWorld(world));
-    lastSaveAt = world.t;
+    lastSaveAt = snapshot.t;
   } catch { /* quota / private mode -- ignore */ }
 }
 // Set in hardReset(), checked by every save path. Survives until
@@ -202,16 +237,18 @@ let viewPanY = 0;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 12;
 
-// Track the selected cell by reference, not index. world.creatures
-// gets fully rebuilt each tick (death/engulf removes plus released
-// vacuole prey appends), so any cached numeric index goes stale
-// silently -- you'd click cell 5 and find yourself looking at a
-// totally different creature on the next tick.
-let selectedCell: Creature | null = null;
+// Track selection by stable creature id. Snapshot creatures are fresh
+// objects each tick so we can't hold the reference; the id is assigned
+// at newCreature time and never reused.
+let selectedCellId: number | null = null;
+function selectedCell(): CreatureSnapshot | null {
+  return selectedCellId != null ? snapshotCreatureById.get(selectedCellId) ?? null : null;
+}
 let activeDisasm = "";
 function refreshActiveDisasm(): void {
-  activeDisasm = selectedCell
-    ? formatDisasmColumns(disassemble(selectedCell.genome, MATERIAL_IDS_ORDERED), DISASM_COL_LINES)
+  const sel = selectedCell();
+  activeDisasm = sel
+    ? formatDisasmColumns(disassemble(sel.genome, MATERIAL_IDS_ORDERED), DISASM_COL_LINES)
     : "";
 }
 // Width budget for the disasm body. Higher = more columns. Tuned to
@@ -254,7 +291,7 @@ const PHYLO_WINDOW_SEC = 180;
 // Reused per-frame to avoid allocating fresh arrays/maps inside the
 // phylogeny render loop. With thousands of species after a long run,
 // per-frame Array.from() + Map() was costing meaningful GC pressure.
-const visibleSpecies: Species[] = [];
+const visibleSpecies: SpeciesSnapshot[] = [];
 const bioByKey = new Map<string, number>();
 
 // Genome-analysis console: right-side sidebar. Collapsible -- when
@@ -364,7 +401,7 @@ exportBtn.addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = url;
   // Filename includes sim time so consecutive exports don't overwrite.
-  a.download = `evosim4-save-t${Math.floor(world.t)}s.json`;
+  a.download = `evosim4-save-t${Math.floor(snapshot.t)}s.json`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -444,18 +481,20 @@ if (window.visualViewport) {
 }
 
 // Linear scan over creatures; bounded by MAX_CREATURES so cost is small.
+// Returns the stable creature id (or -1 if no cell is within reach).
 function findCellAt(x: number, y: number): number {
-  let best = -1;
+  let bestId = -1;
   let bestSq = Infinity;
-  for (let i = 0; i < world.creatures.length; i++) {
-    const c = world.creatures[i];
+  const cs = snapshot.creatures;
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
     const dx = c.x - x;
     const dy = c.y - y;
     const d = dx * dx + dy * dy;
     const reach = (c.r + 8) * (c.r + 8);
-    if (d < bestSq && d < reach) { bestSq = d; best = i; }
+    if (d < bestSq && d < reach) { bestSq = d; bestId = c.id; }
   }
-  return best;
+  return bestId;
 }
 // Canvas (CSS) pixel coords -> world coords, inverse of the view
 // transform set in resize(). Used by click + hover so cells under
@@ -482,15 +521,15 @@ canvas.addEventListener("click", (e) => {
   const w = canvasToWorld(cx, cy);
   const best = findCellAt(w.x, w.y);
   if (best >= 0) {
-    selectedCell = world.creatures[best];
+    selectedCellId = best;
     refreshActiveDisasm();
     // Tapping a cell also re-locks the follow-tooltip onto it; on
     // touch devices there's no mousemove to set the initial lock.
-    lockedCell = world.creatures[best];
+    lockedCellId = best;
   } else {
     // Click on empty water clears the tooltip lock so the user can
     // dismiss without waiting for the cell to die.
-    lockedCell = null;
+    lockedCellId = null;
   }
 });
 
@@ -513,7 +552,7 @@ let tooltipScheduled = false;
 // Hovering a different cell replaces the lock; moving the cursor over
 // empty water leaves the existing lock alone. Click an empty patch
 // to clear it manually.
-let lockedCell: Creature | null = null;
+let lockedCellId: number | null = null;
 function worldToClientX(wx: number): number {
   const rect = canvas.getBoundingClientRect();
   return wx * viewScale * viewZoom + viewOffsetX * viewZoom + viewPanX + rect.left;
@@ -524,25 +563,24 @@ function worldToClientY(wy: number): number {
 }
 function flushTooltip(): void {
   tooltipScheduled = false;
-  // Drop the lock if the cell died or was eaten -- its slot may be
-  // reused for a freshly-born creature, but the Creature reference
-  // itself isn't put back into world.creatures, so indexOf() is the
-  // reliable liveness check. (We DON'T re-scan for a cell under the
-  // cursor here -- that caused phantom switches when a different
-  // cell drifted under the parked cursor.)
-  if (lockedCell && world.creatures.indexOf(lockedCell) < 0) lockedCell = null;
-  const c = lockedCell;
+  // Drop the lock if the cell died or was eaten -- the snapshot is
+  // rebuilt each tick from live creatures, so an absent id is the
+  // liveness check. (We DON'T re-scan for a cell under the cursor
+  // here -- that caused phantom switches when a different cell
+  // drifted under the parked cursor.)
+  if (lockedCellId != null && !snapshotCreatureById.has(lockedCellId)) lockedCellId = null;
+  const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
   if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
   for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
-  const age = formatAge(Math.max(0, world.t - c.bornAt));
+  const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   // Surface engulfed + bonded counts so the user can tell a fat
   // single cell from a host carrying endosymbionts from an adhered
   // pair drifting close. Only render rows when nonzero to keep
   // the box small for typical free-swimmers.
   const engulfed = c.contents.length;
-  const bonded = c.bonds.length;
+  const bonded = c.bondsCount;
   const assocLine =
     (engulfed > 0 || bonded > 0)
       ? `\nengulfed=${engulfed}  bonded=${bonded}`
@@ -585,7 +623,7 @@ canvas.addEventListener("mousemove", (e) => {
   // lock alone (so a swimming cell can drift away and we still
   // follow it). The per-frame flusher never re-targets.
   const hovered = findCellAt(wpt.x, wpt.y);
-  if (hovered >= 0) lockedCell = world.creatures[hovered];
+  if (hovered >= 0) lockedCellId = hovered;
   if (!tooltipScheduled) {
     tooltipScheduled = true;
     requestAnimationFrame(flushTooltip);
@@ -767,7 +805,7 @@ const ALPHAS = [1.0, 0.96, 0.91, 0.85, 0.79, 0.73, 0.68, 0.64];
 // is a big speedup -- arc/fill/beginPath are expensive when called in
 // the millions per second.
 const N_MATERIALS = 6;
-const SUB_BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS * N_MATERIALS }, () => []);
+const SUB_BUCKETS: ParticleSnapshot[][] = Array.from({ length: N_BUCKETS * N_MATERIALS }, () => []);
 const MATERIAL_IDX_BY_NAME: Record<string, number> = {};
 for (let i = 0; i < MATERIAL_IDS_ORDERED.length; i++) MATERIAL_IDX_BY_NAME[MATERIAL_IDS_ORDERED[i]] = i;
 // How much each bucket is tinted toward the deep-water color. 0 = no tint
@@ -797,7 +835,7 @@ for (const matId of MATERIAL_IDS_ORDERED) {
 // Toxic-waste-tagged particles get rendered in a sickly rust color
 // rather than their underlying material color, so the player can see
 // where pollution accumulates. Routed by waste molecule fraction.
-const TOXIC_BUCKETS: Particle[][] = Array.from({ length: N_BUCKETS }, () => []);
+const TOXIC_BUCKETS: ParticleSnapshot[][] = Array.from({ length: N_BUCKETS }, () => []);
 const TOXIC_BASE = "#a04a2a";
 const TOXIC_TINTED = DEPTH_TINTS.map((t) => blendToward(TOXIC_BASE, t));
 const TOXIC_WASTE_FRAC = 0.5;
@@ -862,7 +900,7 @@ function updateDroplets(): void {
   if (dt > 0.1) dt = 0.1; // clamp after pauses / tab returns
   lastDropletTime = nowWall;
 
-  const act = surfaceActivity(world);
+  const act = surfaceActivity(snapshot);
   const expected = DROPLET_RATE_PER_SEC * act * dt;
   let n = Math.floor(expected);
   if (Math.random() < expected - n) n++;
@@ -870,9 +908,9 @@ function updateDroplets(): void {
     // Sample a random x; only spawn if that point is above mean
     // surface (i.e., on a crest). Otherwise skip -- keeps spray
     // visually correlated with where the waves actually peak.
-    const x = Math.random() * world.width;
-    const surfY = surfaceYAt(world, x);
-    if (surfY > world.surfaceY - DROPLET_MIN_CREST) continue;
+    const x = Math.random() * snapshot.width;
+    const surfY = surfaceYAt(snapshot, x);
+    if (surfY > snapshot.surfaceY - DROPLET_MIN_CREST) continue;
     droplets.push({
       x,
       y: surfY,
@@ -889,7 +927,7 @@ function updateDroplets(): void {
     d.y += d.vy * dt;
     d.life -= dt;
     // Pop if life ran out or droplet fell back into the surface.
-    const surfHere = surfaceYAt(world, d.x);
+    const surfHere = surfaceYAt(snapshot, d.x);
     if (d.life <= 0 || d.y > surfHere) {
       droplets[i] = droplets[droplets.length - 1];
       droplets.pop();
@@ -918,13 +956,13 @@ function render(): void {
   // (touch gestures, wheel, future hooks) gets the correction without
   // having to remember to call clampPan itself.
   clampPan();
-  const { width, height, depth, surfaceY } = world;
+  const { width, height, depth, surfaceY } = snapshot;
   // Day/night tint applied to both surface and depth water colors so
   // the whole scene gets dimmer at night. 1 = full day, ~0.4 = deep
   // night (we don't go fully black so creatures stay visible).
-  const dayMult = 0.4 + 0.6 * solarLight(world);
-  const tWarm = darkenColor(tempToColor(world.tempSurface), dayMult);
-  const tCool = darkenColor(tempToColor(world.tempBottom), dayMult);
+  const dayMult = 0.4 + 0.6 * solarLight(snapshot);
+  const tWarm = darkenColor(tempToColor(snapshot.tempSurface), dayMult);
+  const tCool = darkenColor(tempToColor(snapshot.tempBottom), dayMult);
 
   // Clear the full canvas (letterbox color), then apply the view
   // transform so subsequent draws use world coords. DPR is folded into
@@ -950,8 +988,8 @@ function render(): void {
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(width, 0);
-  ctx.lineTo(width, surfaceYAt(world,width));
-  for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
+  ctx.lineTo(width, surfaceYAt(snapshot, width));
+  for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.closePath();
   ctx.fill();
 
@@ -961,8 +999,8 @@ function render(): void {
   grad.addColorStop(1, tCool);
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.moveTo(0, surfaceYAt(world,0));
-  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
+  ctx.moveTo(0, surfaceYAt(snapshot, 0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.lineTo(width, height);
   ctx.lineTo(0, height);
   ctx.closePath();
@@ -977,14 +1015,14 @@ function render(): void {
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, surfaceYAt(world,0));
-  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(world,x));
+  ctx.moveTo(0, surfaceYAt(snapshot, 0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.stroke();
 
   for (const b of SUB_BUCKETS) b.length = 0;
   for (const b of TOXIC_BUCKETS) b.length = 0;
   const matIdx: Record<string, number> = MATERIAL_IDX_BY_NAME;
-  for (const p of world.particles) {
+  for (const p of snapshot.particles) {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
     const bucket = Math.floor(t * N_BUCKETS);
     // Tag-toxic check: a molecule-tagged particle whose waste fraction
@@ -1042,8 +1080,9 @@ function render(): void {
   // water line) but below cells.
   drawDroplets();
 
-  for (let i = 0; i < world.creatures.length; i++) {
-    drawCreature(world.creatures[i], world.creatures[i] === selectedCell);
+  const selId = selectedCellId;
+  for (let i = 0; i < snapshot.creatures.length; i++) {
+    drawCreature(snapshot.creatures[i], snapshot.creatures[i].id === selId);
   }
 
   drawHeatmap();
@@ -1077,8 +1116,12 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// One day a worker boundary will swallow direct world.profile reads;
+// keep the dump function reading the live snapshot so the call site
+// works either way.
+
 function dumpProfile(): void {
-  const p = world.profile;
+  const p = snapshot.profile;
   if (!p || p.ticks === 0) return;
   const n = p.ticks;
   const rows: { phase: string; ms: number }[] = [
@@ -1098,7 +1141,7 @@ function dumpProfile(): void {
   rows.sort((a, b) => b.ms - a.ms);
   const total = rows.reduce((s, r) => s + r.ms, 0);
   // eslint-disable-next-line no-console
-  console.log(`[profile] over ${n} ticks  total=${total.toFixed(3)}ms/tick  pop=${world.creatures.length}  particles=${world.particles.length}`);
+  console.log(`[profile] over ${n} ticks  total=${total.toFixed(3)}ms/tick  pop=${snapshot.creatures.length}  particles=${snapshot.particles.length}`);
   for (const r of rows) {
     const pct = total > 0 ? (100 * r.ms / total).toFixed(1) : "0.0";
     // eslint-disable-next-line no-console
@@ -1107,7 +1150,7 @@ function dumpProfile(): void {
 }
 function drawHeatmap(): void {
   if (heatmapMode === "off") return;
-  const { width, height, surfaceY } = world;
+  const { width, height, surfaceY } = snapshot;
   const cell = HEATMAP_CELL;
   const cols = Math.ceil(width / cell);
   const rows = Math.ceil((height - surfaceY) / cell);
@@ -1117,7 +1160,7 @@ function drawHeatmap(): void {
       for (let c = 0; c < cols; c++) {
         const x = c * cell;
         const y = surfaceY + r * cell;
-        const t = temperatureAt(world, x + cell / 2, y + cell / 2);
+        const t = temperatureAt(snapshot, x + cell / 2, y + cell / 2);
         ctx.fillStyle = heatColorTemp(t);
         ctx.fillRect(x, y, cell, cell);
       }
@@ -1131,7 +1174,7 @@ function drawHeatmap(): void {
   if (heatmapMode === "density") {
   // Density: count particles per heatmap cell.
   const counts = new Uint16Array(cols * rows);
-  for (const p of world.particles) {
+  for (const p of snapshot.particles) {
     const cx = Math.floor(p.x / cell);
     const cy = Math.floor((p.y - surfaceY) / cell);
     if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
@@ -1154,16 +1197,17 @@ function drawHeatmap(): void {
     return;
   }
   if (heatmapMode === "pheromone") {
-    // Render pheromone field directly. Grid size is world.pheromoneCols/Rows.
+    // Render pheromone field directly. Grid size is snapshot.pheromoneCols/Rows.
     let maxP = 0.001;
-    for (let i = 0; i < world.pheromone.length; i++) if (world.pheromone[i] > maxP) maxP = world.pheromone[i];
-    const pCols = world.pheromoneCols;
-    const pRows = world.pheromoneRows;
-    const pCell = world.width / pCols;
+    const pher = snapshot.pheromone;
+    for (let i = 0; i < pher.length; i++) if (pher[i] > maxP) maxP = pher[i];
+    const pCols = snapshot.pheromoneCols;
+    const pRows = snapshot.pheromoneRows;
+    const pCell = snapshot.width / pCols;
     ctx.globalAlpha = HEATMAP_ALPHA;
     for (let r = 0; r < pRows; r++) {
       for (let c = 0; c < pCols; c++) {
-        const v = world.pheromone[r * pCols + c];
+        const v = pher[r * pCols + c];
         if (v <= 0) continue;
         ctx.fillStyle = heatColorPheromone(v / maxP);
         ctx.fillRect(c * pCell, r * pCell, pCell, pCell);
@@ -1230,7 +1274,7 @@ function drawGenomeStats(): void {
   const panelH = gsMinimized ? GS_PANEL_H_MIN : GS_PANEL_H_FULL;
   const panelX = canvasCssW - GS_PANEL_W - GS_PANEL_MARGIN;
   const panelY = GS_PANEL_MARGIN;
-  const cs = world.creatures;
+  const cs = snapshot.creatures;
   const n = cs.length;
 
   // Bucket fill + mean/stddev. Both passes only N adds; no allocation.
@@ -1371,7 +1415,7 @@ function drawPhylogeny(): void {
   // Rolling window: only the last PHYLO_WINDOW_SEC of history is shown
   // so recent events stay legible. Species whose lifespan starts before
   // the window clip at the left edge (handled naturally by tx()).
-  const tNow = world.t;
+  const tNow = snapshot.t;
   const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
   const span = Math.max(0.001, tNow - tMin);
   // Reserve enough top padding that the thickest possible lane (live
@@ -1387,7 +1431,7 @@ function drawPhylogeny(): void {
   // Keeps the per-frame work proportional to recent activity instead of
   // every species ever seen.
   visibleSpecies.length = 0;
-  for (const sp of world.species.values()) {
+  for (const sp of snapshot.species) {
     if (sp.lastSeen >= tMin) visibleSpecies.push(sp);
   }
   visibleSpecies.sort((a, b) => a.lane - b.lane);
@@ -1397,15 +1441,19 @@ function drawPhylogeny(): void {
   // of recomputing genomeKey each frame -- somatic drift doesn't move a
   // cell to a different species, so the birth key is the right bucket.
   bioByKey.clear();
-  for (const c of world.creatures) {
+  for (const c of snapshot.creatures) {
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.biomass);
   }
   // Update each species' all-time-peak biomass from this sample. The
   // phylogeny render runs every frame, so peak tracks tightly without
-  // needing per-tick work in the sim core.
+  // needing per-tick work in the sim core. Mirror into the live world
+  // so the value survives across snapshots; the snapshot's copy is
+  // overwritten each frame from world.species.
   for (const [key, b] of bioByKey) {
     const sp = world.species.get(key);
     if (sp && b > sp.peakBiomass) sp.peakBiomass = b;
+    const snSp = snapshotSpeciesByKey.get(key);
+    if (snSp && b > snSp.peakBiomass) snSp.peakBiomass = b;
   }
   let maxBio = 0;
   for (const sp of visible) {
@@ -1460,9 +1508,9 @@ function drawPhylogeny(): void {
   ctx.globalAlpha = 1;
 
   // Divergence / convergence connectors on top so they're visible.
-  for (const ev of world.phylogenyEvents) {
-    const from = world.species.get(ev.from);
-    const to = world.species.get(ev.to);
+  for (const ev of snapshot.phylogenyEvents) {
+    const from = snapshotSpeciesByKey.get(ev.from);
+    const to = snapshotSpeciesByKey.get(ev.to);
     if (!from || !to) continue;
     const y1 = yOfLane.get(from.lane);
     const y2 = yOfLane.get(to.lane);
@@ -1531,7 +1579,7 @@ function buildTerrainBitmap(): void {
   // (deepest first). Painting in that order = back-to-front. Deeper
   // rocks (higher z) are darkened to suggest depth fog; foreground
   // rocks paint over them at full saturation.
-  for (const ob of world.obstacles) {
+  for (const ob of snapshot.obstacles) {
     // depthFade in 0 (foreground) .. 0.72 (back layer). Apply as an
     // additional darkening to each gradient stop and the stroke.
     // All hexLerp calls work off ob.color (a hex string) directly --
@@ -1617,28 +1665,28 @@ function drawCellLOD(cx: number, cy: number, r: number, color: string): void {
   ctx.fill();
 }
 
-function drawCreature(c: Creature, selected: boolean): void {
+function drawCreature(c: CreatureSnapshot, selected: boolean): void {
   // Each cell has a stable random phase derived from its bornAt + position,
   // so its wobble pattern is its own instead of every cell pulsing in sync.
   const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
-  const t = world.t;
+  const t = snapshot.t;
   const screenR = c.r * viewScale;
   const lod = !selected && screenR < LOD_MIN_SCREEN_R;
   if (c.division) {
     // Mitosis: render two overlapping wobbly bodies whose centers split
     // along the division axis as `progress` advances 0 -> 1.
-    const child = c.division.child;
-    const sep = c.division.progress * (c.r + child.r);
+    const child = c.division;
+    const sep = c.division.progress * (c.r + child.childR);
     const dx = Math.cos(c.division.axis) * sep * 0.5;
     const dy = Math.sin(c.division.axis) * sep * 0.5;
     if (lod) {
       drawCellLOD(c.x - dx, c.y - dy, c.r, c.color);
-      drawCellLOD(c.x + dx, c.y + dy, child.r, child.color);
+      drawCellLOD(c.x + dx, c.y + dy, child.childR, child.childColor);
     } else {
       drawCellBody(c.x - dx, c.y - dy, c.r, c.color, t, phase);
       strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
-      drawCellBody(c.x + dx, c.y + dy, child.r, child.color, t, phase + 1.7);
-      strokeCellOutline(c.x + dx, c.y + dy, child.r, selected, t, phase + 1.7);
+      drawCellBody(c.x + dx, c.y + dy, child.childR, child.childColor, t, phase + 1.7);
+      strokeCellOutline(c.x + dx, c.y + dy, child.childR, selected, t, phase + 1.7);
     }
   } else if (lod) {
     drawCellLOD(c.x, c.y, c.r, c.color);
@@ -1715,28 +1763,28 @@ function updateInspector(): void {
   // species still in the 4-minute prune grace window.
   const liveLineages = new Set<number>();
   const liveSpecies = new Set<string>();
-  for (const c of world.creatures) {
+  for (const c of snapshot.creatures) {
     liveLineages.add(c.lineageRoot);
     liveSpecies.add(c.speciesKey);
   }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(world.t)}  pop=${world.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
-    `extinct=${world.extinctionCount}`;
+    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
+    `extinct=${snapshot.extinctionCount}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // If the selected cell has died or been eaten, fall back to the first
   // live creature so the inspector shows something useful instead of
   // silently going blank.
-  if (!selectedCell || world.creatures.indexOf(selectedCell) < 0) {
-    selectedCell = world.creatures[0] ?? null;
+  if (selectedCellId == null || !snapshotCreatureById.has(selectedCellId)) {
+    selectedCellId = snapshot.creatures[0]?.id ?? null;
   }
   // Always re-disassemble: the selected cell's genome can change between
   // frames from somatic mutation, so a cached string would go stale.
   refreshActiveDisasm();
-  const c = selectedCell;
+  const c = selectedCell();
   if (!c) {
-    inspector.textContent = `${statsLine()}\npop=0  particles=${world.particles.length}`;
+    inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
     return;
   }
   let reserveMass = 0;
@@ -1749,11 +1797,11 @@ function updateInspector(): void {
     .join(" ");
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
-  const stackStr = c.vm.stack.map((n) => n.toFixed(1)).join(" ");
-  const age = formatAge(Math.max(0, world.t - c.bornAt));
+  const stackStr = c.vmStack.map((n) => n.toFixed(1)).join(" ");
+  const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   inspector.textContent =
     `${statsLine()}\n` +
-    `pop=${world.creatures.length}  parts=${world.particles.length}/${world.particleTarget}  extinct=${world.extinctionCount}  (click a cell)\n` +
+    `pop=${snapshot.creatures.length}  parts=${snapshot.particles.length}/${snapshot.particleTarget}  extinct=${snapshot.extinctionCount}  (click a cell)\n` +
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
@@ -1763,7 +1811,7 @@ function updateInspector(): void {
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} rib=${fmt(m.ribosome)} bio=${fmt(m.biomass)}\n` +
     `stomach: ${reserves}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
-    `pc=${c.vm.pc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
+    `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
   disasmBody.textContent = activeDisasm;
 }
 
@@ -1809,8 +1857,8 @@ function updatePerfStats(simAdvanced: number, renderMs: number, simMs: number): 
 }
 
 function statsLine(): string {
-  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${world.t.toFixed(0)}s  species=${world.species.size}`;
-  const p = world.profile;
+  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${snapshot.t.toFixed(0)}s  species=${snapshot.species.length}`;
+  const p = snapshot.profile;
   if (p && p.ticks > 0) {
     const total =
       p.pheromone + p.bonds + p.forces + p.creatures +
@@ -1863,6 +1911,7 @@ simChannel.port1.onmessage = () => {
     } catch (err) {
       lastSimError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       lastSimErrorAt = world.t;
+      refreshSnapshot();
       // eslint-disable-next-line no-console
       console.error("[sim] step threw, continuing:", err);
       break;
@@ -1881,6 +1930,10 @@ simChannel.port2.postMessage(null);
 
 function frame(): void {
   lastFrameStart = performance.now();
+  // Take a fresh snapshot of the live world for this frame's render +
+  // HUD reads. In stage C3 this will be replaced by reading the most
+  // recent snapshot the sim worker has posted.
+  refreshSnapshot();
   const simMsLast = simMsThisFrame;
   simMsThisFrame = 0;
   const advanced = advancedThisFrame;
@@ -1900,7 +1953,7 @@ function frame(): void {
   // to follow OR the cursor is currently over the canvas. flushTooltip
   // re-checks liveness and re-projects the locked cell's screen pos
   // so the box tracks a swimming cell.
-  if (lockedCell || pendingMouseInside) flushTooltip();
+  if (lockedCellId != null || pendingMouseInside) flushTooltip();
   maybeAnalyzeGenomes();
   const renderMs = performance.now() - tBeforeRender;
   updatePerfStats(advanced, renderMs, simMsLast);
@@ -1916,14 +1969,14 @@ let stallWatchWall = performance.now();
 const STALL_WALL_MS = 1500;
 function updateDiagBar(): void {
   const nowWall = performance.now();
-  if (world.t !== stallWatchT) {
-    stallWatchT = world.t;
+  if (snapshot.t !== stallWatchT) {
+    stallWatchT = snapshot.t;
     stallWatchWall = nowWall;
   }
   const stalledMs = nowWall - stallWatchWall;
   const parts: string[] = [];
   if (stalledMs > STALL_WALL_MS) {
-    parts.push(`SIM STALLED ${(stalledMs / 1000).toFixed(1)}s  pop=${world.creatures.length}  parts=${world.particles.length}`);
+    parts.push(`SIM STALLED ${(stalledMs / 1000).toFixed(1)}s  pop=${snapshot.creatures.length}  parts=${snapshot.particles.length}`);
   }
   if (lastSimError) {
     parts.push(`step err @ t=${lastSimErrorAt.toFixed(0)}s: ${lastSimError.slice(0, 120)}`);
@@ -1947,8 +2000,8 @@ function updateDiagBar(): void {
 const ANALYSIS_INTERVAL_SEC = 60;
 let lastAnalysisT = -Infinity;
 function maybeAnalyzeGenomes(): void {
-  if (world.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
-  lastAnalysisT = world.t;
+  if (snapshot.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
+  lastAnalysisT = snapshot.t;
 
   // Rank by all-time-peak biomass, which the phylogeny render keeps
   // updated each frame. Live-only biomass swings wildly (cells
@@ -1956,16 +2009,16 @@ function maybeAnalyzeGenomes(): void {
   // it would flicker / report 0 for extinct lineages. Peak is the
   // honest "how big did this lineage ever get".
   type Row = {
-    sp: Species;
+    sp: SpeciesSnapshot;
     alive: boolean;
     duration: number;
     biomass: number;
     cells: number;
   };
   const rows: Row[] = [];
-  for (const sp of world.species.values()) {
+  for (const sp of snapshot.species) {
     const alive = sp.alive > 0;
-    const duration = (alive ? world.t : sp.lastSeen) - sp.firstSeen;
+    const duration = (alive ? snapshot.t : sp.lastSeen) - sp.firstSeen;
     rows.push({
       sp,
       alive,
@@ -1987,7 +2040,7 @@ function maybeAnalyzeGenomes(): void {
   analysisBody.innerHTML = "";
   const header = document.createElement("div");
   header.style.cssText = "padding:6px 0 8px;font-weight:bold;border-bottom:1px solid #1a3340;";
-  header.textContent = `Top 5 species at t=${formatAge(world.t)} (across ${world.species.size} tracked)`;
+  header.textContent = `Top 5 species at t=${formatAge(snapshot.t)} (across ${snapshot.species.length} tracked)`;
   analysisBody.appendChild(header);
 
   for (let i = 0; i < top.length; i++) {
@@ -1995,7 +2048,7 @@ function maybeAnalyzeGenomes(): void {
     const sp = row.sp;
     const status = row.alive
       ? `ALIVE`
-      : `EXTINCT ${formatAge(world.t - sp.lastSeen)} ago`;
+      : `EXTINCT ${formatAge(snapshot.t - sp.lastSeen)} ago`;
     const block = document.createElement("div");
     block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
     const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;

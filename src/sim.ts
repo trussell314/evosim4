@@ -539,9 +539,19 @@ export class ReservesView {
   set gas(v: number) { this.c.store.r_gas[this.c.idx] = v; }
 }
 
+// Process-wide monotonic counter assigning a stable per-cell id at
+// newCreature. Kept module-scoped (not on World) so tests that spin
+// up multiple Worlds in one process still get unique ids. Snapshots
+// use this id as the selection handle across ticks.
+let NEXT_CREATURE_ID = 1;
 export class Creature {
   idx: number;
   store: CreatureStore;
+  // Stable identity that outlives store slot reuse. Assigned at
+  // newCreature time; never recycled, never reused on resurrection.
+  // The renderer uses this to track click selection across ticks
+  // when the worker rebuilds creature snapshots each frame.
+  id: number = 0;
   // Non-typed-array fields kept on the handle (variable-shape, not hot)
   genome!: Uint8Array;
   vm!: VMState;
@@ -646,6 +656,7 @@ export interface CreatureInit {
 export function newCreature(store: CreatureStore, init: CreatureInit): Creature {
   const idx = store.alloc();
   const c = new Creature(store, idx);
+  c.id = NEXT_CREATURE_ID++;
   store.x[idx] = init.x ?? 0;
   store.y[idx] = init.y ?? 0;
   store.z[idx] = init.z ?? 0;
@@ -1746,7 +1757,30 @@ const TEMP_MULT_MAX = 4.0;
 // disturbance intensity (so storms read like real chop). Used by the
 // visible surface wave, the physics wave forcing, and aeration so all
 // three move together.
-export function surfaceActivity(world: World): number {
+// Minimal field set the surface/temperature/light helpers read from
+// the world. World naturally satisfies this; so does RenderSnapshot,
+// which lets the renderer call the same helpers off a snapshot.
+export interface WorldEnv {
+  t: number;
+  height: number;
+  surfaceY: number;
+  surfaceWaveAmp: number;
+  surfaceLength: number;
+  surfacePeriod: number;
+  swellLength: number;
+  swellPeriod: number;
+  updraftLength: number;
+  updraftPeriod: number;
+  disturbanceIntensity: number;
+  tempSurface: number;
+  tempBottom: number;
+  tempPatchAmp: number;
+  tempPatchLength: number;
+  tempPatchPeriod: number;
+  dayPhase: number;
+}
+
+export function surfaceActivity(world: WorldEnv): number {
   const t = world.t;
   const env =
     0.55 +
@@ -1756,7 +1790,7 @@ export function surfaceActivity(world: World): number {
   return envClamped * (1 + 3 * world.disturbanceIntensity);
 }
 
-export function surfaceYAt(world: World, x: number): number {
+export function surfaceYAt(world: WorldEnv, x: number): number {
   const t = world.t;
   const A = world.surfaceWaveAmp * surfaceActivity(world);
   const kS = (2 * Math.PI) / world.surfaceLength;
@@ -1781,7 +1815,7 @@ export function surfaceYAt(world: World, x: number): number {
   return world.surfaceY + dy;
 }
 
-export function temperatureAt(world: World, x: number, y: number): number {
+export function temperatureAt(world: WorldEnv, x: number, y: number): number {
   const span = Math.max(1, world.height - world.surfaceY);
   const depth = Math.max(0, Math.min(1, (y - world.surfaceY) / span));
   const base = world.tempSurface + (world.tempBottom - world.tempSurface) * depth;
@@ -1794,7 +1828,7 @@ export function temperatureAt(world: World, x: number, y: number): number {
 // Solar light multiplier 0..1. Sin curve over dayPhase with midday at
 // phase 0.25; dark half of cycle returns 0. Multiplied into the depth
 // attenuation at every light-using site (photosynthesis, sensor).
-export function solarLight(world: World): number {
+export function solarLight(world: { dayPhase: number }): number {
   return Math.max(0, Math.sin(2 * Math.PI * world.dayPhase));
 }
 
@@ -5176,4 +5210,226 @@ export function applySavedWorld(world: World, json: string): boolean {
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------
+// Render snapshot. Plain-data subset of the world that the renderer
+// needs each frame. Produced on the sim side (in-process today, in a
+// worker after stage C), consumed by the UI to draw. Carries no class
+// instances or store references -- everything is JSON-/structuredClone-
+// transferable so it can cross a worker boundary later.
+// ---------------------------------------------------------------------
+
+export interface ParticleSnapshot {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  material: MaterialId;
+  // Only present when the particle carries a molecule payload (corpse /
+  // excretion). The renderer checks the waste fraction to switch to the
+  // toxic-tint palette.
+  molecules: Molecules | null;
+}
+
+// Slim shape used inside a cell's contents[] -- the renderer only needs
+// color + radius to draw engulfed prey inside the host body, and the
+// tooltip / inspector show counts but not individual fields.
+export interface InnerCreatureSnapshot {
+  id: number;
+  color: string;
+  r: number;
+}
+
+export interface CreatureSnapshot {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  vx: number;
+  vy: number;
+  color: string;
+  energy: number;
+  ingestCooldown: number;
+  bornAt: number;
+  lineageRoot: number;
+  speciesKey: string;
+  genome: Uint8Array;
+  molecules: Molecules;
+  reserves: Record<MaterialId, number>;
+  vmPc: number;
+  vmStack: number[];
+  bondsCount: number;
+  contents: InnerCreatureSnapshot[];
+  division: { progress: number; axis: number; childR: number; childColor: string } | null;
+}
+
+export interface SpeciesSnapshot {
+  key: string;
+  color: string;
+  firstSeen: number;
+  lastSeen: number;
+  alive: number;
+  lane: number;
+  genome: Uint8Array;
+  peakBiomass: number;
+}
+
+export interface RenderSnapshot extends WorldEnv {
+  // World geometry / scalars used by the renderer.
+  width: number;
+  depth: number;
+  particleTarget: number;
+  extinctionCount: number;
+  pheromone: Float32Array;
+  pheromoneCols: number;
+  pheromoneRows: number;
+  // Static across the run, but we ship it once so the renderer can
+  // bake the terrain bitmap on the first snapshot it sees.
+  obstacles: Obstacle[];
+  particles: ParticleSnapshot[];
+  creatures: CreatureSnapshot[];
+  species: SpeciesSnapshot[];
+  phylogenyEvents: PhylogenyEvent[];
+  // Optional per-phase timing. Mirrors world.profile when present.
+  profile?: WorldProfile;
+}
+
+function snapshotInner(c: Creature): InnerCreatureSnapshot {
+  return { id: c.id, color: c.color, r: c.r };
+}
+
+function snapshotCreatureLive(c: Creature): CreatureSnapshot {
+  const m = c.molecules;
+  const r = c.reserves;
+  return {
+    id: c.id,
+    x: c.x,
+    y: c.y,
+    z: c.z,
+    r: c.r,
+    vx: c.vx,
+    vy: c.vy,
+    color: c.color,
+    energy: c.energy,
+    ingestCooldown: c.ingestCooldown,
+    bornAt: c.bornAt,
+    lineageRoot: c.lineageRoot,
+    speciesKey: c.speciesKey,
+    genome: c.genome,
+    molecules: {
+      adp: m.adp,
+      glucose: m.glucose,
+      fattyAcid: m.fattyAcid,
+      aminoAcid: m.aminoAcid,
+      chlorophyll: m.chlorophyll,
+      enzyme: m.enzyme,
+      o2: m.o2,
+      co2: m.co2,
+      minerals: m.minerals,
+      biomass: m.biomass,
+      waste: m.waste,
+      ribosome: m.ribosome,
+    },
+    reserves: {
+      rock: r.rock,
+      sand: r.sand,
+      clay: r.clay,
+      organic: r.organic,
+      lipid: r.lipid,
+      gas: r.gas,
+    },
+    vmPc: c.vm.pc,
+    // The renderer reads the stack length and a short preview; a slice
+    // is enough and keeps the per-tick clone small.
+    vmStack: c.vm.stack.slice(),
+    bondsCount: c.bonds.length,
+    contents: c.contents.map(snapshotInner),
+    division: c.division
+      ? {
+          progress: c.division.progress,
+          axis: c.division.axis,
+          childR: c.division.child.r,
+          childColor: c.division.child.color,
+        }
+      : null,
+  };
+}
+
+function snapshotParticleLive(p: Particle): ParticleSnapshot {
+  // p.molecules getter returns undefined when there's no payload; the
+  // snapshot uses null for the same reason -- both are structured-
+  // clone-friendly, but null is one less code path on the consumer.
+  return {
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    r: p.r,
+    material: p.material,
+    molecules: p.molecules ?? null,
+  };
+}
+
+function snapshotSpecies(sp: Species): SpeciesSnapshot {
+  return {
+    key: sp.key,
+    color: sp.color,
+    firstSeen: sp.firstSeen,
+    lastSeen: sp.lastSeen,
+    alive: sp.alive,
+    lane: sp.lane,
+    genome: sp.genome,
+    peakBiomass: sp.peakBiomass,
+  };
+}
+
+// Copy the renderable subset of `world` into a fresh RenderSnapshot.
+// Called once per render frame from the sim worker after each tick
+// batch. The snapshot owns its own creature / particle / species
+// arrays; the originals can be mutated by the next step without
+// affecting any rendered frame.
+export function takeSnapshot(world: World): RenderSnapshot {
+  const creatures: CreatureSnapshot[] = new Array(world.creatures.length);
+  for (let i = 0; i < world.creatures.length; i++) {
+    creatures[i] = snapshotCreatureLive(world.creatures[i]);
+  }
+  const particles: ParticleSnapshot[] = new Array(world.particles.length);
+  for (let i = 0; i < world.particles.length; i++) {
+    particles[i] = snapshotParticleLive(world.particles[i]);
+  }
+  const species: SpeciesSnapshot[] = [];
+  for (const sp of world.species.values()) species.push(snapshotSpecies(sp));
+  return {
+    width: world.width,
+    height: world.height,
+    depth: world.depth,
+    t: world.t,
+    surfaceY: world.surfaceY,
+    surfaceWaveAmp: world.surfaceWaveAmp,
+    surfaceLength: world.surfaceLength,
+    surfacePeriod: world.surfacePeriod,
+    swellLength: world.swellLength,
+    swellPeriod: world.swellPeriod,
+    updraftLength: world.updraftLength,
+    updraftPeriod: world.updraftPeriod,
+    disturbanceIntensity: world.disturbanceIntensity,
+    tempSurface: world.tempSurface,
+    tempBottom: world.tempBottom,
+    tempPatchAmp: world.tempPatchAmp,
+    tempPatchLength: world.tempPatchLength,
+    tempPatchPeriod: world.tempPatchPeriod,
+    dayPhase: world.dayPhase,
+    particleTarget: world.particleTarget,
+    extinctionCount: world.extinctionCount,
+    pheromone: new Float32Array(world.pheromone),
+    pheromoneCols: world.pheromoneCols,
+    pheromoneRows: world.pheromoneRows,
+    obstacles: world.obstacles,
+    particles,
+    creatures,
+    species,
+    phylogenyEvents: world.phylogenyEvents.slice(),
+    profile: world.profile,
+  };
 }
