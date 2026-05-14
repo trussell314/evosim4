@@ -270,6 +270,20 @@ simWorker.postMessage({
 // which is fine. We don't try to detect schema rejection on the main
 // side any more; the worker decides.
 
+// Particle subworkers are spawned here on the main thread rather than
+// from inside sim.worker, because nested module workers (Worker spawning
+// Worker) silently fail to load in some browsers under COEP isolation.
+// Main relays messages between sim worker and the particle pool; the
+// hot path between sim worker and particle workers stays on shared
+// memory via Atomics, so the relay only carries init + ack messages.
+let particleWorkers: Worker[] = [];
+function teardownParticleWorkers(): void {
+  for (const pw of particleWorkers) {
+    try { pw.terminate(); } catch { /* ignore */ }
+  }
+  particleWorkers = [];
+}
+
 simWorker.addEventListener("message", (e: MessageEvent) => {
   const msg = e.data;
   if (msg.type === "snapshot") {
@@ -284,6 +298,26 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
   } else if (msg.type === "save") {
     latestSaveJson = msg.json;
     maybeAutosave();
+  } else if (msg.type === "spawn-particle-pool") {
+    teardownParticleWorkers();
+    const payloads = msg.initPayloads as { workerIndex: number }[];
+    for (let i = 0; i < payloads.length; i++) {
+      const idx = i;
+      const pw = new Worker(new URL("./particle.worker.ts", import.meta.url), { type: "module" });
+      pw.addEventListener("message", (ev: MessageEvent) => {
+        simWorker.postMessage({ type: "particle-pool-message", index: idx, data: ev.data });
+      });
+      pw.addEventListener("error", (ev) => {
+        simWorker.postMessage({ type: "particle-pool-error", index: idx, message: ev.message || "unknown" });
+      });
+      pw.addEventListener("messageerror", () => {
+        simWorker.postMessage({ type: "particle-pool-error", index: idx, message: "messageerror" });
+      });
+      pw.postMessage(payloads[i]);
+      particleWorkers.push(pw);
+    }
+  } else if (msg.type === "teardown-particle-pool") {
+    teardownParticleWorkers();
   }
 });
 

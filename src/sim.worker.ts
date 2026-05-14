@@ -53,7 +53,9 @@ type WorkerInbound =
   | { type: "setTurbo"; turbo: boolean }
   | { type: "toggleProfile" }
   | { type: "applySaved"; json: string }
-  | { type: "requestSave" };
+  | { type: "requestSave" }
+  | { type: "particle-pool-message"; index: number; data: unknown }
+  | { type: "particle-pool-error"; index: number; message: string };
 
 type WorkerOutbound =
   | {
@@ -63,7 +65,9 @@ type WorkerOutbound =
       simMs: number;
       err: { message: string; at: number } | null;
     }
-  | { type: "save"; json: string };
+  | { type: "save"; json: string }
+  | { type: "spawn-particle-pool"; initPayloads: unknown[] }
+  | { type: "teardown-particle-pool" };
 
 function send(msg: WorkerOutbound): void {
   (self as unknown as Worker).postMessage(msg);
@@ -72,6 +76,21 @@ function send(msg: WorkerOutbound): void {
 self.addEventListener("message", (e: MessageEvent) => {
   const m = e.data as WorkerInbound;
   switch (m.type) {
+    case "particle-pool-message": {
+      if (!pool) return;
+      const idx = m.index | 0;
+      const data = m.data as { type?: string; workerIndex?: number; error?: unknown };
+      if (!data || typeof data !== "object") return;
+      if (data.type === "ack-load") pool.loadAcked[idx] = true;
+      else if (data.type === "ack-init") pool.initAcked[data.workerIndex! | 0] = true;
+      else if (data.type === "ack-wake") pool.wakeAcked[data.workerIndex! | 0] = true;
+      else if (data.type === "ack-init-error") pool.initErrors[data.workerIndex! | 0] = String(data.error || "unknown");
+      return;
+    }
+    case "particle-pool-error": {
+      teardownPool(`worker ${m.index} error: ${m.message}`);
+      return;
+    }
     case "init": {
       world = createWorld(m.width, m.height);
       if (m.savedJson) {
@@ -210,7 +229,10 @@ const CMD_COLLISIONS = 1;
 const PARAM_COUNT = 22;
 
 interface ParticlePool {
-  workers: Worker[];
+  // Worker refs live on the main thread; sim worker only talks to them
+  // indirectly via "particle-pool-message" relays. Nested module
+  // workers spawned from another worker silently fail to load in some
+  // browsers, so we route through main as a workaround.
   ctrl: Int32Array;
   params: Float64Array;
   nWorkers: number;
@@ -230,15 +252,13 @@ const BARRIER_TIMEOUT_MS = 500;
 
 function teardownPool(reason: string): void {
   if (!pool) return;
-  for (const wk of pool.workers) {
-    try { wk.terminate(); } catch { /* ignore */ }
-  }
   pool = null;
   setParticleForceDispatcher(null);
   setCollisionPhaseDispatcher(null);
   pendingSimError = { message: `[pool] ${reason}`, at: world ? world.t : 0 };
   // eslint-disable-next-line no-console
   console.error("[sim worker] particle pool torn down:", reason);
+  send({ type: "teardown-particle-pool" });
 }
 
 function setupParticlePool(w: World): void {
@@ -250,23 +270,6 @@ function setupParticlePool(w: World): void {
       !(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
     return;
   }
-  // Probe whether the COI service worker is intercepting fetches made
-  // from THIS (worker) context. If it is, the response will carry the
-  // SW-injected COEP=require-corp / CORP=cross-origin headers. If not,
-  // sub-worker script loads will silently fail to satisfy parent COEP
-  // and the workers will never execute. Probe a known same-origin URL
-  // under the SW scope.
-  fetch("./", { cache: "no-store" }).then((r) => {
-    const h = r.headers;
-    // eslint-disable-next-line no-console
-    console.warn("[pool probe]", r.url, r.status,
-      "coop=", h.get("cross-origin-opener-policy"),
-      "coep=", h.get("cross-origin-embedder-policy"),
-      "corp=", h.get("cross-origin-resource-policy"));
-  }).catch((err) => {
-    // eslint-disable-next-line no-console
-    console.warn("[pool probe] fetch failed:", err);
-  });
   const storeLayout = w.particleStore.sharedLayout();
   if (!(storeLayout.buffer instanceof SharedArrayBuffer)) return;
   const collisionLayout = getCollisionSharedLayout();
@@ -286,37 +289,13 @@ function setupParticlePool(w: World): void {
   const paramsBuf = new SharedArrayBuffer(PARAM_COUNT * 8);
   const ctrl = new Int32Array(ctrlBuf);
   const params = new Float64Array(paramsBuf);
-  const workers: Worker[] = [];
   const loadAcked = new Array<boolean>(nWorkers).fill(false);
   const initAcked = new Array<boolean>(nWorkers).fill(false);
   const wakeAcked = new Array<boolean>(nWorkers).fill(false);
   const initErrors: (string | null)[] = new Array(nWorkers).fill(null);
+  const initPayloads: unknown[] = [];
   for (let i = 0; i < nWorkers; i++) {
-    const wk = new Worker(new URL("./particle.worker.ts", import.meta.url), {
-      type: "module",
-    });
-    // Worker errors (load failures, uncaught throws) don't surface in
-    // the console for sub-workers spawned from another worker, so
-    // attach handlers that tear the pool down and flag a sim error.
-    // Without this the sim deadlocks at the next barrier with no
-    // diagnostic.
-    wk.addEventListener("error", (ev) => {
-      teardownPool(`worker ${i} error: ${ev.message || "unknown"}`);
-    });
-    wk.addEventListener("messageerror", () => {
-      teardownPool(`worker ${i} messageerror`);
-    });
-    wk.addEventListener("message", (e: MessageEvent) => {
-      const m = e.data;
-      if (!m || typeof m !== "object") return;
-      // ack-load doesn't carry a workerIndex (posted before init runs);
-      // tag it by closure-captured i instead.
-      if (m.type === "ack-load") loadAcked[i] = true;
-      else if (m.type === "ack-init") initAcked[m.workerIndex | 0] = true;
-      else if (m.type === "ack-wake") wakeAcked[m.workerIndex | 0] = true;
-      else if (m.type === "ack-init-error") initErrors[m.workerIndex | 0] = String(m.error || "unknown");
-    });
-    wk.postMessage({
+    initPayloads.push({
       type: "init",
       particleLayout: storeLayout,
       collisionLayout: collisionShared ? collisionLayout : null,
@@ -326,11 +305,15 @@ function setupParticlePool(w: World): void {
       workerIndex: i,
       nWorkers,
     });
-    workers.push(wk);
   }
-  pool = { workers, ctrl, params, nWorkers, phase: 0, loadAcked, initAcked, wakeAcked, initErrors };
+  pool = { ctrl, params, nWorkers, phase: 0, loadAcked, initAcked, wakeAcked, initErrors };
   setParticleForceDispatcher(dispatchParticleForces);
   if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
+  // Spawn workers on main and have main forward acks back to us.
+  // Workers spawned this way are top-level workers from main's point
+  // of view, which works around the silent-load failure observed when
+  // spawning module workers from inside another worker.
+  send({ type: "spawn-particle-pool", initPayloads });
 }
 
 function poolDiagSnapshot(): string {
