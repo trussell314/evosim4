@@ -4745,8 +4745,10 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   // Named chems: one particle per chem id above MIN_RELEASE. Each
   // particle carries chemId so the eater absorbs the same chemical
   // back into its pool slot. Below-threshold remnants are dropped
-  // silently (they round-off to environment).
-  const MIN_RELEASE = 0.5;
+  // silently (they round-off to environment). Threshold tuned so a
+  // typical cell death produces ~3-5 particles, not one per chem
+  // slot -- keeps long-run particle counts stable.
+  const MIN_RELEASE = 2;
   for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
     const total = cols[k][ci];
     if (total < MIN_RELEASE) { cols[k][ci] = 0; continue; }
