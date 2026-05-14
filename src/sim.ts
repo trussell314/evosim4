@@ -6398,6 +6398,11 @@ export interface RenderSnapshot extends WorldEnv {
   depth: number;
   particleTarget: number;
   extinctionCount: number;
+  // Lineage roots whose founder is still alive. Main thread uses this
+  // to count "lineages that outlived the founder cull": a lineage with
+  // live cells whose root isn't in this set has lost its founder and
+  // is being carried by descendants only.
+  livingFounderLineages: number[];
   pheromone: Float32Array;
   pheromoneCols: number;
   pheromoneRows: number;
@@ -6538,6 +6543,20 @@ export function takeSnapshot(world: World): RenderSnapshot {
     dayPhase: world.dayPhase,
     particleTarget: world.particleTarget,
     extinctionCount: world.extinctionCount,
+    // Lineage roots that still have a founder cell alive. Computed by
+    // walking creatures: a creature whose id is in world.founderIds
+    // contributes its lineageRoot. Set -> array for structured-clone.
+    livingFounderLineages: (() => {
+      const roots: number[] = [];
+      const seen = new Set<number>();
+      for (const c of world.creatures) {
+        if (world.founderIds.has(c.id) && !seen.has(c.lineageRoot)) {
+          seen.add(c.lineageRoot);
+          roots.push(c.lineageRoot);
+        }
+      }
+      return roots;
+    })(),
     pheromone: new Float32Array(world.pheromone),
     pheromoneCols: world.pheromoneCols,
     pheromoneRows: world.pheromoneRows,

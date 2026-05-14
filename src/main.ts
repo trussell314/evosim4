@@ -1906,19 +1906,29 @@ function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
   // fps + sim/wall ratio + elapsed sim time + pop (species) +
   // extinction count there. pop= shows cells / living species /
-  // lineages: total live cells, distinct genomes among currently-
-  // alive cells, distinct founding lineages (lineageRoot ids).
+  // lineages / post-founder-cull-survivors:
+  //   - cells: total live cells.
+  //   - species: distinct genomes among currently-alive cells.
+  //   - lineages: distinct founding lineages (lineageRoot ids).
+  //   - survivors: lineages whose founder has been culled (or
+  //     starved/etc) but whose descendants are still alive --
+  //     a real measure of "lineages that managed to reproduce".
   // world.species.size would over-count -- it includes extinct
-  // species still in the 4-minute prune grace window.
+  // species still in the prune grace window.
   const liveLineages = new Set<number>();
   const liveSpecies = new Set<string>();
   for (const c of snapshot.creatures) {
     liveLineages.add(c.lineageRoot);
     liveSpecies.add(c.speciesKey);
   }
+  const livingFounderSet = new Set(snapshot.livingFounderLineages ?? []);
+  let founderCullSurvivors = 0;
+  for (const root of liveLineages) {
+    if (!livingFounderSet.has(root)) founderCullSurvivors++;
+  }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
+    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}/${founderCullSurvivors}  ` +
     `extinct=${snapshot.extinctionCount}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
