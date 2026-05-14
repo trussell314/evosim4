@@ -414,6 +414,7 @@ const CREATURE_F32_COLS = [
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
   "m_biomass", "m_waste", "m_adp", "m_ribosome",
   "m_biopolymer", "m_membrane",
+  "m_photoreceptor", "m_chemoreceptor", "m_mechanoreceptor", "m_thermoreceptor",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpLo", "fpHi"] as const;
@@ -481,6 +482,10 @@ export class CreatureStore {
   m_ribosome!: Float32Array;
   m_biopolymer!: Float32Array;
   m_membrane!: Float32Array;
+  m_photoreceptor!: Float32Array;
+  m_chemoreceptor!: Float32Array;
+  m_mechanoreceptor!: Float32Array;
+  m_thermoreceptor!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -552,6 +557,10 @@ export class CreatureStore {
     this.m_ribosome = new Float32Array(b, o.base.m_ribosome, cap);
     this.m_biopolymer = new Float32Array(b, o.base.m_biopolymer, cap);
     this.m_membrane = new Float32Array(b, o.base.m_membrane, cap);
+    this.m_photoreceptor = new Float32Array(b, o.base.m_photoreceptor, cap);
+    this.m_chemoreceptor = new Float32Array(b, o.base.m_chemoreceptor, cap);
+    this.m_mechanoreceptor = new Float32Array(b, o.base.m_mechanoreceptor, cap);
+    this.m_thermoreceptor = new Float32Array(b, o.base.m_thermoreceptor, cap);
     this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
     this.fpLo = new Uint32Array(b, o.base.fpLo, cap);
     this.fpHi = new Uint32Array(b, o.base.fpHi, cap);
@@ -570,6 +579,7 @@ export class CreatureStore {
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
       this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
       this.m_biopolymer, this.m_membrane,
+      this.m_photoreceptor, this.m_chemoreceptor, this.m_mechanoreceptor, this.m_thermoreceptor,
     ];
     this.chemCols = new Array(CHEMICAL_COUNT);
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
@@ -618,6 +628,8 @@ export class CreatureStore {
     this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
     this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
     this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
+    this.m_photoreceptor[i] = 0; this.m_chemoreceptor[i] = 0;
+    this.m_mechanoreceptor[i] = 0; this.m_thermoreceptor[i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
     // Named chemCols slots 0..7 are aliases of molCols and already
     // cleared above; only the generic slice (8..63) needs its own
@@ -656,6 +668,14 @@ export class MoleculesView {
   set biopolymer(v: number) { this.c.store.m_biopolymer[this.c.idx] = v; }
   get membrane(): number { return this.c.store.m_membrane[this.c.idx]; }
   set membrane(v: number) { this.c.store.m_membrane[this.c.idx] = v; }
+  get photoreceptor(): number { return this.c.store.m_photoreceptor[this.c.idx]; }
+  set photoreceptor(v: number) { this.c.store.m_photoreceptor[this.c.idx] = v; }
+  get chemoreceptor(): number { return this.c.store.m_chemoreceptor[this.c.idx]; }
+  set chemoreceptor(v: number) { this.c.store.m_chemoreceptor[this.c.idx] = v; }
+  get mechanoreceptor(): number { return this.c.store.m_mechanoreceptor[this.c.idx]; }
+  set mechanoreceptor(v: number) { this.c.store.m_mechanoreceptor[this.c.idx] = v; }
+  get thermoreceptor(): number { return this.c.store.m_thermoreceptor[this.c.idx]; }
+  set thermoreceptor(v: number) { this.c.store.m_thermoreceptor[this.c.idx] = v; }
 }
 
 // Reserves were retired in phase D of the chemistry overhaul.
@@ -714,7 +734,7 @@ export class Creature {
   // Setter: copy field-by-field from any Molecules-shaped object into
   // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
   // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number }) {
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number }) {
     const s = this.store; const i = this.idx;
     s.m_glucose[i] = m.glucose ?? 0;
     s.m_fattyAcid[i] = m.fattyAcid ?? 0;
@@ -730,6 +750,10 @@ export class Creature {
     s.m_ribosome[i] = m.ribosome ?? 0;
     s.m_biopolymer[i] = m.biopolymer ?? 0;
     s.m_membrane[i] = m.membrane ?? 0;
+    s.m_photoreceptor[i] = m.photoreceptor ?? 0;
+    s.m_chemoreceptor[i] = m.chemoreceptor ?? 0;
+    s.m_mechanoreceptor[i] = m.mechanoreceptor ?? 0;
+    s.m_thermoreceptor[i] = m.thermoreceptor ?? 0;
   }
   get x(): number { return this.store.x[this.idx]; }
   set x(v: number) { this.store.x[this.idx] = v; }
@@ -817,6 +841,10 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.ribosome !== undefined) store.m_ribosome[idx] = m.ribosome;
     if (m.biopolymer !== undefined) store.m_biopolymer[idx] = m.biopolymer;
     if (m.membrane !== undefined) store.m_membrane[idx] = m.membrane;
+    if (m.photoreceptor !== undefined) store.m_photoreceptor[idx] = m.photoreceptor;
+    if (m.chemoreceptor !== undefined) store.m_chemoreceptor[idx] = m.chemoreceptor;
+    if (m.mechanoreceptor !== undefined) store.m_mechanoreceptor[idx] = m.mechanoreceptor;
+    if (m.thermoreceptor !== undefined) store.m_thermoreceptor[idx] = m.thermoreceptor;
   }
   return c;
 }
@@ -854,12 +882,17 @@ export interface Molecules {
   ribosome: number;     // protein-synthesis machinery; multiplies biosynth rate
   biopolymer: number;   // bulk food substrate; broken to glu/aa/fa by enzyme
   membrane: number;     // structural lipid bilayer; required for fission
+  photoreceptor: number;   // gates SENSE_LIGHT / EM / pheromone
+  chemoreceptor: number;   // gates SENSE_GRAD / DENSITY / KIN
+  mechanoreceptor: number; // gates SENSE_PRESSURE / WALL
+  thermoreceptor: number;  // gates SENSE_TEMP
 }
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
   "o2", "co2", "minerals", "biomass", "waste", "ribosome",
   "biopolymer", "membrane",
+  "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
 ];
 
 // Per-byte genome cost (BUILD_KEYS, genomeMoleculeCost,
@@ -873,6 +906,7 @@ export function emptyMolecules(): Molecules {
     chlorophyll: 0, enzyme: 0,
     o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0, ribosome: 0,
     biopolymer: 0, membrane: 0,
+    photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0,
   };
 }
 
@@ -1335,7 +1369,7 @@ const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
 const CHEMICAL_COUNT = 64;
-const NAMED_CHEMICAL_COUNT = 14;
+const NAMED_CHEMICAL_COUNT = 18;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
 // Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
@@ -1346,6 +1380,7 @@ const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "biomass", "adp",
   "waste", "chlorophyll", "enzyme", "ribosome",
   "biopolymer", "membrane",
+  "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
 // Stable across the migration; phase E renumbers ATP to 0 and shifts these.
@@ -1370,6 +1405,13 @@ const CHEM_ENZ = 10;
 const CHEM_RIBO = 11;
 const CHEM_BIOPOLYMER = 12;
 const CHEM_MEMBRANE = 13;
+const CHEM_PHOTORECEPTOR = 14;
+const CHEM_CHEMORECEPTOR = 15;
+const CHEM_MECHANORECEPTOR = 16;
+const CHEM_THERMORECEPTOR = 17;
+// Receptor saturation reference. Above this pool size sense signals
+// run at full strength; below it they scale linearly toward zero.
+const RECEPTOR_REF = 1.0;
 const RIBO_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
@@ -1459,6 +1501,10 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* ribo   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3,  vaporPressure: 0,  meltingPoint: 70,   permeability: 0,   bondEnergy: 5,    role: "mrna",      color: "#c8a4dc" },
   /* biop   */ { molarMass: 1.0, density: 1.05, defaultPhase: "solid",   solubility: 0.05, vaporPressure: 0,  meltingPoint: 250,  permeability: 0,   bondEnergy: 25,   role: "none",      color: "#7fb069" },
   /* memb   */ { molarMass: 1.0, density: 0.8,  defaultPhase: "liquid",  solubility: 0.01, vaporPressure: 0,  meltingPoint: 50,   permeability: 0,   bondEnergy: 40,   role: "membrane",  color: "#f0d264" },
+  /* photo  */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#d864c8" },
+  /* chemo  */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#64c8d8" },
+  /* mech   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#c8d864" },
+  /* thermo */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#d8a064" },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // Initialize the exported per-chem density LUT. Hot loops reuse this
@@ -1730,11 +1776,11 @@ function buildReactionTable(): Reaction[] {
   installNamedReactions(out);
   return out;
 }
-// Number of named reactions installed at the head of REACTIONS. Bumps
-// from 10 to 12 in phase D to make room for biopolymer-digest (slot 10)
-// and membrane-synth (slot 11). Exported so HUD / disassembler can
-// label catalyst slots by their bootstrap pathway.
-export const NAMED_REACTION_COUNT = 12;
+// Number of named reactions installed at the head of REACTIONS. Phase
+// D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
+// H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
+// disassembler can label catalyst slots by their bootstrap pathway.
+export const NAMED_REACTION_COUNT = 16;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +
@@ -1796,6 +1842,15 @@ function installNamedReactions(out: Reaction[]): void {
   // a cell that biosynths a body also lays down membrane. Cheaper
   // than chl/ribo so a growing cell can afford it.
   out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_memb
+  // Receptor biosynth (phase H2). Same shape as synth_chl / synth_enz:
+  // amino acid + minerals consumed, mRNA-gated, ATP cost. Lumped under
+  // the SYNTH_BIO bit so cells that maintain biomass also maintain
+  // sensing capacity -- an emergent property: starving cells lose
+  // both growth and their senses.
+  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
+  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
+  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
+  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -3069,6 +3124,16 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
       aminoAcid: 0.5,
       chlorophyll: hasChl ? 0.5 : 0,
       enzyme: hasEnz ? 0.5 : 0,
+      // Phase H2: founders start with a starter dose of each receptor
+      // chemical so they can sense from tick 1. Receptors decay via
+      // maintenanceDecay and are replenished by biosynth slots 12..15
+      // (gated by SYNTH_BIO, same bit as biomass). Cells that fail to
+      // keep biosynth going go blind over a couple of minutes -- a
+      // selective pressure to maintain growth + sensing together.
+      photoreceptor: 1.0,
+      chemoreceptor: 1.0,
+      mechanoreceptor: 1.0,
+      thermoreceptor: 1.0,
     },
   });
   // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
@@ -3449,6 +3514,20 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_ribosome[i] = rib - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
+  }
+  // Receptor chems decay at the same rate as other machinery. Cells
+  // that don't run biosynth lose their sensing capacity over minutes.
+  const RECEPTOR_DECAY_PER_SEC = 0.005;
+  const recCols = [s.m_photoreceptor, s.m_chemoreceptor, s.m_mechanoreceptor, s.m_thermoreceptor];
+  for (let r = 0; r < recCols.length; r++) {
+    const col = recCols[r];
+    const v = col[i];
+    if (v > 0) {
+      const lost = v * RECEPTOR_DECAY_PER_SEC * stressMult * dt;
+      col[i] = v - lost;
+      s.m_aminoAcid[i] += 0.5 * lost;
+      s.m_minerals[i] += 0.5 * lost;
+    }
   }
   for (let k = 0; k < CATALYST_COUNT; k++) {
     const col = s.catalystCols[k];
@@ -5259,6 +5338,45 @@ function populateSensors(c: Creature, world: World): void {
     VM_SENSORS.neighborHash =
       ((xored & 0xFF) ^ ((xored >>> 8) & 0xFF) ^ ((xored >>> 16) & 0xFF) ^ ((xored >>> 24) & 0xFF)) & 0xFF;
   }
+  // Phase H2: gate external sensors on the corresponding receptor
+  // chemical's pool. Sat(v) = v / (v + REF) gives a smooth ramp from
+  // 0 (no receptor) to 1 (saturated). Self-sensors (energy, mass,
+  // own chem pool, age, head direction) do NOT gate -- a cell always
+  // knows its own state. External signals scale toward zero when the
+  // cell hasn't invested in receptors.
+  const sCols = c.store.chemCols; const sI = c.idx;
+  const sat = (v: number) => v / (v + RECEPTOR_REF);
+  const photoSat = sat(sCols[CHEM_PHOTORECEPTOR][sI]);
+  const chemoSat = sat(sCols[CHEM_CHEMORECEPTOR][sI]);
+  const mechSat = sat(sCols[CHEM_MECHANORECEPTOR][sI]);
+  const thermoSat = sat(sCols[CHEM_THERMORECEPTOR][sI]);
+  // Photo gates light + EM bands + pheromone trail-following.
+  VM_SENSORS.light *= photoSat;
+  VM_SENSORS.emBands[0] *= photoSat;
+  VM_SENSORS.emBands[1] *= photoSat;
+  VM_SENSORS.emBands[2] *= photoSat;
+  VM_SENSORS.pheromone *= photoSat;
+  // Chemo gates external gradients/density and neighbor-cell features.
+  for (let i = 0; i < 6; i++) {
+    VM_SENSORS.gradX[i] *= chemoSat;
+    VM_SENSORS.gradY[i] *= chemoSat;
+    VM_SENSORS.density[i] *= chemoSat;
+  }
+  VM_SENSORS.kinOverlap *= chemoSat;
+  VM_SENSORS.neighborHash = Math.round(VM_SENSORS.neighborHash * chemoSat);
+  VM_SENSORS.creatureDx *= chemoSat;
+  VM_SENSORS.creatureDy *= chemoSat;
+  VM_SENSORS.creatureMass *= chemoSat;
+  // Mech gates wall + pressure (cell's perception of physical forces).
+  VM_SENSORS.wallX *= mechSat;
+  VM_SENSORS.wallY *= mechSat;
+  VM_SENSORS.pressureX *= mechSat;
+  VM_SENSORS.pressureY *= mechSat;
+  // Thermo gates the local temperature reading. The signal scales the
+  // departure from a baseline (water midpoint ~15C); zero receptor =
+  // always-baseline (no information).
+  const baseTemp = 15;
+  VM_SENSORS.temp = baseTemp + (VM_SENSORS.temp - baseTemp) * thermoSat;
 }
 
 function creatureTotalMass(c: Creature): number {
@@ -6556,6 +6674,10 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       ribosome: m.ribosome,
       biopolymer: m.biopolymer,
       membrane: m.membrane,
+      photoreceptor: m.photoreceptor,
+      chemoreceptor: m.chemoreceptor,
+      mechanoreceptor: m.mechanoreceptor,
+      thermoreceptor: m.thermoreceptor,
     },
     vmPc: c.vm.pc,
     // The renderer reads the stack length and a short preview; a slice

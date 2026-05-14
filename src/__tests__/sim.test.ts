@@ -84,7 +84,7 @@ function quietWorld(): World {
     currentAmp: 0,
     vmInstrBudget: 8,
     obstacles: [],
-    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0, biomass: 0, waste: 0, ribosome: 0, biopolymer: 0, membrane: 0 },
+    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0, biomass: 0, waste: 0, ribosome: 0, biopolymer: 0, membrane: 0, photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0 },
     ambient: (() => { const a = new Float32Array(64); a[CHEM_IDS.o2] = 12; a[CHEM_IDS.co2] = 1; return a; })(),
   };
 }
@@ -117,6 +117,10 @@ function makeCreature(overrides: Partial<{
   // override in their molecules patch.
   const molecules: Partial<Molecules> = {
     biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
+    // Phase H2: receptors start saturated so existing tests of
+    // sensing behavior don't have to invest in them. Tests probing
+    // receptor-gating override these to zero in their molecules patch.
+    photoreceptor: 1, chemoreceptor: 1, mechanoreceptor: 1, thermoreceptor: 1,
     ...(overrides.molecules ?? {}),
   };
   return newCreature(store, {
@@ -1624,6 +1628,39 @@ describe("mass conservation", () => {
     for (const mk of MOLECULE_IDS) m += w.atmosphere[mk];
     return m;
   }
+
+  it("zero receptor pool gates the corresponding SENSE op output", () => {
+    // Phase H2 invariant: a cell with no chemoreceptor reads zero
+    // from SENSE_GRAD even when food particles are nearby. Same cell
+    // with chemoreceptor saturated reads a nonzero value.
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    // Plant a biopolymer cloud the cell could chase.
+    for (let i = 0; i < 100; i++) {
+      pushParticle(w, { x: 600, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 3,
+        chemId: CHEM_IDS.biopolymer, density: 1.0 });
+    }
+    // Cell with zero chemoreceptor.
+    const blind = makeCreature({
+      x: 450, y: 300, energy: 50, senseRange: 300,
+      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, OP.HALT]),
+      molecules: { biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
+        photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0 },
+    });
+    w.creatures.push(blind);
+    step(w, 1 / 60);
+    // After the genome runs, register 0 holds the gradient. Zero
+    // receptor -> chemoSat == 0 -> gradient zeroed.
+    expect(blind.vm.regs[0]).toBe(0);
+    // Same setup, but seeing cell.
+    const seeing = makeCreature({
+      x: 450, y: 300, energy: 50, senseRange: 300,
+      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, OP.HALT]),
+    });
+    w.creatures.push(seeing);
+    step(w, 1 / 60);
+    expect(seeing.vm.regs[0]).not.toBe(0);
+  });
 
   it("cell <-> ambient diffusion is mass-conserving per chem", () => {
     const w = quietWorld();
