@@ -63,7 +63,6 @@ import {
   MATERIAL_IDS_ORDERED,
   MOLECULE_IDS,
   surfaceYAt,
-  surfaceActivity,
   temperatureAt,
   solarLight,
   takeSnapshot,
@@ -1063,103 +1062,12 @@ function tempToColor(T: number): string {
   return `rgb(${r},${g},${b2})`;
 }
 
-// Spray droplets: transient render-only entities that spawn at wave
-// crests, arc above the water line under gravity, and disappear when
-// they fall back into the surface. Pure visual; the splash physics
-// in sim.ts still kicks particles upward, this just makes the effect
-// readable. Lives in render so it doesn't fight the sim's fixed dt.
-type Droplet = { x: number; y: number; vx: number; vy: number; r: number; life: number };
-const droplets: Droplet[] = [];
-const DROPLET_RATE_PER_SEC = 30;     // spawn budget at activity = 1
-const DROPLET_MIN_CREST = 1;         // px above mean surface
-const DROPLET_GRAVITY = 280;         // px/s^2; independent of world.gravity
-let lastDropletTime = performance.now();
-
-function updateDroplets(): void {
-  const nowWall = performance.now();
-  let dt = (nowWall - lastDropletTime) / 1000;
-  if (dt > 0.1) dt = 0.1; // clamp after pauses / tab returns
-  lastDropletTime = nowWall;
-
-  const act = surfaceActivity(snapshot);
-  const expected = DROPLET_RATE_PER_SEC * act * dt;
-  let n = Math.floor(expected);
-  if (Math.random() < expected - n) n++;
-  const meanY = snapshot.surfaceY;
-  // Reference amplitude for scaling speed -- bigger waves throw harder.
-  const ampScale = Math.max(2, snapshot.surfaceWaveAmp * act);
-  for (let i = 0; i < n; i++) {
-    // Sample a random x along the surface. Spawn anywhere on the
-    // above-mean portion of a wave (leading edge, crest, trailing
-    // edge), not just at the tip -- otherwise every droplet starts
-    // at a point where the surface is flat (slope = 0) and the
-    // computed normal is purely vertical regardless of wave shape.
-    const x = Math.random() * snapshot.width;
-    const surfY = surfaceYAt(snapshot, x);
-    const heightAboveMean = meanY - surfY;
-    if (heightAboveMean < DROPLET_MIN_CREST) continue;
-
-    // Local surface slope -> outward normal. Sampling ±3px is fine
-    // enough to capture the dominant wave's tilt at this x without
-    // amplifying high-frequency noise from the harmonics.
-    const sampleDx = 3;
-    const yL = surfaceYAt(snapshot, x - sampleDx);
-    const yR = surfaceYAt(snapshot, x + sampleDx);
-    const slope = (yR - yL) / (2 * sampleDx);
-    // Outward normal in screen coords (y down). Tangent is (1, slope);
-    // rotating CW gives (slope, -1) -- y-negative so it points up out
-    // of the water, x-component carries the wave-face tilt.
-    const normLen = Math.sqrt(slope * slope + 1);
-    const nx = slope / normLen;
-    const ny = -1 / normLen;
-
-    // Speed scales with how high this spawn is on the wave. Peaks
-    // launch hard, mid-slopes throw gentler. Add a tangential noise
-    // term so droplets fan out instead of forming a single ray.
-    const heightFactor = Math.min(1, heightAboveMean / ampScale);
-    const baseSpeed = 45 + heightFactor * 90 + Math.random() * 40;
-    const tangentialNoise = (Math.random() - 0.5) * 50;
-    const tx = -ny; // tangent perpendicular to (nx, ny)
-    const ty = nx;
-
-    droplets.push({
-      x,
-      y: surfY,
-      vx: nx * baseSpeed + tx * tangentialNoise,
-      vy: ny * baseSpeed + ty * tangentialNoise,
-      // Size scales with how high on the wave we spawn. Peak ejections
-      // throw chunky droplets; mid-slope sheds stay small. Keeps a bit
-      // of random spread so droplets in the same splash look varied.
-      r: 1.2 + heightFactor * 4 + Math.random() * 1.5,
-      life: 1.2 + Math.random() * 0.6,
-    });
-  }
-  for (let i = droplets.length - 1; i >= 0; i--) {
-    const d = droplets[i];
-    d.vy += DROPLET_GRAVITY * dt;
-    d.x += d.vx * dt;
-    d.y += d.vy * dt;
-    d.life -= dt;
-    // Pop if life ran out or droplet fell back into the surface.
-    const surfHere = surfaceYAt(snapshot, d.x);
-    if (d.life <= 0 || d.y > surfHere) {
-      droplets[i] = droplets[droplets.length - 1];
-      droplets.pop();
-    }
-  }
-}
-
-function drawDroplets(): void {
-  if (droplets.length === 0) return;
-  // Single beginPath/fill batches all droplets into one draw call.
-  ctx.fillStyle = "rgba(220, 240, 255, 0.85)";
-  ctx.beginPath();
-  for (const d of droplets) {
-    ctx.moveTo(d.x + d.r, d.y);
-    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-  }
-  ctx.fill();
-}
+// Splash droplets removed -- previous implementation sprinkled them
+// across the above-mean half of every wave regardless of whether the
+// crest was steep enough to actually break. Result: random pops over
+// otherwise calm water. See PERF_NEXT_STEPS / chat thread for the
+// design of the replacement (event-driven, gated on local steepness
+// and minimum activity, burst-spawned per breaking crest).
 
 // Sample the wavy surface at intervals; sim.surfaceYAt is the shared
 // source of truth so the rendered line matches the physical wall.
@@ -1294,10 +1202,6 @@ function render(): void {
   }
   ctx.filter = "none";
   ctx.globalAlpha = 1;
-
-  // Spray droplets render above particles (they're flying above the
-  // water line) but below cells.
-  drawDroplets();
 
   const selId = selectedCellId;
   for (let i = 0; i < snapshot.creatures.length; i++) {
@@ -2094,7 +1998,6 @@ function frame(): void {
   const renderThisFrame = !turboMode || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
   const tBeforeRender = performance.now();
   if (renderThisFrame) {
-    updateDroplets();
     render();
   }
   const tAfterRender = performance.now();
