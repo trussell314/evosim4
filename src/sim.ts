@@ -2745,8 +2745,12 @@ function emptyReserves(): Record<MaterialId, number> {
 // genome's SYNTH_* presence only sizes the absolute minimum
 // machinery seed (a "primordial soup" of mandatory-multiplier
 // molecules) so first-generation cells can fire their first
-// reactions before they have a chance to build more.
-const FOUNDER_SCOOP_RADIUS = 30;
+// reactions before they have a chance to build more. Each founder
+// samples a random radius in [FOUNDER_SCOOP_R_MIN, FOUNDER_SCOOP_R_MAX]
+// so initial cell sizes vary -- some founders get a lean scoop and
+// stay tiny, others land in a particle-rich patch and start fat.
+const FOUNDER_SCOOP_R_MIN = 14;
+const FOUNDER_SCOOP_R_MAX = 50;
 function makeCreature(world: World, x: number, y: number, z: number): Creature {
   const genome = makeRandomViableGenome();
   let hasChl = false, hasEnz = false;
@@ -2786,7 +2790,8 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
   // the world (its mass joins the cell). An empty patch means a
   // very lean cell that probably won't survive long; that's the
   // luck of biogenesis.
-  const rSq = FOUNDER_SCOOP_RADIUS * FOUNDER_SCOOP_RADIUS;
+  const scoopR = FOUNDER_SCOOP_R_MIN + Math.random() * (FOUNDER_SCOOP_R_MAX - FOUNDER_SCOOP_R_MIN);
+  const rSq = scoopR * scoopR;
   const ps = world.particles;
   for (let i = ps.length - 1; i >= 0; i--) {
     const p = ps[i];
