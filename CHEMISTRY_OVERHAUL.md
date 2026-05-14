@@ -227,10 +227,10 @@ Each one rolls:
   yield more ATP).
 - `role`: always `none` for procedural chems.
 
-Target count: ≥50 procedural chemicals (so total ≥70). Genome ABI
-allows operands modulo `CHEMICAL_COUNT`; bumping count past 64 means
-the surface fingerprint (currently a 64-bit packed mask) needs to
-grow — see migration plan.
+Target: 80 procedural chemicals on top of the 16-slot bootstrap
+reservation, for a total of 96. Surface fingerprint widens from
+64 bits to 128 bits (already a `(lo, hi)` Uint32 pair — extends to
+four words). Genome operands continue to be mod `CHEMICAL_COUNT`.
 
 ### Other modeled processes
 
@@ -379,35 +379,61 @@ Retire dead concepts: `MaterialId`, `Molecules` interface,
 functions if any remain. Final tests: smoke scenario runs to
 completion, a population stabilizes.
 
-## Open decisions (consult before implementation)
+## Locked decisions
 
-These are sticky choices; each affects multiple phases. Defaults
-listed; user confirms before phase B starts.
+User-confirmed before implementation starts. Revise here if any
+flip mid-migration.
 
-1. **Save format**: bump `SAVE_SCHEMA` version, do not migrate
-   old saves. (Default: yes, break old saves.)
-2. **Total chemical count**: 64 (preserve current fingerprint
-   width) or grow to 72+ (room for all bootstrap + ≥50 procedural).
-   (Default: grow to 72, widen fingerprint to 128 bits.)
-3. **Genome ABI**: chemical ids and catalyst slot ids change.
-   Existing populations won't make sense. OK to start fresh
-   with regenerated founders. (Default: yes.)
-4. **ATP-as-chemical**: move `Creature.energy` into the chem
-   pool. (Default: yes, but stage in phase E so earlier phases
-   are smaller.)
-5. **Membrane as fission gate**: hard-require a minimum
-   membrane lipid pool to call `REPRODUCE`. (Default: yes — it
-   gives "membrane" a real role; otherwise it's just a renamed
-   lipid molecule.)
-6. **Ambient pool spatial resolution**: scalar per chemical
-   (well-mixed) vs. coarse 2D grid. (Default: scalar for MVP;
-   grid is a future phase.)
-7. **DNA as a chemistry pool**: today the genome is bytes on
-   the creature object, not a chemical. Should DNA itself be a
-   tracked chemical (mass cost to mitosis, can be denatured)?
-   (Default: no — DNA stays as bytes; the mRNA pool is the
-   single chemical proxy for the whole nucleic-acid machinery.)
-8. **Pebbles**: stay as visual-only terrain. (Default: yes.)
+1. **Total chemical count: 96.** Headroom past the doc's
+   bootstrap+50 mock target. Surface fingerprint widens from
+   64-bit to 128-bit (two `Uint32` pairs already pattern).
+2. **ATP is `chemCols[0]`.** `Creature.energy` is retired in
+   phase E; all ATP-cost ops read/write the chem column. Energy
+   accounting is plain chemistry from that phase on.
+3. **Mitosis hard-gates on membrane lipid.** A minimum pool of
+   chemical 14 (membrane lipid) is required for `REPRODUCE` to
+   succeed. Below the floor: attempt fails cheaply, like any
+   other failed fission today. Floor is tuned in phase D.
+4. **Ambient is a global scalar per chemical (MVP).** Mass
+   conservation across cell ↔ ambient ↔ particle ↔ atmosphere
+   exchanges is a hard invariant — covered by a dedicated test
+   that sums total mass per chemical across all containers and
+   asserts it's preserved across a tick. Spatial resolution
+   (two-layer or 2D grid) lands later without API changes.
+5. **Save format breaks; no migration shim.** `SAVE_SCHEMA`
+   bumps; loading an old save shows an error. Consequence: old
+   genome operands reference different chem/catalyst ids, so
+   any leftover saved populations would be nonsense anyway —
+   not worth the migration cost.
+6. **Bootstrap chemistry is the doc's 12 reactions and 16
+   chemicals — nothing more.** No built-in toxin, signaling,
+   or storage chemistry. Those must emerge if at all.
+7. **DNA stays as bytes on the creature.** Not a chemical
+   pool. mRNA remains the single chemical proxy for the whole
+   nucleic-acid machinery.
+8. **Pebbles stay as visual-only terrain.** No chemistry; no
+   ingestion; no density-driven behavior beyond what they do
+   today.
+
+## Mass conservation invariant
+
+Made explicit because it's the load-bearing assumption in the
+new model. For every chemical `c`:
+
+```
+sum(cell_pool[c] for cell in world)
+  + sum(particle.mass[c] for particle in world)
+  + world.ambient[c]
+  + world.atmosphere[c]                    // for aerated gases
+  = total[c]                               // conserved across each tick
+```
+
+Reactions don't violate this because stoichiometry is
+mass-balanced at construction (existing engine guarantee).
+Ingestion / excretion / dissolution / aeration are the
+exchange events; each one moves mass between containers
+without creating or destroying it. A test in phase D asserts
+the invariant directly.
 
 ## Out of scope for this overhaul
 
