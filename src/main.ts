@@ -2219,12 +2219,11 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   // Uses the canonical walker from genome.ts so this stays in lockstep
   // with the VM. Any future op added to genome.ts's OPERANDS table is
   // automatically picked up here.
-  let reproducePc = -1;
-  walkGenome(genome, (op, pc, operand) => {
+  walkGenome(genome, (op, _pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
-      case OP.REPRODUCE: reproduce = true; if (reproducePc < 0) reproducePc = pc; break;
+      case OP.REPRODUCE: reproduce = true; break;
       case OP.PREDATE: predate = true; break;
       case OP.ENGULF: engulf = true; break;
       case OP.EMIT: emit = true; break;
@@ -2259,54 +2258,47 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   const mat = (k: number) => materialNames[k] ?? String(k);
 
   const parts: string[] = [];
-  // Trophic mode
+
+  // Trophic mode -- always one phrase, varies per cell.
   if (predate || engulf) parts.push("Hunts other cells.");
   else if (ingest.size > 0) {
-    const list = Array.from(ingest).map(mat).join(" + ");
-    parts.push(`Eats ${list}` + (thrust ? " — actively swims toward it." : "; doesn't pursue."));
-  } else if (synthChl) parts.push("Photoautotroph: fixes CO2 via chlorophyll, no ingestion.");
-  else if (thrust) parts.push("Swims but doesn't eat anything.");
-  else parts.push("Drifts passively; no food intake.");
-  // Synthesis
+    parts.push(`Eats ${Array.from(ingest).map(mat).join(" + ")}.`);
+  } else if (synthChl) parts.push("Photoautotroph: fixes CO2 via chlorophyll.");
+  else if (thrust) parts.push("Swims, doesn't eat.");
+  else parts.push("Drifts; no intake.");
+
+  // Synthesis -- only show what's present.
   const synth: string[] = [];
-  if (synthAA && synthFA && synthBio) synth.push("builds full biomass");
-  else {
-    if (synthBio) synth.push("makes biomass");
-    if (synthAA) synth.push("amino acids");
-    if (synthFA) synth.push("fatty acids");
-  }
-  if (synthChl) synth.push("makes chlorophyll (photosynthesizes)");
-  if (synthEnz) synth.push("makes enzymes");
-  if (synthRibo) synth.push("builds ribosomes (faster all-around growth)");
-  if (synth.length > 0) parts.push(`Internally ${synth.join(", ")}.`);
-  else parts.push("No biosynthesis ops — can't grow new structure.");
-  // Reproduction. The PC isn't reset between ticks (it wraps mod L),
-  // and HALT short-circuits the current tick early -- so a REPRODUCE
-  // op buried deep in the genome only fires once per ~full-genome
-  // cycle (L/budget ticks), not per tick. The describer reflects
-  // this so users don't confuse "has REPRODUCE" with "constantly
-  // succeeds at fission".
+  if (synthBio) synth.push("biomass");
+  if (synthAA) synth.push("aa");
+  if (synthFA) synth.push("fa");
+  if (synthChl) synth.push("chlorophyll");
+  if (synthEnz) synth.push("enzymes");
+  if (synthRibo) synth.push("ribosomes");
+  if (synth.length > 0) parts.push("Builds " + synth.join(", ") + ".");
+
+  // Reproduction -- only mention when present; sterile lineages
+  // self-evidently die so the absence speaks for itself in context
+  // with the species' phylogeny lifespan.
   if (reproduce) {
-    if (gated) parts.push("Divides when conditions are met.");
-    else parts.push(
-      `REPRODUCE has no JZ-style gating (sits at PC ${reproducePc} of ${genome.length}); fires whenever the PC walks past it. Each attempt pays ATP whether the daughter survives or not.`
-    );
-  } else parts.push("Has no REPRODUCE op — sterile.");
-  // Extras
+    parts.push(gated ? "Divides conditionally." : "Divides reflexively (no gate).");
+  }
+
+  // Extras (action ops beyond move/eat/reproduce).
   const extras: string[] = [];
   if (repair) extras.push("repairs DNA");
   if (emit) extras.push("emits pheromone");
-  if (adhere) extras.push("forms colonies");
+  if (adhere) extras.push("adheres");
   if (excrete.size > 0) extras.push("excretes " + Array.from(excrete).map(mat).join("/"));
-  if (selfModifies) extras.push("rewrites its own genome");
+  if (selfModifies) extras.push("self-modifies");
   if (turn && !thrust) extras.push("turns in place");
-  if (extras.length > 0) parts.push("Also " + extras.join(", ") + ".");
-  // Sensors
+  if (extras.length > 0) parts.push(extras.join(", ").replace(/^./, (c) => c.toUpperCase()) + ".");
+
+  // Sensors -- only when present.
   if (sensors.size > 0) {
-    parts.push(`Senses ${Array.from(sensors).join(", ")}${gated ? " and gates behavior on it" : " but doesn't gate behavior on it"}.`);
-  } else {
-    parts.push("Blind — no sensor reads.");
+    parts.push(`Senses ${Array.from(sensors).join(", ")}${gated ? " (gated)" : " (ungated)"}.`);
   }
+
   return parts.join(" ");
 }
 
