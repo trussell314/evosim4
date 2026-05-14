@@ -373,6 +373,28 @@ exportBtn.addEventListener("click", () => {
 });
 root.appendChild(exportBtn);
 
+// Turbo mode: sim eats every available ms; render runs only once
+// every TURBO_RENDER_EVERY rAFs so the world is still glanceable.
+// Toggle button sits between reset and export.
+let turboMode = false;
+let turboFrameCounter = 0;
+const TURBO_RENDER_EVERY = 30; // one render per ~500ms at 60fps rAF
+const turboBtn = document.createElement("button");
+turboBtn.title = "Run sim flat-out; render once per ~500ms";
+const renderTurboBtn = (): void => {
+  turboBtn.textContent = turboMode ? "turbo on" : "turbo";
+  turboBtn.style.cssText =
+    WORLD_BTN_STYLE +
+    (turboMode ? "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a;" : "");
+  positionWorldButtons();
+};
+turboBtn.addEventListener("click", () => {
+  turboMode = !turboMode;
+  turboFrameCounter = 0;
+  renderTurboBtn();
+});
+root.appendChild(turboBtn);
+
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
   const bottom = PHYLO_STRIP_H + 8;
@@ -380,8 +402,11 @@ function positionWorldButtons(): void {
   resetBtn.style.left = "8px";
   exportBtn.style.bottom = `${bottom}px`;
   exportBtn.style.right = `${panelW + 8}px`;
+  // Turbo sits to the right of reset.
+  turboBtn.style.bottom = `${bottom}px`;
+  turboBtn.style.left = `${8 + resetBtn.offsetWidth + 8}px`;
 }
-positionWorldButtons();
+renderTurboBtn();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -1827,11 +1852,11 @@ simChannel.port1.onmessage = () => {
   let ranOne = false;
   while (performance.now() < sliceDeadline) {
     const t0 = performance.now();
-    // Always run at least one step per frame so sim can never stall
-    // permanently. The overshoot guard only applies to *additional*
-    // steps -- if recentStepMs spikes once we still make forward
-    // progress, and the spike decays back to normal as steps run.
-    if (ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
+    // In normal mode, refuse to start a step that would overshoot the
+    // next vsync (keeps render glassy). In turbo, ignore that guard
+    // entirely -- the sim eats every available ms, render runs only
+    // once every TURBO_RENDER_EVERY rAFs.
+    if (!turboMode && ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
     try {
       step(world, FIXED_DT);
       maybeAutosave();
@@ -1860,9 +1885,16 @@ function frame(): void {
   simMsThisFrame = 0;
   const advanced = advancedThisFrame;
   advancedThisFrame = 0;
+  // Turbo: skip most renders to leave the main thread free for sim
+  // slices. updateInspector still runs every frame so the HUD stats
+  // (sim_t, fps-ish, pop, x-rate) stay live.
+  turboFrameCounter = (turboFrameCounter + 1) | 0;
+  const renderThisFrame = !turboMode || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
   const tBeforeRender = performance.now();
-  updateDroplets();
-  render();
+  if (renderThisFrame) {
+    updateDroplets();
+    render();
+  }
   updateInspector();
   // Refresh the tooltip every frame whenever there's a locked cell
   // to follow OR the cursor is currently over the canvas. flushTooltip
