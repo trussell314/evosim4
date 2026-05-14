@@ -67,7 +67,7 @@ for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_INDEX[MATERIAL_IDS[i]] = 
 // Flat Float32 lookup of material default density, indexed by the
 // uint8 stored in ParticleStore.material[i]. Avoids a string-keyed
 // dictionary lookup in the hot force loop.
-const MATERIAL_BASE_DENSITY = new Float32Array(MATERIAL_IDS.length);
+export const MATERIAL_BASE_DENSITY = new Float32Array(MATERIAL_IDS.length);
 for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_BASE_DENSITY[i] = MATERIALS[MATERIAL_IDS[i]].density;
 
 export interface ObstacleLobe {
@@ -102,49 +102,149 @@ export interface Obstacle {
 // Invariant: world.particles[i].idx === i. Splice / removeAt
 // routines maintain this via swap-and-pop so iterating by array
 // index is equivalent to iterating store slot by slot.
+// Fixed preallocated cap for the ParticleStore. Big enough to cover
+// the over-cap multiplier on top of particleTarget at the largest
+// world size we ship (currently 800x600 -> particleTarget ~2320,
+// peak ~20x ~46k), with a safety margin. The SAB-backed columns
+// don't support growth (subworker views would become stale), so we
+// reserve the worst case up front. ~3 MB of memory at this cap.
+const PARTICLE_STORE_PREALLOC_CAP = 65536;
+
+// Particle store layout. Single backing buffer (SharedArrayBuffer
+// when crossOriginIsolated, plain ArrayBuffer otherwise) so subworkers
+// can hold views over the same memory for parallel applyForces. Each
+// column lives at a fixed byte offset; mutating a slot through any
+// view writes the bytes once.
+//
+// Column order (must match PARTICLE_COLUMN_LAYOUT below):
+//   x, y, z, vx, vy, vz, r, density, age   : Float32   (4 bytes each)
+//   material                                : Uint8     (1 byte)
+//   quietTicks                              : Int32     (4 bytes)
+export interface ParticleSharedLayout {
+  buffer: ArrayBufferLike;
+  cap: number;
+  offsets: {
+    x: number; y: number; z: number;
+    vx: number; vy: number; vz: number;
+    r: number; density: number; age: number;
+    material: number;
+    quietTicks: number;
+  };
+}
+
+const FLOAT_BYTES = 4;
+const UINT8_BYTES = 1;
+const INT32_BYTES = 4;
+
+function allocParticleBuffer(cap: number): { buffer: ArrayBufferLike; layout: ParticleSharedLayout["offsets"] } {
+  // 9 float columns + 1 uint8 column + 1 int32 column, each padded
+  // out to 8 bytes so the next column's view stays aligned.
+  const align = (n: number): number => (n + 7) & ~7;
+  const f32Size = cap * FLOAT_BYTES;
+  const u8Size = cap * UINT8_BYTES;
+  const i32Size = cap * INT32_BYTES;
+  let o = 0;
+  const offsets = {} as ParticleSharedLayout["offsets"];
+  offsets.x = o; o = align(o + f32Size);
+  offsets.y = o; o = align(o + f32Size);
+  offsets.z = o; o = align(o + f32Size);
+  offsets.vx = o; o = align(o + f32Size);
+  offsets.vy = o; o = align(o + f32Size);
+  offsets.vz = o; o = align(o + f32Size);
+  offsets.r = o; o = align(o + f32Size);
+  offsets.density = o; o = align(o + f32Size);
+  offsets.age = o; o = align(o + f32Size);
+  offsets.material = o; o = align(o + u8Size);
+  offsets.quietTicks = o; o = align(o + i32Size);
+  const total = o;
+  // Prefer SharedArrayBuffer when crossOriginIsolated so subworkers
+  // can mutate columns in place. Falls back to a regular ArrayBuffer
+  // when SAB isn't allowed (no COOP/COEP, older host), and the
+  // simulation just runs single-threaded.
+  let buffer: ArrayBufferLike;
+  if (typeof SharedArrayBuffer !== "undefined" &&
+      typeof globalThis !== "undefined" &&
+      // crossOriginIsolated is on Window + WorkerGlobalScope when COOP/COEP are set.
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
+    buffer = new SharedArrayBuffer(total);
+  } else {
+    buffer = new ArrayBuffer(total);
+  }
+  return { buffer, layout: offsets };
+}
+
 export class ParticleStore {
   cap = 0;
   n = 0;
-  x = new Float32Array(0);
-  y = new Float32Array(0);
-  z = new Float32Array(0);
-  vx = new Float32Array(0);
-  vy = new Float32Array(0);
-  vz = new Float32Array(0);
-  r = new Float32Array(0);
-  density = new Float32Array(0);   // 0 -> use MATERIALS[material].density
-  material = new Uint8Array(0);    // index into MATERIAL_IDS
-  quietTicks = new Int32Array(0);
+  buffer!: ArrayBufferLike;
+  offsets!: ParticleSharedLayout["offsets"];
+  x!: Float32Array;
+  y!: Float32Array;
+  z!: Float32Array;
+  vx!: Float32Array;
+  vy!: Float32Array;
+  vz!: Float32Array;
+  r!: Float32Array;
+  density!: Float32Array;   // 0 -> use MATERIALS[material].density
+  material!: Uint8Array;    // index into MATERIAL_IDS
+  quietTicks!: Int32Array;
   // Particle age in sim-seconds. Used by the decay pass: old particles
   // gradually lose mass (radius shrinks) and disappear once below a
   // minimum size. Models decomposition by unmodeled microbiota and
   // prevents corpse-spillage from autolysis from accumulating
   // indefinitely.
-  age = new Float32Array(0);
+  age!: Float32Array;
   molecules: (Molecules | null)[] = [];
   // Generic-chemical payload (chemCols slots 8..63). Stays null for
   // the typical particle; allocated only when a dying cell's generic
   // pool got dumped here so it can be re-absorbed on ingest. Length
   // GENERIC_CHEMICAL_COUNT when present.
   genericChem: (Float32Array | null)[] = [];
-  constructor(initialCap = 256) { this.grow(initialCap); }
+  constructor(initialCap = 256) {
+    // Round initial cap up to the parallel-friendly preallocated
+    // ceiling. Subworkers receive views over this exact buffer and
+    // can't follow us across a reallocation, so we sidestep growth
+    // by reserving enough room up front.
+    const cap = Math.max(initialCap, PARTICLE_STORE_PREALLOC_CAP);
+    const { buffer, layout } = allocParticleBuffer(cap);
+    this.cap = cap;
+    this.buffer = buffer;
+    this.offsets = layout;
+    this.rebuildViews();
+  }
+  // Returns a layout descriptor a subworker can use to construct its
+  // own views over the same buffer. Must remain stable for the
+  // lifetime of the store (no realloc).
+  sharedLayout(): ParticleSharedLayout {
+    return { buffer: this.buffer, cap: this.cap, offsets: this.offsets };
+  }
+  private rebuildViews(): void {
+    const b = this.buffer;
+    const o = this.offsets;
+    const cap = this.cap;
+    this.x = new Float32Array(b, o.x, cap);
+    this.y = new Float32Array(b, o.y, cap);
+    this.z = new Float32Array(b, o.z, cap);
+    this.vx = new Float32Array(b, o.vx, cap);
+    this.vy = new Float32Array(b, o.vy, cap);
+    this.vz = new Float32Array(b, o.vz, cap);
+    this.r = new Float32Array(b, o.r, cap);
+    this.density = new Float32Array(b, o.density, cap);
+    this.age = new Float32Array(b, o.age, cap);
+    this.material = new Uint8Array(b, o.material, cap);
+    this.quietTicks = new Int32Array(b, o.quietTicks, cap);
+  }
   grow(newCap: number): void {
     if (newCap <= this.cap) return;
-    const old = this;
-    const nx = new Float32Array(newCap); nx.set(old.x); this.x = nx;
-    const ny = new Float32Array(newCap); ny.set(old.y); this.y = ny;
-    const nz = new Float32Array(newCap); nz.set(old.z); this.z = nz;
-    const nvx = new Float32Array(newCap); nvx.set(old.vx); this.vx = nvx;
-    const nvy = new Float32Array(newCap); nvy.set(old.vy); this.vy = nvy;
-    const nvz = new Float32Array(newCap); nvz.set(old.vz); this.vz = nvz;
-    const nr = new Float32Array(newCap); nr.set(old.r); this.r = nr;
-    const nd = new Float32Array(newCap); nd.set(old.density); this.density = nd;
-    const nm = new Uint8Array(newCap); nm.set(old.material); this.material = nm;
-    const nq = new Int32Array(newCap); nq.set(old.quietTicks); this.quietTicks = nq;
-    const na = new Float32Array(newCap); na.set(old.age); this.age = na;
-    while (this.molecules.length < newCap) this.molecules.push(null);
-    while (this.genericChem.length < newCap) this.genericChem.push(null);
-    this.cap = newCap;
+    // The store's backing SharedArrayBuffer is shared with particle
+    // subworkers that hold views over it; a realloc would silently
+    // strand them on stale memory. We preallocate big up front
+    // (PARTICLE_STORE_PREALLOC_CAP) so this path is unreachable in
+    // practice; signal loudly if it ever isn't.
+    throw new Error(
+      `ParticleStore grow ${this.cap} -> ${newCap} would invalidate ` +
+      `subworker views; raise PARTICLE_STORE_PREALLOC_CAP instead.`,
+    );
   }
   // Append a slot with the given field values. Returns the new slot
   // index. Caller is responsible for keeping the world.particles
@@ -3199,49 +3299,64 @@ function applyBondSprings(world: World, dt: number): void {
   }
 }
 
-function applyForces(world: World, dt: number): void {
-  const kS = (2 * Math.PI) / world.surfaceLength;
-  const wS = (2 * Math.PI) / world.surfacePeriod;
-  const kL = (2 * Math.PI) / world.swellLength;
-  const wL = (2 * Math.PI) / world.swellPeriod;
-  const kU = (2 * Math.PI) / world.updraftLength;
-  const wU = (2 * Math.PI) / world.updraftPeriod;
+// Scalar inputs the particle force loop needs from the world. Kept
+// as a flat shape so a particle subworker can deserialize it cheaply
+// from the dispatch SAB instead of cloning the whole World.
+export interface ParticleForceParams {
+  dt: number;
+  t: number;
+  drag: number;
+  gravity: number;
+  surfaceY: number;
+  surfaceDecay: number;
+  swellDecay: number;
+  updraftAmp: number;
+  currentAmp: number;
+  kS: number; wS: number;
+  kL: number; wL: number;
+  kU: number; wU: number;
+  surfAmp: number;
+  swellAmp: number;
+  zAmp: number;
+  bAmp: number;
+  updraftEnv: number;
+  colDepth: number;
+  currentDrift: number;
+}
 
-  // Disturbance amplifies wind/wave/mixing forces. 1.0 baseline, up to 4x
-  // during a peak storm. Only surface/swell/zStir/brownian get amplified;
-  // gravity/drag are unchanged. surfaceActivity bundles the slow
-  // irregularity envelope and the storm multiplier so wave physics,
-  // the visible surface line, and aeration all move together.
-  const act = surfaceActivity(world);
-  const bAmp = world.brownianAmp * act;
-  const surfAmp = world.surfaceAmp * act;
-  const swellAmp = world.swellAmp * act;
-  const zAmp = world.zStirAmp * act;
-  const updraftEnv = Math.min(1, act);
-
-  // Slow horizontal current: surface flows one way, deep flows the other.
-  // The direction reverses very slowly so cells eventually have to cope
-  // with both regimes.
-  const colDepth = Math.max(1, world.height - world.surfaceY);
-  const currentDrift = Math.sin(world.t * CURRENT_FREQ);
-  // Particle fast path: indexed access on the parallel typed arrays
-  // avoids the per-particle handle getter/setter chain. With ~4-9k
-  // particles per tick this is the hottest loop in the sim.
-  const ps = world.particleStore;
-  const PX = ps.x, PY = ps.y, PZ = ps.z;
-  const PVX = ps.vx, PVY = ps.vy, PVZ = ps.vz;
-  const PR = ps.r, PDENS = ps.density, PMAT = ps.material;
-  const np = world.particles.length;
-  const t = world.t;
-  const drag = world.drag;
-  const grav = world.gravity;
-  const surfDecay = world.surfaceDecay;
-  const swellDecay = world.swellDecay;
-  const updraftAmp = world.updraftAmp;
-  const currentAmp = world.currentAmp;
-  const surfaceY = world.surfaceY;
-  const matBase = MATERIAL_BASE_DENSITY;
-  for (let i = 0; i < np; i++) {
+// Pure per-range version of the particle force loop. The sim worker
+// runs it over the full range when no parallel particle workers are
+// available; the particle subworkers each run it over their assigned
+// chunk. Operates directly on the SoA columns (which are SAB-backed
+// views) so there's no copy across the worker boundary.
+export function applyParticleForcesRange(
+  PX: Float32Array, PY: Float32Array, PZ: Float32Array,
+  PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
+  PR: Float32Array, PDENS: Float32Array, PMAT: Uint8Array,
+  matBase: Float32Array,
+  from: number, to: number,
+  p: ParticleForceParams,
+): void {
+  const dt = p.dt;
+  const t = p.t;
+  const drag = p.drag;
+  const grav = p.gravity;
+  const surfaceY = p.surfaceY;
+  const surfDecay = p.surfaceDecay;
+  const swellDecay = p.swellDecay;
+  const updraftAmp = p.updraftAmp;
+  const currentAmp = p.currentAmp;
+  const kS = p.kS, wS = p.wS;
+  const kL = p.kL, wL = p.wL;
+  const kU = p.kU, wU = p.wU;
+  const surfAmp = p.surfAmp;
+  const swellAmp = p.swellAmp;
+  const zAmp = p.zAmp;
+  const bAmp = p.bAmp;
+  const updraftEnv = p.updraftEnv;
+  const colDepth = p.colDepth;
+  const currentDrift = p.currentDrift;
+  for (let i = from; i < to; i++) {
     const xi = PX[i], yi = PY[i], ri = PR[i];
     let vxi = PVX[i], vyi = PVY[i], vzi = PVZ[i];
     const overrideD = PDENS[i];
@@ -3249,14 +3364,6 @@ function applyForces(world: World, dt: number): void {
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
-    // Balanced sum of rightward + leftward travelling waves. A single
-    // travelling wave produces Stokes drift in its propagation direction;
-    // particles slowly migrate to one side of the world. A pair with
-    // opposite directions but *different* (k, w) cancels the drift
-    // without collapsing back to a standing wave (which would re-create
-    // fixed accumulation nodes -- equal-(k,w) opposing waves sum to a
-    // standing wave). Splash is the 90-degree-out-of-phase vertical
-    // companion of the dominant horizontal component.
     const surfPR = kS * xi - wS * t;
     const surfPL = 1.3 * kS * xi + 0.9 * wS * t + 1.1;
     const swellPR = kL * xi - wL * t;
@@ -3284,6 +3391,93 @@ function applyForces(world: World, dt: number): void {
     PY[i] = yi + vyi * dt;
     PZ[i] = PZ[i] + vzi * dt;
   }
+}
+
+export function buildParticleForceParams(world: World): ParticleForceParams {
+  const act = surfaceActivity(world);
+  return {
+    dt: 0, // filled by caller
+    t: world.t,
+    drag: world.drag,
+    gravity: world.gravity,
+    surfaceY: world.surfaceY,
+    surfaceDecay: world.surfaceDecay,
+    swellDecay: world.swellDecay,
+    updraftAmp: world.updraftAmp,
+    currentAmp: world.currentAmp,
+    kS: (2 * Math.PI) / world.surfaceLength,
+    wS: (2 * Math.PI) / world.surfacePeriod,
+    kL: (2 * Math.PI) / world.swellLength,
+    wL: (2 * Math.PI) / world.swellPeriod,
+    kU: (2 * Math.PI) / world.updraftLength,
+    wU: (2 * Math.PI) / world.updraftPeriod,
+    surfAmp: world.surfaceAmp * act,
+    swellAmp: world.swellAmp * act,
+    zAmp: world.zStirAmp * act,
+    bAmp: world.brownianAmp * act,
+    updraftEnv: Math.min(1, act),
+    colDepth: Math.max(1, world.height - world.surfaceY),
+    currentDrift: Math.sin(world.t * CURRENT_FREQ),
+  };
+}
+
+// Hook a parallel particle-force dispatcher (e.g. a subworker pool)
+// into the sim. When set, applyForces delegates the per-particle loop
+// to it instead of running serially; the subworker pool writes back
+// into the SAB-backed ParticleStore and signals completion via
+// Atomics. Stays null for tests and any context without
+// crossOriginIsolated SAB support; sim falls back to single-threaded.
+export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => void;
+let particleForceDispatcher: ParticleForceDispatcher | null = null;
+export function setParticleForceDispatcher(d: ParticleForceDispatcher | null): void {
+  particleForceDispatcher = d;
+}
+
+function applyForces(world: World, dt: number): void {
+  // Particle fast path: indexed access on the parallel typed arrays
+  // avoids the per-particle handle getter/setter chain. With ~4-9k
+  // particles per tick this is the hottest loop in the sim.
+  const ps = world.particleStore;
+  const np = world.particles.length;
+  const params = buildParticleForceParams(world);
+  params.dt = dt;
+  if (particleForceDispatcher && np > 0) {
+    // Subworker pool runs the particle loop in parallel chunks; the
+    // sim worker is free to run the creature loop below concurrently
+    // (the dispatcher waits before returning, so by the time the
+    // creature loop finishes both pieces are done).
+    particleForceDispatcher(np, params);
+  } else {
+    applyParticleForcesRange(
+      ps.x, ps.y, ps.z, ps.vx, ps.vy, ps.vz,
+      ps.r, ps.density, ps.material,
+      MATERIAL_BASE_DENSITY,
+      0, np,
+      params,
+    );
+  }
+  // The creature loop ran below regardless; if dispatcher was async
+  // it would need a Promise/await, but our dispatcher is a synchronous
+  // barrier (Atomics.wait) so the particle work is guaranteed to be
+  // settled by the time we reach the creature loop's reads.
+  const t = params.t;
+  const drag = params.drag;
+  const grav = params.gravity;
+  const surfaceY = params.surfaceY;
+  const surfDecay = params.surfaceDecay;
+  const swellDecay = params.swellDecay;
+  const updraftAmp = params.updraftAmp;
+  const currentAmp = params.currentAmp;
+  const kS = params.kS, wS = params.wS;
+  const kL = params.kL, wL = params.wL;
+  const kU = params.kU, wU = params.wU;
+  const surfAmp = params.surfAmp;
+  const swellAmp = params.swellAmp;
+  const zAmp = params.zAmp;
+  const bAmp = params.bAmp;
+  const updraftEnv = params.updraftEnv;
+  const colDepth = params.colDepth;
+  const currentDrift = params.currentDrift;
   // Creature fast path: same math as the particle loop, but creatures
   // may belong to different stores (tests allocate private stores), so
   // hoist the store columns per-creature.
