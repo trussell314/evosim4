@@ -2583,7 +2583,7 @@ const SAND_BIG_FRACTION = 0;
 // density -- explicitly requested. At ~150 px² per pebble that's
 // ~165k px² of visual area on an 800-wide floor, enough for a thick
 // stacked sediment band. Lower this if the floor reads as too deep.
-const PEBBLE_TARGET = 550;
+const PEBBLE_TARGET = 275;
 // Per-second spawn rate when below target. Sized to fill the bed in
 // roughly 10 sim-seconds from a cold world without overshooting the
 // per-frame replenish budget.
