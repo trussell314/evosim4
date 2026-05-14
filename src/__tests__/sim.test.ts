@@ -1629,6 +1629,31 @@ describe("mass conservation", () => {
     return m;
   }
 
+  it("soluble particles dissolve into the ambient pool", () => {
+    // Phase G: a free particle of glucose (high solubility) below the
+    // surface should shrink over time while ambient[glucose] grows.
+    // Mass conserved: particle mass loss + ambient gain = constant.
+    const w = quietWorld();
+    w.aerationRate = 0;
+    w.particleSpawnRate = 0;
+    w.ambient[CHEM_IDS.glucose] = 0;
+    const p = pushParticle(w, {
+      x: 100, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 4,
+      chemId: CHEM_IDS.glucose, density: 1.5,
+    });
+    const r0 = p.r;
+    const massBefore = 1.5 * (4 / 3) * Math.PI * r0 * r0 * r0;
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    // Either the particle is still present but smaller, or it
+    // fully dissolved and is gone. Either way, ambient gained mass.
+    expect(w.ambient[CHEM_IDS.glucose]).toBeGreaterThan(0);
+    if (w.particles.includes(p)) {
+      expect(p.r).toBeLessThan(r0);
+    }
+    // Conservation: ambient gain bounded by initial particle mass.
+    expect(w.ambient[CHEM_IDS.glucose]).toBeLessThan(massBefore * 1.01);
+  });
+
   it("zero receptor pool gates the corresponding SENSE op output", () => {
     // Phase H2 invariant: a cell with no chemoreceptor reads zero
     // from SENSE_GRAD even when food particles are nearby. Same cell

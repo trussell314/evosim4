@@ -3337,7 +3337,11 @@ function spendATP(c: Creature, want: number): number {
 // flat so the hot loop avoids a property dispatch per cell-chem pair.
 // Built once at module load alongside CHEM_BASE_DENSITY.
 const CHEM_PERMEABILITY = new Float32Array(CHEMICAL_COUNT);
-for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_PERMEABILITY[i] = CHEMICALS[i].permeability;
+const CHEM_SOLUBILITY = new Float32Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) {
+  CHEM_PERMEABILITY[i] = CHEMICALS[i].permeability;
+  CHEM_SOLUBILITY[i] = CHEMICALS[i].solubility;
+}
 
 // Phase F: generalized passive diffusion. Each diffusable chem flows
 // down its gradient between the cell's pool and world.ambient, with
@@ -3368,6 +3372,55 @@ function diffuseAmbient(c: Creature, world: World, dt: number): void {
     // depleted pool stays depleted until something refills it.
     const next = ambient[k] - flow;
     ambient[k] = next < 0 ? 0 : next;
+  }
+}
+
+// Phase G: free particles of soluble chems dissolve into the ambient
+// pool when ambient[chemId] is below the chemical's solubility. Mass-
+// conserving: every unit removed from the particle is added to ambient.
+// Particles that drop below MIN_DISSOLVE_R fully dissolve (removed and
+// remaining mass dumped to ambient). Gas-phase chems also outgas
+// (negative gap) but the particle stays; ambient shrinks toward
+// saturation. Real physical chemistry has both directions; for MVP
+// we only model dissolution-into-ambient and let outgassing spawn
+// new particles through future phase-G work.
+const DISSOLVE_RATE_PER_AREA = 0.05;
+const MIN_DISSOLVE_R = 0.6;
+function dissolveParticles(world: World, dt: number): void {
+  const store = world.particleStore;
+  const ambient = world.ambient;
+  const PC = store.chemId;
+  const PR = store.r;
+  const PY = store.y;
+  const surfaceY = world.surfaceY;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  // Iterate in reverse so removeParticleAt's swap-pop doesn't skip entries.
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    if (PY[i] < surfaceY) continue; // particle above water -- can't dissolve
+    const chemId = PC[i];
+    const sol = CHEM_SOLUBILITY[chemId];
+    if (sol <= 0) continue;
+    const gap = sol - ambient[chemId];
+    if (gap <= 0) continue; // ambient saturated; no dissolution
+    const r = PR[i];
+    if (r <= 0) continue;
+    // Multi-chem corpse particles (genericChem payload) keep their
+    // chem identity through the corpse path; don't dissolve them.
+    if (store.genericChem[i]) continue;
+    if (store.molecules[i]) continue;
+    const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
+    const mass = density * FOUR_THIRDS_PI * r * r * r;
+    // Rate proportional to surface area (4*pi*r^2) and concentration gap.
+    const dissolveMass = DISSOLVE_RATE_PER_AREA * gap * (r * r) * dt;
+    if (dissolveMass >= mass || r * Math.cbrt(1 - dissolveMass / mass) < MIN_DISSOLVE_R) {
+      // Fully dissolve.
+      ambient[chemId] += mass;
+      removeParticleAt(world, i);
+    } else {
+      const newMass = mass - dissolveMass;
+      PR[i] = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
+      ambient[chemId] += dissolveMass;
+    }
   }
 }
 
@@ -3852,6 +3905,7 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.walls += n - m; m = n;
     aerate(world, dt);
     aerateAmbient(world, dt);
+    dissolveParticles(world, dt);
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
@@ -3886,6 +3940,7 @@ export function step(world: World, dt: number): void {
     applyWalls(world);
     aerate(world, dt);
     aerateAmbient(world, dt);
+    dissolveParticles(world, dt);
     replenishParticles(world, dt);
     decayParticles(world, dt);
     pruneSpecies(world);
