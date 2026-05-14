@@ -5599,14 +5599,22 @@ function resolveCollisions(
       COLLISION_CELL_ITEMS[slot] = pi;
     }
 
-    if (collisionPhaseDispatcher && n >= PARALLEL_PARTICLE_MIN) {
-      const wait0 = collisionPhaseDispatcher(cols, rows, 0, e);
+    // Cache the dispatcher locally so a barrier-timeout teardown that
+    // fires from inside wait0() (e.g. mobile suspends the tab, particle
+    // workers stop responding) doesn't null the module-level reference
+    // mid-step and crash the second dispatcher call with
+    // "Se is not a function". The cached function checks `if (!pool)`
+    // at entry and returns a no-op wait fn when the pool is torn down,
+    // so we still get through the rest of this iteration cleanly.
+    const dispatch = collisionPhaseDispatcher;
+    if (dispatch && n >= PARALLEL_PARTICLE_MIN) {
+      const wait0 = dispatch(cols, rows, 0, e);
       // Run hooks on the first iter only; subsequent iters have no
       // useful work to hide and we want hook side-effects to happen
       // exactly once per step.
       if (pendingP0) { pendingP0(); pendingP0 = undefined; }
       wait0();
-      const wait1 = collisionPhaseDispatcher(cols, rows, 1, e);
+      const wait1 = dispatch(cols, rows, 1, e);
       if (pendingP1) { pendingP1(); pendingP1 = undefined; }
       wait1();
     } else {
