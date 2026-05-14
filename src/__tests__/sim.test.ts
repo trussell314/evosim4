@@ -115,10 +115,17 @@ function makeCreature(overrides: Partial<{
 }> = {}): Creature {
   const store = new CreatureStore(1);
   const reserves: Partial<Record<MaterialId, number>> = overrides.reserves ?? {};
-  // Above the default genome's biomass > 30 reproduction gate so the
-  // mass-scaled REPRODUCE ATP fee fires in tests that walk the full
-  // default genome.
-  const molecules: Partial<Molecules> = { biomass: 50, ...(overrides.molecules ?? {}) };
+  // Defaults: biomass above the reproduction gate; ribosome + aa
+  // generous enough that the new viability thresholds
+  // (MIN_VIABLE_RIBOSOME / MIN_VIABLE_AMINOACID) don't autolyze a
+  // test creature mid-scenario. enzyme=1 unlocks the reserve-based
+  // fuel path under the new noFuel rule (reserves need enzyme to
+  // count as fuel). Tests that probe enzyme- or aa-starvation
+  // override these in their molecules patch.
+  const molecules: Partial<Molecules> = {
+    biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
+    ...(overrides.molecules ?? {}),
+  };
   return newCreature(store, {
     x: overrides.x ?? 400,
     y: overrides.y ?? 300,
@@ -1338,12 +1345,13 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     flushDivisions(w);
     expect(w.creatures.length).toBe(2);
     for (const cell of w.creatures) {
-      cell.molecules.aminoAcid = 0;
+      // Keep aa just above MIN_VIABLE_AMINOACID -- enough to stay
+      // alive, far below what fission needs as build-blocks. Same
+      // for biomass (above MIN_VIABLE_BIOMASS). Fission has to fail
+      // on build-block exhaustion, not on the viability checks.
+      cell.molecules.aminoAcid = 0.01;
       cell.molecules.fattyAcid = 0;
       cell.molecules.minerals = 0;
-      // Keep biomass just above MIN_VIABLE_BIOMASS so the cell doesn't
-      // autolyze -- we want fission to fail on build-block exhaustion,
-      // not on structural collapse.
       cell.molecules.biomass = 1;
       for (const id of M) cell.reserves[id] = 0;
     }

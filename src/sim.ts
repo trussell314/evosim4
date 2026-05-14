@@ -758,7 +758,7 @@ export class Creature {
   // Setter: copy field-by-field from any Molecules-shaped object into
   // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
   // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number }) {
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number }) {
     const s = this.store; const i = this.idx;
     s.m_glucose[i] = m.glucose ?? 0;
     s.m_fattyAcid[i] = m.fattyAcid ?? 0;
@@ -771,6 +771,7 @@ export class Creature {
     s.m_biomass[i] = m.biomass ?? 0;
     s.m_waste[i] = m.waste ?? 0;
     s.m_adp[i] = m.adp ?? 0;
+    s.m_ribosome[i] = m.ribosome ?? 0;
   }
   get reserves(): ReservesView { return this._r ??= new ReservesView(this); }
   set reserves(r: { rock?: number; sand?: number; clay?: number; organic?: number; lipid?: number; gas?: number }) {
@@ -866,6 +867,7 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.biomass !== undefined) store.m_biomass[idx] = m.biomass;
     if (m.waste !== undefined) store.m_waste[idx] = m.waste;
     if (m.adp !== undefined) store.m_adp[idx] = m.adp;
+    if (m.ribosome !== undefined) store.m_ribosome[idx] = m.ribosome;
   }
   if (init.reserves) {
     const r = init.reserves;
@@ -1840,6 +1842,16 @@ const ENZYME_DECAY_PER_SEC = 0.001;
 const CHLORO_DECAY_PER_SEC = 0.001;
 const RIBO_DECAY_PER_SEC = 0.001;
 const MIN_VIABLE_BIOMASS = 0.5;
+// A cell with no ribosome can't turn over biomass or rebuild lost
+// enzymes. Ribosome decays slowly (~0.1%/sec) so a 0.01 threshold
+// gives healthy cells thousands of sim-sec of headroom before falling
+// below it without active SYNTH_RIBO.
+const MIN_VIABLE_RIBOSOME = 0.01;
+// Amino acid is much more fluid -- biosynth + reactions consume it
+// in bursts and maintenance decay refills it. A 0.001 threshold
+// catches cells with *essentially zero* aa (no synth, no prey)
+// without nuking cells in transient low-aa states mid-tick.
+const MIN_VIABLE_AMINOACID = 0.001;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
 // is effectively stable; an old cell accumulates DNA damage gradually.
@@ -2860,6 +2872,12 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
       biomass: 1,
       adp: 5,
       ribosome: 1,
+      // Seed a small amino acid pool so the new viability threshold
+      // (MIN_VIABLE_AMINOACID) doesn't kill founders before they have
+      // a chance to run SYNTH_AA / PREDATE / ENGULF. Maintenance
+      // decay also funnels a fraction of biomass-loss into aa each
+      // tick, but that takes a few sim-sec to accumulate.
+      aminoAcid: 0.5,
       chlorophyll: hasChl ? 0.5 : 0,
       enzyme: hasEnz ? 0.5 : 0,
     },
@@ -4432,7 +4450,19 @@ function updateCreatures(world: World, dt: number): void {
     //  1. Starvation: no ATP and no fuel anywhere to rebuild it.
     //  2. Autolysis: biomass has decayed below the viable minimum (the
     //     cell can no longer hold itself together as a cell).
-    if ((c.energy <= 0 && noFuel(c)) || c.molecules.biomass < MIN_VIABLE_BIOMASS) {
+    //  3. No ribosome: without protein-synthesis machinery the cell
+    //     can't turn over biomass or replenish enzymes -- biologically
+    //     dead even if structurally intact.
+    //  4. No amino acid: with the per-op aa cost on growth ops, an
+    //     aa-empty cell is functionally paralyzed. Catch it here so
+    //     it doesn't sit indefinitely just decaying biomass.
+    const m = c.molecules;
+    if (
+      (c.energy <= 0 && noFuel(c))
+      || m.biomass < MIN_VIABLE_BIOMASS
+      || m.ribosome < MIN_VIABLE_RIBOSOME
+      || m.aminoAcid < MIN_VIABLE_AMINOACID
+    ) {
       dead.push(c);
     }
   }
@@ -5055,11 +5085,27 @@ function creatureSelfMass(c: Creature): number {
 // Has the cell exhausted every fuel it could turn into ATP?
 function noFuel(c: Creature): boolean {
   const m = c.molecules;
-  return m.glucose < 0.5 && m.fattyAcid < 0.5
-    && c.reserves.organic < 0.5 && c.reserves.lipid < 0.5
-    // Chlorophyll + CO2 + light can still recover atp via photosynthesis.
-    && !(m.chlorophyll > 0.5 && m.co2 > 0.5);
+  // Direct molecular fuels: glucose / fattyAcid can be catabolized
+  // straight into ATP, no enzyme needed.
+  const hasDirect = m.glucose >= 0.5 || m.fattyAcid >= 0.5;
+  if (hasDirect) return false;
+  // Reserve fuels (organic / lipid) require digestive enzyme to be
+  // converted into usable molecules. A cell with reserves but no
+  // enzyme can't extract energy from them -- it has fuel on paper
+  // but no machinery to burn it, which is functionally starvation.
+  const hasReserves = c.reserves.organic >= 0.5 || c.reserves.lipid >= 0.5;
+  if (hasReserves && m.enzyme >= MIN_USABLE_ENZYME) return false;
+  // Photosynth recovery path: chlorophyll + CO2 + light bypasses the
+  // enzyme requirement (chl is itself an enzyme-like catalyst).
+  if (m.chlorophyll > 0.5 && m.co2 > 0.5) return false;
+  return true;
 }
+
+// Minimum enzyme to unlock reserve-based catabolism. Heterotroph
+// founders start with enzyme=0.5 and enzyme decays at ~0.1%/sec, so
+// it takes hundreds of sim-sec to fall below this without active
+// SYNTH_ENZ; aligns with the other "near zero" thresholds.
+const MIN_USABLE_ENZYME = 0.01;
 
 export function updateCreatureRadius(c: Creature): void {
   // Treat stored mass as a sphere's volume (water-density convention), then
