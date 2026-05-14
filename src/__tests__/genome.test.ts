@@ -15,22 +15,36 @@ import {
   mutateGenome,
   genomeMaterialCost,
   makeDefaultGenome,
+  OPERANDS,
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
-  dx: number[]; dy: number[]; dist: number[];
+  gradX: number[]; gradY: number[]; density: number[];
+  wallX: number; wallY: number; headX: number; headY: number; temp: number; pheromone: number;
   creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
   light: number;
 }> = {}): VMSensors {
   return {
-    dx: new Float32Array(overrides.dx ?? [0, 0, 0, 0, 0, 0]),
-    dy: new Float32Array(overrides.dy ?? [0, 0, 0, 0, 0, 0]),
-    dist: new Float32Array(overrides.dist ?? [0, 0, 0, 0, 0, 0]),
+    gradX: new Float32Array(overrides.gradX ?? [0, 0, 0, 0, 0, 0]),
+    gradY: new Float32Array(overrides.gradY ?? [0, 0, 0, 0, 0, 0]),
+    density: new Float32Array(overrides.density ?? [0, 0, 0, 0, 0, 0]),
+    wallX: overrides.wallX ?? 0,
+    wallY: overrides.wallY ?? 0,
+    headX: overrides.headX ?? 0,
+    headY: overrides.headY ?? 0,
+    temp: overrides.temp ?? 0,
+    pheromone: overrides.pheromone ?? 0,
     creatureDx: overrides.creatureDx ?? 0,
     creatureDy: overrides.creatureDy ?? 0,
     creatureDist: overrides.creatureDist ?? 0,
     creatureMass: overrides.creatureMass ?? 0,
     light: overrides.light ?? 0,
+    pressureX: 0,
+    pressureY: 0,
+    emBands: new Float32Array(3),
+    chemConc: new Float32Array(64),
+    kinOverlap: 0,
+    neighborHash: 0,
   };
 }
 
@@ -43,9 +57,27 @@ function makeSelf(overrides: Partial<{
     vy: overrides.vy ?? 0,
     reserve: new Float32Array(overrides.reserve ?? [0, 0, 0, 0, 0, 0]),
     mass: overrides.mass ?? 0,
+    biomass: 0, age: 0,
+    glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
   };
 }
 
+// HALT is now a NOP in the VM (the op was retired) but our tests
+// historically used it as a "stop after these ops" marker. Walk the
+// bytes counting opcodes up to the first HALT and use that as the
+// default budget, so tests that wrote `[OP.PUSH8, 42, OP.HALT]` keep
+// executing exactly one instruction without needing to specify budget.
+function budgetToHalt(bytes: number[]): number {
+  let pc = 0;
+  let count = 0;
+  while (pc < bytes.length) {
+    const op = bytes[pc++];
+    if (op === OP.HALT) return count;
+    count++;
+    pc += OPERANDS[op] ?? 0;
+  }
+  return Math.max(count, 1);
+}
 function exec(
   bytes: number[],
   opts: {
@@ -58,7 +90,7 @@ function exec(
   const state = opts.state ?? newVMState();
   const sensors = opts.sensors ?? makeSensors();
   const self = opts.self ?? makeSelf();
-  const budget = opts.budget ?? 64;
+  const budget = opts.budget ?? budgetToHalt(bytes);
   const out = newOutputs();
   runTick(new Uint8Array(bytes), state, sensors, self, budget, out);
   return { out, state };
@@ -105,8 +137,9 @@ describe("VM stack ops", () => {
   it("stack capped at 32 (drops oldest)", () => {
     const bytes: number[] = [];
     for (let i = 1; i <= 40; i++) bytes.push(OP.PUSH8, i);
-    bytes.push(OP.HALT);
-    const { state } = exec(bytes, { budget: 200 });
+    // budget=40 stops after the 40 PUSH8 instructions; without it
+    // (or with the old HALT) the VM would now wrap and keep pushing.
+    const { state } = exec(bytes, { budget: 40 });
     expect(state.stack.length).toBe(32);
     expect(state.stack[0]).toBe(9);
     expect(state.stack[31]).toBe(40);
@@ -162,26 +195,52 @@ describe("VM control flow", () => {
     exec([OP.PUSH8, 7], { state, budget: 6 });
     expect(state.stack.length).toBe(6);
   });
-  it("HALT yields, pc advances past HALT byte", () => {
+  it("HALT byte (0xFF) is now a NOP -- VM keeps executing past it", () => {
+    // budgetToHalt in the test helper stops counting at HALT, so by
+    // default the body executes up to the HALT and stops there. With
+    // an explicit budget the VM walks straight through.
     const state = newVMState();
-    const { out } = exec([OP.PUSH8, 1, OP.HALT, OP.PUSH8, 2], { state });
-    expect(state.stack).toEqual([1]);
-    expect(state.pc).toBe(3);
-    expect(out.instructions).toBe(2);
+    // 3 instructions = PUSH8 1, HALT-as-NOP, PUSH8 2.
+    const { out } = exec([OP.PUSH8, 1, OP.HALT, OP.PUSH8, 2], { state, budget: 3 });
+    expect(state.stack).toEqual([1, 2]);
+    expect(out.instructions).toBe(3);
   });
   it("budget caps even without HALT", () => {
     expect(exec([OP.NOP, OP.NOP, OP.NOP], { budget: 5 }).out.instructions).toBe(5);
   });
 });
 
+describe("VM scratch registers (LOAD / STORE)", () => {
+  it("STORE pops, LOAD pushes from the same register", () => {
+    expect(exec([OP.PUSH8, 42, OP.STORE, 7, OP.LOAD, 7, OP.HALT]).state.stack).toEqual([42]);
+  });
+  it("registers persist across runTick calls", () => {
+    const state = newVMState();
+    const out = newOutputs();
+    // Explicit budget = the number of instructions we want to run;
+    // HALT is no longer a yield.
+    runTick(new Uint8Array([OP.PUSH8, 99, OP.STORE, 3]), state, makeSensors(), makeSelf(), 2, out);
+    // Reset stack + pc to simulate a fresh tick; regs deliberately persist.
+    state.stack.length = 0; state.pc = 0;
+    runTick(new Uint8Array([OP.LOAD, 3]), state, makeSensors(), makeSelf(), 1, out);
+    expect(state.stack).toEqual([99]);
+  });
+  it("LOAD from an unset register reads zero", () => {
+    expect(exec([OP.LOAD, 5, OP.HALT]).state.stack).toEqual([0]);
+  });
+  it("register index wraps mod 16", () => {
+    // 7 % 16 == 7; 23 % 16 == 7 -- both should hit the same cell.
+    expect(exec([OP.PUSH8, 11, OP.STORE, 23, OP.LOAD, 7, OP.HALT]).state.stack).toEqual([11]);
+  });
+});
+
 describe("VM sensors", () => {
-  it("SENSE_DX/DY/DIST read by material index", () => {
-    expect(exec([OP.SENSE_DX, 3, OP.HALT], { sensors: makeSensors({ dx: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
-    expect(exec([OP.SENSE_DY, 5, OP.HALT], { sensors: makeSensors({ dy: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([60]);
-    expect(exec([OP.SENSE_DIST, 2, OP.HALT], { sensors: makeSensors({ dist: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([30]);
+  it("SENSE_GRAD_X/Y read by material index", () => {
+    expect(exec([OP.SENSE_GRAD_X, 3, OP.HALT], { sensors: makeSensors({ gradX: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
+    expect(exec([OP.SENSE_GRAD_Y, 5, OP.HALT], { sensors: makeSensors({ gradY: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([60]);
   });
   it("sensor operand wraps via modulo", () => {
-    expect(exec([OP.SENSE_DX, 8, OP.HALT], { sensors: makeSensors({ dx: [11, 12, 13, 14, 15, 16] }) }).state.stack).toEqual([13]);
+    expect(exec([OP.SENSE_GRAD_X, 8, OP.HALT], { sensors: makeSensors({ gradX: [11, 12, 13, 14, 15, 16] }) }).state.stack).toEqual([13]);
   });
   it("SELF_ENERGY", () => {
     expect(exec([OP.SELF_ENERGY, OP.HALT], { self: makeSelf({ energy: 77 }) }).state.stack).toEqual([77]);
@@ -201,6 +260,31 @@ describe("VM sensors", () => {
   });
   it("SENSE_LIGHT", () => {
     expect(exec([OP.SENSE_LIGHT, OP.HALT], { sensors: makeSensors({ light: 0.73 }) }).state.stack).toEqual([0.73]);
+  });
+  it("SENSE_DENSITY reads count by material index", () => {
+    expect(exec([OP.SENSE_DENSITY, 3, OP.HALT], { sensors: makeSensors({ density: [1, 2, 3, 4, 5, 6] }) }).state.stack).toEqual([4]);
+  });
+  it("SENSE_DENSITY operand wraps via modulo", () => {
+    expect(exec([OP.SENSE_DENSITY, 7, OP.HALT], { sensors: makeSensors({ density: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([20]);
+  });
+  it("SENSE_WALL_X / WALL_Y", () => {
+    expect(exec([OP.SENSE_WALL_X, OP.SENSE_WALL_Y, OP.HALT], { sensors: makeSensors({ wallX: -0.7, wallY: 0.3 }) }).state.stack).toEqual([-0.7, 0.3]);
+  });
+  it("SENSE_HEAD_X / HEAD_Y", () => {
+    expect(exec([OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y, OP.HALT], { sensors: makeSensors({ headX: 0.6, headY: -0.8 }) }).state.stack).toEqual([0.6, -0.8]);
+  });
+  it("SENSE_TEMP pushes local water temperature", () => {
+    expect(exec([OP.SENSE_TEMP, OP.HALT], { sensors: makeSensors({ temp: 22.5 }) }).state.stack).toEqual([22.5]);
+  });
+  it("SENSE_PHEROMONE pushes local field concentration", () => {
+    expect(exec([OP.SENSE_PHEROMONE, OP.HALT], { sensors: makeSensors({ pheromone: 7 }) }).state.stack).toEqual([7]);
+  });
+  it("EMIT pops a non-negative value into out.emit", () => {
+    expect(exec([OP.PUSH8, 9, OP.EMIT, OP.HALT]).out.emit).toBe(9);
+    // Negative input clamps to 0.
+    expect(exec([OP.PUSH8, 0xFE /* -2 */, OP.EMIT, OP.HALT]).out.emit).toBe(0);
+    // Multiple emits accumulate.
+    expect(exec([OP.PUSH8, 3, OP.EMIT, OP.PUSH8, 4, OP.EMIT, OP.HALT]).out.emit).toBe(7);
   });
 });
 
@@ -230,6 +314,27 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, OP.HALT]).out.predate).toBe(true);
   });
+  it("INGEST sets material flag by index", () => {
+    const out = exec([OP.INGEST, 3, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 0, 0]);
+  });
+  it("INGEST flags accumulate across multiple ops", () => {
+    const out = exec([OP.INGEST, 3, OP.INGEST, 4, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 1, 0]);
+  });
+  it("INGEST flags default to all-zero without the op", () => {
+    const out = exec([OP.NOP, OP.HALT]).out;
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+  it("TURN accumulates angle delta from the stack", () => {
+    expect(exec([OP.PUSH8, 1, OP.TURN, OP.HALT]).out.turn).toBe(1);
+  });
+  it("multiple TURNs sum", () => {
+    expect(exec([OP.PUSH8, 2, OP.TURN, OP.PUSH8, 3, OP.TURN, OP.HALT]).out.turn).toBe(5);
+  });
+  it("TURN with no stack value pops 0 (no rotation)", () => {
+    expect(exec([OP.TURN, OP.HALT]).out.turn).toBe(0);
+  });
   it("output reset between runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();
@@ -239,6 +344,8 @@ describe("VM actuators", () => {
     expect(out.reproduce).toBe(false);
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
+    expect(out.turn).toBe(0);
+    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
     expect(Array.from(out.excrete)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });
@@ -251,17 +358,18 @@ describe("VM edge cases", () => {
     expect(state.stack).toEqual([]);
   });
   it("unknown opcodes act as NOP", () => {
-    const { state, out } = exec([0x7F, OP.PUSH8, 9, OP.HALT]);
+    // budget covers the noop byte + the PUSH8 (2 instructions)
+    const { state, out } = exec([0x7F, OP.PUSH8, 9], { budget: 2 });
     expect(state.stack).toEqual([9]);
-    expect(out.instructions).toBe(3);
+    expect(out.instructions).toBe(2);
   });
   it("state persists across ticks", () => {
-    const genome = new Uint8Array([OP.PUSH8, 7, OP.HALT]);
+    const genome = new Uint8Array([OP.PUSH8, 7]);
     const state = newVMState();
     const out = newOutputs();
-    runTick(genome, state, makeSensors(), makeSelf(), 32, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
     expect(state.stack).toEqual([7]);
-    runTick(genome, state, makeSensors(), makeSelf(), 32, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
     expect(state.stack).toEqual([7, 7]);
   });
   it("operand-only-byte at end of genome wraps", () => {
@@ -291,12 +399,12 @@ describe("disassemble", () => {
   });
   it("renders material operand by name when provided", () => {
     const names = ["rock", "sand", "clay", "organic", "lipid", "gas"];
-    const text = disassemble(new Uint8Array([OP.SENSE_DX, 3, OP.EXCRETE, 7, OP.HALT]), names);
-    expect(text).toContain("sense_dx organic");
+    const text = disassemble(new Uint8Array([OP.SENSE_GRAD_X, 3, OP.EXCRETE, 7, OP.HALT]), names);
+    expect(text).toContain("sense_grad_x organic");
     expect(text).toContain("excrete sand");
   });
   it("renders material operand by index without names", () => {
-    expect(disassemble(new Uint8Array([OP.SENSE_DX, 2, OP.HALT]))).toContain("sense_dx 2");
+    expect(disassemble(new Uint8Array([OP.SENSE_GRAD_X, 2, OP.HALT]))).toContain("sense_grad_x 2");
   });
   it("renders unknown bytes as db 0xNN", () => {
     expect(disassemble(new Uint8Array([0x7A]))).toContain("db 0x7a");
@@ -367,10 +475,9 @@ describe("makeDefaultGenome", () => {
   });
   it("contains the starter behavior bytes", () => {
     const g = makeDefaultGenome();
-    expect(g[0]).toBe(OP.SENSE_DX);
-    expect(g[1]).toBe(3);
-    expect(g[g.length - 1]).toBe(OP.HALT);
+    expect(Array.from(g)).toContain(OP.SENSE_GRAD_X);
+    expect(g[g.length - 1]).toBe(OP.REPRODUCE);
     expect(Array.from(g)).toContain(OP.THRUST);
-    expect(Array.from(g)).toContain(OP.REPRODUCE);
+    expect(Array.from(g)).toContain(OP.SENSE_AMP);
   });
 });

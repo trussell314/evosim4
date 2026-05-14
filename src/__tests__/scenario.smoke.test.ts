@@ -12,7 +12,10 @@ import {
   step,
   type World,
   MATERIAL_IDS_ORDERED,
+  MOLECULE_IDS,
+  newCreature,
 } from "../sim";
+import { newVMState } from "../genome";
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -137,23 +140,31 @@ describe("smoke: default-creature ecosystem (long run)", () => {
   it("runs 3 default creatures for 60 simulated seconds without crashing or NaN-ing", () => {
     const w = createWorld(800, 600);
     const proto = w.creatures[0];
-    w.creatures.push({
-      ...proto,
-      x: 200, y: 200,
-      genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
-    });
-    w.creatures.push({
-      ...proto,
-      x: 600, y: 400,
-      genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
-    });
-    for (const c of w.creatures) {
-      const fresh = {} as typeof proto.reserves;
-      for (const id of MATERIAL_IDS_ORDERED) fresh[id] = c.reserves[id];
-      c.reserves = fresh;
-    }
+    const cloneOf = (px: number, py: number) => {
+      const molecules: Record<string, number> = {};
+      for (const k of MOLECULE_IDS) molecules[k] = proto.molecules[k];
+      const reserves: Record<string, number> = {};
+      for (const id of MATERIAL_IDS_ORDERED) reserves[id] = proto.reserves[id];
+      return newCreature(w.creatureStore, {
+        x: px, y: py, z: proto.z,
+        vx: proto.vx, vy: proto.vy, vz: proto.vz,
+        r: proto.r, density: proto.density,
+        energy: proto.energy,
+        senseRange: proto.senseRange,
+        thrustAccel: proto.thrustAccel,
+        ingestCooldown: proto.ingestCooldown,
+        repairTicks: proto.repairTicks,
+        bornAt: proto.bornAt,
+        genome: new Uint8Array(proto.genome),
+        vm: newVMState(),
+        color: proto.color,
+        speciesKey: proto.speciesKey,
+        molecules,
+        reserves,
+      });
+    };
+    w.creatures.push(cloneOf(200, 200));
+    w.creatures.push(cloneOf(600, 400));
     runAndObserve(w, 60, 1 / 60, 5);
   });
 });
