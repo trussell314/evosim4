@@ -4,14 +4,10 @@ import {
   MATERIALS,
   MATERIAL_IDS_ORDERED,
   MOLECULE_IDS,
-  step,
   surfaceYAt,
   surfaceActivity,
   temperatureAt,
-  makeProfile,
   solarLight,
-  serializeWorld,
-  applySavedWorld,
   takeSnapshot,
   type RenderSnapshot,
   type ParticleSnapshot,
@@ -114,59 +110,54 @@ disasmHeader.addEventListener("click", () => {
 const WORLD_LANDSCAPE = { w: 800, h: 600 };
 const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
-const world = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
-
-// Try to restore a saved world from localStorage. Schema mismatch
-// (chemistry constants bumped, etc.) or any parse error -> stay with
-// the freshly-created world. Mobile Safari kills backgrounded tabs
-// aggressively; we autosave every game minute so a returning user
-// keeps their lineage.
 const SAVE_KEY = "evosim4:save";
-const SAVE_INTERVAL_SEC = 60;
-(function tryRestore(): void {
-  const raw = (() => {
-    try { return localStorage.getItem(SAVE_KEY); }
-    catch { return null; }
-  })();
-  if (!raw) return;
-  try {
-    if (!applySavedWorld(world, raw)) {
-      // Schema mismatch or malformed. Wipe the bad save so we don't
-      // re-attempt it on every refresh.
-      try { localStorage.removeItem(SAVE_KEY); } catch { /* private mode */ }
-    }
-  } catch (err) {
-    console.warn("evosim4: restore failed", err);
-    try { localStorage.removeItem(SAVE_KEY); } catch { /* private mode */ }
-  }
+
+// Read whatever's in localStorage (if anything) so we can pass it to
+// the worker as part of init. The worker schema-checks before applying
+// and silently keeps the fresh world on mismatch; we wipe the bad
+// localStorage entry here too so the next reload starts clean.
+const savedJson = (() => {
+  try { return localStorage.getItem(SAVE_KEY); }
+  catch { return null; }
 })();
 
-// View of the simulation that all render/HUD code reads from. Refreshed
-// after each sim slice via refreshSnapshot(). Lives separately from the
-// live `world` so stage C3 can swap the sim into a worker without the
-// renderer noticing -- it just starts receiving snapshots via
-// postMessage instead of building them locally.
-let snapshot: RenderSnapshot = takeSnapshot(world);
+// Bootstrap snapshot: build a transient world purely to produce an
+// empty initial RenderSnapshot for the renderer to draw against until
+// the worker delivers its first real one. The local world is never
+// stepped or referenced again -- the worker owns the truth.
+const bootstrapWorld = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
+let snapshot: RenderSnapshot = takeSnapshot(bootstrapWorld);
 let snapshotSpeciesByKey: Map<string, SpeciesSnapshot> = new Map();
 let snapshotCreatureById: Map<number, CreatureSnapshot> = new Map();
-function refreshSnapshot(): void {
-  snapshot = takeSnapshot(world);
+function rebuildSnapshotIndexes(): void {
   snapshotSpeciesByKey.clear();
   for (const sp of snapshot.species) snapshotSpeciesByKey.set(sp.key, sp);
   snapshotCreatureById.clear();
   for (const c of snapshot.creatures) snapshotCreatureById.set(c.id, c);
 }
-refreshSnapshot();
+rebuildSnapshotIndexes();
 
-let lastSaveAt = snapshot.t;
+// Latest serialized save string the worker has posted to us. Autosave
+// + forceSave + export all read from this cache rather than asking
+// the worker synchronously (which we can't do across the worker
+// boundary anyway). Updated on every "save" message from the worker.
+let latestSaveJson: string | null = savedJson;
+
+// Latest per-frame stats reported by the worker. Used by the perf
+// stats line so the main thread can still display sim/wall ratio
+// without measuring the work itself.
+let workerSimMsThisFrame = 0;
+let workerAdvancedThisFrame = 0;
+let workerLastSimError: string | null = null;
+let workerLastSimErrorAt = 0;
+
 function maybeAutosave(): void {
   if (resetting) return;
-  if (snapshot.t - lastSaveAt < SAVE_INTERVAL_SEC) return;
-  lastSaveAt = snapshot.t;
+  if (!latestSaveJson) return;
   try {
-    localStorage.setItem(SAVE_KEY, serializeWorld(world));
+    localStorage.setItem(SAVE_KEY, latestSaveJson);
   } catch (err) {
-    // Quota exceeded, private mode, etc. Don't crash the sim.
+    // Quota exceeded, private mode, etc. Don't crash the page.
     console.warn("evosim4: autosave failed", err);
   }
 }
@@ -175,9 +166,9 @@ function forceSave(): void {
   // without this guard we'd write the soon-to-be-discarded world
   // right back to localStorage, defeating the reset.
   if (resetting) return;
+  if (!latestSaveJson) return;
   try {
-    localStorage.setItem(SAVE_KEY, serializeWorld(world));
-    lastSaveAt = snapshot.t;
+    localStorage.setItem(SAVE_KEY, latestSaveJson);
   } catch { /* quota / private mode -- ignore */ }
 }
 // Set in hardReset(), checked by every save path. Survives until
@@ -201,6 +192,45 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") forceSave();
 });
 window.addEventListener("pagehide", forceSave);
+
+// ---------------------------------------------------------------------
+// Sim worker. Owns the live World and runs step() flat-out on a
+// background thread. Posts a fresh RenderSnapshot ~60Hz; posts a
+// serialized-world save string every ~60s of sim time. All world
+// mutation (turbo toggle, profile toggle, applying a saved world)
+// goes through messages.
+// ---------------------------------------------------------------------
+const simWorker = new Worker(new URL("./sim.worker.ts", import.meta.url), {
+  type: "module",
+});
+simWorker.postMessage({
+  type: "init",
+  width: WORLD_SIZE.w,
+  height: WORLD_SIZE.h,
+  savedJson,
+});
+// If we passed a saved JSON in and the worker silently fell back to
+// fresh (schema mismatch / malformed), the worker's "save" stream
+// will overwrite localStorage with the fresh world a minute later --
+// which is fine. We don't try to detect schema rejection on the main
+// side any more; the worker decides.
+
+simWorker.addEventListener("message", (e: MessageEvent) => {
+  const msg = e.data;
+  if (msg.type === "snapshot") {
+    snapshot = msg.snapshot;
+    rebuildSnapshotIndexes();
+    workerSimMsThisFrame += msg.simMs;
+    workerAdvancedThisFrame += msg.advanced;
+    if (msg.err) {
+      workerLastSimError = msg.err.message;
+      workerLastSimErrorAt = msg.err.at;
+    }
+  } else if (msg.type === "save") {
+    latestSaveJson = msg.json;
+    maybeAutosave();
+  }
+});
 
 // Reset + export buttons live in the world-area corners. They're
 // created and positioned later (positionWorldButtons), once the
@@ -293,6 +323,12 @@ const PHYLO_WINDOW_SEC = 180;
 // per-frame Array.from() + Map() was costing meaningful GC pressure.
 const visibleSpecies: SpeciesSnapshot[] = [];
 const bioByKey = new Map<string, number>();
+// All-time peak summed-biomass per species. The phylogeny render
+// samples per-frame, but the worker's species snapshot doesn't carry
+// peak across ticks (peak was historically tracked on the live world);
+// keep the running peak on the main side so the sidebar can rank
+// species by their best-ever stretch, not just the current instant.
+const peakBiomassByKey = new Map<string, number>();
 
 // Genome-analysis console: right-side sidebar. Collapsible -- when
 // minimized only a thin tab shows; expanded, the canvas shrinks to
@@ -387,13 +423,13 @@ exportBtn.textContent = "export";
 exportBtn.title = "Download the saved world as JSON";
 exportBtn.style.cssText = WORLD_BTN_STYLE;
 exportBtn.addEventListener("click", () => {
-  let json: string;
-  try {
-    // Snapshot the live world rather than reading localStorage so the
-    // export is always current, even between autosaves.
-    json = serializeWorld(world);
-  } catch (err) {
-    alert("export failed: " + (err instanceof Error ? err.message : String(err)));
+  // Use the most recent save JSON the worker posted to us. It can be
+  // up to SAVE_INTERVAL_SEC stale (60s of sim time); for "current" we'd
+  // have to ask the worker and await its response, which is overkill
+  // for a manual export.
+  const json = latestSaveJson;
+  if (!json) {
+    alert("export not ready yet -- try again in a moment");
     return;
   }
   const blob = new Blob([json], { type: "application/json" });
@@ -429,6 +465,7 @@ turboBtn.addEventListener("click", () => {
   turboMode = !turboMode;
   turboFrameCounter = 0;
   renderTurboBtn();
+  simWorker.postMessage({ type: "setTurbo", turbo: turboMode });
 });
 root.appendChild(turboBtn);
 
@@ -1107,18 +1144,14 @@ window.addEventListener("keydown", (e) => {
       heatmapMode === "temp" ? "density" :
       heatmapMode === "density" ? "pheromone" : "off";
   } else if (e.key === "p" || e.key === "P") {
-    if (world.profile) {
-      dumpProfile();
-      world.profile = undefined;
-    } else {
-      world.profile = makeProfile();
-    }
+    // Profile lives on the worker's world. We can't read it back
+    // synchronously, but the snapshot carries world.profile when set,
+    // so the dump fires whenever a profile is currently active in the
+    // last snapshot.
+    if (snapshot.profile) dumpProfile();
+    simWorker.postMessage({ type: "toggleProfile" });
   }
 });
-
-// One day a worker boundary will swallow direct world.profile reads;
-// keep the dump function reading the live snapshot so the call site
-// works either way.
 
 function dumpProfile(): void {
   const p = snapshot.profile;
@@ -1444,16 +1477,12 @@ function drawPhylogeny(): void {
   for (const c of snapshot.creatures) {
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.biomass);
   }
-  // Update each species' all-time-peak biomass from this sample. The
-  // phylogeny render runs every frame, so peak tracks tightly without
-  // needing per-tick work in the sim core. Mirror into the live world
-  // so the value survives across snapshots; the snapshot's copy is
-  // overwritten each frame from world.species.
+  // Update the main-side peak map from this sample. The phylogeny
+  // render runs every frame, so the peak tracks tightly without
+  // needing per-tick work in the sim worker.
   for (const [key, b] of bioByKey) {
-    const sp = world.species.get(key);
-    if (sp && b > sp.peakBiomass) sp.peakBiomass = b;
-    const snSp = snapshotSpeciesByKey.get(key);
-    if (snSp && b > snSp.peakBiomass) snSp.peakBiomass = b;
+    const prev = peakBiomassByKey.get(key) ?? 0;
+    if (b > prev) peakBiomassByKey.set(key, b);
   }
   let maxBio = 0;
   for (const sp of visible) {
@@ -1815,13 +1844,11 @@ function updateInspector(): void {
   disasmBody.textContent = activeDisasm;
 }
 
-// Sim runs at maximum speed but the renderer is paced to hit 60fps.
-// Each frame: measure how long the render + inspector took last time;
-// give the sim whatever budget remains in the 16.6ms slot (with a 2ms
-// safety margin for browser overhead). When CPU-constrained the sim
-// just does fewer ticks per render; render still hits 60fps.
-const FIXED_DT = 1 / 60;
-const TARGET_FRAME_MS = 16.6;
+// Sim runs flat-out in simWorker; the renderer is just an rAF loop
+// that consumes whatever snapshot the worker last posted (~60Hz under
+// normal load, less under heavy work). FPS / sim-rate / per-frame
+// timings come from the running tallies the snapshot handler keeps
+// in workerSimMsThisFrame / workerAdvancedThisFrame.
 
 // Stats line: FPS + sim/wall ratio + particle count. Smoothed over a
 // short window so the numbers don't flicker.
@@ -1869,75 +1896,17 @@ function statsLine(): string {
   return s;
 }
 
-// Sim and render are decoupled. Render is on rAF (vsync). Sim runs
-// in a MessageChannel macrotask that *chains*: every onmessage posts
-// the next one, so sim fills the gap between vsyncs with whatever
-// budget remains (gated by sliceDeadline + frameDeadline checks).
-//
-// Earlier we tried "one macrotask per rAF" to break a suspected
-// rAF-starvation cause of 30fps lock. Data showed r+s well under
-// vsync but still 30fps -- so the lock was browser/OS rate-limiting
-// (mobile thermal/power throttling, vsync clamp hysteresis), not us.
-// Removing the chain hurt sim throughput by ~3x with no fps benefit.
-const SIM_SLICE_MS = 6;
-const FRAME_OVERHEAD_FOR_SIM_MS = 3;
-const simChannel = new MessageChannel();
-let lastFrameStart = performance.now();
-let advancedThisFrame = 0;
-let simMsThisFrame = 0;
-// Worst recent step() duration in ms, with slow decay. Used to refuse
-// to *start* a step that would overshoot the per-frame deadline.
-let recentStepMs = 1.5;
-const RECENT_STEP_DECAY = 0.97;
-const STEP_BUDGET_SAFETY = 1.4;
-// Surface step() errors on the HUD so mobile users can see them
-// without opening a console.
-let lastSimError: string | null = null;
-let lastSimErrorAt = 0;
-simChannel.port1.onmessage = () => {
-  const sliceDeadline = performance.now() + SIM_SLICE_MS;
-  const frameDeadline = lastFrameStart + (TARGET_FRAME_MS - FRAME_OVERHEAD_FOR_SIM_MS);
-  let ranOne = false;
-  while (performance.now() < sliceDeadline) {
-    const t0 = performance.now();
-    // In normal mode, refuse to start a step that would overshoot the
-    // next vsync (keeps render glassy). In turbo, ignore that guard
-    // entirely -- the sim eats every available ms, render runs only
-    // once every TURBO_RENDER_EVERY rAFs.
-    if (!turboMode && ranOne && t0 + recentStepMs * STEP_BUDGET_SAFETY > frameDeadline) break;
-    try {
-      step(world, FIXED_DT);
-      maybeAutosave();
-    } catch (err) {
-      lastSimError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-      lastSimErrorAt = world.t;
-      refreshSnapshot();
-      // eslint-disable-next-line no-console
-      console.error("[sim] step threw, continuing:", err);
-      break;
-    }
-    advancedThisFrame += FIXED_DT;
-    ranOne = true;
-    const elapsed = performance.now() - t0;
-    simMsThisFrame += elapsed;
-    recentStepMs = elapsed > recentStepMs ? elapsed : recentStepMs * RECENT_STEP_DECAY;
-  }
-  // Chain: post the next macrotask so sim fills the gap between
-  // vsyncs. frame() also posts one per rAF as an initial kick.
-  simChannel.port2.postMessage(null);
-};
-simChannel.port2.postMessage(null);
+// Sim and render are fully decoupled: sim runs in simWorker on its own
+// thread; main thread just renders the latest snapshot the worker has
+// posted. The frame loop pulls workerSimMsThisFrame /
+// workerAdvancedThisFrame from the running tally that the worker's
+// snapshot-message handler maintains.
 
 function frame(): void {
-  lastFrameStart = performance.now();
-  // Take a fresh snapshot of the live world for this frame's render +
-  // HUD reads. In stage C3 this will be replaced by reading the most
-  // recent snapshot the sim worker has posted.
-  refreshSnapshot();
-  const simMsLast = simMsThisFrame;
-  simMsThisFrame = 0;
-  const advanced = advancedThisFrame;
-  advancedThisFrame = 0;
+  const simMsLast = workerSimMsThisFrame;
+  workerSimMsThisFrame = 0;
+  const advanced = workerAdvancedThisFrame;
+  workerAdvancedThisFrame = 0;
   // Turbo: skip most renders to leave the main thread free for sim
   // slices. updateInspector still runs every frame so the HUD stats
   // (sim_t, fps-ish, pop, x-rate) stay live.
@@ -1978,8 +1947,8 @@ function updateDiagBar(): void {
   if (stalledMs > STALL_WALL_MS) {
     parts.push(`SIM STALLED ${(stalledMs / 1000).toFixed(1)}s  pop=${snapshot.creatures.length}  parts=${snapshot.particles.length}`);
   }
-  if (lastSimError) {
-    parts.push(`step err @ t=${lastSimErrorAt.toFixed(0)}s: ${lastSimError.slice(0, 120)}`);
+  if (workerLastSimError) {
+    parts.push(`step err @ t=${workerLastSimErrorAt.toFixed(0)}s: ${workerLastSimError.slice(0, 120)}`);
   }
   if (parts.length === 0) {
     hudDiag.style.display = "none";
@@ -2023,7 +1992,7 @@ function maybeAnalyzeGenomes(): void {
       sp,
       alive,
       duration,
-      biomass: sp.peakBiomass,
+      biomass: peakBiomassByKey.get(sp.key) ?? sp.peakBiomass,
       cells: sp.alive,
     });
   }
