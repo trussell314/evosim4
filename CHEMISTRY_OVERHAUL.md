@@ -38,6 +38,20 @@ the strategies.
    on the explicit bootstrap list (signaling, storage, defense,
    sensing-via-chemistry) must arise from evolution composing
    primitives. The engine should not name or hardwire them.
+6. **Senses are molecule-gated.** A genome can read a sensor op
+   directly, but the reading is gated by a corresponding **sensor
+   chemical** in the cell's pool. No pigment → no light reading;
+   no chemoreceptor → no chemical gradient reading; no
+   mechanoreceptor → no pressure reading. Cells synthesize
+   receptors via biosynth reactions like any other catalyst.
+   This makes the *capacity* to sense an evolved investment, not
+   a free primitive.
+7. **Performance is non-negotiable.** Chemistry runs inside
+   per-tick hot loops over every cell. Any phase that lands has
+   to leave the simulation running at comparable steady-state
+   FPS / sim-ratio to the pre-refactor branch on the same
+   hardware. New per-cell or per-particle costs must be paid in
+   indexed Float32Array work, not allocations or string lookups.
 
 ## Current state (one-paragraph summary)
 
@@ -207,6 +221,10 @@ generated. Approximate phases / densities listed.
 | 14 | Membrane lipid   | membrane     | liquid | 0.8     | none       | structural; fission cost    |
 | 15 | Biopolymer       | none         | solid  | 1.05    | low        | bulk food substrate         |
 | 16-19 | Markers (×4)  | marker       | aqueous| 1.0     | high       | identity-only; no reactions |
+| 20 | Photoreceptor    | sensor-light | aqueous| 1.1     | low        | gates SENSE_LIGHT / pheromone / EM |
+| 21 | Chemoreceptor    | sensor-chem  | aqueous| 1.1     | low        | gates SENSE_CHEMICAL / GRAD / DENSITY / KIN |
+| 22 | Mechanoreceptor  | sensor-mech  | aqueous| 1.1     | low        | gates SENSE_PRESSURE / WALL / HEAD |
+| 23 | Thermoreceptor   | sensor-temp  | aqueous| 1.1     | low        | gates SENSE_TEMP |
 
 ### Procedural mock chemicals
 
@@ -242,6 +260,24 @@ four words). Genome operands continue to be mod `CHEMICAL_COUNT`.
   cheaply.
 - **Mutation & DNA repair** unchanged. (Repair op remains an ATP
   spend.)
+- **Sensor chemicals.** A handful of bootstrap chems act as
+  receptor proxies for the SENSE_* ops. Each sensor op consults
+  a specific receptor chemical's pool in the cell; below a small
+  floor the op returns zero. Cells synthesize receptors via
+  biosynth reactions and pay the same ATP/substrate cost they
+  pay for chlorophyll / enzyme / mRNA. The mapping (kept
+  minimal):
+  - **photoreceptor** → light, pheromone, EM-band ops
+  - **chemoreceptor** → gradient / density / chemical / kin ops
+  - **mechanoreceptor** → pressure, wall, head-position ops
+  - **thermoreceptor** → temperature op
+
+  These are catalysts-of-perception. A blind cell (no
+  photoreceptor) can still execute SENSE_LIGHT, but reads 0;
+  the genome's compiled response will be no-op. The signal
+  amplitude scales with receptor concentration up to a
+  saturation, mirroring real cell biology where receptor density
+  sets sensitivity.
 
 ### Not modeled (must emerge if at all)
 
@@ -357,6 +393,23 @@ preserved as a derived quantity.
 Tests: every reaction satisfies the energy invariant. ATP gain in
 practice tracks expected efficiency for the bootstrap pathways.
 
+### Phase H2 — Sensor chemicals
+
+Add the four receptor chemicals to bootstrap. Each `SENSE_*` op
+reads `cell.chemCols[receptor]` and scales / gates its return
+value: at pool 0 the op returns 0; the response rises with
+receptor concentration to a saturation. Add corresponding
+biosynth reactions (amino acid + minerals → receptor, mRNA-gated,
+ATP cost). Cells that don't invest can't sense.
+
+Performance: each SENSE op gains one `chemCols[id][i]` read +
+multiply. The hot path is per-tick per-cell per-executed-sense-op,
+already bounded by VM instr budget; this is a 1-2 ns addition.
+
+Tests: a cell with zero photoreceptor returns 0 from
+SENSE_LIGHT regardless of ambient. Synthesizing receptor restores
+the signal.
+
 ### Phase I — Marker chems & fingerprint
 
 Promote 4 procedural chems to `role: marker`. They are produced
@@ -434,6 +487,25 @@ Ingestion / excretion / dissolution / aeration are the
 exchange events; each one moves mass between containers
 without creating or destroying it. A test in phase D asserts
 the invariant directly.
+
+## Performance bar
+
+The simulation's steady-state profile on the pre-refactor branch
+sits around 5.7x sim ratio at np≈2300 / pop≈25 (per
+`PERF_NEXT_STEPS.md`). Every phase that lands must:
+
+- Run the existing `scenario.smoke.test.ts` in comparable wall time
+  (within ~10% of pre-phase baseline).
+- Not add any per-tick allocation in the hot path (chemistry,
+  forces, collisions, VM). All work is indexed Float32Array math.
+- Not introduce string-keyed lookups in per-cell or per-particle
+  loops.
+- Keep the catalyst-pool fast path (skip when pool ≤ 0 and
+  uncatRate ≤ 0).
+
+If a phase regresses perf by more than the bar, it doesn't merge
+into the migration; the offending pattern gets profiled and
+reworked first.
 
 ## Out of scope for this overhaul
 
