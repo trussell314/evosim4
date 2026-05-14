@@ -2635,59 +2635,33 @@ function spawnFounder(world: World): Creature {
 const SEED_SPEC: Array<{
   mat: MaterialId;
   count: number;
-  // Each entry: with probability p, attach `amount` of molecule `mol`.
-  // Independent rolls so a single particle can carry 0..N payloads.
-  payloads: Array<{ p: number; mol: keyof Molecules; amount: number }>;
   // Number of generic-chemical slots to populate on each seeded
   // particle, plus the max amount per slot. These are *substrates*
   // and *products* of generic reactions (not catalysts -- catalysts
-  // live in a separate cell-only pool with 256 slots). Seeding them
-  // gives cells something to react with at world start beyond just
-  // the named molecules (glucose/aa/fa/...). Per-particle slots are
-  // picked at random so the primordial soup is varied rather than
-  // concentrated on one reaction's substrates.
+  // live in a separate cell-only pool with 256 slots, and particles
+  // can't carry them). Seeding them gives cells something to react
+  // with at world start; named molecules (glucose / aminoAcid /
+  // fattyAcid / etc.) are NOT seeded -- they have to come from
+  // synthesis ops or from extracting prey directly.
   genericSlots: number;
   genericAmount: number;
 }> = [
-  // Organic dominates trophic input. Most are raw substrate; a
-  // minority carry partially-decomposed molecules. Richest in
-  // generic chemistry since organic biomatter is the natural
-  // carrier of complex molecules in the substrate pool.
-  {
-    mat: "organic",
-    count: 200,
-    payloads: [
-      { p: 0.15, mol: "glucose", amount: 0.4 },
-      { p: 0.06, mol: "aminoAcid", amount: 0.3 },
-      { p: 0.02, mol: "fattyAcid", amount: 0.2 },
-    ],
-    genericSlots: 3,
-    genericAmount: 0.2,
-  },
-  // Clay holds trace minerals + adsorbed generic chemistry.
-  {
-    mat: "clay",
-    count: 100,
-    payloads: [{ p: 0.04, mol: "minerals", amount: 0.5 }],
-    genericSlots: 2,
-    genericAmount: 0.15,
-  },
+  // Organic dominates trophic input and carries the richest generic
+  // chemistry signature -- partially-decomposed biomatter has a
+  // wide distribution of substrate/product slots.
+  { mat: "organic", count: 200, genericSlots: 3, genericAmount: 0.2 },
+  // Clay holds adsorbed generic chemistry on its sheets.
+  { mat: "clay", count: 100, genericSlots: 2, genericAmount: 0.15 },
   // Sand: mineral substrate, trace generic chemistry.
-  { mat: "sand", count: 100, payloads: [], genericSlots: 1, genericAmount: 0.1 },
+  { mat: "sand", count: 100, genericSlots: 1, genericAmount: 0.1 },
   // Rock: similar to sand but slightly lower generic chem.
-  { mat: "rock", count: 50, payloads: [], genericSlots: 1, genericAmount: 0.08 },
-  // Lipid: half carry free fatty acid; lipid-bound compounds give
-  // a moderate generic-chem signature.
-  {
-    mat: "lipid",
-    count: 30,
-    payloads: [{ p: 0.5, mol: "fattyAcid", amount: 0.3 }],
-    genericSlots: 2,
-    genericAmount: 0.15,
-  },
+  { mat: "rock", count: 50, genericSlots: 1, genericAmount: 0.08 },
+  // Lipid: lipid-bound compounds give a moderate generic-chem
+  // signature without any free fatty acid riding along.
+  { mat: "lipid", count: 30, genericSlots: 2, genericAmount: 0.15 },
   // Gas is rare at seed (most gas enters via aerate later); no
   // generic chemistry rides on bubbles.
-  { mat: "gas", count: 20, payloads: [], genericSlots: 0, genericAmount: 0 },
+  { mat: "gas", count: 20, genericSlots: 0, genericAmount: 0 },
 ];
 
 function buildSeedGenericChem(slots: number, amount: number): Float32Array | undefined {
@@ -2709,13 +2683,6 @@ function seedInitialParticles(world: World): void {
   for (const spec of SEED_SPEC) {
     for (let i = 0; i < spec.count; i++) {
       const r = 1 + Math.random() * 1.5;
-      let molecules: Molecules | undefined;
-      for (const p of spec.payloads) {
-        if (Math.random() < p.p) {
-          if (!molecules) molecules = emptyMolecules();
-          molecules[p.mol] = p.amount;
-        }
-      }
       const genericChem = buildSeedGenericChem(spec.genericSlots, spec.genericAmount);
       pushParticle(world, {
         x: Math.random() * W,
@@ -2725,7 +2692,6 @@ function seedInitialParticles(world: World): void {
         r,
         material: spec.mat,
         density: rollDensity(spec.mat),
-        molecules,
         genericChem,
       });
     }

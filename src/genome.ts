@@ -948,13 +948,14 @@ export function viableGenome(genome: Uint8Array): boolean {
   //   - SYNTH_AA: internal synthesis from non-aa precursors (exempt
   //     from the per-op aa cost itself; it's the producer).
   //   - PREDATE/ENGULF: extract the prey's free aa directly.
-  //   - INGEST: graze seeded organic particles carrying aa payloads.
-  // None of these go through the ribosome (which itself requires aa
-  // to synth under the planned cost rule), so there's no chicken-
-  // and-egg lock -- audit suggestion #2.
-  // If aa seeding is ever removed from the world spawn config, drop
-  // `hasIngest` from this clause so INGEST-only lineages auto-reject.
-  const hasAaSource = hasAA || hasPredate || hasEngulf || hasIngest;
+  // INGEST is NOT counted: seeded particles carry only generic
+  // chemistry, not named molecules like aminoAcid. A pure-INGEST
+  // lineage that doesn't also synth or predate has no path to aa
+  // and would starve under the per-op cost rule.
+  // None of these sources go through the ribosome (which itself
+  // requires aa to synth under the cost rule), so there's no
+  // chicken-and-egg lock -- audit suggestion #2.
+  const hasAaSource = hasAA || hasPredate || hasEngulf;
   if (!hasAaSource) return false;
   return true;
 }
