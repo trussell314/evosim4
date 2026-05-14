@@ -1441,30 +1441,89 @@ const RIBO_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
 const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
+// Phase B of the chemistry overhaul (CHEMISTRY_OVERHAUL.md): the
+// chemical table is now the single source of truth for every
+// substance the engine reasons about, with full property rows
+// (phase, solubility, density, role, etc.). The downstream
+// migration phases (C..J) will consume these fields; until then
+// the new properties are populated but unused, so behavior is
+// unchanged from the previous "mass + diffusable" definition.
+export type ChemPhase = "solid" | "liquid" | "gas" | "aqueous";
+export type ChemRole =
+  | "none"
+  | "energyCarrier"   // ATP-like: stores energy in chemical form
+  | "energyEmpty"     // ADP-like: the discharged counterpart
+  | "membrane"        // structural lipid bilayer
+  | "mrna"            // catalyst proxy for biosynth (formerly "ribosome")
+  | "pigment"         // catalyst proxy for photosynthesis
+  | "digester"        // catalyst proxy for catabolism
+  | "marker";         // identity-only; no reactions consume it
 interface ChemicalDef {
   name: string;
-  mass: number; // unit mass per "mole" -- 1 for named (matches existing model)
-  // Whether this chemical crosses the inner/host membrane in
-  // endosymbiont diffusion. Small molecules diffuse (glucose, gases,
-  // amino acids); structural / machinery molecules don't (biomass,
-  // chl, enz, ribo). All generic chemicals diffuse by default.
-  diffusable: boolean;
+  // Mass per unit reaction; conserved across reactions by the
+  // procedural generator. (Renamed from `mass`.)
+  molarMass: number;
+  // Bulk density when condensed (liquid or solid). Drives free-particle
+  // physics (buoyancy/sinking). Gases use their own low density.
+  density: number;
+  // Default phase at standard simulation conditions.
+  defaultPhase: ChemPhase;
+  // Saturation concentration in water (0 = insoluble). Used by phase G
+  // for dissolution / outgassing accounting against the ambient pool.
+  solubility: number;
+  // Proxy for tendency to enter gas phase as temperature rises. Higher
+  // = more volatile. Used by phase G.
+  vaporPressure: number;
+  // Proxy for solid <-> liquid transition. Above this, the chem behaves
+  // as liquid for phase-transition purposes.
+  meltingPoint: number;
+  // Rate of passive diffusion across the cell membrane (units: mass/sec
+  // per gradient unit per surface ratio). Zero for structural /
+  // machinery molecules that can't cross. Replaces the old
+  // `diffusable: boolean` -- nonzero permeability == "diffusable".
+  permeability: number;
+  // Stored chemical potential per unit mass. Informational for the
+  // procedural reaction generator (substrates with high bondEnergy
+  // tend to yield more ATP when broken down). Phase H uses it.
+  bondEnergy: number;
+  // Role flag for built-in machinery / identity semantics. Most
+  // chemicals are "none".
+  role: ChemRole;
+  // Dominant-component color for rendering. Used by phase C when
+  // particles switch from material-keyed colors to chem-keyed.
+  color: string;
 }
-// (NAMED_DIFFUSABLE is referenced by buildChemicalTable below; declared
-// before CHEMICALS so the temporal-dead-zone doesn't bite at module init.)
-const NAMED_DIFFUSABLE: ReadonlyArray<boolean> = [
-  /* o2     */ true,
-  /* co2    */ true,
-  /* glu    */ true,
-  /* aa     */ true,
-  /* fa     */ true,
-  /* min    */ true,
-  /* biomass*/ false,
-  /* adp    */ true,
-  /* waste  */ true,
-  /* chl    */ false,
-  /* enz    */ false,
-  /* ribo   */ false,
+
+interface NamedChemSpec {
+  molarMass: number;
+  density: number;
+  defaultPhase: ChemPhase;
+  solubility: number;
+  vaporPressure: number;
+  meltingPoint: number;
+  permeability: number;
+  bondEnergy: number;
+  role: ChemRole;
+  color: string;
+}
+// Order MUST match NAMED_CHEMICALS exactly. Properties are tuned to
+// reasonable real-chemistry analogs: O2/CO2 are volatile gases, glucose
+// is a high-bond-energy soluble sugar, fatty acid is hydrophobic and
+// energy-dense, biomass is structural-insoluble, chlorophyll/enzyme/
+// ribosome are aqueous machinery that doesn't cross membranes.
+const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
+  /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#cfe2ff" },
+  /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6" },
+  /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0.6, bondEnergy: 30,   role: "none",      color: "#dbe09c" },
+  /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075" },
+  /* fa     */ { molarMass: 1.0, density: 0.9,  defaultPhase: "liquid",  solubility: 0.1,  vaporPressure: 0,  meltingPoint: 40,   permeability: 0.3, bondEnergy: 80,   role: "none",      color: "#f0d264" },
+  /* min    */ { molarMass: 1.0, density: 2.4,  defaultPhase: "solid",   solubility: 0.02, vaporPressure: 0,  meltingPoint: 1200, permeability: 0.1, bondEnergy: 0,    role: "none",      color: "#8c8175" },
+  /* biomass*/ { molarMass: 1.0, density: 1.1,  defaultPhase: "solid",   solubility: 0,    vaporPressure: 0,  meltingPoint: 300,  permeability: 0,   bondEnergy: 15,   role: "none",      color: "#7fb069" },
+  /* adp    */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 0,    role: "energyEmpty", color: "#a8d8ea" },
+  /* waste  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.6, bondEnergy: 2,    role: "none",      color: "#a89878" },
+  /* chl    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 5,    role: "pigment",   color: "#5fa850" },
+  /* enz    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.5,  vaporPressure: 0,  meltingPoint: 90,   permeability: 0,   bondEnergy: 5,    role: "digester",  color: "#e0a070" },
+  /* ribo   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3,  vaporPressure: 0,  meltingPoint: 70,   permeability: 0,   bondEnergy: 5,    role: "mrna",      color: "#c8a4dc" },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
@@ -1472,22 +1531,76 @@ const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // already populated above by the time this line evaluates.
 const CHEM_NAMED_MOL_IDX: number[] = NAMED_CHEMICALS.map((n) => MOLECULE_INDEX[n]);
 
+// Deterministic per-chem procedural color: walk a hue ring and pair
+// with phase-driven saturation/lightness so a glance at the particle
+// tells you roughly what state it tends to be in.
+function procColor(rng: () => number, phase: ChemPhase): string {
+  const h = Math.floor(rng() * 360);
+  const sat = phase === "gas" ? 25 : phase === "solid" ? 35 : 55;
+  const light = phase === "gas" ? 78 : phase === "solid" ? 45 : 60;
+  return `hsl(${h}deg ${sat}% ${light}%)`;
+}
+
 function buildChemicalTable(): ChemicalDef[] {
   const out: ChemicalDef[] = [];
   for (let i = 0; i < NAMED_CHEMICALS.length; i++) {
-    out.push({ name: NAMED_CHEMICALS[i], mass: 1, diffusable: NAMED_DIFFUSABLE[i] });
+    const spec = NAMED_CHEM_SPECS[i];
+    out.push({ name: NAMED_CHEMICALS[i], ...spec });
   }
-  // Deterministic per-chemical mass for the generic pool, drawn
-  // from a small set so reactions across runs have the same balance.
-  // Skew toward small masses (most biology is light chemistry).
-  // Generic chemicals all diffuse -- they're abstract molecules and
-  // letting them flow between endosymbiont and host enables real
-  // metabolic cooperation.
+  // Procedural generics. Each property rolled deterministically so
+  // reaction balance is stable across runs (and across the
+  // renderer/worker boundary). Skew masses low (most biology is
+  // light chemistry); phase distribution roughly 60% liquid/aqueous,
+  // 25% solid, 15% gas. Permeability biased by molar mass so light
+  // chems tend to diffuse. All generics carry role "none" -- only
+  // bootstrap entries get special roles.
   const rng = mulberry32(0xC8E3_15CA);
   for (let i = NAMED_CHEMICAL_COUNT; i < CHEMICAL_COUNT; i++) {
     const u = rng();
-    const mass = 0.5 + u * u * 4.5; // 0.5 .. 5.0, skewed low
-    out.push({ name: `c${i.toString(16).padStart(2, "0")}`, mass, diffusable: true });
+    const molarMass = 0.5 + u * u * 4.5; // 0.5 .. 5.0, skewed low
+    const phaseRoll = rng();
+    const defaultPhase: ChemPhase =
+      phaseRoll < 0.15 ? "gas" :
+      phaseRoll < 0.40 ? "solid" :
+      phaseRoll < 0.75 ? "liquid" : "aqueous";
+    // Density: gases low, solids high, liquids/aqueous middling.
+    const density =
+      defaultPhase === "gas" ? 0.1 + rng() * 0.3 :
+      defaultPhase === "solid" ? 1.5 + rng() * 2.0 :
+      defaultPhase === "liquid" ? 0.7 + rng() * 0.8 :
+      0.9 + rng() * 0.4;
+    // Solubility: log-uniform across a wide range. Gases skew lower
+    // (most don't dissolve well); aqueous chems skew higher.
+    const solBase = Math.exp(Math.log(0.01) + rng() * (Math.log(5) - Math.log(0.01)));
+    const solubility =
+      defaultPhase === "aqueous" ? Math.max(solBase, 0.5) :
+      defaultPhase === "solid" ? solBase * 0.2 :
+      solBase;
+    const vaporPressure = defaultPhase === "gas" ? 5 + rng() * 8 : rng() * 2;
+    const meltingPoint =
+      defaultPhase === "solid" ? 200 + rng() * 1000 :
+      defaultPhase === "gas" ? -200 + rng() * 100 :
+      rng() * 200;
+    // Light molecules diffuse easily; heavy ones don't. Solids and
+    // very large molecules effectively don't cross at all.
+    const permBase = 1.0 / (1 + molarMass * 0.5);
+    const permeability = defaultPhase === "solid" ? 0 : permBase * (0.4 + rng() * 0.6);
+    // Bond energy: rolled per chem, with a small skew so a handful
+    // are "high-energy" substrates that drive ATP-rich reactions.
+    const bondEnergy = (rng() < 0.2 ? 30 + rng() * 60 : rng() * 20);
+    out.push({
+      name: `c${i.toString(16).padStart(2, "0")}`,
+      molarMass,
+      density,
+      defaultPhase,
+      solubility,
+      vaporPressure,
+      meltingPoint,
+      permeability,
+      bondEnergy,
+      role: "none",
+      color: procColor(rng, defaultPhase),
+    });
   }
   return out;
 }
@@ -1566,7 +1679,7 @@ function buildReactionTable(): Reaction[] {
     for (let j = 0; j < nS; j++) {
       const c = pickFrom(COUNT_POOL);
       sCount[j] = c;
-      sMass += c * CHEMICALS[sChem[j]].mass;
+      sMass += c * CHEMICALS[sChem[j]].molarMass;
     }
     // Product counts: pick raw integers, then scale so total product
     // mass equals total substrate mass (mass conservation). The scale
@@ -1577,7 +1690,7 @@ function buildReactionTable(): Reaction[] {
     for (let j = 0; j < nP; j++) {
       const c = pickFrom(COUNT_POOL);
       pCountRaw[j] = c;
-      pMassRaw += c * CHEMICALS[pChem[j]].mass;
+      pMassRaw += c * CHEMICALS[pChem[j]].molarMass;
     }
     const scale = sMass / pMassRaw;
     const pCount = new Float32Array(nP);
@@ -3309,11 +3422,13 @@ function maintenanceDecay(c: Creature, dt: number): void {
 // surplus ATP / glucose / etc. flows where it's useful. This is the
 // whole "subsumed cell becomes organelle" mechanic.
 const ORGANELLE_DIFFUSE_PER_SEC = 0.5;   // fraction of (inner - host) gap that crosses per sec
-// Cached list of chemical ids whose CHEMICALS[id].diffusable is true.
+// Cached list of chemical ids whose CHEMICALS[id].permeability is nonzero.
 // Built once from the table so the hot loop iterates a tight array.
+// (Replaces the old `diffusable: boolean` -- permeability is the
+// continuous version, with zero meaning "structural / can't cross".)
 const DIFFUSABLE_CHEM_IDS: number[] = (() => {
   const out: number[] = [];
-  for (let i = 0; i < CHEMICAL_COUNT; i++) if (CHEMICALS[i].diffusable) out.push(i);
+  for (let i = 0; i < CHEMICAL_COUNT; i++) if (CHEMICALS[i].permeability > 0) out.push(i);
   return out;
 })();
 function runOrganelleChemistry(
@@ -4708,7 +4823,7 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
       const v = cols[k][ci];
       if (v > 0) {
         payload[k] = v;
-        totalMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].mass;
+        totalMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].molarMass;
         cols[k][ci] = 0;
         any = true;
       }
