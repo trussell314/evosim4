@@ -4673,16 +4673,72 @@ export function updateCreatureRadius(c: Creature): void {
 }
 
 const GRID_CELL_SIZE = 12;
-const COLLISION_BUCKETS: number[][] = [];
-// Indices of buckets that received at least one particle this pass.
-// Lets the resolve loop iterate only occupied cells (~30% of total at
-// typical density) instead of every cell in the grid.
-let COLLISION_NONEMPTY = new Int32Array(0);
-let COLLISION_NONEMPTY_N = 0;
-let COLLISION_MASS = new Float64Array(0);
-// Per-particle "is asleep" flag, recomputed each call from quietTicks.
-// Pair tests where both ends are asleep get skipped.
-let COLLISION_ASLEEP = new Uint8Array(0);
+
+// Worst-case grid dimensions. For an 800x600 world with cell=12, the
+// grid is 67x50 = 3350 cells. 16384 leaves room for larger worlds; the
+// buffer is allocated once at world creation and never resized.
+const COLLISION_MAX_CELLS = 16384;
+// Matches PARTICLE_STORE_PREALLOC_CAP so cellItems can index every
+// possible particle slot.
+const COLLISION_MAX_PARTICLES = PARTICLE_STORE_PREALLOC_CAP;
+
+// SAB-backed collision-pass scratch. Holds the per-particle mass +
+// sleep flags AND the spatial-hash grid in a layout subworkers can
+// read directly. Replaces the old number[][] bucket-of-arrays layout
+// (which can't cross a worker boundary).
+//
+//   mass        Float32[cap]            kg-like per particle
+//   asleep      Uint8[cap]              1 if both ends of a pair can skip work
+//   cellStart   Int32[maxCells + 1]     prefix sum: items in cell i live at
+//                                       cellItems[cellStart[i]..cellStart[i+1])
+//   cellItems   Int32[cap]              particle indices, sorted by cell
+//
+// Built serially each pass on the sim worker; read by the row-parity
+// collision subworkers during the parallel resolve phase.
+export interface CollisionSharedLayout {
+  buffer: ArrayBufferLike;
+  maxParticles: number;
+  maxCells: number;
+  offsets: {
+    mass: number;
+    asleep: number;
+    cellStart: number;
+    cellItems: number;
+  };
+}
+
+function allocCollisionBuffer(): CollisionSharedLayout {
+  const align = (n: number): number => (n + 7) & ~7;
+  let o = 0;
+  const offsets = {} as CollisionSharedLayout["offsets"];
+  offsets.mass = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.asleep = o; o = align(o + COLLISION_MAX_PARTICLES);
+  offsets.cellStart = o; o = align(o + (COLLISION_MAX_CELLS + 1) * 4);
+  offsets.cellItems = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  const total = o;
+  let buffer: ArrayBufferLike;
+  if (typeof SharedArrayBuffer !== "undefined" &&
+      typeof globalThis !== "undefined" &&
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
+    buffer = new SharedArrayBuffer(total);
+  } else {
+    buffer = new ArrayBuffer(total);
+  }
+  return { buffer, maxParticles: COLLISION_MAX_PARTICLES, maxCells: COLLISION_MAX_CELLS, offsets };
+}
+
+const COLLISION_LAYOUT = allocCollisionBuffer();
+const COLLISION_MASS = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.mass, COLLISION_MAX_PARTICLES);
+const COLLISION_ASLEEP = new Uint8Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.asleep, COLLISION_MAX_PARTICLES);
+const COLLISION_CELL_START = new Int32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.cellStart, COLLISION_MAX_CELLS + 1);
+const COLLISION_CELL_ITEMS = new Int32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.cellItems, COLLISION_MAX_PARTICLES);
+// Per-cell counter scratch used during cellItems build. Not shared
+// across workers; only the sim worker touches it.
+let COLLISION_CELL_COUNTER = new Int32Array(0);
+export function getCollisionSharedLayout(): CollisionSharedLayout {
+  return COLLISION_LAYOUT;
+}
+
 const SLEEP_SPEED_SQ = 25;       // <5 px/s counts as still
 const SLEEP_THRESHOLD_TICKS = 30; // ~half a sim-second before sleeping
 
@@ -4822,6 +4878,65 @@ function forCreaturesNear(
   }
 }
 
+// Dispatcher hook for the parallel collision pass. When set, the sim
+// worker delegates each row-parity phase (even rows, then odd rows)
+// to a subworker pool that holds views over the same SAB-backed
+// particle store + collision grid. Stays null in tests / non-isolated
+// contexts; the serial path below runs in that case.
+export type CollisionPhaseDispatcher = (cols: number, rows: number, rowParity: 0 | 1, e: number) => void;
+let collisionPhaseDispatcher: CollisionPhaseDispatcher | null = null;
+export function setCollisionPhaseDispatcher(d: CollisionPhaseDispatcher | null): void {
+  collisionPhaseDispatcher = d;
+}
+
+// Process every cell in rows {rowStart, rowStart+rowStep, ...} on the
+// collision grid: resolve pairs within each cell plus pairs against
+// the four canonical downstream neighbors (E, SW, S, SE). Reads cell
+// membership from cellStart / cellItems built by the sim worker on
+// the same buffer. Each row writes to particles in its own row + the
+// row below it, so disjoint rows produce disjoint writes (see
+// resolveCollisions for the two-phase row-parity coloring).
+//
+// Worker assignment for phase p with N workers:
+//   worker i processes rowStart = p + 2*i, rowStep = 2*N.
+// That way every row in the phase is owned by exactly one worker.
+export function applyCollisionsRowRange(
+  PX: Float32Array, PY: Float32Array, PZ: Float32Array,
+  PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
+  PR: Float32Array,
+  cellStart: Int32Array, cellItems: Int32Array,
+  rowStart: number, rowStep: number,
+  cols: number, rows: number,
+  e: number,
+): void {
+  for (let cy = rowStart; cy < rows; cy += rowStep) {
+    for (let cx = 0; cx < cols; cx++) {
+      const ci = cy * cols + cx;
+      const s0 = cellStart[ci];
+      const s1 = cellStart[ci + 1];
+      if (s1 === s0) continue;
+      // Within-cell pairs.
+      for (let i = s0; i < s1; i++) {
+        const ai = cellItems[i];
+        for (let j = i + 1; j < s1; j++) {
+          resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cellItems[j], e);
+        }
+      }
+      // Downstream neighbors: E, SW, S, SE. Pairs with each are
+      // resolved exactly once because every cell only iterates its
+      // four downstream-of-(cx,cy) neighbors.
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+        ci, cx + 1, cy,     cols, rows, e);
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+        ci, cx - 1, cy + 1, cols, rows, e);
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+        ci, cx,     cy + 1, cols, rows, e);
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+        ci, cx + 1, cy + 1, cols, rows, e);
+    }
+  }
+}
+
 function resolveCollisions(world: World): void {
   const store = world.particleStore;
   const n = world.particles.length;
@@ -4831,11 +4946,14 @@ function resolveCollisions(world: World): void {
   const cols = Math.max(1, Math.ceil(world.width / cellSize));
   const rows = Math.max(1, Math.ceil(world.height / cellSize));
   const cellCount = cols * rows;
-
-  while (COLLISION_BUCKETS.length < cellCount) COLLISION_BUCKETS.push([]);
-  if (COLLISION_MASS.length < n) COLLISION_MASS = new Float64Array(n * 2);
-  if (COLLISION_NONEMPTY.length < cellCount) COLLISION_NONEMPTY = new Int32Array(cellCount * 2);
-  if (COLLISION_ASLEEP.length < n) COLLISION_ASLEEP = new Uint8Array(n * 2);
+  if (cellCount + 1 > COLLISION_MAX_CELLS + 1) {
+    // Shouldn't happen with current world sizes + GRID_CELL_SIZE;
+    // signal loudly so we don't silently corrupt collision state.
+    throw new Error(`collision grid ${cellCount} cells exceeds COLLISION_MAX_CELLS=${COLLISION_MAX_CELLS}`);
+  }
+  if (COLLISION_CELL_COUNTER.length < cellCount) {
+    COLLISION_CELL_COUNTER = new Int32Array(cellCount * 2);
+  }
 
   const PX = store.x, PY = store.y, PZ = store.z;
   const PVX = store.vx, PVY = store.vy, PVZ = store.vz;
@@ -4860,35 +4978,62 @@ function resolveCollisions(world: World): void {
   }
 
   for (let pass = 0; pass < world.collisionIters; pass++) {
-    for (let i = 0; i < COLLISION_NONEMPTY_N; i++) COLLISION_BUCKETS[COLLISION_NONEMPTY[i]].length = 0;
-    COLLISION_NONEMPTY_N = 0;
+    // Build cellStart + cellItems. Two-pass: (1) count per cell into
+    // cellStart, (2) prefix sum, (3) place each particle using a per-
+    // cell counter. cellStart[i+1] - cellStart[i] = count in cell i.
+    for (let i = 0; i <= cellCount; i++) COLLISION_CELL_START[i] = 0;
+    const cellOfPart = COLLISION_CELL_COUNTER; // reuse as scratch to remember cell-of-particle
     for (let pi = 0; pi < n; pi++) {
       let cx = Math.floor(PX[pi] / cellSize);
       let cy = Math.floor(PY[pi] / cellSize);
       if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
       if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
-      const idx = cy * cols + cx;
-      const bucket = COLLISION_BUCKETS[idx];
-      if (bucket.length === 0) {
-        COLLISION_NONEMPTY[COLLISION_NONEMPTY_N++] = idx;
-      }
-      bucket.push(pi);
+      const ci = cy * cols + cx;
+      cellOfPart[pi] = ci;
+      COLLISION_CELL_START[ci + 1]++;
+    }
+    for (let i = 1; i <= cellCount; i++) COLLISION_CELL_START[i] += COLLISION_CELL_START[i - 1];
+    // Place particles. cellOfPart is reused here but we no longer
+    // need its previous values once we've consumed pi; safe to
+    // overwrite as a placement cursor seeded from cellStart.
+    const cursor = new Int32Array(cellCount); // small alloc; cellCount typically <4k
+    for (let pi = 0; pi < n; pi++) {
+      const ci = cellOfPart[pi];
+      const slot = COLLISION_CELL_START[ci] + cursor[ci]++;
+      COLLISION_CELL_ITEMS[slot] = pi;
     }
 
-    for (let k = 0; k < COLLISION_NONEMPTY_N; k++) {
-      const idx = COLLISION_NONEMPTY[k];
-      const cell = COLLISION_BUCKETS[idx];
-      const cl = cell.length;
-      const cy = (idx / cols) | 0;
-      const cx = idx - cy * cols;
-      for (let i = 0; i < cl; i++) {
-        const ai = cell[i];
-        for (let j = i + 1; j < cl; j++) resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cell[j], e);
+    if (collisionPhaseDispatcher) {
+      collisionPhaseDispatcher(cols, rows, 0, e);
+      collisionPhaseDispatcher(cols, rows, 1, e);
+    } else {
+      // Serial fallback: iterate every row.
+      for (let cy = 0; cy < rows; cy++) {
+        for (let cx = 0; cx < cols; cx++) {
+          const ci = cy * cols + cx;
+          const s0 = COLLISION_CELL_START[ci];
+          const s1 = COLLISION_CELL_START[ci + 1];
+          if (s1 === s0) continue;
+          for (let i = s0; i < s1; i++) {
+            const ai = COLLISION_CELL_ITEMS[i];
+            for (let j = i + 1; j < s1; j++) {
+              resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, COLLISION_CELL_ITEMS[j], e);
+            }
+          }
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_CELL_START, COLLISION_CELL_ITEMS,
+            ci, cx + 1, cy,     cols, rows, e);
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_CELL_START, COLLISION_CELL_ITEMS,
+            ci, cx - 1, cy + 1, cols, rows, e);
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_CELL_START, COLLISION_CELL_ITEMS,
+            ci, cx,     cy + 1, cols, rows, e);
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_CELL_START, COLLISION_CELL_ITEMS,
+            ci, cx + 1, cy + 1, cols, rows, e);
+        }
       }
-      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx + 1, cy,     cols, rows, e);
-      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx - 1, cy + 1, cols, rows, e);
-      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx,     cy + 1, cols, rows, e);
-      checkNeighborPairsSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cell, cx + 1, cy + 1, cols, rows, e);
     }
   }
 }
@@ -5040,21 +5185,25 @@ function resolveCreatureSedimentCollisions(world: World): void {
   }
 }
 
-function checkNeighborPairsSoa(
+function checkNeighborCellSoa(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
-  PR: Float32Array, cell: number[],
-  nx: number, ny: number, cols: number, rows: number,
+  PR: Float32Array,
+  cellStart: Int32Array, cellItems: Int32Array,
+  ci: number, nx: number, ny: number,
+  cols: number, rows: number,
   e: number,
 ): void {
   if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return;
-  const nb = COLLISION_BUCKETS[ny * cols + nx];
-  const nl = nb.length;
-  if (nl === 0) return;
-  const cl = cell.length;
-  for (let i = 0; i < cl; i++) {
-    const ai = cell[i];
-    for (let j = 0; j < nl; j++) resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, nb[j], e);
+  const ni = ny * cols + nx;
+  const ns0 = cellStart[ni], ns1 = cellStart[ni + 1];
+  if (ns1 === ns0) return;
+  const s0 = cellStart[ci], s1 = cellStart[ci + 1];
+  for (let i = s0; i < s1; i++) {
+    const ai = cellItems[i];
+    for (let j = ns0; j < ns1; j++) {
+      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cellItems[j], e);
+    }
   }
 }
 

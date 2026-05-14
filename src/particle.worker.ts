@@ -1,56 +1,62 @@
-// Particle subworker. One of a pool spawned by sim.worker.ts to run
-// the per-particle portion of applyForces in parallel. Communication
-// is barrier-style on a control SharedArrayBuffer via Atomics; the
-// particle SoA columns are direct views over the sim worker's
-// SharedArrayBuffer so the math reads / writes the same memory the
-// sim worker is about to read for collisions.
+// Particle subworker. One of a pool spawned by sim.worker.ts. Handles
+// two parallel-particle commands depending on what the sim worker
+// signals through the control SAB:
 //
-// Init payload (one-time):
-//   { type: "init",
-//     particleLayout: ParticleSharedLayout,
-//     controlBuffer: SharedArrayBuffer,      // Int32 control words
-//     paramsBuffer: SharedArrayBuffer,       // Float64 params block
-//     matBase: Float32Array,                 // material base density
-//     workerIndex: number,                   // 0..nWorkers-1
-//     nWorkers: number }
+//   CMD_FORCES (0)     -> applyForces' particle loop over a slice of [0, np)
+//   CMD_COLLISIONS (1) -> applyCollisionsRowRange for a row-parity phase
 //
-// Then this worker Atomics.wait()s on the phase counter; when it
-// changes, processes its assigned slice; Atomics.adds to the done
-// counter; notifies the sim worker.
+// Both share the same Atomics-barrier loop on the control SAB: sim
+// worker writes command + params, bumps phase, notifies; each
+// subworker wakes, reads command, dispatches, increments done.
 
 import {
   applyParticleForcesRange,
+  applyCollisionsRowRange,
   type ParticleSharedLayout,
+  type CollisionSharedLayout,
   type ParticleForceParams,
 } from "./sim";
 
 const PARAM_COUNT = 22;
 
 // Control buffer layout (Int32):
-//   [0] phase  -- sim worker increments each tick; subworker
-//                 Atomics.wait()s for it to differ from lastPhase
-//   [1] done   -- subworkers Atomics.add(+1) when they finish; sim
-//                 worker Atomics.wait()s until it equals nWorkers
-//   [2] np     -- current particle count this tick
-//   [3] stop   -- nonzero asks the subworker to exit cleanly
+//   [0] phase   -- sim worker increments each tick
+//   [1] done    -- subworkers Atomics.add(+1) when finished
+//   [2] np      -- forces command: current particle count
+//   [3] stop    -- reserved (graceful shutdown)
+//   [4] cmd     -- 0 = forces, 1 = collisions
+//   [5] cCols   -- collisions: grid columns
+//   [6] cRows   -- collisions: grid rows
+//   [7] cParity -- collisions: 0 = even rows, 1 = odd rows
+//   [8] cE      -- collisions: restitution e * 1e6 (scaled to int)
 const CTRL_PHASE = 0;
 const CTRL_DONE = 1;
 const CTRL_NP = 2;
-const CTRL_STOP = 3;
+const CTRL_CMD = 4;
+const CTRL_C_COLS = 5;
+const CTRL_C_ROWS = 6;
+const CTRL_C_PARITY = 7;
+const CTRL_C_E = 8;
 
-let particleLayout: ParticleSharedLayout | null = null;
+const CMD_FORCES = 0;
+const CMD_COLLISIONS = 1;
+
 let ctrl: Int32Array | null = null;
 let paramsView: Float64Array | null = null;
 let matBase: Float32Array | null = null;
 let workerIndex = 0;
 let nWorkers = 1;
-let views: {
+let pviews: {
   PX: Float32Array; PY: Float32Array; PZ: Float32Array;
   PVX: Float32Array; PVY: Float32Array; PVZ: Float32Array;
   PR: Float32Array; PDENS: Float32Array; PMAT: Uint8Array;
 } | null = null;
+let cviews: {
+  cellStart: Int32Array;
+  cellItems: Int32Array;
+} | null = null;
 
-function rebuildViews(layout: ParticleSharedLayout): typeof views {
+function rebuildParticleViews(layout: ParticleSharedLayout) {
   const b = layout.buffer;
   const o = layout.offsets;
   const cap = layout.cap;
@@ -67,7 +73,16 @@ function rebuildViews(layout: ParticleSharedLayout): typeof views {
   };
 }
 
-function readParams(): ParticleForceParams {
+function rebuildCollisionViews(layout: CollisionSharedLayout) {
+  const b = layout.buffer;
+  const o = layout.offsets;
+  return {
+    cellStart: new Int32Array(b, o.cellStart, layout.maxCells + 1),
+    cellItems: new Int32Array(b, o.cellItems, layout.maxParticles),
+  };
+}
+
+function readForceParams(): ParticleForceParams {
   const p = paramsView!;
   return {
     dt: p[0],
@@ -95,49 +110,62 @@ function readParams(): ParticleForceParams {
 self.addEventListener("message", (e: MessageEvent) => {
   const m = e.data;
   if (m.type !== "init") return;
-  particleLayout = m.particleLayout;
   workerIndex = m.workerIndex | 0;
   nWorkers = Math.max(1, m.nWorkers | 0);
   matBase = m.matBase;
   ctrl = new Int32Array(m.controlBuffer);
-  // Params buffer holds PARAM_COUNT Float64 slots; sim worker writes,
-  // we read. Aligned at offset 0 of its own SAB.
   paramsView = new Float64Array(m.paramsBuffer);
   if (paramsView.length < PARAM_COUNT) {
     // eslint-disable-next-line no-console
     console.error("[particle worker] paramsBuffer too small");
     return;
   }
-  views = rebuildViews(particleLayout!);
+  pviews = rebuildParticleViews(m.particleLayout);
+  if (m.collisionLayout) cviews = rebuildCollisionViews(m.collisionLayout);
   loop();
 });
 
 function loop(): void {
-  // Spin-and-wait on the phase counter. Each tick the sim worker
-  // increments it and Atomics.notify()s; we wake, run our slice,
-  // increment the done counter, and notify back.
   let lastPhase = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     Atomics.wait(ctrl!, CTRL_PHASE, lastPhase);
-    if (Atomics.load(ctrl!, CTRL_STOP) !== 0) return;
     const phase = Atomics.load(ctrl!, CTRL_PHASE);
     lastPhase = phase;
-    const np = Atomics.load(ctrl!, CTRL_NP);
-    if (np > 0 && views && matBase) {
-      // Even-split partition of [0, np) across nWorkers.
-      const chunk = Math.floor(np / nWorkers);
-      const rem = np - chunk * nWorkers;
-      const from = workerIndex * chunk + Math.min(workerIndex, rem);
-      const extra = workerIndex < rem ? 1 : 0;
-      const to = from + chunk + extra;
-      const params = readParams();
-      applyParticleForcesRange(
-        views.PX, views.PY, views.PZ,
-        views.PVX, views.PVY, views.PVZ,
-        views.PR, views.PDENS, views.PMAT,
-        matBase, from, to, params,
-      );
+    const cmd = Atomics.load(ctrl!, CTRL_CMD);
+    if (cmd === CMD_FORCES) {
+      const np = Atomics.load(ctrl!, CTRL_NP);
+      if (np > 0 && pviews && matBase) {
+        const chunk = Math.floor(np / nWorkers);
+        const rem = np - chunk * nWorkers;
+        const from = workerIndex * chunk + Math.min(workerIndex, rem);
+        const extra = workerIndex < rem ? 1 : 0;
+        const to = from + chunk + extra;
+        const params = readForceParams();
+        applyParticleForcesRange(
+          pviews.PX, pviews.PY, pviews.PZ,
+          pviews.PVX, pviews.PVY, pviews.PVZ,
+          pviews.PR, pviews.PDENS, pviews.PMAT,
+          matBase, from, to, params,
+        );
+      }
+    } else if (cmd === CMD_COLLISIONS) {
+      const cols = Atomics.load(ctrl!, CTRL_C_COLS);
+      const rows = Atomics.load(ctrl!, CTRL_C_ROWS);
+      const parity = Atomics.load(ctrl!, CTRL_C_PARITY);
+      const e = Atomics.load(ctrl!, CTRL_C_E) / 1e6;
+      if (cols > 0 && rows > 0 && pviews && cviews) {
+        const rowStart = parity + 2 * workerIndex;
+        const rowStep = 2 * nWorkers;
+        applyCollisionsRowRange(
+          pviews.PX, pviews.PY, pviews.PZ,
+          pviews.PVX, pviews.PVY, pviews.PVZ,
+          pviews.PR,
+          cviews.cellStart, cviews.cellItems,
+          rowStart, rowStep,
+          cols, rows, e,
+        );
+      }
     }
     Atomics.add(ctrl!, CTRL_DONE, 1);
     Atomics.notify(ctrl!, CTRL_DONE);

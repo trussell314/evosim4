@@ -15,8 +15,10 @@
 import {
   applySavedWorld,
   createWorld,
+  getCollisionSharedLayout,
   makeProfile,
   serializeWorld,
+  setCollisionPhaseDispatcher,
   setParticleForceDispatcher,
   step,
   takeSnapshot,
@@ -196,7 +198,14 @@ const CTRL_DONE = 1;
 const CTRL_NP = 2;
 // CTRL_STOP at slot 3 is reserved for a future graceful-shutdown
 // signal; sim worker doesn't currently set it.
-const CTRL_SLOTS = 4;
+const CTRL_CMD = 4;
+const CTRL_C_COLS = 5;
+const CTRL_C_ROWS = 6;
+const CTRL_C_PARITY = 7;
+const CTRL_C_E = 8;
+const CTRL_SLOTS = 9;
+const CMD_FORCES = 0;
+const CMD_COLLISIONS = 1;
 // Params block: 22 Float64 slots.
 const PARAM_COUNT = 22;
 
@@ -220,6 +229,11 @@ function setupParticlePool(w: World): void {
   }
   const storeLayout = w.particleStore.sharedLayout();
   if (!(storeLayout.buffer instanceof SharedArrayBuffer)) return;
+  const collisionLayout = getCollisionSharedLayout();
+  // The collision SAB must also actually be a SharedArrayBuffer for
+  // the parallel collision path to work; if it isn't we just skip
+  // wiring the collision dispatcher and run that phase serially.
+  const collisionShared = collisionLayout.buffer instanceof SharedArrayBuffer;
 
   // Two workers is the sweet spot at ~5k particles (main loop is
   // ~0.5ms; one helper gets us close to 2x with minimal coordination
@@ -240,6 +254,7 @@ function setupParticlePool(w: World): void {
     wk.postMessage({
       type: "init",
       particleLayout: storeLayout,
+      collisionLayout: collisionShared ? collisionLayout : null,
       controlBuffer: ctrlBuf,
       paramsBuffer: paramsBuf,
       matBase: MATERIAL_BASE_DENSITY,
@@ -250,6 +265,7 @@ function setupParticlePool(w: World): void {
   }
   pool = { workers, ctrl, params, nWorkers, phase: 0 };
   setParticleForceDispatcher(dispatchParticleForces);
+  if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
 }
 
 function dispatchParticleForces(np: number, p: ParticleForceParams): void {
@@ -283,6 +299,7 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   // The phase counter is what subworkers Atomics.wait()'d on; bumping
   // it wakes them. After they finish each adds 1 to the done counter;
   // we Atomics.wait on it until it equals nWorkers.
+  Atomics.store(ctrl, CTRL_CMD, CMD_FORCES);
   Atomics.store(ctrl, CTRL_NP, np);
   Atomics.store(ctrl, CTRL_DONE, 0);
   pool.phase++;
@@ -291,6 +308,24 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   // Barrier: wait until every worker has bumped done. Loop because
   // wait() can return without the condition being met (spurious wake,
   // timeout, or notify from another channel).
+  while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
+    Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE));
+  }
+}
+
+function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): void {
+  if (!pool) return;
+  const { ctrl, nWorkers } = pool;
+  Atomics.store(ctrl, CTRL_CMD, CMD_COLLISIONS);
+  Atomics.store(ctrl, CTRL_C_COLS, cols);
+  Atomics.store(ctrl, CTRL_C_ROWS, rows);
+  Atomics.store(ctrl, CTRL_C_PARITY, parity);
+  // Restitution is a small float (0..1); pack into Int32 at 1e6 scale.
+  Atomics.store(ctrl, CTRL_C_E, Math.round(e * 1e6));
+  Atomics.store(ctrl, CTRL_DONE, 0);
+  pool.phase++;
+  Atomics.store(ctrl, CTRL_PHASE, pool.phase);
+  Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
   while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
     Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE));
   }
