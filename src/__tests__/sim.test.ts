@@ -184,8 +184,8 @@ describe("createWorld", () => {
     // guaranteed; replenish + aerate kick in via step() afterwards.
     expect(w.particles.length).toBeGreaterThan(700);
     expect(w.particles.length).toBeLessThanOrEqual(1000);
-    expect(w.creatures.length).toBeGreaterThanOrEqual(15);
-    expect(w.creatures.length).toBeLessThanOrEqual(25);
+    expect(w.creatures.length).toBeGreaterThanOrEqual(30);
+    expect(w.creatures.length).toBeLessThanOrEqual(50);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
@@ -225,8 +225,8 @@ describe("createWorld", () => {
     const w = createWorld(800, 600);
     // 5-10 founders means 5-10 species (each random genome is its
     // own root). Founders are at firstSeen=0 with no parent.
-    expect(w.species.size).toBeGreaterThanOrEqual(15);
-    expect(w.species.size).toBeLessThanOrEqual(25);
+    expect(w.species.size).toBeGreaterThanOrEqual(30);
+    expect(w.species.size).toBeLessThanOrEqual(50);
     for (const sp of w.species.values()) {
       // Founders enter at world creation time. createWorld in the
       // test path bumps w.t past the warmup delays before spawning,

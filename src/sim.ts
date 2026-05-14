@@ -1143,7 +1143,7 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6) / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6 * 1.5) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
@@ -2573,7 +2573,9 @@ export function createWorld(
     // they're entering at. Otherwise tests see creatures with
     // bornAt=0 and age=61 immediately.
     world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
-    const initialFounders = 15 + Math.floor(Math.random() * 11); // 15-25
+    // 60-100% of FOUNDER_TARGET seeded immediately; the top-up loop
+    // fills the rest in step().
+    const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + Math.random() * 0.4));
     for (let i = 0; i < initialFounders; i++) {
       const f = spawnFounder(world);
       if (i === 0) {
@@ -2590,7 +2592,7 @@ export function createWorld(
 // founder spawn is now deferred to the same top-up path (gated by
 // FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
 // batch" constants any more.
-const FOUNDER_TARGET = 25;
+const FOUNDER_TARGET = 50;
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
 // pebble bed time to settle and the water column to populate before
