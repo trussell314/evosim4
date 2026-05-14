@@ -2916,7 +2916,9 @@ function spawnFounder(world: World): Creature {
   const nc = creatures.length;
   for (let attempt = 0; attempt < 32; attempt++) {
     x = world.width * (0.1 + 0.8 * Math.random());
-    y = world.height * (0.1 + 0.6 * Math.random());
+    // Y range covers most of the water column (10%..90% of height),
+    // skipping just the surface band and the pebble bed at the floor.
+    y = world.height * (0.1 + 0.8 * Math.random());
     let okay = true;
     for (let k = 0; k < nc; k++) {
       const other = creatures[k];
