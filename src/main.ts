@@ -461,6 +461,10 @@ const PHYLO_STRIP_H = 70;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
+// Phylogeny filter: when true, the strip only renders the top 5
+// currently-alive species ranked by live biomass. Toggled via the F
+// key. Off by default so the full history view is the baseline.
+let phyloFilterTop5 = false;
 // Reused per-frame to avoid allocating fresh arrays/maps inside the
 // phylogeny render loop. With thousands of species after a long run,
 // per-frame Array.from() + Map() was costing meaningful GC pressure.
@@ -1236,6 +1240,9 @@ window.addEventListener("keydown", (e) => {
     // last snapshot.
     if (snapshot.profile) dumpProfile();
     simWorker.postMessage({ type: "toggleProfile" });
+  } else if (e.key === "f" || e.key === "F") {
+    // Toggle the phylogeny "top 5 alive" filter.
+    phyloFilterTop5 = !phyloFilterTop5;
   }
 });
 
@@ -1579,6 +1586,23 @@ function drawPhylogeny(): void {
       if (!snapshotSpeciesByKey.has(key)) peakBiomassByKey.delete(key);
     }
   }
+  // Top-5 filter: prune visibleSpecies down to the five currently-alive
+  // species with the highest live biomass. Applied after bioByKey is
+  // built so the ranking uses fresh per-frame numbers. visible is a
+  // const alias for visibleSpecies, so the in-place mutation here
+  // flows through.
+  if (phyloFilterTop5) {
+    visibleSpecies.sort((a, b) => {
+      if (a.alive > 0 && b.alive <= 0) return -1;
+      if (b.alive > 0 && a.alive <= 0) return 1;
+      return (bioByKey.get(b.key) ?? 0) - (bioByKey.get(a.key) ?? 0);
+    });
+    let aliveN = 0;
+    for (const sp of visibleSpecies) if (sp.alive > 0) aliveN++;
+    visibleSpecies.length = Math.min(5, aliveN);
+    visibleSpecies.sort((a, b) => a.lane - b.lane);
+  }
+
   let maxBio = 0;
   for (const sp of visible) {
     const b = bioByKey.get(sp.key) ?? 0;
@@ -1652,8 +1676,9 @@ function drawPhylogeny(): void {
 
   ctx.fillStyle = "#7fb8c8";
   ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  const filterTag = phyloFilterTop5 ? "  [TOP 5 alive, F toggles]" : "  (F: top 5 filter)";
   ctx.fillText(
-    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)`,
+    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)${filterTag}`,
     8,
     stripY + 11,
   );
