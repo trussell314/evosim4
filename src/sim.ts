@@ -3634,6 +3634,12 @@ export interface ParticleForceParams {
   t: number;
   drag: number;
   gravity: number;
+  // World floor y -- used to gate the asleep-freeze to particles
+  // resting at the bottom wall only. Without this gate the freeze
+  // also catches lipids/gas/organic at the wavy surface and glues
+  // them to a fixed y instead of letting buoyancy bob them with
+  // the waves.
+  worldFloorY: number;
   surfaceY: number;
   surfaceDecay: number;
   swellDecay: number;
@@ -3684,17 +3690,18 @@ export function applyParticleForcesRange(
   const updraftEnv = p.updraftEnv;
   const colDepth = p.colDepth;
   const currentDrift = p.currentDrift;
+  const floorY = p.worldFloorY;
   for (let i = from; i < to; i++) {
-    // Asleep particles (set in the previous tick's collision pass)
-    // are frozen: skip force application and zero out velocity so
-    // they don't accumulate gravity tick after tick. Wakes back up
-    // automatically when a collision sets velocity above
-    // SLEEP_SPEED_SQ and resolveCollisions flips ASLEEP back to 0.
-    if (ASLEEP[i]) {
+    const xi = PX[i], yi = PY[i], ri = PR[i];
+    // Freeze asleep particles ONLY when they're resting at the
+    // bottom wall. Other asleep particles (e.g. lipids glued to the
+    // wavy surface ceiling) still need buoyancy + drag every tick so
+    // they bob with the surface; freezing them there glues them to a
+    // static y and the wave passes through them.
+    if (ASLEEP[i] && yi + ri >= floorY - 0.5) {
       PVX[i] = 0; PVY[i] = 0; PVZ[i] = 0;
       continue;
     }
-    const xi = PX[i], yi = PY[i], ri = PR[i];
     let vxi = PVX[i], vyi = PVY[i], vzi = PVZ[i];
     const overrideD = PDENS[i];
     const density = overrideD !== 0 ? overrideD : matBase[PMAT[i]];
@@ -3743,6 +3750,7 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
     t: world.t,
     drag: world.drag,
     gravity: world.gravity,
+    worldFloorY: world.height,
     surfaceY: world.surfaceY,
     surfaceDecay: world.surfaceDecay,
     swellDecay: world.swellDecay,
