@@ -592,6 +592,22 @@ export interface GenomeSummary {
   selfModifies: boolean;
   sensors: string[];
   capabilities: string[];
+  // Metabolism / chemistry axis. Populated by walking SYNTH_* ops
+  // and trophic ops. Used for the new "Metabolism" bullet + top-line
+  // summary + warnings section.
+  synthBio: boolean;
+  synthAA: boolean;
+  synthFA: boolean;
+  synthEnz: boolean;
+  synthChl: boolean;
+  synthRibo: boolean;
+  // Catalyst slots SYNTH_CAT will populate if it fires at the listed
+  // PCs. Best-effort static analysis: operand byte mod CATALYST_COUNT.
+  // Doesn't catch runtime PC drift; gives an honest "likely portfolio".
+  catalystSlots: number[];
+  metabolism: string;       // one-line classification
+  warnings: string[];       // structural issues that doom the lineage
+  oneLine: string;          // top-of-summary one-liner
   verdict: string;
 }
 
@@ -609,6 +625,9 @@ export function summarizeGenome(
   let repair = false, selfModifies = false;
   let hasJump = false, hasCmp = false;
   let executableOps = 0, unknownBytes = 0;
+  let synthBio = false, synthAA = false, synthFA = false;
+  let synthEnz = false, synthChl = false, synthRibo = false;
+  const catalystSlots: number[] = [];
 
   let i = 0;
   while (i < genome.length) {
@@ -641,6 +660,17 @@ export function summarizeGenome(
       case OP.EXCRETE: {
         const mat = m6(operand);
         if (!excreteMaterials.includes(mat)) excreteMaterials.push(mat);
+        break;
+      }
+      case OP.SYNTH_BIO:  synthBio = true; break;
+      case OP.SYNTH_AA:   synthAA = true; break;
+      case OP.SYNTH_FA:   synthFA = true; break;
+      case OP.SYNTH_ENZ:  synthEnz = true; break;
+      case OP.SYNTH_CHL:  synthChl = true; break;
+      case OP.SYNTH_RIBO: synthRibo = true; break;
+      case OP.SYNTH_CAT: {
+        const slot = operand % CATALYST_COUNT;
+        if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
         break;
       }
       case OP.JZ: case OP.JNZ: hasJump = true; break;
@@ -733,6 +763,7 @@ export function summarizeGenome(
   // Net behavior: short verdict + likely fate in this environment.
   let netClass: string;
   if (!anyAction) netClass = "An inert blob.";
+  else if (synthChl && synthBio && reproduce) netClass = "A photoautotroph that builds biomass from light and divides.";
   else if (predate || engulf) netClass = "A predator.";
   else if (thrust && ingestMaterials.length > 0 && reproduce) netClass = "A complete loop: senses, swims, eats, divides.";
   else if (ingestMaterials.length > 0 && reproduce) netClass = "A passive eater that divides -- doesn't steer toward food.";
@@ -741,6 +772,67 @@ export function summarizeGenome(
   else if (thrust) netClass = "A wanderer -- swims around but never eats.";
   else if (reproduce) netClass = "Tries to divide but can't sustain itself (no eat path).";
   else netClass = "Has actions, but no eat path.";
+
+  // Metabolism axis. Based on which trophic + synth ops are present;
+  // doesn't simulate runtime so a SYNTH_* op buried after a never-
+  // taken branch still "counts" -- intentional, we want to surface
+  // anything the genome could in principle do.
+  const isHetero = ingestMaterials.length > 0 || predate || engulf;
+  let metabolism: string;
+  if (synthChl && isHetero) {
+    metabolism = "predatory autotroph (photosynth + extracts from prey)";
+  } else if (synthChl) {
+    metabolism = synthAA && synthFA
+      ? "complete photoautotroph"
+      : "incomplete photoautotroph (missing aa/fa synthesis)";
+  } else if ((predate || engulf) && ingestMaterials.length === 0) {
+    metabolism = "obligate predator";
+  } else if (predate || engulf) {
+    metabolism = "predator-grazer hybrid";
+  } else if (ingestMaterials.length > 0) {
+    metabolism = synthEnz
+      ? "heterotroph (digests reserves into molecules)"
+      : "molecule-grazer (no SYNTH_ENZ -- can only consume tagged corpse particles, not raw substrate)";
+  } else {
+    metabolism = "no trophic input -- can't acquire mass";
+  }
+  bullets.push("- Metabolism: " + metabolism + ".");
+
+  const builds: string[] = [];
+  if (synthBio) builds.push("biomass");
+  if (synthAA) builds.push("amino acid");
+  if (synthFA) builds.push("fatty acid");
+  if (synthEnz) builds.push("enzyme");
+  if (synthChl) builds.push("chlorophyll");
+  if (synthRibo) builds.push("ribosomes");
+  bullets.push("- Builds: " + (builds.length > 0 ? builds.join(", ") : "nothing (no SYNTH_* ops present)") + ".");
+
+  bullets.push("- Catalysts: " + (catalystSlots.length > 0
+    ? `SYNTH_CAT targets slot${catalystSlots.length === 1 ? "" : "s"} ${catalystSlots.slice(0, 8).sort((a, b) => a - b).join(", ")}${catalystSlots.length > 8 ? `, +${catalystSlots.length - 8} more` : ""}.`
+    : "no SYNTH_CAT; inherits whatever the parent split provided."));
+
+  // Warnings: structural issues that make the lineage doomed under
+  // the current biology. Quiet (no warnings line) if the genome
+  // checks out.
+  const warnings: string[] = [];
+  if (synthBio && !synthRibo) {
+    warnings.push("SYNTH_BIO without SYNTH_RIBO -- ribosomes decay and biosynth stalls.");
+  }
+  if (synthChl && !isHetero && !synthAA) {
+    warnings.push("pure autotroph without SYNTH_AA -- aa supply will run out.");
+  }
+  if (synthChl && !isHetero && !synthFA) {
+    warnings.push("pure autotroph without SYNTH_FA -- fa supply will run out.");
+  }
+  if (isHetero && !synthEnz) {
+    warnings.push("heterotroph without SYNTH_ENZ -- reserves don't count as fuel (MIN_USABLE_ENZYME).");
+  }
+  if (!synthAA && !predate && !engulf) {
+    warnings.push("no amino-acid source (SYNTH_AA / PREDATE / ENGULF) -- can't sustain growth ops.");
+  }
+  if (warnings.length > 0) {
+    bullets.push("- Warnings: " + warnings.join(" "));
+  }
 
   let fate: string;
   if (ingestMaterials.length === 0 && !predate && !engulf) {
@@ -753,8 +845,26 @@ export function summarizeGenome(
     fate = `Self-sustaining if food is available; gates make it reproduce only when conditions are met.`;
   }
 
+  // One-line gist at the top -- captures the cell at a glance for
+  // someone scrolling through many. Composition: metabolism class +
+  // the dominant behavioral verb.
+  const verb = !anyAction
+    ? "inert"
+    : predate || engulf
+    ? "preys"
+    : thrust && ingestMaterials.length > 0
+    ? "swims and eats"
+    : ingestMaterials.length > 0
+    ? "grazes passively"
+    : thrust
+    ? "wanders"
+    : "stationary";
+  const oneLine = `${metabolism}; ${verb}${reproduce ? "; divides" : "; sterile"}.`;
+
   const lines: string[] = [];
   lines.push(`stats: bytes=${genome.length}  ops=${executableOps}  junk=${unknownBytes}  ~${estAtpPerTick.toFixed(2)} ATP/tick`);
+  lines.push("");
+  lines.push("Summary: " + oneLine);
   lines.push("");
   lines.push(...bullets);
   lines.push("");
@@ -766,6 +876,8 @@ export function summarizeGenome(
     thrust, turn, ingestMaterials, excreteMaterials,
     reproduce, predate, engulf, emit, adhere, repair, selfModifies,
     sensors, capabilities,
+    synthBio, synthAA, synthFA, synthEnz, synthChl, synthRibo,
+    catalystSlots, metabolism, warnings, oneLine,
     verdict: lines.join("\n"),
   };
 }
