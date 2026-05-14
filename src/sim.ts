@@ -2638,18 +2638,21 @@ const SEED_SPEC: Array<{
   // Each entry: with probability p, attach `amount` of molecule `mol`.
   // Independent rolls so a single particle can carry 0..N payloads.
   payloads: Array<{ p: number; mol: keyof Molecules; amount: number }>;
-  // Number of generic-chemical (catalyst) slots to populate on each
-  // seeded particle and the max amount per slot. Bootstraps the
-  // catalyst pool at world start so cells aren't waiting on the
-  // first death-release to encounter any chemistry beyond named
-  // molecules. Per-particle slots are picked at random so the
-  // primordial soup is varied rather than concentrated on one slot.
+  // Number of generic-chemical slots to populate on each seeded
+  // particle, plus the max amount per slot. These are *substrates*
+  // and *products* of generic reactions (not catalysts -- catalysts
+  // live in a separate cell-only pool with 256 slots). Seeding them
+  // gives cells something to react with at world start beyond just
+  // the named molecules (glucose/aa/fa/...). Per-particle slots are
+  // picked at random so the primordial soup is varied rather than
+  // concentrated on one reaction's substrates.
   genericSlots: number;
   genericAmount: number;
 }> = [
   // Organic dominates trophic input. Most are raw substrate; a
   // minority carry partially-decomposed molecules. Richest in
-  // catalysts since organic biomatter is where catalysts evolved.
+  // generic chemistry since organic biomatter is the natural
+  // carrier of complex molecules in the substrate pool.
   {
     mat: "organic",
     count: 200,
@@ -2661,7 +2664,7 @@ const SEED_SPEC: Array<{
     genericSlots: 3,
     genericAmount: 0.2,
   },
-  // Clay holds trace minerals + adsorbed chemistry.
+  // Clay holds trace minerals + adsorbed generic chemistry.
   {
     mat: "clay",
     count: 100,
@@ -2669,12 +2672,12 @@ const SEED_SPEC: Array<{
     genericSlots: 2,
     genericAmount: 0.15,
   },
-  // Sand: pure mineral substrate, light catalyst presence.
+  // Sand: mineral substrate, trace generic chemistry.
   { mat: "sand", count: 100, payloads: [], genericSlots: 1, genericAmount: 0.1 },
-  // Rock: similar to sand but slightly lower catalyst yield.
+  // Rock: similar to sand but slightly lower generic chem.
   { mat: "rock", count: 50, payloads: [], genericSlots: 1, genericAmount: 0.08 },
-  // Lipid: half carry free fatty acid; lipid-bound enzymes a real
-  // signature so catalyst presence is moderate.
+  // Lipid: half carry free fatty acid; lipid-bound compounds give
+  // a moderate generic-chem signature.
   {
     mat: "lipid",
     count: 30,
