@@ -185,6 +185,54 @@ const savedJson = (() => {
 // stepped or referenced again -- the worker owns the truth.
 const bootstrapWorld = createWorld(WORLD_SIZE.w, WORLD_SIZE.h);
 let snapshot: RenderSnapshot = takeSnapshot(bootstrapWorld);
+
+// Main-thread profile: lets us see if the worker's sim_rate is being
+// gated by snapshot delivery, frame() execution, or render() cost.
+// Compares snapshots-received-per-second against frames-rendered-per-
+// second and the wall time consumed by each frame's sub-buckets.
+const MAIN_PROFILE_LOG_MS = 3000;
+let mpSnapshotsReceived = 0;
+let mpSnapshotsAdvanced = 0;
+let mpIntakeMs = 0;
+let mpFrames = 0;
+let mpFrameTotalMs = 0;
+let mpRenderMs = 0;
+let mpInspectorMs = 0;
+let mpFlushTooltipMs = 0;
+let mpAnalyzeMs = 0;
+let mpDiagBarMs = 0;
+let mpLastLogAt = 0;
+function maybeLogMainProfile(): void {
+  if (MAIN_PROFILE_LOG_MS <= 0) return;
+  const now = performance.now();
+  if (mpLastLogAt === 0) { mpLastLogAt = now; return; }
+  const elapsedMs = now - mpLastLogAt;
+  if (elapsedMs < MAIN_PROFILE_LOG_MS) return;
+  const fmtMs = (v: number, n: number) => n > 0 ? (v / n).toFixed(2) : "-";
+  const elapsedSec = elapsedMs / 1000;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[main-prof] snaps=${mpSnapshotsReceived} (${(mpSnapshotsReceived/elapsedSec).toFixed(1)}/s) `
+    + `simAdv=${mpSnapshotsAdvanced.toFixed(3)}s (${(mpSnapshotsAdvanced/elapsedSec).toFixed(2)}x) `
+    + `intake=${fmtMs(mpIntakeMs, mpSnapshotsReceived)}ms/snap | `
+    + `frames=${mpFrames} (${(mpFrames/elapsedSec).toFixed(1)}/s) `
+    + `frame=${fmtMs(mpFrameTotalMs, mpFrames)}ms `
+    + `[render=${fmtMs(mpRenderMs, mpFrames)} inspector=${fmtMs(mpInspectorMs, mpFrames)} `
+    + `tooltip=${fmtMs(mpFlushTooltipMs, mpFrames)} analyze=${fmtMs(mpAnalyzeMs, mpFrames)} `
+    + `diag=${fmtMs(mpDiagBarMs, mpFrames)}]`,
+  );
+  mpSnapshotsReceived = 0;
+  mpSnapshotsAdvanced = 0;
+  mpIntakeMs = 0;
+  mpFrames = 0;
+  mpFrameTotalMs = 0;
+  mpRenderMs = 0;
+  mpInspectorMs = 0;
+  mpFlushTooltipMs = 0;
+  mpAnalyzeMs = 0;
+  mpDiagBarMs = 0;
+  mpLastLogAt = now;
+}
 let snapshotSpeciesByKey: Map<string, SpeciesSnapshot> = new Map();
 let snapshotCreatureById: Map<number, CreatureSnapshot> = new Map();
 function rebuildSnapshotIndexes(): void {
@@ -290,6 +338,7 @@ function teardownParticleWorkers(): void {
 simWorker.addEventListener("message", (e: MessageEvent) => {
   const msg = e.data;
   if (msg.type === "snapshot") {
+    const tIntake = performance.now();
     snapshot = msg.snapshot;
     rebuildSnapshotIndexes();
     workerSimMsThisFrame += msg.simMs;
@@ -298,6 +347,9 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
       workerLastSimError = msg.err.message;
       workerLastSimErrorAt = msg.err.at;
     }
+    mpSnapshotsReceived++;
+    mpSnapshotsAdvanced += msg.advanced;
+    mpIntakeMs += performance.now() - tIntake;
   } else if (msg.type === "save") {
     latestSaveJson = msg.json;
     maybeAutosave();
@@ -2000,13 +2052,11 @@ function statsLine(): string {
 // snapshot-message handler maintains.
 
 function frame(): void {
+  const tFrameStart = performance.now();
   const simMsLast = workerSimMsThisFrame;
   workerSimMsThisFrame = 0;
   const advanced = workerAdvancedThisFrame;
   workerAdvancedThisFrame = 0;
-  // Turbo: skip most renders to leave the main thread free for sim
-  // slices. updateInspector still runs every frame so the HUD stats
-  // (sim_t, fps-ish, pop, x-rate) stay live.
   turboFrameCounter = (turboFrameCounter + 1) | 0;
   const renderThisFrame = !turboMode || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
   const tBeforeRender = performance.now();
@@ -2014,16 +2064,25 @@ function frame(): void {
     updateDroplets();
     render();
   }
+  const tAfterRender = performance.now();
+  mpRenderMs += tAfterRender - tBeforeRender;
   updateInspector();
-  // Refresh the tooltip every frame whenever there's a locked cell
-  // to follow OR the cursor is currently over the canvas. flushTooltip
-  // re-checks liveness and re-projects the locked cell's screen pos
-  // so the box tracks a swimming cell.
+  const tAfterInspector = performance.now();
+  mpInspectorMs += tAfterInspector - tAfterRender;
   if (lockedCellId != null || pendingMouseInside) flushTooltip();
+  const tAfterTooltip = performance.now();
+  mpFlushTooltipMs += tAfterTooltip - tAfterInspector;
   maybeAnalyzeGenomes();
-  const renderMs = performance.now() - tBeforeRender;
+  const tAfterAnalyze = performance.now();
+  mpAnalyzeMs += tAfterAnalyze - tAfterTooltip;
+  const renderMs = tAfterRender - tBeforeRender;
   updatePerfStats(advanced, renderMs, simMsLast);
   updateDiagBar();
+  const tFrameEnd = performance.now();
+  mpDiagBarMs += tFrameEnd - tAfterAnalyze;
+  mpFrames++;
+  mpFrameTotalMs += tFrameEnd - tFrameStart;
+  maybeLogMainProfile();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
