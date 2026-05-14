@@ -52,6 +52,8 @@ let pviews: {
   PR: Float32Array; PDENS: Float32Array; PMAT: Uint8Array;
 } | null = null;
 let cviews: {
+  mass: Float32Array;
+  asleep: Uint8Array;
   cellStart: Int32Array;
   cellItems: Int32Array;
 } | null = null;
@@ -76,7 +78,14 @@ function rebuildParticleViews(layout: ParticleSharedLayout) {
 function rebuildCollisionViews(layout: CollisionSharedLayout) {
   const b = layout.buffer;
   const o = layout.offsets;
+  // MASS and ASLEEP live in the same shared layout as the cell index.
+  // They're written by the sim worker before each collision phase and
+  // read by resolvePairSoa here; building views over the *shared*
+  // buffer (rather than this worker's module-local copy from
+  // sim.ts module init) is what makes the cross-worker handoff work.
   return {
+    mass: new Float32Array(b, o.mass, layout.maxParticles),
+    asleep: new Uint8Array(b, o.asleep, layout.maxParticles),
     cellStart: new Int32Array(b, o.cellStart, layout.maxCells + 1),
     cellItems: new Int32Array(b, o.cellItems, layout.maxParticles),
   };
@@ -182,6 +191,7 @@ function loop(): void {
           pviews.PX, pviews.PY, pviews.PZ,
           pviews.PVX, pviews.PVY, pviews.PVZ,
           pviews.PR,
+          cviews.mass, cviews.asleep,
           cviews.cellStart, cviews.cellItems,
           rowStart, rowStep,
           cols, rows, e,

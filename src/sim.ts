@@ -4914,6 +4914,7 @@ export function applyCollisionsRowRange(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array,
+  MASS: Float32Array, ASLEEP: Uint8Array,
   cellStart: Int32Array, cellItems: Int32Array,
   rowStart: number, rowStep: number,
   cols: number, rows: number,
@@ -4929,19 +4930,19 @@ export function applyCollisionsRowRange(
       for (let i = s0; i < s1; i++) {
         const ai = cellItems[i];
         for (let j = i + 1; j < s1; j++) {
-          resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cellItems[j], e);
+          resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, ai, cellItems[j], e);
         }
       }
       // Downstream neighbors: E, SW, S, SE. Pairs with each are
       // resolved exactly once because every cell only iterates its
       // four downstream-of-(cx,cy) neighbors.
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
         ci, cx + 1, cy,     cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
         ci, cx - 1, cy + 1, cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
         ci, cx,     cy + 1, cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
         ci, cx + 1, cy + 1, cols, rows, e);
     }
   }
@@ -5027,19 +5028,19 @@ function resolveCollisions(world: World): void {
           for (let i = s0; i < s1; i++) {
             const ai = COLLISION_CELL_ITEMS[i];
             for (let j = i + 1; j < s1; j++) {
-              resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, COLLISION_CELL_ITEMS[j], e);
+              resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP, ai, COLLISION_CELL_ITEMS[j], e);
             }
           }
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx + 1, cy,     cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx - 1, cy + 1, cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx,     cy + 1, cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx + 1, cy + 1, cols, rows, e);
         }
@@ -5199,6 +5200,7 @@ function checkNeighborCellSoa(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array,
+  MASS: Float32Array, ASLEEP: Uint8Array,
   cellStart: Int32Array, cellItems: Int32Array,
   ci: number, nx: number, ny: number,
   cols: number, rows: number,
@@ -5212,7 +5214,7 @@ function checkNeighborCellSoa(
   for (let i = s0; i < s1; i++) {
     const ai = cellItems[i];
     for (let j = ns0; j < ns1; j++) {
-      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, ai, cellItems[j], e);
+      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, ai, cellItems[j], e);
     }
   }
 }
@@ -5220,9 +5222,11 @@ function checkNeighborCellSoa(
 function resolvePairSoa(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
-  PR: Float32Array, i: number, j: number, e: number,
+  PR: Float32Array,
+  MASS: Float32Array, ASLEEP: Uint8Array,
+  i: number, j: number, e: number,
 ): void {
-  if (COLLISION_ASLEEP[i] && COLLISION_ASLEEP[j]) return;
+  if (ASLEEP[i] && ASLEEP[j]) return;
   const ax = PX[i], ay = PY[i], az = PZ[i];
   const bx = PX[j], by = PY[j], bz = PZ[j];
   let dx = bx - ax, dy = by - ay, dz = bz - az;
@@ -5234,8 +5238,8 @@ function resolvePairSoa(
   if (dist < 1e-6) { dx = 1; dy = 0; dz = 0; dist = 1; nxv = 1; nyv = 0; nzv = 0; }
   else { nxv = dx / dist; nyv = dy / dist; nzv = dz / dist; }
   const overlap = minDist - dist;
-  const ma = COLLISION_MASS[i];
-  const mb = COLLISION_MASS[j];
+  const ma = MASS[i];
+  const mb = MASS[j];
   const total = ma + mb;
   const corrA = overlap * (mb / total);
   const corrB = overlap * (ma / total);
