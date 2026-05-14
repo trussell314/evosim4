@@ -2278,7 +2278,15 @@ function resolveObstacleCollisions(world: World): void {
   const minY = OBSTACLES_MIN_Y;
   const ps = world.particleStore;
   const pn = world.particles.length;
-  collideObstaclesSoa(ps.x, ps.y, ps.vx, ps.vy, ps.r, pn, world.restitution, minY, 0);
+  // Skip asleep (sediment) particles. They were resolved against any
+  // obstacle they touched when they fell asleep, and they don't move
+  // on their own once asleep -- so each tick of obstacle collision on
+  // them is pure waste. Without this skip, oColl scales with sediment
+  // accumulation: at np=2325 it grew from 0.16ms to >1.5ms/tick over
+  // a few minutes of sim time, dominating the worker budget.
+  // COLLISION_ASLEEP is populated by resolveCollisions which runs
+  // earlier in step().
+  collideObstaclesSoa(ps.x, ps.y, ps.vx, ps.vy, ps.r, COLLISION_ASLEEP, pn, world.restitution, minY, 0);
   const cn = world.creatures.length;
   // Creatures may belong to different stores (test fixtures use
   // private stores). Per-creature hoist into the right typed arrays.
@@ -2338,6 +2346,7 @@ function collideObstaclesSoaSingle(
 // to world.particles[i]. No indirection.
 function collideObstaclesSoa(
   X: Float32Array, Y: Float32Array, VX: Float32Array, VY: Float32Array, R: Float32Array,
+  ASLEEP: Uint8Array,
   n: number, e: number, minY: number, _pad: number,
 ): void {
   void _pad;
@@ -2345,6 +2354,7 @@ function collideObstaclesSoa(
   // particle clamp below would land bx at -1 and throw on undefined.
   if (OBSTACLE_BANDS_COLS <= 0) return;
   for (let k = 0; k < n; k++) {
+    if (ASLEEP[k]) continue;
     const yk = Y[k]; const rk = R[k];
     if (yk + rk < minY) continue;
     const xk = X[k];
