@@ -2261,18 +2261,23 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
 
   const parts: string[] = [];
 
-  // 1. Ingests -- materials the cell will swallow, plus the predation
-  // path if any. Pure photo cells get an autotroph note.
-  if (predate || engulf) parts.push("Ingests: other cells (predator).");
-  else if (ingest.size > 0) parts.push(`Ingests: ${Array.from(ingest).map(mat).join(", ")}.`);
-  else if (synthChl) parts.push("Ingests: nothing (photoautotroph, fixes CO2).");
+  // 1. Ingests -- materials the cell will swallow. INGEST always
+  // picks up the particle's molecule + genericChem payloads alongside
+  // the material mass, so generic-chem flow is part of trophic input
+  // even when not explicitly genome-selected.
+  if (predate || engulf) parts.push("Ingests: other cells (absorbs all molecules + generic chem).");
+  else if (ingest.size > 0) parts.push(`Ingests: ${Array.from(ingest).map(mat).join(", ")} (with molecules + generic chem on each particle).`);
+  else if (synthChl) parts.push("Ingests: nothing (photoautotroph, fixes CO2; no generic-chem inflow).");
   else parts.push("Ingests: nothing.");
 
-  // 2. Metabolism -- which biosynthesis pathways the genome unlocks.
-  // Aerobic respiration / fermentation / beta-oxidation run on every
-  // cell with substrates regardless of genome, so they aren't listed
-  // (they don't differentiate cells). Photosynthesis only runs if
-  // chlorophyll exists, which requires SYNTH_CHL.
+  // 2. Metabolism -- biosynth pathways AND the generic-reaction gates
+  // they open. Aerobic / fermentation / beta-oxidation run on every
+  // cell with substrates regardless of genome, so they aren't listed.
+  // Photosynthesis only runs if chlorophyll exists (SYNTH_CHL).
+  // Each SYNTH bit also unlocks the gated generic reactions whose
+  // gateMask matches it -- those reactions consume + produce the
+  // generic-chem slots, which is how a cell actually uses its chem
+  // pool day-to-day.
   const synth: string[] = [];
   if (synthBio) synth.push("biomass");
   if (synthAA) synth.push("aa");
@@ -2281,8 +2286,8 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   if (synthRibo) synth.push("ribosomes");
   if (synthChl) synth.push("chlorophyll (photosynth)");
   parts.push(synth.length > 0
-    ? `Metabolism: synthesizes ${synth.join(", ")}.`
-    : "Metabolism: catabolism only (no synthesis ops).");
+    ? `Metabolism: synthesizes ${synth.join(", ")}; unlocks generic reactions gated on those bits (each consumes / produces specific generic-chem slots).`
+    : "Metabolism: catabolism only (no synth ops -- runs only ungated generic reactions).");
 
   // 3. Catalysis (non-metabolic specialty) -- SYNTH_CAT targeting
   // generic reaction slots (>= 10, past the named pathway slots).
@@ -2303,19 +2308,20 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
     const sorted = specialtyCats.sort((a, b) => a - b);
     const shown = sorted.slice(0, 6).join(", ");
     const more = sorted.length > 6 ? `, +${sorted.length - 6} more` : "";
-    parts.push(`Catalyzes (specialty chem): slot${sorted.length === 1 ? "" : "s"} ${shown}${more}.`);
+    parts.push(`Catalyzes (specialty): boosts generic reactions on slot${sorted.length === 1 ? "" : "s"} ${shown}${more} (each ties to specific generic-chem substrates/products).`);
   }
   if (namedCats.length > 0) {
     parts.push(`Catalyzes (metabolic boost): ${namedCats.join(", ")}.`);
   }
 
-  // 4. Excretes -- material reserves vented by EXCRETE. Now also
-  // carries proportional molecules + generic chemistry (engine
-  // change) so excretion is a real environmental output, not just
-  // a waste dump.
+  // 4. Excretes -- material reserves vented by EXCRETE. Each ejection
+  // also carries a proportional slice of the cell's molecule pool AND
+  // generic-chem pool (engine change), so excretion is a real
+  // environmental output -- the cell can deliberately seed neighbors
+  // with named molecules and generic-chem substrates / products.
   parts.push(excrete.size > 0
-    ? `Excretes: ${Array.from(excrete).map(mat).join(", ")} (with bundled molecules + chemistry).`
-    : "Excretes: nothing.");
+    ? `Excretes: ${Array.from(excrete).map(mat).join(", ")} (each particle carries a proportional slice of molecules + generic chem).`
+    : "Excretes: nothing (chemistry only leaves via death).");
 
   // Reproduction, extras, sensors (sterile lineages get nothing
   // since the phylogeny strip's lifespan already conveys that).
