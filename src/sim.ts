@@ -1143,7 +1143,7 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6 * 1.5) / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6 * 1.5 * 2) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
