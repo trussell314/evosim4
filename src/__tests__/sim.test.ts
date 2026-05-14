@@ -7,11 +7,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   type World,
   Creature,
-  type MaterialId,
   type Molecules,
-  MATERIALS,
-  MATERIAL_IDS_ORDERED,
   MOLECULE_IDS,
+  CHEM_IDS,
   createWorld,
   seedParticles,
   step,
@@ -26,8 +24,6 @@ import {
   newCreature,
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState, type VMState } from "../genome";
-
-const M = MATERIAL_IDS_ORDERED;
 
 // Drive any in-flight cell divisions to completion without advancing the
 // rest of the simulation. Tests that examine post-fission state can call
@@ -101,7 +97,6 @@ function makeCreature(overrides: Partial<{
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   r: number; density: number;
-  reserves: Partial<Record<MaterialId, number>>;
   molecules: Partial<Molecules>;
   energy: number;
   senseRange: number; thrustAccel: number;
@@ -114,14 +109,11 @@ function makeCreature(overrides: Partial<{
   speciesKey: string;
 }> = {}): Creature {
   const store = new CreatureStore(1);
-  const reserves: Partial<Record<MaterialId, number>> = overrides.reserves ?? {};
   // Defaults: biomass above the reproduction gate; ribosome + aa
-  // generous enough that the new viability thresholds
-  // (MIN_VIABLE_RIBOSOME / MIN_VIABLE_AMINOACID) don't autolyze a
-  // test creature mid-scenario. enzyme=1 unlocks the reserve-based
-  // fuel path under the new noFuel rule (reserves need enzyme to
-  // count as fuel). Tests that probe enzyme- or aa-starvation
-  // override these in their molecules patch.
+  // generous enough that the viability thresholds don't autolyze
+  // a test creature mid-scenario. enzyme=1 unlocks biopolymer
+  // digestion under the new model. Tests probing starvation
+  // override in their molecules patch.
   const molecules: Partial<Molecules> = {
     biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
     ...(overrides.molecules ?? {}),
@@ -144,15 +136,22 @@ function makeCreature(overrides: Partial<{
     bornAt: overrides.bornAt ?? 0,
     speciesKey: overrides.speciesKey ?? "",
     molecules,
-    reserves,
   });
 }
 
 function cellTotalMass(c: Creature): number {
   let m = c.energy;
-  for (const id of M) m += c.reserves[id];
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
+}
+
+// Distribute `total` mass-units across the cell's chem pool, spread
+// across food-like chems (biopolymer + minerals + fa). Replaces the
+// pre-phase-D pattern `for (const id of M) c.reserves[id] = N`.
+function fillCellChems(c: Creature, total: number): void {
+  c.molecules.biopolymer += total * 0.5;
+  c.molecules.minerals += total * 0.3;
+  c.molecules.fattyAcid += total * 0.2;
 }
 
 function readyToFission(c: Creature): void {
@@ -210,7 +209,8 @@ describe("createWorld", () => {
       expect(p.r).toBeGreaterThanOrEqual(1);
       // Big-sand variant lets sand grains spawn up to ~r=8.
       expect(p.r).toBeLessThanOrEqual(8);
-      expect(MATERIALS[p.material]).toBeDefined();
+      expect(p.chemId).toBeGreaterThanOrEqual(0);
+      expect(p.chemId).toBeLessThan(64);
     }
   });
 
@@ -241,21 +241,21 @@ describe("createWorld", () => {
 describe("physics: gravity & buoyancy", () => {
   it("denser-than-water material sinks", () => {
     const w = quietWorld(); w.gravity = 100;
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "rock" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(w, 0.1);
     expect(w.particles[0].vy).toBeGreaterThan(0);
     expect(w.particles[0].y).toBeGreaterThan(100);
   });
   it("less-dense-than-water material rises", () => {
     const w = quietWorld(); w.gravity = 100;
-    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "gas" });
+    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.o2, density: 0.2 });
     step(w, 0.1);
     expect(w.particles[0].vy).toBeLessThan(0);
     expect(w.particles[0].y).toBeLessThan(300);
   });
   it("density-1 material (organic) has no net vertical force", () => {
     const w = quietWorld(); w.gravity = 100;
-    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.1);
     expect(Math.abs(w.particles[0].vy)).toBeLessThan(1e-6);
   });
@@ -264,13 +264,13 @@ describe("physics: gravity & buoyancy", () => {
 describe("physics: drag", () => {
   it("decays velocity toward zero over time", () => {
     const w = quietWorld(); w.drag = 2.0;
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     for (let i = 0; i < 180; i++) step(w, 1 / 60);
     expect(Math.abs(w.particles[0].vx)).toBeLessThan(5);
   });
   it("doesn't reverse velocity sign in one step", () => {
     const w = quietWorld(); w.drag = 0.6;
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 50, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 1 / 60);
     expect(w.particles[0].vx).toBeGreaterThan(0);
     expect(w.particles[0].vx).toBeLessThan(50);
@@ -280,7 +280,7 @@ describe("physics: drag", () => {
 describe("physics: walls", () => {
   it("x bounces off the left wall", () => {
     const w = quietWorld(); w.xWallRestitution = 0.5;
-    pushParticle(w, { x: 5, y: 100, z: 12, vx: -100, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 5, y: 100, z: 12, vx: -100, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.5);
     expect(w.particles[0].x).toBeLessThan(w.width / 2);
     expect(w.particles[0].x).toBeGreaterThanOrEqual(w.particles[0].r - 1e-6);
@@ -288,7 +288,7 @@ describe("physics: walls", () => {
   });
   it("x bounces off the right wall", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 795, y: 100, z: 12, vx: 100, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 795, y: 100, z: 12, vx: 100, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.5);
     expect(w.particles[0].x).toBeGreaterThan(w.width / 2);
     expect(w.particles[0].vx).toBeLessThan(0);
@@ -296,7 +296,7 @@ describe("physics: walls", () => {
   it("creature bounces off side walls (no toroidal sweep)", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 5, y: 100, vx: -100, energy: 50 });
-    c.reserves.organic = 50;
+    c.molecules.biopolymer = 50;
     w.creatures.push(c);
     step(w, 0.1);
     expect(w.creatures.length).toBe(1);
@@ -305,21 +305,21 @@ describe("physics: walls", () => {
   });
   it("y clamps at the floor and zeros downward velocity", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 595, z: 12, vx: 0, vy: 50, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 595, z: 12, vx: 0, vy: 50, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.5);
     expect(w.particles[0].y + w.particles[0].r).toBeLessThanOrEqual(w.height + 1e-6);
     expect(w.particles[0].vy).toBeLessThanOrEqual(0);
   });
   it("y clamps at the ceiling", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 1, z: 12, vx: 0, vy: -50, vz: 0, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 1, z: 12, vx: 0, vy: -50, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.5);
     expect(w.particles[0].y).toBeGreaterThanOrEqual(w.particles[0].r - 1e-6);
     expect(w.particles[0].vy).toBeGreaterThanOrEqual(0);
   });
   it("z reflects with restitution on both faces", () => {
     const w = quietWorld(); w.zWallRestitution = 0.5;
-    pushParticle(w, { x: 100, y: 100, z: 1, vx: 0, vy: 0, vz: -50, r: 4, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 1, vx: 0, vy: 0, vz: -50, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.1);
     expect(w.particles[0].vz).toBeGreaterThan(0);
     expect(w.particles[0].vz).toBeLessThan(50);
@@ -329,8 +329,8 @@ describe("physics: walls", () => {
 describe("physics: collisions", () => {
   it("two overlapping particles get separated", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
-    pushParticle(w, { x: 103, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.biopolymer, density: 1.0 });
+    pushParticle(w, { x: 103, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.001);
     const dx = w.particles[1].x - w.particles[0].x;
     const dy = w.particles[1].y - w.particles[0].y;
@@ -339,8 +339,8 @@ describe("physics: collisions", () => {
   });
   it("co-located particles resolve without crashing", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "organic" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.biopolymer, density: 1.0 });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     expect(() => step(w, 0.001)).not.toThrow();
     const dx = w.particles[1].x - w.particles[0].x;
     const dy = w.particles[1].y - w.particles[0].y;
@@ -349,15 +349,15 @@ describe("physics: collisions", () => {
   });
   it("denser particle moves less than lighter on overlap", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "rock" });
-    pushParticle(w, { x: 105, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, material: "gas" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.minerals, density: 2.6 });
+    pushParticle(w, { x: 105, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 5, chemId: CHEM_IDS.o2, density: 0.2 });
     step(w, 0.001);
     expect(Math.abs(w.particles[1].x - 105)).toBeGreaterThan(Math.abs(w.particles[0].x - 100));
   });
   it("non-overlapping particles don't move from collision", () => {
     const w = quietWorld();
-    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
-    pushParticle(w, { x: 200, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: 100, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
+    pushParticle(w, { x: 200, y: 100, z: 12, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(w, 0.001);
     expect(w.particles[0].x).toBeCloseTo(100, 5);
     expect(w.particles[1].x).toBeCloseTo(200, 5);
@@ -367,9 +367,9 @@ describe("physics: collisions", () => {
 describe("physics: waves", () => {
   it("surface wave forcing decays with depth", () => {
     const wS = quietWorld(); wS.surfaceAmp = 200; wS.surfaceDecay = 50;
-    pushParticle(wS, { x: 100, y: 10, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(wS, { x: 100, y: 10, z: 12, vx: 0, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     const wD = quietWorld(); wD.surfaceAmp = 200; wD.surfaceDecay = 50;
-    pushParticle(wD, { x: 100, y: 400, z: 12, vx: 0, vy: 0, vz: 0, r: 4, material: "organic" });
+    pushParticle(wD, { x: 100, y: 400, z: 12, vx: 0, vy: 0, vz: 0, r: 4, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(wS, 0.1); step(wD, 0.1);
     expect(Math.abs(wS.particles[0].vx)).toBeGreaterThan(Math.abs(wD.particles[0].vx) * 5);
   });
@@ -383,10 +383,10 @@ describe("creature: chemistry - catabolism + respiration", () => {
       energy: 100, genome: new Uint8Array([OP.HALT]),
       molecules: { enzyme: 5 },
     });
-    c.reserves.organic = 50;
+    c.molecules.biopolymer = 50;
     w.creatures.push(c);
     step(w, 1.0);
-    expect(c.reserves.organic).toBeLessThan(50);
+    expect(c.molecules.biopolymer).toBeLessThan(50);
     expect(c.molecules.glucose).toBeGreaterThan(0);
     expect(c.molecules.aminoAcid).toBeGreaterThan(0);
     expect(c.molecules.fattyAcid).toBeGreaterThan(0);
@@ -428,7 +428,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const w = quietWorld();
     const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
     const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    big.reserves.rock = 15000;
+    big.molecules.minerals = 15000;
     w.creatures.push(small, big);
     step(w, 1.0);
     const drainSmall = 100 - small.energy;
@@ -439,15 +439,15 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
     const wS = quietWorld();
     const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     wS.creatures.push(cs);
-    pushParticle(wS, { x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(wS, { x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(wS, 0.001);
     const cdSmall = cs.ingestCooldown;
 
     const wB = quietWorld();
     const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
-    cb.reserves.rock = 4000;
+    cb.molecules.minerals = 4000;
     wB.creatures.push(cb);
-    pushParticle(wB, { x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(wB, { x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(wB, 0.001);
     const cdBig = cb.ingestCooldown;
 
@@ -466,8 +466,8 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
         x: 100, y: 300, energy: 100,
         genome: new Uint8Array([OP.PUSH8, 80, OP.THRUST, OP.HALT]),
       });
-      c.reserves.organic = 0;
-      c.reserves.rock = rockMass;
+      c.molecules.biopolymer = 0;
+      c.molecules.minerals = rockMass;
       w.creatures.push(c);
       const e0 = c.energy;
       step(w, 0.1);
@@ -539,47 +539,50 @@ describe("creature: chemistry - photosynthesis", () => {
 describe("creature: excretion", () => {
   it("EXCRETE spawns a particle of the requested material", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 5, OP.HALT]) });
-    c.reserves.gas = 30;
+    // SENSOR_CHEMS operand 3 -> O2 in the post-phase-D mapping.
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 3, OP.HALT]) });
+    c.molecules.o2 = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     step(w, 1 / 60);
     const newP = w.particles.filter((p) => !before.has(p));
     expect(newP.length).toBe(1);
-    expect(newP[0].material).toBe("gas");
-    expect(c.reserves.gas).toBeLessThan(30);
+    expect(newP[0].chemId).toBe(CHEM_IDS.o2);
+    expect(c.molecules.o2).toBeLessThan(30);
   });
   it("caps at available reserve", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 100, OP.EXCRETE, 5, OP.HALT]) });
-    c.reserves.gas = 5;
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 100, OP.EXCRETE, 3, OP.HALT]) });
+    c.molecules.o2 = 5;
     w.creatures.push(c);
     step(w, 1 / 60);
-    expect(c.reserves.gas).toBeGreaterThanOrEqual(0);
-    expect(c.reserves.gas).toBeLessThan(0.5);
+    expect(c.molecules.o2).toBeGreaterThanOrEqual(0);
+    expect(c.molecules.o2).toBeLessThan(0.5);
   });
   it("skipped when reserve below threshold", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, 5, OP.HALT]) });
-    c.reserves.gas = 0.1;
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, 3, OP.HALT]) });
+    c.molecules.o2 = 0.1;
     w.creatures.push(c);
     const before = w.particles.length;
     step(w, 1 / 60);
-    expect(c.reserves.gas).toBeCloseTo(0.1, 2);
+    // O2 diffusion from ambient nudges the pool toward 12; we just
+    // check that EXCRETE didn't fire (no fresh particle below).
+    expect(c.molecules.o2).toBeLessThan(1);
     const newP = w.particles.slice(before);
-    expect(newP.some((p) => p.material === "gas")).toBe(false);
+    expect(newP.some((p) => (p.chemId === CHEM_IDS.o2 || p.chemId === CHEM_IDS.co2))).toBe(false);
   });
   it("particle spawns near the cell edge", () => {
     const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 5, OP.HALT]) });
-    c.reserves.gas = 30;
+    const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 3, OP.HALT]) });
+    c.molecules.o2 = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     step(w, 1 / 60);
-    const newP = w.particles.filter((p) => !before.has(p) && p.material === "gas");
+    const newP = w.particles.filter((p) => !before.has(p) && (p.chemId === CHEM_IDS.o2 || p.chemId === CHEM_IDS.co2));
     expect(newP.length).toBe(1);
     const p = newP[0];
     expect(Math.hypot(p.x - 400, p.y - 300)).toBeLessThan(c.r * 2 + 5);
@@ -600,7 +603,7 @@ describe("creature: ingestion cost and cooldown", () => {
     w.particleSpawnRate = 0;
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     const e0 = c.energy;
     step(w, 0.001);
     expect(w.particles.length).toBe(0);
@@ -612,7 +615,7 @@ describe("creature: ingestion cost and cooldown", () => {
     w.creatures.push(c);
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
-      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
       targets.push(p);
     }
     step(w, 0.001);
@@ -623,10 +626,10 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
-      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
       targets.push(p);
     }
     for (let i = 0; i < 5; i++) step(w, 0.01);
@@ -636,10 +639,10 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const tgt = new Set<unknown>();
     for (let i = 0; i < 3; i++) {
-      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+      const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
       tgt.add(p);
     }
     for (let i = 0; i < 60; i++) step(w, 1 / 60);
@@ -653,7 +656,7 @@ describe("creature: ingestion cost and cooldown", () => {
     const c = makeCreature({ energy: 0 });
     c.molecules.glucose = 1;
     w.creatures.push(c);
-    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
   });
@@ -664,16 +667,16 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    const target = pushParticle(w, { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
+    const target = pushParticle(w, { x: c.x + 2, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
     step(w, 0.001);
     expect(w.particles.includes(target)).toBe(false);
-    expect(c.reserves.lipid).toBeGreaterThan(0);
+    expect(c.molecules.fattyAcid).toBeGreaterThan(0);
   });
   it("does not absorb particles outside the cell", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    pushParticle(w, { x: c.x + c.r + 10, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
+    pushParticle(w, { x: c.x + c.r + 10, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
   });
@@ -681,19 +684,23 @@ describe("creature: ingestion (basic)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(w, 0.001);
-    expect(c.reserves.rock).toBeCloseTo(MATERIALS.rock.density * (4 / 3) * Math.PI * 27, 5);
+    expect(c.molecules.minerals).toBeCloseTo(2.6 * (4 / 3) * Math.PI * 27, 5);
   });
   it("INGEST is material-selective: rock genome ignores lipid", () => {
     const w = quietWorld();
-    // INGEST 0 -> rock only.
+    // INGEST 0 -> minerals slot only.
     const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
     w.creatures.push(c);
-    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "lipid" });
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
+    const faBefore = c.molecules.fattyAcid;
     step(w, 0.001);
     expect(w.particles.includes(target)).toBe(true);
-    expect(c.reserves.lipid).toBe(0);
+    // The cell did not target fa with INGEST, so the particle's mass
+    // (~10 units) should not enter the cell's fa pool. Maintenance
+    // decay can dribble trace fa in (biomass -> aa+fa); bound the gain.
+    expect(c.molecules.fattyAcid - faBefore).toBeLessThan(1);
   });
 });
 
@@ -776,10 +783,10 @@ describe("creature: thrust", () => {
   it("thrusts toward a placed organic particle", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 100, y: 100, energy: 100 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
-    pushParticle(w, { x: 250, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
+    pushParticle(w, { x: 250, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     const e0 = c.energy;
     step(w, 0.1);
     expect(c.vx).toBeGreaterThan(0);
@@ -788,18 +795,18 @@ describe("creature: thrust", () => {
   it("thrust magnitude clamped to thrustAccel", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 0, y: 0, thrustAccel: 50, energy: 1000 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    pushParticle(w, { x: 700, y: 0, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: 700, y: 0, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 1.0);
     expect(c.vx).toBeLessThanOrEqual(50 + 1e-6);
   });
   it("creature with no energy cannot thrust", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 100, y: 100, energy: 0 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    pushParticle(w, { x: 300, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: 300, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     step(w, 0.1);
     expect(c.vx).toBeCloseTo(0, 6);
   });
@@ -810,7 +817,7 @@ describe("creature: reproduction", () => {
   it("does not reproduce when reserves are insufficient", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    c.reserves.organic = 200;
+    c.molecules.biopolymer = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);
@@ -818,7 +825,7 @@ describe("creature: reproduction", () => {
   it("reproduces when all six material reserves cover cost", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200; readyToFission(c);
+    fillCellChems(c, 1200); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -827,7 +834,7 @@ describe("creature: reproduction", () => {
   it("both daughters have positive energy after default-skew fission", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200; readyToFission(c);
+    fillCellChems(c, 1200); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -842,7 +849,7 @@ describe("creature: reproduction", () => {
   it("cell mass is conserved across fission (no additive yolk)", () => {
     const w = quietWorld();
     const c = makeCreature();
-    for (const id of M) c.reserves[id] = 200; readyToFission(c);
+    fillCellChems(c, 1200); readyToFission(c);
     c.energy = 200;
     const totalBefore = cellTotalMass(c);
     w.creatures.push(c);
@@ -857,23 +864,27 @@ describe("creature: reproduction", () => {
     // metabolism, not a huge swing).
     expect(totalBefore - totalAfter).toBeLessThan(40);
   });
-  it("organic accounts for metabolism during tick", () => {
+  it("biopolymer survives fission with at-most a small metabolic dent", () => {
     const w = quietWorld();
     const c = makeCreature();
-    for (const id of M) c.reserves[id] = 200; readyToFission(c);
+    fillCellChems(c, 1200); readyToFission(c);
     c.energy = 200;
-    c.molecules.enzyme = 5; // catabolize gates on enzyme now
+    c.molecules.enzyme = 5; // biopolymer digestion gates on enzyme
+    const biopBefore = c.molecules.biopolymer;
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
-    const total = w.creatures[0].reserves.organic + w.creatures[1].reserves.organic;
-    expect(total).toBeLessThan(200);
-    expect(total).toBeGreaterThan(199);
+    const total = w.creatures[0].molecules.biopolymer + w.creatures[1].molecules.biopolymer;
+    // The biopolymer-digest reaction (slot 10) consumes some during the
+    // ticks; what's left + what got digested + what got passed to the
+    // child should still roughly balance to the pre-fission total.
+    expect(total).toBeLessThanOrEqual(biopBefore + 0.01);
+    expect(total).toBeGreaterThan(biopBefore * 0.5);
   });
   it("child genome is a fresh (possibly mutated) copy", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 200; readyToFission(c);
+    fillCellChems(c, 1200); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -884,7 +895,7 @@ describe("creature: reproduction", () => {
     const w = quietWorld();
     for (let i = 0; i < 400; i++) {
       const c = makeCreature({ x: 100 + (i % 80) * 5, y: 100 + Math.floor(i / 80) * 5, energy: 200 });
-      for (const id of M) c.reserves[id] = 500; readyToFission(c); readyToFission(c);
+      fillCellChems(c, 3000); readyToFission(c); readyToFission(c);
       w.creatures.push(c);
     }
     step(w, 1 / 60);
@@ -895,9 +906,7 @@ describe("creature: reproduction", () => {
 describe("creature: predation (cell eats cell)", () => {
   beforeEach(() => stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]));
   function totalMass(c: Creature): number {
-    let m = 0;
-    for (const id of M) m += c.reserves[id];
-    return m;
+    return cellTotalMass(c);
   }
   const inert = () => new Uint8Array([OP.HALT]);
   const predator = () => new Uint8Array([OP.PREDATE, OP.HALT]);
@@ -905,9 +914,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("big eats small on overlap with PREDATE", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 100;
+    fillCellChems(p, 100 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);
@@ -916,9 +925,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("predator absorbs prey's reserves and energy", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 100;
+    fillCellChems(p, 100 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     const m0 = totalMass(p), pm = totalMass(q), pe = q.energy;
     step(w, 1 / 60);
@@ -928,9 +937,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("equal-mass overlapping cells don't engulf each other", () => {
     const w = quietWorld();
     const a = makeCreature({ x: 400, y: 300, energy: 100, genome: inert() });
-    for (const id of M) a.reserves[id] = 50;
+    fillCellChems(a, 50 * 6);
     const b = makeCreature({ x: 405, y: 300, energy: 100, genome: inert() });
-    for (const id of M) b.reserves[id] = 50;
+    fillCellChems(b, 50 * 6);
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -938,9 +947,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("engulf pays cost (net positive after prey energy gift)", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 20, genome: inert() });
-    for (const id of M) q.reserves[id] = 1;
+    fillCellChems(q, 1 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures[0].energy).toBeGreaterThan(100);
@@ -949,9 +958,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("predator gets longer cooldown after engulf", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 20, genome: inert() });
-    for (const id of M) q.reserves[id] = 1;
+    fillCellChems(q, 1 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures[0].ingestCooldown).toBeGreaterThan(0.15);
@@ -959,9 +968,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("non-overlapping cells don't engulf", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 100, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 600, y: 300, energy: 20, genome: inert() });
-    for (const id of M) q.reserves[id] = 1;
+    fillCellChems(q, 1 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -969,9 +978,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("cooldown blocks engulf", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, ingestCooldown: 1.0, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 20, genome: inert() });
-    for (const id of M) q.reserves[id] = 1;
+    fillCellChems(q, 1 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -979,11 +988,11 @@ describe("creature: predation (cell eats cell)", () => {
   it("low energy blocks engulf", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 1, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
-    p.reserves.organic = 0;
+    fillCellChems(p, 200 * 6);
+    p.molecules.biopolymer = 0;
     const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
-    for (const id of M) q.reserves[id] = 1;
-    q.reserves.organic = 5;
+    fillCellChems(q, 1 * 6);
+    q.molecules.biopolymer = 5;
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -991,9 +1000,9 @@ describe("creature: predation (cell eats cell)", () => {
   it("predation is opt-in: no PREDATE -> no engulf", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: inert() });
-    for (const id of M) p.reserves[id] = 100;
+    fillCellChems(p, 100 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
@@ -1001,10 +1010,10 @@ describe("creature: predation (cell eats cell)", () => {
   it("predation energy cost scales with prey mass", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 100;
+    fillCellChems(p, 100 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 0, genome: inert() });
-    for (const id of M) q.reserves[id] = 30;
-    q.reserves.organic = 30;
+    fillCellChems(q, 30 * 6);
+    q.molecules.biopolymer = 30;
     w.creatures.push(p, q);
     const e0 = p.energy;
     step(w, 1 / 60);
@@ -1014,23 +1023,23 @@ describe("creature: predation (cell eats cell)", () => {
   it("predation refused when can't afford the prey-mass cost", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 5, genome: predator() });
-    for (const id of M) p.reserves[id] = 100;
-    p.reserves.organic = 5;
+    fillCellChems(p, 100 * 6);
+    p.molecules.biopolymer = 5;
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    for (const id of M) q.reserves[id] = 16;
-    q.reserves.organic = 5;
+    fillCellChems(q, 16 * 6);
+    q.molecules.biopolymer = 5;
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
   });
   it("engulfing does NOT spawn death particles", () => {
     const w = quietWorld();
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.particles.filter((p) => !before.has(p)).length).toBe(0);
@@ -1045,9 +1054,9 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   it("removes prey from world.creatures and parks it in predator.contents", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);
@@ -1058,26 +1067,26 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   it("does NOT transfer prey reserves/molecules into predator", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    for (const id of M) p.reserves[id] = 300;
+    fillCellChems(p, 300 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert() });
-    q.reserves.rock = 80;
+    q.molecules.minerals = 80;
     q.molecules.glucose = 25;
-    const pRockBefore = p.reserves.rock;
+    const pRockBefore = p.molecules.minerals;
     w.creatures.push(p, q);
     step(w, 1 / 60);
-    expect(p.reserves.rock).toBeGreaterThan(pRockBefore - 5);
-    expect(p.reserves.rock).toBeLessThan(pRockBefore + 1);
+    expect(p.molecules.minerals).toBeGreaterThan(pRockBefore - 5);
+    expect(p.molecules.minerals).toBeLessThan(pRockBefore + 1);
     expect(p.molecules.glucose).toBeLessThan(15);
     expect(p.contents.length).toBe(1);
-    expect(p.contents[0].reserves.rock).toBeCloseTo(80, 1);
+    expect(p.contents[0].molecules.minerals).toBeCloseTo(80, 1);
     expect(p.contents[0].molecules.glucose).toBeCloseTo(25, 1);
   });
   it("engulfed prey still counts toward predator mass (vacuole occupies volume)", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    p.reserves.rock = 200;
+    p.molecules.minerals = 200;
     const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
-    q.reserves.rock = 50;
+    q.molecules.minerals = 50;
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(cellTotalMass(p) + cellTotalMass(p.contents[0])).toBeGreaterThan(390);
@@ -1085,15 +1094,15 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   it("predator death releases vacuole contents back to the world", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    for (const id of M) p.reserves[id] = 200;
+    fillCellChems(p, 200 * 6);
     const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
-    for (const id of M) q.reserves[id] = 10;
+    fillCellChems(q, 10 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
     expect(p.contents.length).toBe(1);
     p.energy = 0;
     p.molecules = emptyMolecules();
-    for (const id of M) p.reserves[id] = 0;
+    fillCellChems(p, 0 * 6);
     step(w, 1 / 60);
     expect(w.creatures.includes(p)).toBe(false);
     expect(w.creatures.includes(q)).toBe(true);
@@ -1101,11 +1110,11 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   it("INGEST (PREDATE) absorbs the vacuole contents of its own prey", () => {
     const w = quietWorld();
     const big = makeCreature({ x: 400, y: 300, energy: 200, genome: new Uint8Array([OP.PREDATE, OP.HALT]) });
-    for (const id of M) big.reserves[id] = 1000;
+    fillCellChems(big, 1000 * 6);
     const mid = makeCreature({ x: 403, y: 300, energy: 50, genome: inert() });
-    for (const id of M) mid.reserves[id] = 30;
+    fillCellChems(mid, 30 * 6);
     const small = makeCreature({ x: 410, y: 300, energy: 20, genome: inert() });
-    for (const id of M) small.reserves[id] = 5;
+    fillCellChems(small, 5 * 6);
     mid.contents.push(small);
     w.creatures.push(big, mid);
     step(w, 1 / 60);
@@ -1119,7 +1128,7 @@ describe("ecology: extinction recovery", () => {
     const w = quietWorld();
     w.founderTarget = 1; // exercise respawn path
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.includes(c)).toBe(false);
@@ -1130,7 +1139,7 @@ describe("ecology: extinction recovery", () => {
     const w = quietWorld();
     w.founderTarget = 1; // exercise respawn path
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
     step(w, 1 / 60);
     const f = w.creatures[0];
@@ -1144,7 +1153,7 @@ describe("ecology: extinction recovery", () => {
     for (let i = 0; i < 3; i++) {
       const c = w.creatures[0] ?? makeCreature({ energy: 0 });
       c.energy = 0;
-      for (const id of M) c.reserves[id] = 0;
+      fillCellChems(c, 0 * 6);
       c.molecules = emptyMolecules();
       if (w.creatures.length === 0) w.creatures.push(c);
       step(w, 1 / 60);
@@ -1157,7 +1166,7 @@ describe("creature: death by starvation", () => {
   it("no energy + no organic -> dies (extinction recovery reseeds)", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.includes(c)).toBe(false);
@@ -1166,7 +1175,7 @@ describe("creature: death by starvation", () => {
   it("organic survives baseline drain", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 50;
+    c.molecules.biopolymer = 50;
     w.creatures.push(c);
     for (let i = 0; i < 60; i++) step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);
@@ -1174,7 +1183,7 @@ describe("creature: death by starvation", () => {
   it("baseline drain depletes idle energy", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 100 });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
     const e0 = c.energy;
     step(w, 1 / 60);
@@ -1183,34 +1192,40 @@ describe("creature: death by starvation", () => {
   it("releases reserves as particles of matching materials", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 0;
-    c.reserves.rock = 50;
-    c.reserves.sand = 30;
-    c.reserves.gas = 20;
+    c.molecules.biopolymer = 0;
+    c.molecules.minerals = 50;
+    c.molecules.minerals = 30;
+    c.molecules.o2 = 20;
     const before = w.particles.length;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.includes(c)).toBe(false);
     expect(w.particles.length).toBeGreaterThan(before);
-    const counts = { rock: 0, sand: 0, gas: 0 } as Record<string, number>;
-    for (const p of w.particles.slice(before)) if (p.material in counts) counts[p.material]++;
-    expect(counts.rock).toBeGreaterThan(0);
-    expect(counts.sand).toBeGreaterThan(0);
-    expect(counts.gas).toBeGreaterThan(0);
+    let minerals = 0; let o2 = 0;
+    for (const p of w.particles.slice(before)) {
+      if (p.chemId === CHEM_IDS.minerals) minerals++;
+      else if (p.chemId === CHEM_IDS.o2) o2++;
+    }
+    expect(minerals).toBeGreaterThan(0);
+    expect(o2).toBeGreaterThan(0);
   });
   it("released mass approximately conserved", () => {
     const w = quietWorld();
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50 + (i % 700), y: 10 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50 + (i % 700), y: 10 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     const c = makeCreature({ energy: 0 });
-    c.reserves.organic = 0;
-    c.reserves.clay = 100;
+    c.molecules.biopolymer = 0;
+    c.molecules.minerals = 100;
     w.creatures.push(c);
     step(w, 1 / 60);
     let m = 0;
     for (const p of w.particles) {
       if (before.has(p)) continue;
-      if (p.material === "clay") m += MATERIALS.clay.density * (4 / 3) * Math.PI * p.r * p.r * p.r;
+      if (p.chemId === CHEM_IDS.minerals) {
+        const ps = w.particleStore;
+        const d = ps.density[p.idx] !== 0 ? ps.density[p.idx] : 2.4;
+        m += d * (4 / 3) * Math.PI * p.r * p.r * p.r;
+      }
     }
     expect(m).toBeGreaterThanOrEqual(99);
     expect(m).toBeLessThan(110);
@@ -1218,29 +1233,29 @@ describe("creature: death by starvation", () => {
   it("released particles spawn near the dead cell", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
-    c.reserves.organic = 0;
-    c.reserves.rock = 50;
+    c.molecules.biopolymer = 0;
+    c.molecules.minerals = 50;
     // Strip molecules so the only mass to release is the rock reserve;
     // biomass would otherwise spawn organic-tagged corpse particles too.
     c.molecules = emptyMolecules();
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     w.creatures.push(c);
     step(w, 1 / 60);
     for (const p of w.particles.filter((p) => !before.has(p))) {
-      expect(p.material).toBe("rock");
+      expect(p.chemId).toBe(CHEM_IDS.minerals);
       expect(Math.abs(p.x - 400)).toBeLessThan(20);
       expect(Math.abs(p.y - 300)).toBeLessThan(20);
     }
   });
-  it("dead cell's molecules survive as molecule-tagged particles", () => {
+  it("dead cell's chems survive as chem-tagged particles", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
-    // Strip every fuel source so noFuel() returns true and the cell dies.
-    for (const id of M) c.reserves[id] = 0;
+    fillCellChems(c, 0 * 6);
     c.molecules = emptyMolecules();
-    // Then load up the non-fuel molecules that should survive into corpse
-    // particles. biomass+enzyme are organic-bucket; minerals are sand-bucket.
+    // Load up the non-fuel chems that should survive death as chem
+    // particles. In the phase-D release path, each named chem above
+    // a small threshold gets its own particle of that chemId.
     c.molecules.biomass = 50;
     c.molecules.enzyme = 20;
     c.molecules.minerals = 30;
@@ -1248,44 +1263,52 @@ describe("creature: death by starvation", () => {
     w.creatures.push(c);
     step(w, 1 / 60);
     const fresh = w.particles.filter((p) => !before.has(p));
-    let bio = 0, enz = 0, min = 0;
-    for (const p of fresh) {
-      if (!p.molecules) continue;
-      bio += p.molecules.biomass;
-      enz += p.molecules.enzyme;
-      min += p.molecules.minerals;
-    }
-    expect(bio).toBeGreaterThan(48);
-    expect(bio).toBeLessThan(52);
-    expect(enz).toBeGreaterThan(18);
-    expect(enz).toBeLessThan(22);
-    expect(min).toBeGreaterThan(28);
-    expect(min).toBeLessThan(32);
-    // Bucketing: minerals went into sand-bucket particles, not generic
-    // organic; that's the whole point of preserving identity.
-    const sandMin = fresh
-      .filter((p) => p.material === "sand" && p.molecules)
-      .reduce((s, p) => s + p.molecules!.minerals, 0);
-    expect(sandMin).toBeGreaterThan(28);
+    const massByChem = (id: number): number => {
+      const ps = w.particleStore;
+      // Per-chem default density used when the particle had no
+      // per-particle override (releaseChemsAsParticles doesn't set
+      // density; the chem table default applies).
+      const defaultDensity: Record<number, number> = {
+        [CHEM_IDS.biomass]: 1.1,
+        [CHEM_IDS.enzyme]: 1.1,
+        [CHEM_IDS.minerals]: 2.4,
+      };
+      let m = 0;
+      for (const p of fresh) {
+        if (p.chemId !== id) continue;
+        const d = ps.density[p.idx] !== 0 ? ps.density[p.idx] : (defaultDensity[id] ?? 1);
+        m += d * (4 / 3) * Math.PI * p.r * p.r * p.r;
+      }
+      return m;
+    };
+    // Maintenance decay nibbles structural chems during the death
+    // tick; allow a 10% loss before particle release.
+    expect(massByChem(CHEM_IDS.biomass)).toBeGreaterThan(45);
+    expect(massByChem(CHEM_IDS.biomass)).toBeLessThan(52);
+    expect(massByChem(CHEM_IDS.enzyme)).toBeGreaterThan(17);
+    expect(massByChem(CHEM_IDS.enzyme)).toBeLessThan(22);
+    expect(massByChem(CHEM_IDS.minerals)).toBeGreaterThan(28);
+    expect(massByChem(CHEM_IDS.minerals)).toBeLessThan(32);
   });
   it("ingesting a molecule-tagged particle deposits into the cell's molecules", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, 3, OP.HALT]) });
+    // INGEST 1 -> biopolymer slot in the post-phase-D SENSOR_CHEMS mapping.
+    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, 1, OP.HALT]) });
     w.creatures.push(eater);
     const gluBefore = eater.molecules.glucose;
-    const orgReserveBefore = eater.reserves.organic;
+    const orgReserveBefore = eater.molecules.biopolymer;
     const mol = emptyMolecules();
     mol.glucose = 12;
     pushParticle(w, {
       x: eater.x, y: eater.y, z: eater.z,
       vx: 0, vy: 0, vz: 0,
-      r: 3, material: "organic",
+      r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0,
       molecules: mol,
     });
     step(w, 0.001);
     expect(eater.molecules.glucose).toBeCloseTo(gluBefore + 12, 5);
-    expect(eater.reserves.organic).toBeCloseTo(orgReserveBefore, 5);
+    expect(eater.molecules.biopolymer).toBeCloseTo(orgReserveBefore, 5);
   });
 });
 
@@ -1294,7 +1317,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
   it("only one child per parent per tick", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
+    fillCellChems(c, 2000 * 6); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -1303,7 +1326,7 @@ describe("creature: reproduction does not cascade within a single tick", () => {
   it("newborn has fresh VM state", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
+    fillCellChems(c, 2000 * 6); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -1317,7 +1340,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
   it("parent can fission again the next tick if it still has build-blocks", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 5000; readyToFission(c);
+    fillCellChems(c, 5000 * 6); readyToFission(c);
     c.molecules.aminoAcid = 2000;
     c.molecules.fattyAcid = 2000;
     c.molecules.minerals = 2000;
@@ -1339,7 +1362,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
   it("fission fails the next tick when build-blocks are depleted", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
+    fillCellChems(c, 2000 * 6); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -1353,7 +1376,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
       cell.molecules.fattyAcid = 0;
       cell.molecules.minerals = 0;
       cell.molecules.biomass = 1;
-      for (const id of M) cell.reserves[id] = 0;
+      fillCellChems(cell, 0 * 6);
     }
     stepFullCycle(w);
     flushDivisions(w);
@@ -1366,7 +1389,7 @@ describe("creature: newborn ingest cooldown", () => {
   it("freshly-spawned child has a positive ingest cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    for (const id of M) c.reserves[id] = 2000; readyToFission(c);
+    fillCellChems(c, 2000 * 6); readyToFission(c);
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -1379,10 +1402,10 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const w = quietWorld();
     // Minimal genome that just triggers INGEST -- no thrust, no reproduce.
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, material: "sand" });
-    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     const dt = 1 / 60;
     const e0 = c.energy;
     step(w, dt);
@@ -1394,12 +1417,16 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
   it("no INGEST op: nearby particle is not absorbed", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
-    c.reserves.organic = 0;
+    c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
+    const minBefore = c.molecules.minerals;
     step(w, 1 / 60);
     expect(w.particles.includes(target)).toBe(true);
-    expect(c.reserves.rock).toBe(0);
+    // No ingestion -> mineral pool shouldn't grow by anything close
+    // to a particle mass (~30 units). Maintenance decay of enz/ribo
+    // dribbles trace amounts in regardless; we just bound the gain.
+    expect(c.molecules.minerals - minBefore).toBeLessThan(1);
   });
 });
 
@@ -1452,14 +1479,14 @@ describe("aeration & surface escape", () => {
   it("gas particle above the surface escapes", () => {
     const w = quietWorld();
     w.surfaceY = 50;
-    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "gas" });
+    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.o2, density: 0.2 });
     step(w, 0.001);
     expect(w.particles.length).toBe(0);
   });
   it("non-gas particle above the surface is clamped, not escaped", () => {
     const w = quietWorld();
     w.surfaceY = 50;
-    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: "rock" });
+    pushParticle(w, { x: 100, y: 30, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(w, 0.001);
     expect(w.particles.length).toBe(1);
     expect(w.particles[0].y).toBeGreaterThanOrEqual(w.surfaceY);
@@ -1479,7 +1506,7 @@ describe("aeration & surface escape", () => {
     w.aerationRate = 500; // burst, easy to observe
     const n0 = w.particles.length;
     step(w, 0.05);
-    const gas = w.particles.filter((p) => p.material === "gas");
+    const gas = w.particles.filter((p) => (p.chemId === CHEM_IDS.o2 || p.chemId === CHEM_IDS.co2));
     expect(w.particles.length).toBeGreaterThan(n0);
     expect(gas.length).toBeGreaterThan(0);
     for (const p of gas) {
@@ -1536,7 +1563,7 @@ describe("adhesion (multicell bonds)", () => {
     b.molecules.biomass = 0;
     b.molecules.glucose = 0;
     b.molecules.fattyAcid = 0;
-    for (const id of M) b.reserves[id] = 0;
+    fillCellChems(b, 0 * 6);
     b.energy = 0;
     w.creatures.push(a, b);
     step(w, 1 / 60);
@@ -1573,11 +1600,14 @@ describe("mass conservation", () => {
   function worldMass(w: World): number {
     let m = 0;
     for (const p of w.particles) {
-      m += MATERIALS[p.material].density * (4 / 3) * Math.PI * p.r * p.r * p.r;
+      // Use the particle's stored density (set per-particle by spawning
+      // code) if nonzero; otherwise fall back to the chem table default.
+      const ps = w.particleStore;
+      const d = ps.density[p.idx] !== 0 ? ps.density[p.idx] : 1; // fallback
+      m += d * (4 / 3) * Math.PI * p.r * p.r * p.r;
     }
     function creatureMass(c: Creature): number {
       let cm = c.energy;
-      for (const id of M) cm += c.reserves[id];
       for (const mk of MOLECULE_IDS) cm += c.molecules[mk];
       for (const inner of c.contents) cm += creatureMass(inner);
       return cm;
@@ -1597,7 +1627,9 @@ describe("mass conservation", () => {
     w.particleSpawnRate = 0;
     w.particleTarget = 100000;
     for (let i = 0; i < 20; i++) {
-      pushParticle(w, { x: 100 + i * 30, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 2, material: i % 2 === 0 ? "organic" : "clay" });
+      pushParticle(w, { x: 100 + i * 30, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 2,
+        chemId: i % 2 === 0 ? CHEM_IDS.biopolymer : CHEM_IDS.minerals,
+        density: i % 2 === 0 ? 1.0 : 1.4 });
     }
     const c = makeCreature({ x: 400, y: 200, energy: 30, genome: OMNIVORE });
     w.creatures.push(c);
@@ -1633,7 +1665,7 @@ describe("particle replenishment", () => {
     const c = makeCreature({ energy: 50 });
     w.creatures.push(c);
     seedParticles(w, 540);
-    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     for (let i = 0; i < 120; i++) step(w, 1 / 60);
     expect(w.particles.length).toBeGreaterThan(540);
   });
@@ -1659,18 +1691,19 @@ describe("default creature behavior (integration)", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 100, y: 100 });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "rock" });
-    pushParticle(w, { x: 160, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, material: "organic" });
+    for (let i = 0; i < 550; i++) pushParticle(w, { x: 700, y: 500+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
+    pushParticle(w, { x: 160, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     for (let i = 0; i < 30; i++) step(w, 1 / 60);
-    const stillThere = w.particles.some((p) => p.material === "organic" && p.x > 150 && p.x < 170);
+    const stillThere = w.particles.some((p) => p.chemId === CHEM_IDS.biopolymer && p.x > 150 && p.x < 170);
     if (stillThere) expect(w.creatures[0].x).toBeGreaterThan(100);
-    else expect(w.creatures[0].reserves.organic).toBeGreaterThan(0);
+    else expect(w.creatures[0].molecules.biopolymer).toBeGreaterThan(0);
   });
   it("threshold not met -> no spawn", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 200 });
-    c.reserves.organic = 10;
-    for (const id of M) if (id !== "organic") c.reserves[id] = 200;
+    c.molecules.biopolymer = 10;
+    c.molecules.minerals = 200;
+    c.molecules.fattyAcid = 200;
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);

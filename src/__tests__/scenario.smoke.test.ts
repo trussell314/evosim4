@@ -11,7 +11,6 @@ import {
   createWorld,
   step,
   type World,
-  MATERIAL_IDS_ORDERED,
   MOLECULE_IDS,
   newCreature,
 } from "../sim";
@@ -60,7 +59,7 @@ function snapshot(w: World): Snapshot {
   let hasNaN = false;
   for (const c of w.creatures) {
     energySum += c.energy;
-    organicSum += c.reserves.organic;
+    organicSum += c.molecules.biopolymer;
     lenSum += c.genome.length;
     if (c.genome.length < lenMin) lenMin = c.genome.length;
     if (c.genome.length > lenMax) lenMax = c.genome.length;
@@ -68,8 +67,8 @@ function snapshot(w: World): Snapshot {
     if (!Number.isFinite(c.x + c.y + c.z + c.vx + c.vy + c.vz + c.energy)) {
       hasNaN = true;
     }
-    for (const id of MATERIAL_IDS_ORDERED) {
-      if (!Number.isFinite(c.reserves[id])) hasNaN = true;
+    for (const k of MOLECULE_IDS) {
+      if (!Number.isFinite(c.molecules[k])) hasNaN = true;
     }
   }
   for (const p of w.particles) {
@@ -143,8 +142,6 @@ describe("smoke: default-creature ecosystem (long run)", () => {
     const cloneOf = (px: number, py: number) => {
       const molecules: Record<string, number> = {};
       for (const k of MOLECULE_IDS) molecules[k] = proto.molecules[k];
-      const reserves: Record<string, number> = {};
-      for (const id of MATERIAL_IDS_ORDERED) reserves[id] = proto.reserves[id];
       return newCreature(w.creatureStore, {
         x: px, y: py, z: proto.z,
         vx: proto.vx, vy: proto.vy, vz: proto.vz,
@@ -160,7 +157,6 @@ describe("smoke: default-creature ecosystem (long run)", () => {
         color: proto.color,
         speciesKey: proto.speciesKey,
         molecules,
-        reserves,
       });
     };
     w.creatures.push(cloneOf(200, 200));

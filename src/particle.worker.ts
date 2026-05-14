@@ -81,7 +81,7 @@ function rebuildParticleViews(layout: ParticleSharedLayout) {
     PVZ: new Float32Array(b, o.vz, cap),
     PR: new Float32Array(b, o.r, cap),
     PDENS: new Float32Array(b, o.density, cap),
-    PMAT: new Uint8Array(b, o.material, cap),
+    PMAT: new Uint8Array(b, o.chemId, cap),
   };
 }
 

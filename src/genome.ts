@@ -1110,11 +1110,14 @@ export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_AMP,             // one sense amplifier -> 80px range
     OP.THRUST_AMP,            // one thrust amplifier -> 95 px/s^2
-    OP.SENSE_GRAD_X, 3,
-    OP.SENSE_GRAD_Y, 3,
+    // Phase D: SENSOR_CHEMS layout puts biopolymer (the bulk food) at
+    // operand 1, minerals at operand 0. Default heterotroph chases
+    // biopolymer and ingests both.
+    OP.SENSE_GRAD_X, 1,
+    OP.SENSE_GRAD_Y, 1,
     OP.THRUST,
-    OP.INGEST, 3,
-    OP.INGEST, 2,
+    OP.INGEST, 1,
+    OP.INGEST, 0,
     // Biosynthesis is now genome-gated. The starter cell is a
     // heterotroph: it intends to digest ingested food into building
     // blocks (enzyme + catabolize), then builds biomass directly

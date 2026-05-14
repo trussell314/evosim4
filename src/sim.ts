@@ -25,50 +25,19 @@ import {
   MAX_GENOME_BYTES,
 } from "./genome";
 
-export type MaterialId =
-  | "rock"
-  | "sand"
-  | "clay"
-  | "organic"
-  | "lipid"
-  | "gas";
-
-export interface Material {
-  id: MaterialId;
-  density: number;
-  color: string;
-}
-
-export const MATERIALS: Record<MaterialId, Material> = {
-  rock:    { id: "rock",    density: 2.6, color: "#5b4a3a" },
-  sand:    { id: "sand",    density: 1.9, color: "#c9b074" },
-  clay:    { id: "clay",    density: 1.4, color: "#8c8175" },
-  organic: { id: "organic", density: 1.0, color: "#7fb069" },
-  lipid:   { id: "lipid",   density: 0.7, color: "#f0d264" },
-  gas:     { id: "gas",     density: 0.2, color: "#cfe2ff" },
-};
-
-const SEED_WEIGHTS: Array<[MaterialId, number]> = [
-  ["rock",    1.0],
-  ["sand",    3.0],
-  ["clay",    3.5],
-  ["organic", 4.5],
-  ["lipid",   0.5],
-  ["gas",     0.5],
-];
-
-const MATERIAL_IDS = Object.keys(MATERIALS) as MaterialId[];
-// O(1) reverse lookup. Populated once at module load; the per-tick hot
-// loops in updateCreatures and populateSensors used to call
-// MATERIAL_IDS.indexOf(p.material) inside a loop over every particle for
-// every cell -- tens of millions of string-array scans per second.
-const MATERIAL_INDEX: Record<MaterialId, number> = {} as Record<MaterialId, number>;
-for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_INDEX[MATERIAL_IDS[i]] = i;
-// Flat Float32 lookup of material default density, indexed by the
-// uint8 stored in ParticleStore.material[i]. Avoids a string-keyed
-// dictionary lookup in the hot force loop.
-export const MATERIAL_BASE_DENSITY = new Float32Array(MATERIAL_IDS.length);
-for (let i = 0; i < MATERIAL_IDS.length; i++) MATERIAL_BASE_DENSITY[i] = MATERIALS[MATERIAL_IDS[i]].density;
+// Phase D of the chemistry overhaul: free-floating particles carry a
+// single chem id (uint8 into the chemical table) instead of a string
+// material label. The legacy MaterialId union, MATERIALS dict, and
+// material-density LUT are gone; their roles are absorbed by the chem
+// table and the SPAWN_CHEM_SPECS roster below. Pebbles are still a
+// thing -- they're identified by chemId === CHEM_MIN with r above
+// PEBBLE_R_MIN, not by a separate "sand" material.
+export type ChemId = number;
+// Flat Float32 lookup of each chemical's bulk density, indexed by
+// chem id. Used in the hot force loop and the sensor pass. Populated
+// after CHEMICALS builds; see CHEM_BASE_DENSITY initialization below
+// the chemical table.
+export let CHEM_BASE_DENSITY: Float32Array;
 
 export interface ObstacleLobe {
   x: number; y: number; r: number;
@@ -118,7 +87,7 @@ const PARTICLE_STORE_PREALLOC_CAP = 65536;
 //
 // Column order (must match PARTICLE_COLUMN_LAYOUT below):
 //   x, y, z, vx, vy, vz, r, density, age   : Float32   (4 bytes each)
-//   material                                : Uint8     (1 byte)
+//   chemId                                  : Uint8     (1 byte)
 //   quietTicks                              : Int32     (4 bytes)
 export interface ParticleSharedLayout {
   buffer: ArrayBufferLike;
@@ -127,7 +96,7 @@ export interface ParticleSharedLayout {
     x: number; y: number; z: number;
     vx: number; vy: number; vz: number;
     r: number; density: number; age: number;
-    material: number;
+    chemId: number;
     quietTicks: number;
   };
 }
@@ -154,7 +123,7 @@ function allocParticleBuffer(cap: number): { buffer: ArrayBufferLike; layout: Pa
   offsets.r = o; o = align(o + f32Size);
   offsets.density = o; o = align(o + f32Size);
   offsets.age = o; o = align(o + f32Size);
-  offsets.material = o; o = align(o + u8Size);
+  offsets.chemId = o; o = align(o + u8Size);
   offsets.quietTicks = o; o = align(o + i32Size);
   const total = o;
   // Prefer SharedArrayBuffer when crossOriginIsolated so subworkers
@@ -185,8 +154,8 @@ export class ParticleStore {
   vy!: Float32Array;
   vz!: Float32Array;
   r!: Float32Array;
-  density!: Float32Array;   // 0 -> use MATERIALS[material].density
-  material!: Uint8Array;    // index into MATERIAL_IDS
+  density!: Float32Array;   // 0 -> use CHEM_BASE_DENSITY[chemId]
+  chemId!: Uint8Array;      // chemical id; rendered/digested per CHEMICALS[k]
   quietTicks!: Int32Array;
   // Particle age in sim-seconds. Used by the decay pass: old particles
   // gradually lose mass (radius shrinks) and disappear once below a
@@ -231,7 +200,7 @@ export class ParticleStore {
     this.r = new Float32Array(b, o.r, cap);
     this.density = new Float32Array(b, o.density, cap);
     this.age = new Float32Array(b, o.age, cap);
-    this.material = new Uint8Array(b, o.material, cap);
+    this.chemId = new Uint8Array(b, o.chemId, cap);
     this.quietTicks = new Int32Array(b, o.quietTicks, cap);
   }
   grow(newCap: number): void {
@@ -266,7 +235,7 @@ export class ParticleStore {
       this.vz[i] = this.vz[last];
       this.r[i] = this.r[last];
       this.density[i] = this.density[last];
-      this.material[i] = this.material[last];
+      this.chemId[i] = this.chemId[last];
       this.quietTicks[i] = this.quietTicks[last];
       this.age[i] = this.age[last];
       this.molecules[i] = this.molecules[last];
@@ -305,8 +274,8 @@ export class Particle {
     return d === 0 ? undefined : d;
   }
   set density(v: number | undefined) { this.store.density[this.idx] = v ?? 0; }
-  get material(): MaterialId { return MATERIAL_IDS[this.store.material[this.idx]]; }
-  set material(v: MaterialId) { this.store.material[this.idx] = MATERIAL_INDEX[v]; }
+  get chemId(): number { return this.store.chemId[this.idx]; }
+  set chemId(v: number) { this.store.chemId[this.idx] = v; }
   get quietTicks(): number | undefined {
     const q = this.store.quietTicks[this.idx];
     return q === 0 ? undefined : q;
@@ -327,7 +296,7 @@ export function pushParticle(
     x: number; y: number; z: number;
     vx: number; vy: number; vz: number;
     r: number;
-    material: MaterialId;
+    chemId: number;
     density?: number;
     molecules?: Molecules;
     genericChem?: Float32Array;
@@ -344,7 +313,7 @@ export function pushParticle(
   store.vz[i] = opts.vz;
   store.r[i] = opts.r;
   store.density[i] = opts.density ?? 0;
-  store.material[i] = MATERIAL_INDEX[opts.material];
+  store.chemId[i] = opts.chemId;
   store.quietTicks[i] = opts.quietTicks ?? 0;
   // Slot reuse (swap-pop) means COLLISION_ASLEEP may carry a stale 1
   // from the previous occupant. Force-clear it so the freshly-pushed
@@ -369,7 +338,9 @@ export function removeParticleAt(world: World, arrIdx: number): void {
   // pebble (creature INGEST doesn't filter by size) leaves the
   // cached count high until the next 30-tick refresh, suppressing
   // pebble replenish for up to half a sim-second.
-  if (store.material[arrIdx] === MATERIAL_INDEX.sand && store.r[arrIdx] >= SAND_BIG_R_MIN) {
+  // Pebble cache decrement: large mineral grains are tracked separately
+  // for sediment-bed replenish targeting.
+  if (store.chemId[arrIdx] === CHEM_MIN && store.r[arrIdx] >= SAND_BIG_R_MIN) {
     if (pebbleCountCache > 0) pebbleCountCache--;
   }
   const last = ps.length - 1;
@@ -390,7 +361,7 @@ export interface ParticleData {
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   r: number;
-  material: MaterialId;
+  chemId: number;
   molecules?: Molecules;
   genericChem?: Float32Array;
   quietTicks?: number;
@@ -443,7 +414,6 @@ const CREATURE_F32_COLS = [
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
   "m_biomass", "m_waste", "m_adp", "m_ribosome",
   "m_biopolymer", "m_membrane",
-  "r_rock", "r_sand", "r_clay", "r_organic", "r_lipid", "r_gas",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpLo", "fpHi"] as const;
@@ -511,22 +481,16 @@ export class CreatureStore {
   m_ribosome!: Float32Array;
   m_biopolymer!: Float32Array;
   m_membrane!: Float32Array;
-  // reserves (parallel to MATERIAL_IDS order)
-  r_rock!: Float32Array;
-  r_sand!: Float32Array;
-  r_clay!: Float32Array;
-  r_organic!: Float32Array;
-  r_lipid!: Float32Array;
-  r_gas!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
   // a contiguous region of the shared buffer.
   catalystCols!: Float32Array[];
-  // Parallel arrays of column refs for indexed access in hot loops.
-  // resCols[matIdx] -> r_<mat>; molCols[molKey] -> m_<key>. Initialized
-  // once after the typed arrays exist.
-  resCols!: Float32Array[];
+  // Parallel array of column refs for indexed access in hot loops.
+  // molCols[molKey] -> m_<key>. Initialized once after the typed arrays
+  // exist. (Reserves have been collapsed into chemCols: every ingested
+  // particle deposits directly into the cell's chem pool, and
+  // catabolism is now the biopolymer-digest reaction.)
   molCols!: Float32Array[];
   // Unified chemical pool addressed by the generic-reaction engine.
   // chemCols[0..7] alias molCols entries (the named chemicals) so a
@@ -588,12 +552,6 @@ export class CreatureStore {
     this.m_ribosome = new Float32Array(b, o.base.m_ribosome, cap);
     this.m_biopolymer = new Float32Array(b, o.base.m_biopolymer, cap);
     this.m_membrane = new Float32Array(b, o.base.m_membrane, cap);
-    this.r_rock = new Float32Array(b, o.base.r_rock, cap);
-    this.r_sand = new Float32Array(b, o.base.r_sand, cap);
-    this.r_clay = new Float32Array(b, o.base.r_clay, cap);
-    this.r_organic = new Float32Array(b, o.base.r_organic, cap);
-    this.r_lipid = new Float32Array(b, o.base.r_lipid, cap);
-    this.r_gas = new Float32Array(b, o.base.r_gas, cap);
     this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
     this.fpLo = new Uint32Array(b, o.base.fpLo, cap);
     this.fpHi = new Uint32Array(b, o.base.fpHi, cap);
@@ -605,9 +563,8 @@ export class CreatureStore {
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       this.genericChemCols[k] = new Float32Array(b, o.generic[k], cap);
     }
-    this.resCols = [this.r_rock, this.r_sand, this.r_clay, this.r_organic, this.r_lipid, this.r_gas];
     // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll,
-    // enzyme, o2, co2, minerals, biomass, waste, ribosome
+    // enzyme, o2, co2, minerals, biomass, waste, ribosome, biopolymer, membrane
     this.molCols = [
       this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
@@ -661,8 +618,6 @@ export class CreatureStore {
     this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
     this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
     this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
-    this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
-    this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
     // Named chemCols slots 0..7 are aliases of molCols and already
     // cleared above; only the generic slice (8..63) needs its own
@@ -703,21 +658,12 @@ export class MoleculesView {
   set membrane(v: number) { this.c.store.m_membrane[this.c.idx] = v; }
 }
 
-export class ReservesView {
-  constructor(public c: Creature) {}
-  get rock(): number { return this.c.store.r_rock[this.c.idx]; }
-  set rock(v: number) { this.c.store.r_rock[this.c.idx] = v; }
-  get sand(): number { return this.c.store.r_sand[this.c.idx]; }
-  set sand(v: number) { this.c.store.r_sand[this.c.idx] = v; }
-  get clay(): number { return this.c.store.r_clay[this.c.idx]; }
-  set clay(v: number) { this.c.store.r_clay[this.c.idx] = v; }
-  get organic(): number { return this.c.store.r_organic[this.c.idx]; }
-  set organic(v: number) { this.c.store.r_organic[this.c.idx] = v; }
-  get lipid(): number { return this.c.store.r_lipid[this.c.idx]; }
-  set lipid(v: number) { this.c.store.r_lipid[this.c.idx] = v; }
-  get gas(): number { return this.c.store.r_gas[this.c.idx]; }
-  set gas(v: number) { this.c.store.r_gas[this.c.idx] = v; }
-}
+// Reserves were retired in phase D of the chemistry overhaul.
+// Ingested particles deposit their mass directly into chemCols[chemId]
+// on the cell. Old code that asked for `c.reserves.organic += mass`
+// is now `c.store.m_biopolymer[i] += mass` (or whichever chem the
+// particle was). Test scaffolding that bulk-loaded reserves now bulks
+// chem pools directly.
 
 // Process-wide monotonic counter assigning a stable per-cell id at
 // newCreature. Kept module-scoped (not on World) so tests that spin
@@ -763,7 +709,6 @@ export class Creature {
   // Views cached on first access. `molecules.glucose` etc. proxy into
   // store.m_glucose[this.idx].
   private _m?: MoleculesView;
-  private _r?: ReservesView;
   constructor(store: CreatureStore, idx: number) { this.store = store; this.idx = idx; }
   get molecules(): MoleculesView { return this._m ??= new MoleculesView(this); }
   // Setter: copy field-by-field from any Molecules-shaped object into
@@ -785,16 +730,6 @@ export class Creature {
     s.m_ribosome[i] = m.ribosome ?? 0;
     s.m_biopolymer[i] = m.biopolymer ?? 0;
     s.m_membrane[i] = m.membrane ?? 0;
-  }
-  get reserves(): ReservesView { return this._r ??= new ReservesView(this); }
-  set reserves(r: { rock?: number; sand?: number; clay?: number; organic?: number; lipid?: number; gas?: number }) {
-    const s = this.store; const i = this.idx;
-    s.r_rock[i] = r.rock ?? 0;
-    s.r_sand[i] = r.sand ?? 0;
-    s.r_clay[i] = r.clay ?? 0;
-    s.r_organic[i] = r.organic ?? 0;
-    s.r_lipid[i] = r.lipid ?? 0;
-    s.r_gas[i] = r.gas ?? 0;
   }
   get x(): number { return this.store.x[this.idx]; }
   set x(v: number) { this.store.x[this.idx] = v; }
@@ -841,7 +776,6 @@ export interface CreatureInit {
   color: string;
   speciesKey: string;
   molecules?: Partial<Molecules>;
-  reserves?: Partial<Record<MaterialId, number>>;
 }
 
 export function newCreature(store: CreatureStore, init: CreatureInit): Creature {
@@ -884,19 +818,15 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.biopolymer !== undefined) store.m_biopolymer[idx] = m.biopolymer;
     if (m.membrane !== undefined) store.m_membrane[idx] = m.membrane;
   }
-  if (init.reserves) {
-    const r = init.reserves;
-    if (r.rock !== undefined) store.r_rock[idx] = r.rock;
-    if (r.sand !== undefined) store.r_sand[idx] = r.sand;
-    if (r.clay !== undefined) store.r_clay[idx] = r.clay;
-    if (r.organic !== undefined) store.r_organic[idx] = r.organic;
-    if (r.lipid !== undefined) store.r_lipid[idx] = r.lipid;
-    if (r.gas !== undefined) store.r_gas[idx] = r.gas;
-  }
   return c;
 }
 
-export const MATERIAL_IDS_ORDERED = MATERIAL_IDS;
+// Chem labels for the 6 sensor-bin slots in SENSE_GRAD / DENSITY ops.
+// Used by the disassembler and HUD to pretty-print the operand. Index
+// matches SENSOR_CHEMS slot order.
+export const SENSOR_CHEM_LABELS: ReadonlyArray<string> = [
+  "min", "biop", "fa", "o2", "co2", "glu",
+];
 
 // Per-cell molecular pool. ATP itself lives on the Creature as `energy`
 // (so existing code that talks about energy is talking about ATP); every
@@ -1340,12 +1270,9 @@ const DENSITY_CEIL = 1.15;
 
 // ----- chemistry constants -----
 //
-// Catabolism rate: how fast undigested reserves break down into named
-// molecules per second per unit cell surface (r/MIN_CREATURE_R). Mass
-// fractions in CATAB_FRACTIONS must sum to 1 per row so material ->
-// molecules conversion is mass-conserving.
-const CATAB_VMAX_PER_R = 6;   // mass / sec per (r / MIN_R) surface ratio at saturation
-const CATAB_KM = 6;
+// Biopolymer digestion (catabolism replacement) is now a regular
+// reaction (REACTIONS slot 10), with rate gated on enzyme pool. See
+// installNamedReactions() for parameters.
 
 // Passive O2 (and CO2) exchange with the surrounding water. Real cells
 // dissolve oxygen across their membrane; without this our cells starve
@@ -1356,54 +1283,21 @@ const O2_AMBIENT = 12;             // assumed dissolved-O2 concentration cells d
 const CO2_OFFGAS_PER_R = 1.5;     // mass/sec; CO2 leaks out of cells (down its gradient)
 const CO2_AMBIENT = 1;
 
-type Catab = Partial<Molecules>;
-const CATAB_FRACTIONS: Record<MaterialId, Catab> = {
-  rock:    { minerals: 1.0 },
-  sand:    { minerals: 1.0 },
-  clay:    { minerals: 0.7, aminoAcid: 0.3 },
-  organic: { glucose: 0.5, aminoAcid: 0.3, fattyAcid: 0.2 },
-  lipid:   { fattyAcid: 0.7, aminoAcid: 0.3 },
-  gas:     { o2: 0.6, co2: 0.4 },
-};
+// Catabolism is now driven by reactions, not a hand-coded material-to-
+// molecule fraction table. The biopolymer-digest bootstrap reaction
+// (slot 10 in REACTIONS) turns ingested biopolymer into glucose + amino
+// acid + fatty acid, gated on the digester (enzyme) chemical -- a real
+// reaction with substrates, products, and rate-limited by enzyme pool.
+// Particles deposit their mass directly into the cell's chem pool on
+// ingestion; the cell decides per-tick how much biopolymer to digest
+// based on how much enzyme it has built. Catabolism of mineral particles
+// is just "the cell carries mineral chemical until it's used as a
+// biosynth substrate" -- no transform needed.
 
-// Precomputed flat tables: per-material, the molecule keys and their
-// fractions, ready for indexed iteration. Beats `for (const k in frac)`
-// in catabolize() -- for-in is several times slower than a tight indexed
-// loop over packed arrays.
-const CATAB_KEYS: Record<MaterialId, (keyof Molecules)[]> = {} as Record<MaterialId, (keyof Molecules)[]>;
-const CATAB_FRACS: Record<MaterialId, number[]> = {} as Record<MaterialId, number[]>;
-for (const id of Object.keys(CATAB_FRACTIONS) as MaterialId[]) {
-  const row = CATAB_FRACTIONS[id];
-  const keys: (keyof Molecules)[] = [];
-  const fracs: number[] = [];
-  for (const k of Object.keys(row) as (keyof Molecules)[]) {
-    const v = row[k];
-    if (v !== undefined && v > 0) { keys.push(k); fracs.push(v); }
-  }
-  CATAB_KEYS[id] = keys;
-  CATAB_FRACS[id] = fracs;
-}
-
-// String key -> index in MOLECULE_IDS array. Used by CATAB_MOL_TARGETS
-// to translate the catabolism table into integer column indices.
+// String key -> index in MOLECULE_IDS array. Used to map between named
+// chem ids and Molecules field positions.
 const MOLECULE_INDEX: Record<keyof Molecules, number> = {} as Record<keyof Molecules, number>;
 for (let i = 0; i < MOLECULE_IDS.length; i++) MOLECULE_INDEX[MOLECULE_IDS[i]] = i;
-
-// Catabolism lookups indexed by material number (matching MATERIAL_IDS).
-// Each row is a packed list of (molecule index, fraction) pairs. Lets
-// the hot loop avoid object-keyed dispatch entirely.
-const CATAB_TARGETS_MOL: Int32Array[] = MATERIAL_IDS.map((id) => {
-  const keys = CATAB_KEYS[id];
-  const a = new Int32Array(keys.length);
-  for (let k = 0; k < keys.length; k++) a[k] = MOLECULE_INDEX[keys[k]];
-  return a;
-});
-const CATAB_TARGETS_FRAC: Float32Array[] = MATERIAL_IDS.map((id) => {
-  const fracs = CATAB_FRACS[id];
-  const a = new Float32Array(fracs.length);
-  for (let k = 0; k < fracs.length; k++) a[k] = fracs[k];
-  return a;
-});
 
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
@@ -1449,7 +1343,15 @@ const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
 // Stable across the migration; phase E renumbers ATP to 0 and shifts these.
+const CHEM_O2 = 0;
+const CHEM_CO2 = 1;
+const CHEM_GLU = 2;
+const CHEM_AA = 3;
+const CHEM_FA = 4;
+const CHEM_MIN = 5;
+const CHEM_BIOMASS = 6;
 const CHEM_ADP = 7;
+const CHEM_WASTE = 8;
 // chlorophyll, enzyme, ribosome have specific roles as rate multipliers:
 //   chl   -> photosynth (mandatory: no chl -> no photosynth)
 //   ribo  -> all biosynth reactions (mandatory: no ribo -> no biosynth)
@@ -1460,14 +1362,8 @@ const CHEM_ADP = 7;
 const CHEM_CHL = 9;
 const CHEM_ENZ = 10;
 const CHEM_RIBO = 11;
-// Phase C additions. Used by phase D's biopolymer-digestion bootstrap
-// reaction and by the fission membrane-floor gate (planned phase D).
-// Re-exported below for cross-module reference once those land.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const CHEM_BIOPOLYMER = 12;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const CHEM_MEMBRANE = 13;
-void CHEM_BIOPOLYMER; void CHEM_MEMBRANE;
 const RIBO_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
@@ -1559,6 +1455,76 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* memb   */ { molarMass: 1.0, density: 0.8,  defaultPhase: "liquid",  solubility: 0.01, vaporPressure: 0,  meltingPoint: 50,   permeability: 0,   bondEnergy: 40,   role: "membrane",  color: "#f0d264" },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
+// Initialize the exported per-chem density LUT. Hot loops reuse this
+// to avoid a property-dispatch on CHEMICALS[id] every particle.
+CHEM_BASE_DENSITY = new Float32Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_BASE_DENSITY[i] = CHEMICALS[i].density;
+// Exported color LUT, indexed by chem id. Used by the renderer in
+// main.ts to color free-floating particles by their chemical identity.
+export const CHEM_COLORS: ReadonlyArray<string> = CHEMICALS.map((c) => c.color);
+// Exported name LUT, indexed by chem id. HUD and disassembler use it
+// to label operands referencing chemicals.
+export const CHEM_NAMES: ReadonlyArray<string> = CHEMICALS.map((c) => c.name);
+// Bootstrap chem id exports. Stable across the migration (phase E
+// renumbers them; tests pin to the export rather than to literals).
+export const CHEM_IDS = {
+  o2: 0, co2: 1, glucose: 2, aminoAcid: 3, fattyAcid: 4, minerals: 5,
+  biomass: 6, adp: 7, waste: 8, chlorophyll: 9, enzyme: 10, ribosome: 11,
+  biopolymer: 12, membrane: 13,
+} as const;
+
+// World-spawn weighting for free-floating particles. Replaces the
+// old per-MaterialId SEED_WEIGHTS table. Minerals subsume the
+// rock/sand/clay slice of the old food web (one chemical, per-particle
+// density jitter recovers the old rock-heavy / clay-light visual
+// variation). Biopolymer takes "organic"'s slot. The two gas chems
+// (O2 / CO2) split the old gas weight 60/40 like the old material
+// catabolized to.
+//
+// `densityJitter` lets specific chems vary their per-particle density;
+// undefined means "use CHEM_BASE_DENSITY[chemId]". Minerals jitter
+// across the old rock..clay range so the sediment band still reads
+// as gravelly. Biopolymer jitters around 1.0 because partially-
+// decomposed biomatter ranges from oily to dense protein.
+//
+// `seedGenericSlots` carries the per-chem "loose generic-chem
+// signature" the world seeds onto particles at start-of-sim. Matches
+// the old SEED_SPEC genericSlots logic so reaction substrates exist
+// in the world without being free molecules.
+interface SpawnChemSpec {
+  chemId: number;
+  weight: number;
+  initialCount: number;
+  densityJitter?: { lo: number; hi: number };
+  seedGenericSlots?: number;
+  seedGenericAmount?: number;
+}
+const SPAWN_CHEM_SPECS: SpawnChemSpec[] = [
+  { chemId: CHEM_BIOPOLYMER, weight: 4.5, initialCount: 200, densityJitter: { lo: 0.7, hi: 1.3 }, seedGenericSlots: 3, seedGenericAmount: 0.2 },
+  // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6 so
+  // some look like clay (lighter, slow sinkers), some like rock
+  // (heavy seabed pieces).
+  { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 }, seedGenericSlots: 1, seedGenericAmount: 0.12 },
+  { chemId: CHEM_FA,  weight: 0.5, initialCount: 30, seedGenericSlots: 2, seedGenericAmount: 0.15 },
+  // Gas split: O2 60%, CO2 40% (matches the old material catab table).
+  { chemId: CHEM_O2,  weight: 0.3, initialCount: 12 },
+  { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
+];
+
+// SENSE_GRAD_X/Y/DENSITY ops index into per-chem sensor bins. The bin
+// arrays remain at 6 wide for backward op compatibility; this table
+// picks WHICH 6 chems map to those bins. Order chosen so the legacy
+// operand 0..5 ranges map to chems that play similar trophic roles to
+// the old material slots they replaced (operand 0 = sediment/mineral,
+// operand 1 = bulk food, etc). Chemicals outside this list are
+// invisible to gradient/density sensing; SENSE_CHEMICAL still reads
+// the internal pool for any chem.
+const SENSOR_CHEMS: ReadonlyArray<number> = [
+  CHEM_MIN, CHEM_BIOPOLYMER, CHEM_FA, CHEM_O2, CHEM_CO2, CHEM_GLU,
+];
+const SENSOR_BIN_BY_CHEM = new Int8Array(CHEMICAL_COUNT);
+SENSOR_BIN_BY_CHEM.fill(-1);
+for (let i = 0; i < SENSOR_CHEMS.length; i++) SENSOR_BIN_BY_CHEM[SENSOR_CHEMS[i]] = i;
 // CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
 // chemCols[k] (k < 8). Resolved against MOLECULE_INDEX which is
 // already populated above by the time this line evaluates.
@@ -1674,6 +1640,12 @@ interface Reaction {
   // photosynth (real chlorophyll absorbs the photon). Mandatory --
   // zero chlorophyll means no carbon fixation.
   chlScale: boolean;
+  // Rate multiplied by chemCols[CHEM_ENZ][i] / ENZ_REF. Set only on
+  // biopolymer digestion (catabolism replacement). Mandatory -- zero
+  // enzyme means no biopolymer breakdown. The cell can still hold
+  // biopolymer in its pool, but can't extract glu/aa/fa from it
+  // without building enzymes.
+  enzScale: boolean;
 }
 const REACTIONS: Reaction[] = buildReactionTable();
 
@@ -1741,16 +1713,22 @@ function buildReactionTable(): Reaction[] {
     out.push({
       sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax,
       uncatRate: 0, gateMask: 0, surfaceScale: false, atpFloor: false,
-      riboScale: false, chlScale: false,
+      riboScale: false, chlScale: false, enzScale: false,
     });
   }
-  // Overwrite the first 10 generated entries with the named reactions.
-  // Catalyst slots 0..9 correspond to the named reactions, so a cell
-  // that builds catalyst[k] is boosting one of these specific
-  // pathways. Subsequent slots (10..255) remain the generated generics.
+  // Overwrite the first NAMED_REACTION_COUNT generated entries with the
+  // named reactions. Catalyst slots 0..N-1 correspond to the named
+  // reactions, so a cell that builds catalyst[k] is boosting one of
+  // these specific pathways. Subsequent slots remain the generated
+  // generics.
   installNamedReactions(out);
   return out;
 }
+// Number of named reactions installed at the head of REACTIONS. Bumps
+// from 10 to 12 in phase D to make room for biopolymer-digest (slot 10)
+// and membrane-synth (slot 11). Exported so HUD / disassembler can
+// label catalyst slots by their bootstrap pathway.
+export const NAMED_REACTION_COUNT = 12;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +
@@ -1766,7 +1744,7 @@ function installNamedReactions(out: Reaction[]): void {
     opts: {
       lightIn?: number; gateMask?: number;
       surfaceScale?: boolean; atpFloor?: boolean;
-      riboScale?: boolean; chlScale?: boolean;
+      riboScale?: boolean; chlScale?: boolean; enzScale?: boolean;
     } = {},
   ): Reaction => ({
     sChem: new Uint8Array(sChem),
@@ -1782,24 +1760,36 @@ function installNamedReactions(out: Reaction[]): void {
     atpFloor: opts.atpFloor ?? false,
     riboScale: opts.riboScale ?? false,
     chlScale: opts.chlScale ?? false,
+    enzScale: opts.enzScale ?? false,
   });
   // Slot index in NAMED_CHEMICALS: o2=0 co2=1 glu=2 aa=3 fa=4 min=5
-  // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11.
+  // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11 biop=12 memb=13.
   // Energy reactions: no riboScale (these aren't protein synthesis).
-  out[0] = mk([2, 0], [1, 1], [1], [2], +10, 16);                // aerobic: glu+o2 -> 2 co2 + 10 atp
-  out[1] = mk([2], [1], [1, 8], [0.5, 0.5], +2, 1.5);            // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
-  out[2] = mk([4, 0], [1, 1], [1], [2], +14, 1.5);               // betaOx: fa+o2 -> 2 co2 + 14 atp
+  out[0] = mk([CHEM_GLU, CHEM_O2], [1, 1], [CHEM_CO2], [2], +10, 16);                          // aerobic: glu+o2 -> 2 co2 + 10 atp
+  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
+  out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
   // Photosynth: requires chlorophyll molecule (mandatory multiplier).
-  out[3] = mk([1], [1], [2, 0], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
+  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
-  // with ribosome count (mandatory) -- this is the cell's protein
-  // synthesis machinery, and zero ribosomes means zero growth.
-  out[4] = mk([2, 5], [0.7, 0.3], [3], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, riboScale: true }); // synth_aa
-  out[5] = mk([2, 5], [0.9, 0.1], [4], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, riboScale: true }); // synth_fa
-  out[6] = mk([3, 5], [0.5, 0.5], [9], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, riboScale: true }); // synth_chl
-  out[7] = mk([3, 5], [0.5, 0.5], [10], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, riboScale: true }); // synth_enz
-  out[8] = mk([3, 5], [0.5, 0.5], [11], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, riboScale: true }); // synth_ribo
-  out[9] = mk([3, 4], [0.9, 0.1], [6], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_biomass
+  // with ribosome / mRNA count (mandatory) -- this is the cell's
+  // protein synthesis machinery, and zero mRNA means zero growth.
+  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, riboScale: true }); // synth_aa
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, riboScale: true }); // synth_fa
+  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, riboScale: true }); // synth_chl
+  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, riboScale: true }); // synth_enz
+  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_RIBO], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, riboScale: true }); // synth_ribo
+  out[9] = mk([CHEM_AA, CHEM_FA], [0.9, 0.1], [CHEM_BIOMASS], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_biomass
+  // Biopolymer digestion. Mass-balanced split mirroring the old
+  // CATAB_FRACTIONS for "organic": 0.5 glu + 0.3 aa + 0.2 fa per
+  // biopolymer unit. Slightly exergonic (+1 ATP) to model the small
+  // payoff a heterotroph gets from breaking polysaccharides /
+  // proteins. Gated on enzyme: no enz, no digestion.
+  out[10] = mk([CHEM_BIOPOLYMER], [1], [CHEM_GLU, CHEM_AA, CHEM_FA], [0.5, 0.3, 0.2], +1, 6, { enzScale: true });
+  // Membrane biosynth. fa -> membrane lipid, endergonic, mRNA-gated.
+  // Driven by the same SYNTH bits as synth_biomass (gate 1 << 0) so
+  // a cell that biosynths a body also lays down membrane. Cheaper
+  // than chl/ribo so a growing cell can afford it.
+  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_memb
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -1939,6 +1929,11 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
       const ch = s.chemCols[CHEM_CHL][i];
       if (ch <= 0) continue;
       machineryMult *= ch / CHL_REF;
+    }
+    if (rxn.enzScale) {
+      const en = s.chemCols[CHEM_ENZ][i];
+      if (en <= 0) continue;
+      machineryMult *= en / ENZ_REF;
     }
     const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface * machineryMult;
     let amt = rate * dt;
@@ -2803,43 +2798,12 @@ function spawnFounder(world: World): Creature {
 }
 
 // Initial particle seeding. Called once per world creation, before
-// any time-gated replenish kicks in. Distribution is intentionally
-// skewed (substrate >> trophically-useful chemistry >> rare specialty)
-// so early cells have a varied environment without flattening the
-// food web. Payload amounts are small -- a fraction of typical
-// per-tick synthesis output -- so seeded molecules supplement
-// internal biochemistry rather than replacing it.
-const SEED_SPEC: Array<{
-  mat: MaterialId;
-  count: number;
-  // Number of generic-chemical slots to populate on each seeded
-  // particle, plus the max amount per slot. These are *substrates*
-  // and *products* of generic reactions (not catalysts -- catalysts
-  // live in a separate cell-only pool with 256 slots, and particles
-  // can't carry them). Seeding them gives cells something to react
-  // with at world start; named molecules (glucose / aminoAcid /
-  // fattyAcid / etc.) are NOT seeded -- they have to come from
-  // synthesis ops or from extracting prey directly.
-  genericSlots: number;
-  genericAmount: number;
-}> = [
-  // Organic dominates trophic input and carries the richest generic
-  // chemistry signature -- partially-decomposed biomatter has a
-  // wide distribution of substrate/product slots.
-  { mat: "organic", count: 200, genericSlots: 3, genericAmount: 0.2 },
-  // Clay holds adsorbed generic chemistry on its sheets.
-  { mat: "clay", count: 100, genericSlots: 2, genericAmount: 0.15 },
-  // Sand: mineral substrate, trace generic chemistry.
-  { mat: "sand", count: 100, genericSlots: 1, genericAmount: 0.1 },
-  // Rock: similar to sand but slightly lower generic chem.
-  { mat: "rock", count: 50, genericSlots: 1, genericAmount: 0.08 },
-  // Lipid: lipid-bound compounds give a moderate generic-chem
-  // signature without any free fatty acid riding along.
-  { mat: "lipid", count: 30, genericSlots: 2, genericAmount: 0.15 },
-  // Gas is rare at seed (most gas enters via aerate later); no
-  // generic chemistry rides on bubbles.
-  { mat: "gas", count: 20, genericSlots: 0, genericAmount: 0 },
-];
+// any time-gated replenish kicks in. Distribution is set via the
+// per-chem SPAWN_CHEM_SPECS table at the top of the file (replaced
+// the old MaterialId-keyed SEED_SPEC). Each spawned particle carries
+// a small generic-chem signature (reaction substrates/products
+// floating in the environment) so cells have varied chemistry to
+// react with at world start.
 
 function buildSeedGenericChem(slots: number, amount: number): Float32Array | undefined {
   if (slots <= 0) return undefined;
@@ -2857,18 +2821,18 @@ function seedInitialParticles(world: World): void {
   const H = world.height;
   const surfaceY = world.surfaceY;
   const yRange = (H - surfaceY) * 0.85;
-  for (const spec of SEED_SPEC) {
-    for (let i = 0; i < spec.count; i++) {
+  for (const spec of SPAWN_CHEM_SPECS) {
+    for (let i = 0; i < spec.initialCount; i++) {
       const r = 1 + Math.random() * 1.5;
-      const genericChem = buildSeedGenericChem(spec.genericSlots, spec.genericAmount);
+      const genericChem = buildSeedGenericChem(spec.seedGenericSlots ?? 0, spec.seedGenericAmount ?? 0);
       pushParticle(world, {
         x: Math.random() * W,
         y: surfaceY + Math.random() * yRange,
         z: r + Math.random() * (world.depth - 2 * r),
         vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
         r,
-        material: spec.mat,
-        density: rollDensity(spec.mat),
+        chemId: spec.chemId,
+        density: rollChemDensity(spec),
         genericChem,
       });
     }
@@ -2907,8 +2871,8 @@ function seedAdpParticles(world: World): void {
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
-      material: "organic",
-      density: rollDensity("organic"),
+      chemId: CHEM_BIOPOLYMER,
+      density: 0.7 + Math.random() * 0.6, // matches the old organic jitter
       molecules,
     });
   }
@@ -2969,18 +2933,20 @@ let pebbleCountStaleTicks = PEBBLE_COUNT_REFRESH_TICKS; // force first refresh
 function countPebbles(world: World): number {
   const ps = world.particleStore;
   const PR = ps.r;
-  const PMAT = ps.material;
-  const sandIdx = MATERIAL_INDEX.sand;
+  const PC = ps.chemId;
   const n = world.particles.length;
   let count = 0;
   for (let i = 0; i < n; i++) {
-    if (PMAT[i] === sandIdx && PR[i] >= SAND_BIG_R_MIN) count++;
+    if (PC[i] === CHEM_MIN && PR[i] >= SAND_BIG_R_MIN) count++;
   }
   return count;
 }
 
-function spawnRadius(mat: MaterialId): number {
-  if (mat === "sand" && Math.random() < SAND_BIG_FRACTION) {
+function spawnRadius(chemId: number): number {
+  // Mineral particles can occasionally roll as pebble-sized grains
+  // (controlled by SAND_BIG_FRACTION; today 0). All others use the
+  // base 1..2.5 range.
+  if (chemId === CHEM_MIN && Math.random() < SAND_BIG_FRACTION) {
     return SAND_BIG_R_MIN + Math.random() * (SAND_BIG_R_MAX - SAND_BIG_R_MIN);
   }
   return 1 + Math.random() * 1.5;
@@ -2990,8 +2956,8 @@ export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
   world.particleStore.n = 0;
   for (let i = 0; i < n; i++) {
-    const mat = pickMaterial();
-    const r = spawnRadius(mat);
+    const spec = pickSpawnSpec();
+    const r = spawnRadius(spec.chemId);
     // Spawn below the surface so the initial state matches the wall.
     const yRange = (world.height - world.surfaceY) * 0.85;
     pushParticle(world, {
@@ -3000,37 +2966,36 @@ export function seedParticles(world: World, n: number): void {
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
-      material: mat,
-      density: rollDensity(mat),
+      chemId: spec.chemId,
+      density: rollChemDensity(spec),
     });
   }
 }
 
-// Per-spawn density jitter. Organic biomatter ranges from oily/lipid-rich
-// (floats) to dense protein clumps (sinks); randomize each particle so
-// the cloud actually mixes vertically instead of forming a flat stratum.
-// Triangular distribution centered on the material's base density.
-function rollDensity(material: MaterialId): number | undefined {
-  if (material !== "organic") return undefined;
-  const tri = Math.random() + Math.random() - 1; // -1..1, triangle peak 0
-  return 1.0 + tri * 0.3; // 0.7..1.3
+// Per-spawn density jitter, indexed by spawn spec. Specs with no
+// jitter clause fall through to undefined (force-pickup of the chem's
+// default density at force-time).
+function rollChemDensity(spec: SpawnChemSpec): number | undefined {
+  if (!spec.densityJitter) return undefined;
+  const { lo, hi } = spec.densityJitter;
+  // Triangular distribution around the midpoint -- recovers the
+  // varied-density "look" of the old rock/sand/clay split that's now
+  // collapsed into a single mineral chem.
+  const tri = Math.random() + Math.random() - 1; // -1..1
+  const mid = (lo + hi) / 2;
+  const half = (hi - lo) / 2;
+  return mid + tri * half;
 }
 
-function pickMaterial(): MaterialId {
+function pickSpawnSpec(): SpawnChemSpec {
   let total = 0;
-  for (const [, w] of SEED_WEIGHTS) total += w;
+  for (const s of SPAWN_CHEM_SPECS) total += s.weight;
   let pick = Math.random() * total;
-  for (const [id, w] of SEED_WEIGHTS) {
-    pick -= w;
-    if (pick <= 0) return id;
+  for (const s of SPAWN_CHEM_SPECS) {
+    pick -= s.weight;
+    if (pick <= 0) return s;
   }
-  return SEED_WEIGHTS[SEED_WEIGHTS.length - 1][0];
-}
-
-function emptyReserves(): Record<MaterialId, number> {
-  const r = {} as Record<MaterialId, number>;
-  for (const id of MATERIAL_IDS) r[id] = 0;
-  return r;
+  return SPAWN_CHEM_SPECS[SPAWN_CHEM_SPECS.length - 1];
 }
 
 // "Lucky DNA + junk" founder bootstrap. A membrane forms around a
@@ -3087,34 +3052,34 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     },
   });
   // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
-  // cell. Material -> reserves, molecules -> molecule pool, generic
-  // chem -> generic pool. Each absorbed particle is removed from
-  // the world (its mass joins the cell). An empty patch means a
-  // very lean cell that probably won't survive long; that's the
-  // luck of biogenesis.
+  // cell. The particle's chemId deposits straight into the matching
+  // chemCols slot; an accompanying multi-chem corpse payload (genericChem)
+  // adds to the cell's generic-chem pool. Each absorbed particle is
+  // removed from the world. An empty patch means a very lean cell
+  // that probably won't survive long; that's the luck of biogenesis.
   const scoopR = FOUNDER_SCOOP_R_MIN + Math.random() * (FOUNDER_SCOOP_R_MAX - FOUNDER_SCOOP_R_MIN);
   const rSq = scoopR * scoopR;
   const ps = world.particles;
+  const cstore = c.store; const cidx = c.idx;
   for (let i = ps.length - 1; i >= 0; i--) {
     const p = ps[i];
     const dx = p.x - x;
     const dy = p.y - y;
     const dz = p.z - z;
     if (dx * dx + dy * dy + dz * dz >= rSq) continue;
-    // Pebbles (large sand grains, part of the sediment bed) are not
+    // Pebbles (large mineral grains, part of the sediment bed) are not
     // absorbed -- a founder spawning near the floor would otherwise
-    // inhale a full pebble's worth of sand mass and skew its starting
-    // reserves wildly. Leave them in the world.
-    if (p.material === "sand" && p.r >= SAND_BIG_R_MIN) continue;
-    c.reserves[p.material] += mass(p);
+    // inhale a full pebble's worth of mineral mass and skew its
+    // starting chem pool wildly. Leave them in the world.
+    if (p.chemId === CHEM_MIN && p.r >= SAND_BIG_R_MIN) continue;
+    cstore.chemCols[p.chemId][cidx] += mass(p);
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
     }
     if (p.genericChem) {
-      const gcCols = c.store.genericChemCols;
-      const ci = c.idx;
+      const gcCols = cstore.genericChemCols;
       for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
-        gcCols[k][ci] += p.genericChem[k];
+        gcCols[k][cidx] += p.genericChem[k];
       }
     }
     removeParticleAt(world, i);
@@ -3219,38 +3184,6 @@ function spendATP(c: Creature, want: number): number {
   return got;
 }
 
-
-// Convert undigested reserves into named molecules. Mass-conserving:
-// each row of CATAB_FRACTIONS sums to 1.
-function catabolize(c: Creature, dt: number): void {
-  const s = c.store; const i = c.idx;
-  // Enzyme molecule is mandatory: zero enzymes => zero digestion. Real
-  // heterotrophs can't process ingested food without proteases /
-  // lipases / etc. Symmetric with ribosome (biosynth) and chlorophyll
-  // (photosynth) -- each named pathway has its own machinery
-  // molecule and gates hard at zero.
-  const enz = s.chemCols[CHEM_ENZ][i];
-  if (enz <= 0) return;
-  const surface = s.r[i] / MIN_CREATURE_R;
-  const enzMult = enz / ENZ_REF;
-  const resCols = s.resCols;
-  const molCols = s.molCols;
-  for (let m = 0; m < 6; m++) {
-    const rc = resCols[m];
-    const avail = rc[i];
-    if (avail <= 0) continue;
-    const rate = CATAB_VMAX_PER_R * surface * (avail / (avail + CATAB_KM)) * enzMult;
-    const rd = rate * dt;
-    const amt = rd < avail ? rd : avail;
-    if (amt <= 0) continue;
-    rc[i] = avail - amt;
-    const targets = CATAB_TARGETS_MOL[m];
-    const fracs = CATAB_TARGETS_FRAC[m];
-    for (let k = 0; k < targets.length; k++) {
-      molCols[targets[k]][i] += amt * fracs[k];
-    }
-  }
-}
 
 // Passive diffusion of O2 and CO2 across the cell membrane. Both flow down
 // their concentration gradient between the cell and the surrounding water,
@@ -3374,7 +3307,7 @@ function autoExcrete(c: Creature, world: World): void {
       if (!overFlow) {
         const mol = emptyMolecules();
         mol.co2 = affordable;
-        spawnExcretedParticle(c, world, "gas", affordable, mol);
+        spawnExcretedParticle(c, world, CHEM_CO2, affordable, mol);
       }
     }
   }
@@ -3388,7 +3321,7 @@ function autoExcrete(c: Creature, world: World): void {
       if (!overFlow) {
         const mol = emptyMolecules();
         mol.waste = affordable;
-        spawnExcretedParticle(c, world, "organic", affordable, mol);
+        spawnExcretedParticle(c, world, CHEM_WASTE, affordable, mol);
       }
     }
   }
@@ -3471,9 +3404,8 @@ function runOrganelleChemistry(
   dtT: number,
   light: number,
 ): void {
-  // Reserve catabolism still hand-coded (it operates on the reserves
-  // side, not chemCols). Everything else goes through the table.
-  catabolize(inner, dtT);
+  // Catabolism is now driven by the biopolymer-digest reaction
+  // (REACTIONS[10]) like every other pathway.
   runGenericReactions(inner, dtT, light, inner.organelleSynthMask);
   maintenanceDecay(inner, dt);
 
@@ -3520,7 +3452,7 @@ function toxify(c: Creature, dt: number): void {
 function spawnExcretedParticle(
   c: Creature,
   world: World,
-  material: MaterialId,
+  chemId: number,
   m: number,
   molecules?: Molecules,
   genericChem?: Float32Array,
@@ -3529,7 +3461,7 @@ function spawnExcretedParticle(
     // Round-off; just drop it on the floor of the cell (lose to environment).
     return;
   }
-  const density = MATERIALS[material].density;
+  const density = CHEM_BASE_DENSITY[chemId];
   const pr = Math.max(1.5, radiusForMass(m, density));
   const angle = Math.random() * Math.PI * 2;
   const ejectV = 25;
@@ -3541,7 +3473,7 @@ function spawnExcretedParticle(
     vy: Math.sin(angle) * ejectV,
     vz: (Math.random() - 0.5) * 10,
     r: pr,
-    material,
+    chemId,
     molecules,
     genericChem,
   });
@@ -3645,7 +3577,7 @@ export function genomeColor(genome: Uint8Array, anchor?: Uint8Array): string {
 // Particle mass = density * (4/3) * pi * r^3. Particles are spheres; the
 // circle we render is the equatorial cross-section. Same convention as cells.
 function mass(p: Particle): number {
-  const d = p.density ?? MATERIALS[p.material].density;
+  const d = p.density ?? CHEM_BASE_DENSITY[p.chemId];
   return d * (4 / 3) * Math.PI * p.r * p.r * p.r;
 }
 
@@ -3831,13 +3763,17 @@ function replenishParticles(world: World, dt: number): void {
         z: r + Math.random() * (world.depth - 2 * r),
         vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
         r,
-        material: "sand",
+        chemId: CHEM_MIN,
+        // Pebble density nudged toward the rock-end of the mineral
+        // range (was always-2.6 under the old MATERIALS["sand"]
+        // entry); jitter so the bed has a little variety.
+        density: 2.2 + Math.random() * 0.4,
       });
       pebbleCountCache++;
     }
   }
 
-  // Normal per-material replenish. Cap accommodates the pebble bed
+  // Normal per-chem replenish. Cap accommodates the pebble bed
   // on top of particleTarget so the biology mix isn't squeezed by
   // the sediment bed.
   if (world.t < WATER_FILL_DELAY_SEC) return;
@@ -3847,16 +3783,16 @@ function replenishParticles(world: World, dt: number): void {
   let toSpawn = Math.floor(expected);
   if (Math.random() < expected - toSpawn) toSpawn++;
   for (let i = 0; i < toSpawn && world.particles.length < replenishCap; i++) {
-    const mat = pickMaterial();
-    const r = spawnRadius(mat);
+    const spec = pickSpawnSpec();
+    const r = spawnRadius(spec.chemId);
     pushParticle(world, {
       x: Math.random() * world.width,
       y: world.surfaceY + r,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
-      material: mat,
-      density: rollDensity(mat),
+      chemId: spec.chemId,
+      density: rollChemDensity(spec),
     });
   }
 }
@@ -3908,7 +3844,9 @@ function aerate(world: World, dt: number): void {
       vy: AERATION_BUBBLE_DROP_SPEED,
       vz: (Math.random() - 0.5) * 4,
       r,
-      material: "gas",
+      // Bubbles carry their atmospheric mix as a molecule payload;
+      // chemId is the dominant gas (O2) for buoyancy/visual classification.
+      chemId: CHEM_O2,
       molecules: mol,
     });
     if (totalAtm <= 0) break;
@@ -4155,9 +4093,9 @@ function applyForces(world: World, dt: number): void {
   } else {
     applyParticleForcesRange(
       ps.x, ps.y, ps.z, ps.vx, ps.vy, ps.vz,
-      ps.r, ps.density, ps.material,
+      ps.r, ps.density, ps.chemId,
       COLLISION_ASLEEP,
-      MATERIAL_BASE_DENSITY,
+      CHEM_BASE_DENSITY,
       0, np,
       params,
     );
@@ -4327,8 +4265,8 @@ function updateCreatures(world: World, dt: number): void {
     const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
     spendATP(c, idleDrain);
 
-    // Bulk -> molecules.
-    catabolize(c, dtT);
+    // Catabolism is now handled by the biopolymer-digest reaction in
+    // runGenericReactions (REACTIONS[10]), gated on enzyme.
 
     // Passive gas exchange with the surrounding water. Diffusion is
     // physical, not enzymatic -- left at the base dt.
@@ -4412,10 +4350,16 @@ function updateCreatures(world: World, dt: number): void {
     VM_SELF.energy = c.energy;
     VM_SELF.vx = c.vx;
     VM_SELF.vy = c.vy;
+    // SELF_RESERVE reads VM_SELF.reserve[matIdx]; we map the legacy
+    // 6-slot operand to the cell's pool of the corresponding sensor chem.
+    // Index aligns with SENSOR_CHEMS: o2, co2, glu, biopolymer, fa, min.
     let selfMass = 0;
+    const chemColsC = c.store.chemCols;
+    const iC = c.idx;
     for (let i = 0; i < 6; i++) {
-      VM_SELF.reserve[i] = c.reserves[MATERIAL_IDS[i]];
-      selfMass += VM_SELF.reserve[i];
+      const v = chemColsC[SENSOR_CHEMS[i]][iC];
+      VM_SELF.reserve[i] = v;
+      selfMass += v;
     }
     VM_SELF.mass = selfMass;
     VM_SELF.biomass = c.molecules.biomass;
@@ -4518,47 +4462,23 @@ function updateCreatures(world: World, dt: number): void {
       spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
 
-    // VM-controlled excretion. Releases a particle of the requested
-    // material PLUS a proportional slice of the cell's molecule pool
-    // and generic chemistry, so cells can deliberately share chemistry
-    // with neighbors (real microbes excrete signaling molecules and
-    // siderophores; gating excretion to death-only would lose that
-    // selection pressure). Slice fraction = (excreted mass / cell
-    // total mass) so the chemistry cost scales with the bulk you ship.
+    // VM-controlled excretion. EXCRETE <operand> now picks a chemId via
+    // SENSOR_CHEMS[operand % 6] (same legacy operand range; same chems
+    // a cell can sense gradients of). The released particle carries
+    // the chosen chemical directly with no proportional pool slice --
+    // the cell is venting a specific chemical, not a generic
+    // "material reserve" any more.
     for (let i = 0; i < 6; i++) {
       const requested = vmOut.excrete[i];
       if (requested <= 0) continue;
-      const matId = MATERIAL_IDS[i];
-      const available = c.reserves[matId];
+      const chemId = SENSOR_CHEMS[i];
+      const cols = c.store.chemCols;
+      const ci = c.idx;
+      const available = cols[chemId][ci];
       const amount = Math.min(requested, available);
       if (amount < EXCRETE_MIN_AMOUNT) continue;
-      c.reserves[matId] -= amount;
-      const totalMass = Math.max(1, creatureTotalMass(c) + amount);
-      const slice = amount / totalMass;
-      // Bundle molecules.
-      let payloadMol: Molecules | undefined;
-      const cm = c.molecules;
-      for (const k of MOLECULE_IDS) {
-        const give = cm[k] * slice;
-        if (give <= 0) continue;
-        cm[k] -= give;
-        if (!payloadMol) payloadMol = emptyMolecules();
-        payloadMol[k] = give;
-      }
-      // Bundle generic chem. Allocate the Float32Array only if at
-      // least one slot has nonzero payload; otherwise the particle
-      // gets no chem array (cheaper).
-      const gcCols = c.store.genericChemCols;
-      const ci = c.idx;
-      let payloadChem: Float32Array | undefined;
-      for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
-        const give = gcCols[k][ci] * slice;
-        if (give <= 0) continue;
-        gcCols[k][ci] -= give;
-        if (!payloadChem) payloadChem = new Float32Array(GENERIC_CHEMICAL_COUNT);
-        payloadChem[k] = give;
-      }
-      spawnExcretedParticle(c, world, matId, amount, payloadMol, payloadChem);
+      cols[chemId][ci] -= amount;
+      spawnExcretedParticle(c, world, chemId, amount);
     }
 
     if (c.ingestCooldown > 0) {
@@ -4610,10 +4530,17 @@ function updateCreatures(world: World, dt: number): void {
           if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
           const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
           if (c.energy < cost) return;
-          for (let k = 0; k < 6; k++) {
-            c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
+          // Predator absorbs the prey's full chem pool. Each chem
+          // transfers slot-for-slot; ATP separately.
+          {
+            const myCols = c.store.chemCols;
+            const otherCols = other.store.chemCols;
+            const ci = c.idx; const oi = other.idx;
+            for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+              myCols[k][ci] += otherCols[k][oi];
+              otherCols[k][oi] = 0;
+            }
           }
-          for (const mk of MOLECULE_IDS) c.molecules[mk] += other.molecules[mk];
           // Generic chem transfers directly too -- predator absorbs
           // the prey's full chemistry, including any abstract
           // molecules the prey had been accumulating.
@@ -4649,19 +4576,28 @@ function updateCreatures(world: World, dt: number): void {
       if (!ingested) {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
-          const matIdx = MATERIAL_INDEX[p.material];
-          if (!vmOut.ingestMaterials[matIdx]) continue;
+          const chemId = p.chemId;
+          const sensorSlot = SENSOR_BIN_BY_CHEM[chemId];
+          // The legacy 6-slot INGEST gating still applies: cells opt
+          // into eating each "sensor chem" (o2/co2/glu/biop/fa/min).
+          // Chemicals outside the sensor set are not ingestable via
+          // the legacy op -- a future op can lift that gate.
+          if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
           if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
             if (p.molecules) {
               // Molecule-tagged particle: contents go straight into the
-              // cell's molecule pool, bypassing catabolism. This is corpse
-              // / excretion food -- already digested.
+              // cell's molecule pool, bypassing digestion. This is corpse
+              // / excretion food -- already broken down.
               for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
             } else {
-              c.reserves[p.material] += mass(p);
+              // Plain chem particle: deposit its mass into the matching
+              // chem slot. Biopolymer needs the digester reaction to
+              // turn into glu/aa/fa; minerals stay as substrate; o2/co2
+              // go straight to the respiration pool.
+              c.store.chemCols[chemId][c.idx] += mass(p);
             }
             // Generic-chemical payload (cells dump their generic pool
             // into one organic particle on death). Transfer into the
@@ -4755,7 +4691,7 @@ function updateCreatures(world: World, dt: number): void {
         // accumulate stale ids across the run.
         world.founderIds.delete(c.id);
         if (spillSet.has(c)) {
-          releaseReservesAsParticles(c, world);
+          releaseChemsAsParticles(c, world);
           c.store.release(c.idx);
         } else if (eaten.has(c) && !inSomeContents.has(c)) {
           // Predated -- absorbed entirely, no vacuole, slot is free.
@@ -4775,35 +4711,49 @@ function updateCreatures(world: World, dt: number): void {
   }
 }
 
-// Which world material best represents each molecule when it leaves a
-// cell as a particle. Picked by density / chemical role so the visual
-// behavior matches: fatty acid floats (lipid), gases float harder (gas),
-// minerals sink (sand), the rest of the biochemistry is organic.
-function moleculeBucket(k: keyof Molecules): MaterialId {
-  if (k === "o2" || k === "co2") return "gas";
-  if (k === "minerals") return "sand";
-  if (k === "fattyAcid") return "lipid";
-  return "organic";
-}
+// On death, return the cell's chem pool to the world as free-floating
+// particles. One particle per named chem with significant mass, each
+// carrying its identity (no more bucketing into "organic" / "lipid"
+// material categories). Catalysts denature back into amino acid +
+// minerals first. Generic chemicals aggregate into a single multi-chem
+// corpse particle whose chemId tag is biopolymer (visual / buoyancy
+// classifier; the per-chem payload is what gets re-absorbed on ingest).
+function releaseChemsAsParticles(c: Creature, world: World): void {
+  const ci = c.idx;
+  const cols = c.store.chemCols;
 
-function releaseReservesAsParticles(c: Creature, world: World): void {
-  // On death the cell's entire contents return to the environment.
-  //
-  // Bulk reserves are released as plain material particles -- they're the
-  // cell's undigested food pile, so they catabolize like world-seeded food
-  // when re-eaten.
-  //
-  // The molecule pool is released as molecule-tagged particles, grouped by
-  // their natural material bucket. Each particle in a bucket carries a
-  // proportional slice of that bucket's molecules. When another cell eats
-  // one of these, the molecules go straight into its molecule pool --
-  // preserving the dead cell's actual chemistry (a fat-rich corpse gives
-  // fatty acid back, a glucose-rich one gives glucose, etc.).
-  for (const matId of MATERIAL_IDS) {
-    let remaining = c.reserves[matId];
-    if (remaining < 0.5) continue;
-    const density = MATERIALS[matId].density;
-    while (remaining > 0.5) {
+  // Catalysts denature on death back to their substrates (0.5 aa +
+  // 0.5 min). Folded into the chem pool so the loop below releases
+  // them naturally as those chems.
+  {
+    const ccats = c.store.catalystCols;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = ccats[k][ci];
+      if (v > 0) {
+        cols[CHEM_AA][ci] += 0.5 * v;
+        cols[CHEM_MIN][ci] += 0.5 * v;
+        ccats[k][ci] = 0;
+      }
+    }
+  }
+  // ATP loses its phosphate on death, returning to the ADP pool.
+  if (c.energy > 0) {
+    cols[CHEM_ADP][ci] += c.energy;
+    c.energy = 0;
+  }
+
+  // Named chems: one particle per chem id above MIN_RELEASE. Each
+  // particle carries chemId so the eater absorbs the same chemical
+  // back into its pool slot. Below-threshold remnants are dropped
+  // silently (they round-off to environment).
+  const MIN_RELEASE = 0.5;
+  for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+    const total = cols[k][ci];
+    if (total < MIN_RELEASE) { cols[k][ci] = 0; continue; }
+    cols[k][ci] = 0;
+    const density = CHEM_BASE_DENSITY[k];
+    let remaining = total;
+    while (remaining > MIN_RELEASE) {
       let r = 2 + Math.random() * 2;
       let mp = density * (4 / 3) * Math.PI * r * r * r;
       if (mp > remaining) {
@@ -4818,51 +4768,32 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
         vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
         vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
         r,
-        material: matId,
+        chemId: k,
       });
       remaining -= mp;
     }
   }
 
-  // Catalysts denature on death back to their substrates (0.5 aa +
-  // 0.5 min), same as enzymes / chlorophyll / ribosomes do during
-  // maintenance. Folded into the molecule pool so the bucket loop
-  // below releases them naturally.
+  // Generic chemicals: aggregate into one corpse particle so each
+  // chem's identity survives without spamming hundreds of tiny
+  // particles. ChemId tag is biopolymer (low-density bulk visual);
+  // the multi-chem payload is what really matters on re-ingest.
   {
-    const cols = c.store.catalystCols;
-    const ci = c.idx;
-    for (let k = 0; k < CATALYST_COUNT; k++) {
-      const v = cols[k][ci];
-      if (v > 0) {
-        c.molecules.aminoAcid += 0.5 * v;
-        c.molecules.minerals += 0.5 * v;
-        cols[k][ci] = 0;
-      }
-    }
-  }
-  // Generic chemicals get their own corpse particle so the chemical
-  // identity survives the cell's death (mass + chem signature both
-  // re-enter the world and can be ingested by another cell, which
-  // re-absorbs the generic chem directly into its own pool). One
-  // particle per cell to keep particle counts down; species can
-  // recover specialized chemistry by predating each other.
-  {
-    const cols = c.store.genericChemCols;
-    const ci = c.idx;
+    const gcols = c.store.genericChemCols;
     const payload = new Float32Array(GENERIC_CHEMICAL_COUNT);
     let totalMass = 0;
     let any = false;
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
-      const v = cols[k][ci];
+      const v = gcols[k][ci];
       if (v > 0) {
         payload[k] = v;
         totalMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].molarMass;
-        cols[k][ci] = 0;
+        gcols[k][ci] = 0;
         any = true;
       }
     }
-    if (any && totalMass >= 0.5) {
-      const density = MATERIALS.organic.density;
+    if (any && totalMass >= MIN_RELEASE) {
+      const density = CHEM_BASE_DENSITY[CHEM_BIOPOLYMER];
       const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(totalMass, density));
       pushParticle(world, {
         x: c.x + (Math.random() - 0.5) * 6,
@@ -4872,66 +4803,9 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
         vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
         vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
         r,
-        material: "organic",
+        chemId: CHEM_BIOPOLYMER,
         genericChem: payload,
       });
-    }
-  }
-
-  // Group molecules by their natural bucket. ATP loses its terminal
-  // phosphate on death, so we lump c.energy into the adp pool.
-  const bucketContents: Record<MaterialId, Molecules> = {
-    rock: emptyMolecules(),
-    sand: emptyMolecules(),
-    clay: emptyMolecules(),
-    organic: emptyMolecules(),
-    lipid: emptyMolecules(),
-    gas: emptyMolecules(),
-  };
-  const bucketTotal: Record<MaterialId, number> = {
-    rock: 0, sand: 0, clay: 0, organic: 0, lipid: 0, gas: 0,
-  };
-  for (const k of MOLECULE_IDS) {
-    const v = c.molecules[k];
-    if (v <= 0) continue;
-    const b = moleculeBucket(k);
-    bucketContents[b][k] += v;
-    bucketTotal[b] += v;
-  }
-  if (c.energy > 0) {
-    bucketContents.organic.adp += c.energy;
-    bucketTotal.organic += c.energy;
-  }
-
-  for (const matId of MATERIAL_IDS) {
-    const total = bucketTotal[matId];
-    if (total < 0.5) continue;
-    const density = MATERIALS[matId].density;
-    let remaining = total;
-    let usedFrac = 0;
-    while (remaining > 0.5) {
-      let r = 2 + Math.random() * 2;
-      let mp = density * (4 / 3) * Math.PI * r * r * r;
-      if (mp > remaining) {
-        r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(remaining, density));
-        mp = density * (4 / 3) * Math.PI * r * r * r;
-      }
-      const frac = Math.min(1 - usedFrac, mp / total);
-      usedFrac += frac;
-      const pMol = emptyMolecules();
-      for (const k of MOLECULE_IDS) pMol[k] = bucketContents[matId][k] * frac;
-      pushParticle(world, {
-        x: c.x + (Math.random() - 0.5) * 6,
-        y: c.y + (Math.random() - 0.5) * 6,
-        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
-        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
-        r,
-        material: matId,
-        molecules: pMol,
-      });
-      remaining -= mp;
     }
   }
 }
@@ -4971,16 +4845,10 @@ function tryReproduce(parent: Creature, world: World): void {
   // standard autolyze handles cleanup with mass returned to the
   // environment. Bad timing has real consequences now.
   const childMolecules = emptyMolecules();
-  const childReserves = emptyReserves();
   for (const mk of MOLECULE_IDS) {
     const give = parent.molecules[mk] * childShare;
     parent.molecules[mk] -= give;
     childMolecules[mk] = give;
-  }
-  for (const id of MATERIAL_IDS) {
-    const give = parent.reserves[id] * childShare;
-    parent.reserves[id] -= give;
-    childReserves[id] = give;
   }
   const childCatalysts = new Float32Array(CATALYST_COUNT);
   {
@@ -5022,7 +4890,6 @@ function tryReproduce(parent: Creature, world: World): void {
 
   const angle = Math.random() * Math.PI * 2;
   let childMassEstimate = energyGift;
-  for (const id of MATERIAL_IDS) childMassEstimate += childReserves[id];
   for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
   const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));
   // Place the child outside the parent's recent food-eating zone.
@@ -5048,7 +4915,6 @@ function tryReproduce(parent: Creature, world: World): void {
     bornAt: world.t,
     speciesKey: genomeKey(childGenome),
     molecules: childMolecules,
-    reserves: childReserves,
   });
   // Inherit the parent's founding lineage. Mutated descendants stay
   // part of the same lineageRoot for top-up counting purposes.
@@ -5118,7 +4984,6 @@ function fissionInner(inner: Creature, world: World): Creature | null {
     bornAt: world.t,
     speciesKey: genomeKey(daughterGenome),
     molecules: emptyMolecules(),
-    reserves: emptyReserves(),
   });
   daughter.organelleSynthMask = genomeSynthMask(daughterGenome);
   // Endosymbiont daughters share the inner's lineageRoot. They live
@@ -5126,16 +4991,14 @@ function fissionInner(inner: Creature, world: World): Creature | null {
   // tagging them keeps the bookkeeping consistent if one is ever
   // released back to the world.
   daughter.lineageRoot = inner.lineageRoot;
-  // Split molecules + reserves + ATP half / half.
+  // Split molecules + ATP half / half. (Generic chem half-split is
+  // skipped here for the endosymbiont path -- the daughter inherits an
+  // empty generic pool, matching the previous behavior. Catalyst pools
+  // are also not split: the parent retains them.)
   for (const k of MOLECULE_IDS) {
     const half = inner.molecules[k] * 0.5;
     inner.molecules[k] -= half;
     daughter.molecules[k] = half;
-  }
-  for (const id of MATERIAL_IDS) {
-    const half = inner.reserves[id] * 0.5;
-    inner.reserves[id] -= half;
-    daughter.reserves[id] = half;
   }
   const eHalf = inner.energy * 0.5;
   inner.energy -= eHalf;
@@ -5315,7 +5178,6 @@ function populateSensors(c: Creature, world: World): void {
 
 function creatureTotalMass(c: Creature): number {
   let m = c.energy; // ATP is a real molecule and contributes to mass.
-  for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   // Engulfed prey lives in our vacuole; its mass still occupies our volume.
   for (const inner of c.contents) m += creatureSelfMass(inner);
@@ -5326,7 +5188,6 @@ function creatureTotalMass(c: Creature): number {
 // when summing up an engulfed prey's contribution to its container's mass.
 function creatureSelfMass(c: Creature): number {
   let m = c.energy;
-  for (let i = 0; i < 6; i++) m += c.reserves[MATERIAL_IDS[i]];
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
 }
@@ -5338,22 +5199,19 @@ function noFuel(c: Creature): boolean {
   // straight into ATP, no enzyme needed.
   const hasDirect = m.glucose >= 0.5 || m.fattyAcid >= 0.5;
   if (hasDirect) return false;
-  // Reserve fuels (organic / lipid) require digestive enzyme to be
-  // converted into usable molecules. A cell with reserves but no
-  // enzyme can't extract energy from them -- it has fuel on paper
-  // but no machinery to burn it, which is functionally starvation.
-  const hasReserves = c.reserves.organic >= 0.5 || c.reserves.lipid >= 0.5;
-  if (hasReserves && m.enzyme >= MIN_USABLE_ENZYME) return false;
+  // Biopolymer is fuel-on-paper: convertible to glu/aa/fa via the
+  // digestion reaction iff the cell has enzyme. Without enzyme it's
+  // functionally starvation.
+  if (m.biopolymer >= 0.5 && m.enzyme >= MIN_USABLE_ENZYME) return false;
   // Photosynth recovery path: chlorophyll + CO2 + light bypasses the
   // enzyme requirement (chl is itself an enzyme-like catalyst).
   if (m.chlorophyll > 0.5 && m.co2 > 0.5) return false;
   return true;
 }
 
-// Minimum enzyme to unlock reserve-based catabolism. Heterotroph
-// founders start with enzyme=0.5 and enzyme decays at ~0.1%/sec, so
-// it takes hundreds of sim-sec to fall below this without active
-// SYNTH_ENZ; aligns with the other "near zero" thresholds.
+// Minimum enzyme to unlock biopolymer digestion. Heterotroph founders
+// start with enzyme=0.5 and enzyme decays at ~0.1%/sec, so it takes
+// hundreds of sim-sec to fall below this without active SYNTH_ENZ.
 const MIN_USABLE_ENZYME = 0.01;
 
 export function updateCreatureRadius(c: Creature): void {
@@ -5365,27 +5223,20 @@ export function updateCreatureRadius(c: Creature): void {
   // disk-area formula.
   const m = creatureTotalMass(c);
   c.r = Math.max(MIN_CREATURE_R, Math.cbrt((3 * m) / (4 * Math.PI)));
-  // Effective density follows what the cell is carrying. Reserves
-  // contribute at their material density (rock 2.6 sinks, gas 0.2
-  // floats); molecules + ATP contribute at water density (1.0). Real
-  // cells are osmotically regulated and live near water-density; we
-  // damp the raw mass ratio toward 1.0 so storing some dense reserves
-  // doesn't immediately glue every cell to the seafloor. Final value
-  // is clamped to [DENSITY_FLOOR, DENSITY_CEIL] so the buoyancy
-  // acceleration `g * (1 - 1/density)` stays in a tractable range.
+  // Effective density follows what the cell is carrying. Each chem
+  // contributes at its bulk density (minerals at 2.4 sinks, gas at
+  // 0.14 floats); molecules + ATP at water density (1.0). Real cells
+  // are osmotically regulated; we damp the raw mass ratio toward 1.0
+  // so loading dense chems doesn't immediately glue the cell to the
+  // seafloor. Clamped to [DENSITY_FLOOR, DENSITY_CEIL].
   if (m > 0) {
     const s = c.store; const i = c.idx;
-    const resCols = s.resCols;
-    const matBase = MATERIAL_BASE_DENSITY;
-    let reserveMass = 0;
+    const cols = s.chemCols;
     let weighted = 0;
-    for (let k = 0; k < 6; k++) {
-      const rk = resCols[k][i];
-      reserveMass += rk;
-      weighted += rk * matBase[k];
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+      weighted += cols[k][i] * CHEM_BASE_DENSITY[k];
     }
-    const watery = m - reserveMass;
-    const raw = (weighted + watery) / m;
+    const raw = weighted / m;
     const damped = 1 + (raw - 1) * DENSITY_DAMPING;
     c.density = damped < DENSITY_FLOOR ? DENSITY_FLOOR
               : damped > DENSITY_CEIL ? DENSITY_CEIL
@@ -5526,19 +5377,25 @@ function rebuildSensorBins(world: World): void {
     }
   }
   const store = world.particleStore;
-  const PX = store.x, PY = store.y, PMAT = store.material;
+  const PX = store.x, PY = store.y, PCHEM = store.chemId;
   const np = world.particles.length;
   for (let i = 0; i < np; i++) {
     const xi = PX[i], yi = PY[i];
+    // Map chemId to sensor bin slot via SENSOR_BIN_BY_CHEM. Chems
+    // outside the 6 sensor slots are invisible to gradient/density
+    // ops (cells use SENSE_CHEMICAL to read internal chem pools for
+    // anything else). Skipping invisible chems also keeps the bin
+    // table hot/small even after CHEMICAL_COUNT grows.
+    const slot = SENSOR_BIN_BY_CHEM[PCHEM[i]];
+    if (slot < 0) continue;
     let bx = Math.floor(xi / SENSOR_BIN);
     let by = Math.floor(yi / SENSOR_BIN);
     if (bx < 0) bx = 0; else if (bx >= SENSOR_BIN_COLS) bx = SENSOR_BIN_COLS - 1;
     if (by < 0) by = 0; else if (by >= SENSOR_BIN_ROWS) by = SENSOR_BIN_ROWS - 1;
-    const idx = PMAT[i];
     const bin = by * SENSOR_BIN_COLS + bx;
-    SENSOR_BIN_COUNT[idx][bin]++;
-    SENSOR_BIN_SUMX[idx][bin] += xi;
-    SENSOR_BIN_SUMY[idx][bin] += yi;
+    SENSOR_BIN_COUNT[slot][bin]++;
+    SENSOR_BIN_SUMX[slot][bin] += xi;
+    SENSOR_BIN_SUMY[slot][bin] += yi;
   }
 }
 
@@ -5701,13 +5558,13 @@ function resolveCollisions(
 
   const PX = store.x, PY = store.y, PZ = store.z;
   const PVX = store.vx, PVY = store.vy, PVZ = store.vz;
-  const PR = store.r, PDENS = store.density, PMAT = store.material;
+  const PR = store.r, PDENS = store.density, PCHEM = store.chemId;
   const PQUIET = store.quietTicks;
-  const matBase = MATERIAL_BASE_DENSITY;
+  const chemBase = CHEM_BASE_DENSITY;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
   for (let i = 0; i < n; i++) {
     const r = PR[i];
-    const d = PDENS[i] !== 0 ? PDENS[i] : matBase[PMAT[i]];
+    const d = PDENS[i] !== 0 ? PDENS[i] : chemBase[PCHEM[i]];
     COLLISION_MASS[i] = d * FOUR_THIRDS_PI * r * r * r;
     const vx = PVX[i], vy = PVY[i], vz = PVZ[i];
     const v2 = vx * vx + vy * vy + vz * vz;
@@ -5818,14 +5675,13 @@ let PEBBLE_IDX_BUFFER = new Int32Array(0);
 
 function resolvePebblePairs(world: World, e: number): void {
   const store = world.particleStore;
-  const PMAT = store.material;
+  const PCHEM = store.chemId;
   const PR = store.r;
-  const sandIdx = MATERIAL_INDEX.sand;
   const n = world.particles.length;
   if (PEBBLE_IDX_BUFFER.length < n) PEBBLE_IDX_BUFFER = new Int32Array(n);
   let pn = 0;
   for (let i = 0; i < n; i++) {
-    if (PMAT[i] === sandIdx && PR[i] >= SAND_BIG_R_MIN) PEBBLE_IDX_BUFFER[pn++] = i;
+    if (PCHEM[i] === CHEM_MIN && PR[i] >= SAND_BIG_R_MIN) PEBBLE_IDX_BUFFER[pn++] = i;
   }
   if (pn < 2) return;
   const PX = store.x, PY = store.y, PZ = store.z;
@@ -5927,19 +5783,18 @@ function resolveCreaturePair(a: Creature, b: Creature, e: number): void {
   b.vz += iz / mb;
 }
 
-// Sediment particles (rock, sand) act as solid terrain: cells can't
-// phase through the seafloor. Clay stays permeable so cells can ingest
-// it. INGEST runs earlier in the tick, so a cell whose genome fires
-// INGEST on a rock/sand at contact still consumes the particle before
-// this bounce runs.
-const SEDIMENT_MATERIALS = new Set<MaterialId>(["rock", "sand"]);
+// Mineral particles act as solid terrain: cells can't phase through
+// the seafloor. INGEST runs earlier in the tick, so a cell whose
+// genome fires INGEST on a mineral at contact still consumes the
+// particle before this bounce runs. (Phase D collapse: rock/sand/clay
+// are all CHEM_MIN now; the clay-permeable carve-out is gone.)
 function resolveCreatureSedimentCollisions(world: World): void {
   const ps = world.particles;
   const cs = world.creatures;
   if (cs.length === 0) return;
   for (let pi = 0; pi < ps.length; pi++) {
     const p = ps[pi];
-    if (!SEDIMENT_MATERIALS.has(p.material)) continue;
+    if (p.chemId !== CHEM_MIN) continue;
     const range = p.r + 30;
     forCreaturesNear(p.x, p.y, range, (c) => {
       let dx = c.x - p.x;
@@ -6056,7 +5911,10 @@ function applyWalls(world: World): void {
   // re-introduce them as bubble contents.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const p = world.particles[i];
-    if (p.material === "gas" && p.y - p.r < surfaceYAt(world, p.x)) {
+    // Gas particles (O2 or CO2 chem) that drift up past the (wavy)
+    // water surface escape to the atmosphere.
+    const cId = p.chemId;
+    if ((cId === CHEM_O2 || cId === CHEM_CO2) && p.y - p.r < surfaceYAt(world, p.x)) {
       const pm = p.molecules;
       if (pm) {
         for (const k of MOLECULE_IDS) {
@@ -6119,7 +5977,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:5:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:6:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -6133,7 +5991,6 @@ interface SavedCreature {
   color: string; speciesKey: string; lineageRoot: number;
   organelleSynthMask: number;
   molecules: Record<string, number>;
-  reserves: Record<string, number>;
   // Sparse: only nonzero entries -- catalystCols is 256 wide, most slots empty.
   catalysts: SavedSparse[];
   // Sparse: 56 wide for generic chemicals.
@@ -6152,7 +6009,7 @@ interface SavedCreature {
 interface SavedParticle {
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
-  r: number; material: MaterialId;
+  r: number; chemId: number;
   density?: number;
   // Optional: persist sleep state so settled sediment doesn't all
   // wake up and bounce on reload (would take SLEEP_THRESHOLD_TICKS
@@ -6216,11 +6073,6 @@ function snapshotCreature(c: Creature): SavedCreature {
     const v = c.molecules[k];
     if (v !== 0) mol[k] = v;
   }
-  const res: Record<string, number> = {};
-  for (const id of MATERIAL_IDS) {
-    const v = c.reserves[id];
-    if (v !== 0) res[id] = v;
-  }
   return {
     x: s.x[i], y: s.y[i], z: s.z[i],
     vx: s.vx[i], vy: s.vy[i], vz: s.vz[i],
@@ -6232,7 +6084,7 @@ function snapshotCreature(c: Creature): SavedCreature {
     vmPc: c.vm.pc, vmStack: Array.from(c.vm.stack),
     color: c.color, speciesKey: c.speciesKey, lineageRoot: c.lineageRoot,
     organelleSynthMask: c.organelleSynthMask,
-    molecules: mol, reserves: res,
+    molecules: mol,
     catalysts: snapshotSparseCol(s.catalystCols, i, CATALYST_COUNT),
     generics: snapshotSparseCol(s.genericChemCols, i, GENERIC_CHEMICAL_COUNT),
     contents: c.contents.length > 0 ? c.contents.map(snapshotCreature) : undefined,
@@ -6243,7 +6095,7 @@ function snapshotParticle(p: Particle): SavedParticle {
   const out: SavedParticle = {
     x: p.x, y: p.y, z: p.z,
     vx: p.vx, vy: p.vy, vz: p.vz,
-    r: p.r, material: p.material,
+    r: p.r, chemId: p.chemId,
   };
   if (p.density !== undefined) out.density = p.density;
   const q = p.quietTicks ?? 0;
@@ -6329,11 +6181,6 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
     const v = sc.molecules[k];
     if (v !== undefined) mol[k] = v;
   }
-  const res = emptyReserves();
-  for (const id of MATERIAL_IDS) {
-    const v = sc.reserves[id];
-    if (v !== undefined) res[id] = v;
-  }
   const c = newCreature(world.creatureStore, {
     x: sc.x, y: sc.y, z: sc.z,
     vx: sc.vx, vy: sc.vy, vz: sc.vz,
@@ -6347,7 +6194,6 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
     bornAt: sc.bornAt,
     speciesKey: sc.speciesKey,
     molecules: mol,
-    reserves: res,
   });
   c.lineageRoot = sc.lineageRoot;
   c.organelleSynthMask = sc.organelleSynthMask;
@@ -6453,7 +6299,7 @@ export function applySavedWorld(world: World, json: string): boolean {
     pushParticle(world, {
       x: sp.x, y: sp.y, z: sp.z,
       vx: sp.vx, vy: sp.vy, vz: sp.vz,
-      r: sp.r, material: sp.material,
+      r: sp.r, chemId: sp.chemId,
       density: sp.density,
       quietTicks: sp.quietTicks,
       molecules: sp.molecules ? { ...emptyMolecules(), ...sp.molecules } : undefined,
@@ -6497,7 +6343,7 @@ export interface ParticleSnapshot {
   y: number;
   z: number;
   r: number;
-  material: MaterialId;
+  chemId: number;
   // Only present when the particle carries a molecule payload (corpse /
   // excretion). The renderer checks the waste fraction to switch to the
   // toxic-tint palette.
@@ -6529,7 +6375,6 @@ export interface CreatureSnapshot {
   speciesKey: string;
   genome: Uint8Array;
   molecules: Molecules;
-  reserves: Record<MaterialId, number>;
   vmPc: number;
   vmStack: number[];
   bondsCount: number;
@@ -6579,7 +6424,6 @@ function snapshotInner(c: Creature): InnerCreatureSnapshot {
 
 function snapshotCreatureLive(c: Creature): CreatureSnapshot {
   const m = c.molecules;
-  const r = c.reserves;
   return {
     id: c.id,
     x: c.x,
@@ -6611,14 +6455,6 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       biopolymer: m.biopolymer,
       membrane: m.membrane,
     },
-    reserves: {
-      rock: r.rock,
-      sand: r.sand,
-      clay: r.clay,
-      organic: r.organic,
-      lipid: r.lipid,
-      gas: r.gas,
-    },
     vmPc: c.vm.pc,
     // The renderer reads the stack length and a short preview; a slice
     // is enough and keeps the per-tick clone small.
@@ -6645,7 +6481,7 @@ function snapshotParticleLive(p: Particle): ParticleSnapshot {
     y: p.y,
     z: p.z,
     r: p.r,
-    material: p.material,
+    chemId: p.chemId,
     molecules: p.molecules ?? null,
   };
 }

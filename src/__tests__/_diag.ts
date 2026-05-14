@@ -22,7 +22,7 @@ for (let i = 0; i < totalSec * 60; i++) {
   if (t >= nextSample) {
     const c = w.creatures[0];
     const m = c ? c.molecules : null;
-    const reserves = c ? (c.reserves.organic + c.reserves.lipid + c.reserves.gas + c.reserves.rock + c.reserves.sand + c.reserves.clay) : 0;
+    const reserves = c ? c.molecules.biopolymer : 0;
     console.log(
       `t=${t.toFixed(0)}s  pop=${w.creatures.length}` +
       `  parts=${w.particles.length}` +

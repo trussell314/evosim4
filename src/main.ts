@@ -59,8 +59,8 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
 
 import {
   createWorld,
-  MATERIALS,
-  MATERIAL_IDS_ORDERED,
+  CHEM_COLORS,
+  SENSOR_CHEM_LABELS,
   MOLECULE_IDS,
   surfaceYAt,
   temperatureAt,
@@ -421,7 +421,7 @@ let activeDisasm = "";
 function refreshActiveDisasm(): void {
   const sel = selectedCell();
   activeDisasm = sel
-    ? formatDisasmColumns(disassemble(sel.genome, MATERIAL_IDS_ORDERED), DISASM_COL_LINES)
+    ? formatDisasmColumns(disassemble(sel.genome, SENSOR_CHEM_LABELS), DISASM_COL_LINES)
     : "";
 }
 // Width budget for the disasm body. Higher = more columns. Tuned to
@@ -756,7 +756,6 @@ function flushTooltip(): void {
   const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
   if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
-  for (const id of MATERIAL_IDS_ORDERED) mass += c.reserves[id];
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   // Surface engulfed + bonded counts so the user can tell a fat
@@ -983,39 +982,39 @@ const N_BUCKETS = 8;
 const N_RENDER_BUCKETS = 7;
 const BLURS = [0, 0.3, 0.7, 1.2, 1.7, 2.2, 2.7, 3.2];
 const ALPHAS = [1.0, 0.96, 0.91, 0.85, 0.79, 0.73, 0.68, 0.64];
-// One sub-bucket per (depth bucket, material) so the renderer can issue
+// One sub-bucket per (depth bucket, chem id) so the renderer can issue
 // a single beginPath + many arcs + single fill per group. With 12k+
 // particles, dropping from one canvas op per particle to one per group
 // is a big speedup -- arc/fill/beginPath are expensive when called in
-// the millions per second.
-const N_MATERIALS = 6;
-const SUB_BUCKETS: ParticleSnapshot[][] = Array.from({ length: N_BUCKETS * N_MATERIALS }, () => []);
-const MATERIAL_IDX_BY_NAME: Record<string, number> = {};
-for (let i = 0; i < MATERIAL_IDS_ORDERED.length; i++) MATERIAL_IDX_BY_NAME[MATERIAL_IDS_ORDERED[i]] = i;
+// the millions per second. Phase D widens the chem axis from 6
+// materials to N_RENDER_CHEMS (sized to the chemical table) so
+// procedural chems also render distinctly.
+const N_RENDER_CHEMS = CHEM_COLORS.length;
+const SUB_BUCKETS: ParticleSnapshot[][] = Array.from({ length: N_BUCKETS * N_RENDER_CHEMS }, () => []);
 // How much each bucket is tinted toward the deep-water color. 0 = no tint
-// (use material color as-is); 1 = fully replaced by background.
+// (use chem color as-is); 1 = fully replaced by background.
 const DEPTH_TINTS = [0, 0.025, 0.06, 0.11, 0.17, 0.23, 0.29, 0.35];
 const DEEP_TINT_R = 6;
 const DEEP_TINT_G = 21;
 const DEEP_TINT_B = 32; // matches the bottom of the water gradient (#061520)
 
-function blendToward(hex: string, frac: number): string {
-  // Parse "#rrggbb" and blend toward the deep-water tint by frac.
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+function blendToward(color: string, frac: number): string {
+  // Accept either "#rrggbb" or "hsl(...)"; for HSL we don't tint
+  // (the renderer already gets darker chems at depth via the canvas
+  // composite). For hex parse rgb and blend toward the deep tint.
+  if (color.startsWith("hsl")) return color;
+  const r = parseInt(color.slice(1, 3), 16);
+  const g = parseInt(color.slice(3, 5), 16);
+  const b = parseInt(color.slice(5, 7), 16);
   const br = Math.round(r + (DEEP_TINT_R - r) * frac);
   const bg = Math.round(g + (DEEP_TINT_G - g) * frac);
   const bb = Math.round(b + (DEEP_TINT_B - b) * frac);
   return `rgb(${br},${bg},${bb})`;
 }
-// Pre-compute tinted material colors per bucket so the render loop just
-// looks them up instead of parsing strings every frame.
-const TINTED_COLORS: Record<string, string[]> = {};
-for (const matId of MATERIAL_IDS_ORDERED) {
-  const base = MATERIALS[matId].color;
-  TINTED_COLORS[matId] = DEPTH_TINTS.map((t) => blendToward(base, t));
-}
+// Pre-compute tinted chem colors per bucket so the render loop just
+// looks them up instead of parsing strings every frame. Indexed by
+// chemId, then by depth tier.
+const TINTED_COLORS: string[][] = CHEM_COLORS.map((base) => DEPTH_TINTS.map((t) => blendToward(base, t)));
 // Toxic-waste-tagged particles get rendered in a sickly rust color
 // rather than their underlying material color, so the player can see
 // where pollution accumulates. Routed by waste molecule fraction.
@@ -1147,13 +1146,12 @@ function render(): void {
 
   for (const b of SUB_BUCKETS) b.length = 0;
   for (const b of TOXIC_BUCKETS) b.length = 0;
-  const matIdx: Record<string, number> = MATERIAL_IDX_BY_NAME;
   for (const p of snapshot.particles) {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
     const bucket = Math.floor(t * N_BUCKETS);
     // Tag-toxic check: a molecule-tagged particle whose waste fraction
     // is high enough renders in the toxic palette, regardless of its
-    // underlying material id.
+    // underlying chem id.
     if (p.molecules && p.molecules.waste > 0) {
       let total = 0;
       const m = p.molecules;
@@ -1164,22 +1162,18 @@ function render(): void {
         continue;
       }
     }
-    const mi = matIdx[p.material];
-    // A snapshot particle whose material isn't in our render table
-    // (corrupted state from a partial worker load, an old save, etc.)
-    // would index SUB_BUCKETS at NaN and crash .push. Skip it.
-    if (mi === undefined) continue;
-    SUB_BUCKETS[bucket * N_MATERIALS + mi].push(p);
+    const ci = p.chemId;
+    if (ci < 0 || ci >= N_RENDER_CHEMS) continue;
+    SUB_BUCKETS[bucket * N_RENDER_CHEMS + ci].push(p);
   }
   const tinted = TINTED_COLORS;
   for (let i = N_RENDER_BUCKETS - 1; i >= 0; i--) {
     ctx.filter = BLURS[i] === 0 ? "none" : `blur(${BLURS[i]}px)`;
     ctx.globalAlpha = ALPHAS[i];
-    for (let m = 0; m < N_MATERIALS; m++) {
-      const group = SUB_BUCKETS[i * N_MATERIALS + m];
+    for (let m = 0; m < N_RENDER_CHEMS; m++) {
+      const group = SUB_BUCKETS[i * N_RENDER_CHEMS + m];
       if (group.length === 0) continue;
-      const matName = MATERIAL_IDS_ORDERED[m];
-      ctx.fillStyle = tinted[matName][i];
+      ctx.fillStyle = tinted[m][i];
       ctx.beginPath();
       // moveTo before each arc prevents canvas from auto-connecting the
       // previous endpoint -- without it we'd draw spurious lines through
@@ -1946,14 +1940,9 @@ function updateInspector(): void {
     inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
     return;
   }
-  let reserveMass = 0;
-  for (const id of MATERIAL_IDS_ORDERED) reserveMass += c.reserves[id];
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
-  const totalMass = reserveMass + molMass;
-  const reserves = MATERIAL_IDS_ORDERED
-    .map((id) => `${id.slice(0, 3)}=${c.reserves[id].toFixed(0)}`)
-    .join(" ");
+  const totalMass = molMass;
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
   const stackStr = c.vmStack.map((n) => n.toFixed(1)).join(" ");
@@ -1968,7 +1957,7 @@ function updateInspector(): void {
     `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} rib=${fmt(m.ribosome)} bio=${fmt(m.biomass)}\n` +
-    `stomach: ${reserves}\n` +
+    `bulk: biop=${fmt(m.biopolymer)} memb=${fmt(m.membrane)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
   disasmBody.textContent = activeDisasm;
@@ -2173,7 +2162,7 @@ function maybeAnalyzeGenomes(): void {
       `<span style="opacity:.7"> (${sp.genome.length}b)</span>  ${status}`;
     const statsLine =
       `duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}`;
-    const prose = describeGenomeProse(sp.genome, MATERIAL_IDS_ORDERED);
+    const prose = describeGenomeProse(sp.genome, SENSOR_CHEM_LABELS);
     const proseDiv = document.createElement("div");
     proseDiv.style.cssText = "padding-top:3px;";
     proseDiv.textContent = prose;

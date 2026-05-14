@@ -23,7 +23,7 @@ import {
   setParticleForceDispatcher,
   step,
   takeSnapshot,
-  MATERIAL_BASE_DENSITY,
+  CHEM_BASE_DENSITY,
   type ParticleForceParams,
   type RenderSnapshot,
   type World,
@@ -403,7 +403,7 @@ function setupParticlePool(w: World): void {
       collisionLayout: collisionShared ? collisionLayout : null,
       controlBuffer: ctrlBuf,
       paramsBuffer: paramsBuf,
-      matBase: MATERIAL_BASE_DENSITY,
+      matBase: CHEM_BASE_DENSITY,
       workerIndex: i,
       nWorkers,
     });
