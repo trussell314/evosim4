@@ -655,6 +655,14 @@ export class Creature {
   // Non-typed-array fields kept on the handle (variable-shape, not hot)
   genome!: Uint8Array;
   vm!: VMState;
+  // Per-cell VM output struct. Previously a single module-global
+  // (VM_OUT), shared across all cells. Made per-cell so each creature
+  // keeps its own previous-tick outputs -- the chemistry pass reads
+  // its own synthMask / catSynthMask instead of whichever cell
+  // happened to run last in the previous tick. Required for any
+  // future parallel creature pipeline; subworkers can mutate
+  // c.vmOut without contending on a shared struct.
+  vmOut!: VMOutputs;
   color!: string;
   speciesKey!: string;
   // Founding-lineage ID: every founder gets a fresh unique ID, every
@@ -757,6 +765,7 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
   const idx = store.alloc();
   const c = new Creature(store, idx);
   c.id = NEXT_CREATURE_ID++;
+  c.vmOut = newOutputs();
   store.x[idx] = init.x ?? 0;
   store.y[idx] = init.y ?? 0;
   store.z[idx] = init.z ?? 0;
@@ -3552,7 +3561,28 @@ const VM_SELF: VMSelf = {
   biomass: 0, age: 0,
   glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
 };
-const VM_OUT: VMOutputs = newOutputs();
+// Loop structure note (stage B foundation):
+//   The per-creature work below splits naturally into two phases.
+//
+//   Phase 1 (per-cell, parallel-safe -- no cross-cell writes):
+//     updateCreatureRadius, catabolize, diffuseGases,
+//     runGenericReactions, biosynthCatalyst, maintenanceDecay,
+//     toxify, somatic mutation, populateSensors, runTick,
+//     applyGenomeSplice, recompute senseRange/thrustAccel,
+//     TURN, THRUST. Reads world spatial grids built before the
+//     loop; writes only c's own store row + c.vmOut.
+//
+//   Phase 2 (serial, cross-cell + world writes):
+//     runOrganelleChemistry (writes inner cell's chem),
+//     autoExcrete (spawns particles), emit (writes pheromone),
+//     adhere (modifies other.bonds), advanceDivision (publishes
+//     new creature), engulf / predate / ingest (mutates other
+//     creatures or particles), death push.
+//
+//   The two-phase split + a subworker pool over Phase 1 is the
+//   next increment of stage B; left intentionally inlined for now
+//   to keep this refactor's diff focused on the de-globalization
+//   of VM_OUT (the prerequisite for any per-cell parallel dispatch).
 
 function updateCreatures(world: World, dt: number): void {
   const n = world.creatures.length;
@@ -3573,6 +3603,7 @@ function updateCreatures(world: World, dt: number): void {
   for (let cIdx = 0; cIdx < n; cIdx++) {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
+    const vmOut = c.vmOut;
 
     updateCreatureRadius(c);
 
@@ -3598,14 +3629,14 @@ function updateCreatures(world: World, dt: number): void {
     // reactions live at REACTIONS[0..9] with uncatRate > 0, so they
     // fire on every cell every tick; generic reactions at [10..255]
     // only fire when the cell has built the relevant catalyst.
-    // Biosynth gateMasks honour VM_OUT.synthMask so SYNTH_AA / FA /
+    // Biosynth gateMasks honour vmOut.synthMask so SYNTH_AA / FA /
     // BIO / CHL / ENZ / RIBO ops still gate what gets built.
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
-    runGenericReactions(c, dtT, ambientLight, VM_OUT.synthMask);
+    runGenericReactions(c, dtT, ambientLight, vmOut.synthMask);
 
     // Generic catalyst synthesis. SYNTH_CAT <id> sets a bit per slot;
     // each catalyst built is its own protein.
-    const cm = VM_OUT.catSynthMask;
+    const cm = vmOut.catSynthMask;
     if (cm) {
       for (let k = 0; k < CATALYST_COUNT; k++) {
         if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
@@ -3692,22 +3723,22 @@ function updateCreatures(world: World, dt: number): void {
     // rates.
     const sp = world.species.get(c.speciesKey);
     const ec = sp ? sp.execCounts : undefined;
-    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, VM_OUT, ec);
+    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, vmOut, ec);
     if (sp) sp.vmTicks++;
-    spendATP(c, VM_OUT.instructions * ENERGY_PER_INSTRUCTION);
-    if (VM_OUT.repair > 0) {
+    spendATP(c, vmOut.instructions * ENERGY_PER_INSTRUCTION);
+    if (vmOut.repair > 0) {
       // Pay per-op so spamming REPAIR is expensive; refresh the window.
       // 30 ticks ~= 0.5 sim-sec at FIXED_DT 1/60, enough to span a
       // damage event without making the cell mutation-proof for life.
-      const want = VM_OUT.repair * REPAIR_ATP_PER_OP;
+      const want = vmOut.repair * REPAIR_ATP_PER_OP;
       const paid = spendATP(c, want);
       if (paid > 0) c.repairTicks = Math.max(c.repairTicks, REPAIR_WINDOW_TICKS);
     }
     // Apply pending genome self-modifications after VM exits. SPLICE_*
     // changed length, which would invalidate PC mid-tick; we let the
     // rest of this tick's ops finish first, then resize here.
-    if (VM_OUT.spliceMode !== 0 && VM_OUT.spliceLength > 0) {
-      applyGenomeSplice(c, VM_OUT.spliceMode, VM_OUT.spliceOffset, VM_OUT.spliceLength);
+    if (vmOut.spliceMode !== 0 && vmOut.spliceLength > 0) {
+      applyGenomeSplice(c, vmOut.spliceMode, vmOut.spliceOffset, vmOut.spliceLength);
     }
     // POKE_BYTE / SPLICE may have changed SENSE_AMP or THRUST_AMP
     // byte counts; recompute both derived traits.
@@ -3716,27 +3747,27 @@ function updateCreatures(world: World, dt: number): void {
 
     // TURN: rotate the cell's velocity by the accumulated angle delta.
     // Cheap; only does the trig when the genome actually issued a turn.
-    if (VM_OUT.turn !== 0) {
-      const cos = Math.cos(VM_OUT.turn);
-      const sin = Math.sin(VM_OUT.turn);
+    if (vmOut.turn !== 0) {
+      const cos = Math.cos(vmOut.turn);
+      const sin = Math.sin(vmOut.turn);
       const nvx = c.vx * cos - c.vy * sin;
       const nvy = c.vx * sin + c.vy * cos;
       c.vx = nvx;
       c.vy = nvy;
     }
 
-    if (VM_OUT.reproduce) tryReproduce(c, world);
+    if (vmOut.reproduce) tryReproduce(c, world);
 
     // Pheromone emission: cell adds intensity to the field at its
     // position. Subsequent ticks decay + diffuse it.
-    if (VM_OUT.emit > 0) {
-      world.pheromone[pheromoneIndex(world, c.x, c.y)] += VM_OUT.emit;
+    if (vmOut.emit > 0) {
+      world.pheromone[pheromoneIndex(world, c.x, c.y)] += vmOut.emit;
     }
 
     // Adhesion: bond with the nearest creature in scanRange if not
     // already bonded. Cap each cell at MAX_BONDS to keep the spring
     // pass cheap and bounded.
-    if (VM_OUT.adhere && c.bonds.length < MAX_BONDS) {
+    if (vmOut.adhere && c.bonds.length < MAX_BONDS) {
       // No engine-side recognition gate: the genome decides via
       // SENSE_KIN / SENSE_NEIGHBOR_HASH before issuing ADHERE. The
       // engine just wires up whatever the cell asked for. Same
@@ -3760,8 +3791,8 @@ function updateCreatures(world: World, dt: number): void {
     // daughter is committed into world.creatures.
     advanceDivision(c, world, dt);
 
-    let ax = VM_OUT.thrustX;
-    let ay = VM_OUT.thrustY;
+    let ax = vmOut.thrustX;
+    let ay = vmOut.thrustY;
     const mag = Math.sqrt(ax * ax + ay * ay);
     if (mag > c.thrustAccel) {
       const k = c.thrustAccel / mag;
@@ -3780,7 +3811,7 @@ function updateCreatures(world: World, dt: number): void {
 
     // VM-controlled excretion (vent specific reserves on demand).
     for (let i = 0; i < 6; i++) {
-      const requested = VM_OUT.excrete[i];
+      const requested = vmOut.excrete[i];
       if (requested <= 0) continue;
       const matId = MATERIAL_IDS[i];
       const available = c.reserves[matId];
@@ -3799,7 +3830,7 @@ function updateCreatures(world: World, dt: number): void {
       // Engulf and predate both scan for nearby cells via the spatial
       // grid; range of c.r + 32 covers all plausible neighbor radii.
       const scanRange = c.r + 32;
-      if (VM_OUT.engulf) {
+      if (vmOut.engulf) {
         const myMass = creatureTotalMass(c);
         forCreaturesNear(c.x, c.y, scanRange, (other) => {
           if (other === c || eaten.has(other)) return;
@@ -3826,7 +3857,7 @@ function updateCreatures(world: World, dt: number): void {
           return true;
         });
       }
-      if (!ingested && VM_OUT.predate) {
+      if (!ingested && vmOut.predate) {
         const myMass = creatureTotalMass(c);
         forCreaturesNear(c.x, c.y, scanRange, (other) => {
           if (other === c || eaten.has(other)) return;
@@ -3879,7 +3910,7 @@ function updateCreatures(world: World, dt: number): void {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
           const matIdx = MATERIAL_INDEX[p.material];
-          if (!VM_OUT.ingestMaterials[matIdx]) continue;
+          if (!vmOut.ingestMaterials[matIdx]) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
@@ -4170,7 +4201,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // will autolyze through the normal death pass (which conserves
   // mass back to particles). "Started mitosis, no undo button" was
   // the user's explicit design call.
-  const parentShare = VM_OUT.reproduceFraction;
+  const parentShare = parent.vmOut.reproduceFraction;
   const childShare = 1 - parentShare;
   // Build-block sufficiency check is also gone -- the parent commits
   // whatever proportional share its current pool gives the child,
