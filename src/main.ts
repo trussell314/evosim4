@@ -11,29 +11,47 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
   // Relative path so it picks up Vite's base prefix at build time;
   // public/coi-serviceworker.js is copied to dist/ root.
   const swUrl = `${import.meta.env.BASE_URL}coi-serviceworker.js`;
-  // First visit: the SW is still installing when register() resolves,
-  // so reg.active is null and the document load happened without the
-  // COOP/COEP rewrite. Reload once the SW takes control of this client
-  // so the next navigation flows through the header rewrite.
+  // Cases we need to handle:
+  //   A) Fresh install: register() resolves with the SW still installing.
+  //      controllerchange fires once it activates + claims; reload then.
+  //   B) SW already active but this navigation isn't controlled
+  //      (force-reload bypass, or claim() missed this client). register()
+  //      resolves with reg.active set but controller === null and no
+  //      controllerchange will fire. Reload manually.
+  //   C) SW controlling but headers still not applied. Reload as well.
+  // A sessionStorage guard prevents an infinite reload loop if the SW
+  // exists but fails to add headers for some reason.
+  const RELOAD_GUARD_KEY = "coi-sw-reload-attempted";
+  const alreadyReloaded = (() => {
+    try { return sessionStorage.getItem(RELOAD_GUARD_KEY) === "1"; } catch { return false; }
+  })();
+  const reloadOnce = (): void => {
+    if (alreadyReloaded) {
+      // eslint-disable-next-line no-console
+      console.warn("[coi] SW registered but page still not isolated after reload; giving up");
+      return;
+    }
+    try { sessionStorage.setItem(RELOAD_GUARD_KEY, "1"); } catch { /* private mode */ }
+    window.location.reload();
+  };
   if (!navigator.serviceWorker.controller) {
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      window.location.reload();
-    }, { once: true });
+    navigator.serviceWorker.addEventListener("controllerchange", reloadOnce, { once: true });
   }
   navigator.serviceWorker.register(swUrl, { scope: import.meta.env.BASE_URL })
     .then((reg) => {
-      // Subsequent visit: a SW is already controlling but the page
-      // still isn't isolated (e.g. the SW pre-dates the fetch handler).
-      // Force a reload so the active worker rewrites headers on the
-      // next document load.
-      if (navigator.serviceWorker.controller && reg.active && !window.crossOriginIsolated) {
-        window.location.reload();
-      }
+      if (window.crossOriginIsolated) return;
+      // Case B/C: an active SW exists but we're still not isolated.
+      // Reload pulls the navigation back through the SW.
+      if (reg.active) reloadOnce();
     })
     .catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("[coi] service worker registration failed:", err);
     });
+} else if (typeof window !== "undefined" && window.crossOriginIsolated) {
+  // Page reached isolation; clear the one-shot guard so future
+  // unrelated reloads aren't pinned to "already tried".
+  try { sessionStorage.removeItem("coi-sw-reload-attempted"); } catch { /* ignore */ }
 }
 
 import {
