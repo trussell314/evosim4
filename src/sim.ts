@@ -1095,18 +1095,11 @@ const THRUST_MASS_REF = 200;
 // one.
 const REPRODUCE_ATTEMPT_ATP_BASE = 0.4;
 const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
-// Newborn maternal investment ("yolk"). Free glucose + ATP injected
-// at fission so children survive the lag between birth and reaching
-// their first meal. Small enough not to invalidate metabolic accounting
-// at population scale.
-const NEWBORN_YOLK_GLUCOSE = 15;
-const NEWBORN_YOLK_ATP = 8;
-// Starter ribosome endowment for newborns. With the strict ribosome
-// model (zero ribosomes -> zero biosynth), a child that inherited
-// only a fractional ribosome from a small parent could stall before
-// it ever gets going. A small free bump guarantees biosynth runs
-// from tick 1.
-const NEWBORN_YOLK_RIBO = 2;
+// Newborn yolk constants retired. The genome now fully determines
+// the child's bootstrap state: it gets its proportional share of
+// the parent's pools and nothing else. If the parent didn't
+// stockpile enough machinery before reproducing, that's the
+// parent's lineage problem.
 // Multiplier on (parent.r + child.r) for birth offset. >1 places the
 // child outside the parent's recently-eaten food zone so it can find
 // a food gradient. Was 1.1 (child inside parent's foraging range).
@@ -2330,58 +2323,76 @@ function emptyReserves(): Record<MaterialId, number> {
   return r;
 }
 
+// "Lucky DNA + junk" founder bootstrap. A membrane forms around a
+// random patch; whatever loose particles happen to be in the patch
+// become the cell's starting substrate. The genome decides what
+// reactions the cell can run; the environment decides what it has
+// to work with. No hardcoded reserve / molecule yolk -- the
+// genome's SYNTH_* presence only sizes the absolute minimum
+// machinery seed (a "primordial soup" of mandatory-multiplier
+// molecules) so first-generation cells can fire their first
+// reactions before they have a chance to build more.
+const FOUNDER_SCOOP_RADIUS = 30;
 function makeCreature(world: World, x: number, y: number, z: number): Creature {
-  // Founders get a random viable genome instead of the hand-crafted
-  // default. Each reseed explores a different starting strategy
-  // (heterotroph / photoautotroph / predator / etc.) -- natural
-  // selection picks the survivors rather than the designer.
   const genome = makeRandomViableGenome();
-  // Photoautotroph founders (genome has SYNTH_CHL but no
-  // INGEST/PREDATE/ENGULF) need a chlorophyll bootstrap or they
-  // can't photosynth their first tick and starve before SYNTH_CHL
-  // builds any. Cheap: scan once.
-  let hasMass = false; let hasChl = false; let hasEnz = false;
+  let hasChl = false, hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
-    if (b === OP.INGEST || b === OP.PREDATE || b === OP.ENGULF) hasMass = true;
-    else if (b === OP.SYNTH_CHL) hasChl = true;
+    if (b === OP.SYNTH_CHL) hasChl = true;
     else if (b === OP.SYNTH_ENZ) hasEnz = true;
   }
-  const founderChl = hasChl && !hasMass ? 2 : (hasChl ? 1 : 0);
-  // Heterotrophs need enzymes to digest; without a tick-1 enzyme
-  // yolk they can't catabolize their starter reserves and starve
-  // before SYNTH_ENZ builds any.
-  const founderEnz = hasMass ? 2 : (hasEnz ? 1 : 0);
+  // Minimal cell body: biomass just above MIN_VIABLE_BIOMASS (the
+  // membrane), a trickle of ADP and ATP to enable tick-1 chemistry,
+  // and the mandatory-multiplier molecules whose genome op the cell
+  // carries. SYNTH_RIBO is universal-required so ribosome is too;
+  // chl/enz only seeded if their op is present. Nothing else --
+  // glucose, aa, fa, reserves all come from the scoop below.
   const c = newCreature(world.creatureStore, {
     x, y, z,
     r: MIN_CREATURE_R,
     density: 1.0,
-    energy: 30,
+    energy: 2,
     senseRange: computeSenseRange(genome),
     thrustAccel: computeThrustAccel(genome),
     genome,
     vm: newVMState(),
     color: genomeColor(genome),
     speciesKey: genomeKey(genome),
-    // Starter cell ships with a working metabolism: enough ATP to live, a
-    // matched ADP pool, some glucose and O2 to run respiration, a little
-    // amino-acid / minerals / fatty-acid for biosynthesis and movement,
-    // and biomass to give it physical body. Ribosomes are mandatory
-    // for biosynth (rate = base * ribo/RIBO_REF), and chlorophyll is
-    // mandatory for photosynth (rate = base * chl/CHL_REF) -- so a
-    // photoautotroph founder gets a small chl yolk too.
     molecules: {
-      adp: 50, glucose: 20, fattyAcid: 15, aminoAcid: 15,
-      o2: 15, minerals: 15, biomass: 30, ribosome: 3,
-      chlorophyll: founderChl, enzyme: founderEnz,
+      biomass: 1,
+      adp: 5,
+      ribosome: 1,
+      chlorophyll: hasChl ? 0.5 : 0,
+      enzyme: hasEnz ? 0.5 : 0,
     },
-    // Seed reserves across all materials so the cell can pay the per-byte
-    // fission cost (genomeMaterialCost is spread across all 6 materials)
-    // without first having to ingest one particle of every type. Without
-    // this, a cell can ingest organic until its reproduce-threshold is met
-    // but still fail to fission because (say) reserves.sand is still 0.
-    reserves: { rock: 4, sand: 15, clay: 12, organic: 30, lipid: 12, gas: 6 },
   });
+  // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
+  // cell. Material -> reserves, molecules -> molecule pool, generic
+  // chem -> generic pool. Each absorbed particle is removed from
+  // the world (its mass joins the cell). An empty patch means a
+  // very lean cell that probably won't survive long; that's the
+  // luck of biogenesis.
+  const rSq = FOUNDER_SCOOP_RADIUS * FOUNDER_SCOOP_RADIUS;
+  const ps = world.particles;
+  for (let i = ps.length - 1; i >= 0; i--) {
+    const p = ps[i];
+    const dx = p.x - x;
+    const dy = p.y - y;
+    const dz = p.z - z;
+    if (dx * dx + dy * dy + dz * dz >= rSq) continue;
+    c.reserves[p.material] += mass(p);
+    if (p.molecules) {
+      for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
+    }
+    if (p.genericChem) {
+      const gcCols = c.store.genericChemCols;
+      const ci = c.idx;
+      for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+        gcCols[k][ci] += p.genericChem[k];
+      }
+    }
+    removeParticleAt(world, i);
+  }
   updateCreatureRadius(c);
   return c;
 }
@@ -3007,16 +3018,16 @@ export function step(world: World, dt: number): void {
   }
 }
 
-// Particle aging + decay. Every particle accumulates age every tick.
-// After PARTICLE_DECAY_START_AGE seconds of grace, its radius shrinks
-// at PARTICLE_DECAY_HALF_LIFE (exponential half-life). When it falls
-// below PARTICLE_MIN_R the particle is removed. Models decomposition
-// by unmodeled microbiota -- corpse mass that no cell ate has to go
-// somewhere or particle counts creep monotonically up.
+// Particle aging + decay. Disabled in favor of letting loose
+// particles persist so founder-from-junk has something to scoop.
+// Kept as code for re-enablement if particle counts ever creep too
+// high; toggle PARTICLE_DECAY_ENABLED to bring it back.
+const PARTICLE_DECAY_ENABLED = false;
 const PARTICLE_DECAY_START_AGE = 300; // sim-seconds before decay begins
 const PARTICLE_DECAY_HALF_LIFE = 60;  // sim-seconds; r halves every 60s once decaying
 const PARTICLE_MIN_R = 0.4;
 function decayParticles(world: World, dt: number): void {
+  if (!PARTICLE_DECAY_ENABLED) return;
   const ps = world.particleStore;
   const age = ps.age;
   const r = ps.r;
@@ -3976,18 +3987,15 @@ function tryReproduce(parent: Creature, world: World): void {
       childGenericChem[k] = give;
     }
   }
-  let energyGift = parent.energy * childShare;
+  const energyGift = parent.energy * childShare;
   parent.energy -= energyGift;
-  // "Yolk": a small free endowment of glucose + ATP to the newborn so
-  // it has runway to find its first meal. Without this, the child
-  // starts with only what proportional split gives it -- often not
-  // enough to survive the lag between birth and reaching a food
-  // particle. Conservation is "violated" (mass appears from thin air)
-  // but this models maternal investment that isn't tracked elsewhere
-  // in our chemistry.
-  childMolecules.glucose += NEWBORN_YOLK_GLUCOSE;
-  childMolecules.ribosome += NEWBORN_YOLK_RIBO;
-  energyGift += NEWBORN_YOLK_ATP;
+  // No additive yolk. The child receives exactly its proportional
+  // share of the parent's molecules / reserves / energy. If the
+  // parent didn't stockpile enough ribosomes / chlorophyll / glucose
+  // before fission, the child inherits that deficit. This puts the
+  // genome in charge of bootstrap -- cells that evolve "save before
+  // dividing" behavior produce viable children; profligate ones
+  // produce stillborns.
 
   updateCreatureRadius(parent);
 
