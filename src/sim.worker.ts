@@ -285,6 +285,10 @@ function setupParticlePool(w: World): void {
   const hwc = (navigator as { hardwareConcurrency?: number }).hardwareConcurrency ?? 4;
   // Reserve 1 thread for main and 1 for the sim worker itself.
   const nWorkers = Math.max(1, Math.min(4, hwc - 2));
+  // With only one helper, dispatching costs more than it saves --
+  // Atomics.wait wake latency is fixed but per-particle savings are
+  // divided by nWorkers. Stay single-threaded in that case.
+  if (nWorkers < 2) return;
   const ctrlBuf = new SharedArrayBuffer(CTRL_SLOTS * 4);
   const paramsBuf = new SharedArrayBuffer(PARAM_COUNT * 8);
   const ctrl = new Int32Array(ctrlBuf);

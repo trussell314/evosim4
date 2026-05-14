@@ -3503,6 +3503,12 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
 // into the SAB-backed ParticleStore and signals completion via
 // Atomics. Stays null for tests and any context without
 // crossOriginIsolated SAB support; sim falls back to single-threaded.
+//
+// Atomics.wait round-trip on a barrier is ~0.1-1ms in browsers. Below
+// this threshold the per-particle savings from splitting work across
+// the pool don't pay back the dispatch overhead, so we stay serial
+// even when the pool is wired up.
+const PARALLEL_PARTICLE_MIN = 800;
 export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => void;
 let particleForceDispatcher: ParticleForceDispatcher | null = null;
 export function setParticleForceDispatcher(d: ParticleForceDispatcher | null): void {
@@ -3517,7 +3523,7 @@ function applyForces(world: World, dt: number): void {
   const np = world.particles.length;
   const params = buildParticleForceParams(world);
   params.dt = dt;
-  if (particleForceDispatcher && np > 0) {
+  if (particleForceDispatcher && np >= PARALLEL_PARTICLE_MIN) {
     // Subworker pool runs the particle loop in parallel chunks; the
     // sim worker is free to run the creature loop below concurrently
     // (the dispatcher waits before returning, so by the time the
@@ -5014,7 +5020,7 @@ function resolveCollisions(world: World): void {
       COLLISION_CELL_ITEMS[slot] = pi;
     }
 
-    if (collisionPhaseDispatcher) {
+    if (collisionPhaseDispatcher && n >= PARALLEL_PARTICLE_MIN) {
       collisionPhaseDispatcher(cols, rows, 0, e);
       collisionPhaseDispatcher(cols, rows, 1, e);
     } else {
