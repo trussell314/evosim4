@@ -215,8 +215,13 @@ function maybePostSave(): void {
 const CTRL_PHASE = 0;
 const CTRL_DONE = 1;
 const CTRL_NP = 2;
-// CTRL_STOP at slot 3 is reserved for a future graceful-shutdown
-// signal; sim worker doesn't currently set it.
+// Barrier-complete signal: 0 = pending, 1 = complete. The worker that
+// increments DONE to nWorkers stores 1 here and notifies; sim worker
+// waits on this slot, not on the counter. That cuts wake-ups per
+// barrier from N (one per worker completion) to 1 (only the last
+// worker fires), which dominates the dispatch cost on hardware where
+// Atomics wake latency is high.
+const CTRL_BARRIER = 3;
 const CTRL_CMD = 4;
 const CTRL_C_COLS = 5;
 const CTRL_C_ROWS = 6;
@@ -371,6 +376,7 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   Atomics.store(ctrl, CTRL_CMD, CMD_FORCES);
   Atomics.store(ctrl, CTRL_NP, np);
   Atomics.store(ctrl, CTRL_DONE, 0);
+  Atomics.store(ctrl, CTRL_BARRIER, 0);
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
@@ -387,6 +393,7 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
   // Restitution is a small float (0..1); pack into Int32 at 1e6 scale.
   Atomics.store(ctrl, CTRL_C_E, Math.round(e * 1e6));
   Atomics.store(ctrl, CTRL_DONE, 0);
+  Atomics.store(ctrl, CTRL_BARRIER, 0);
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
@@ -398,15 +405,18 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
 // caller should give up on this phase). The sim's next step will use
 // the serial fallback that the cleared dispatchers route to.
 function waitForBarrier(ctrl: Int32Array, nWorkers: number, label: string): boolean {
+  // Sim worker now waits on CTRL_BARRIER (set by the last worker only)
+  // instead of polling CTRL_DONE, so a successful barrier is exactly
+  // one wake. The loop is defensive against spurious wakeups.
   const deadline = performance.now() + BARRIER_TIMEOUT_MS;
-  while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
+  while (Atomics.load(ctrl, CTRL_BARRIER) === 0) {
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
       const diag = poolDiagSnapshot();
       teardownPool(`${label} barrier timed out (${nWorkers - Atomics.load(ctrl, CTRL_DONE)}/${nWorkers} unresponsive; ${diag})`);
       return false;
     }
-    Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE), remaining);
+    Atomics.wait(ctrl, CTRL_BARRIER, 0, remaining);
   }
   return true;
 }

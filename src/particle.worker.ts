@@ -32,6 +32,7 @@ const PARAM_COUNT = 22;
 const CTRL_PHASE = 0;
 const CTRL_DONE = 1;
 const CTRL_NP = 2;
+const CTRL_BARRIER = 3;
 const CTRL_CMD = 4;
 const CTRL_C_COLS = 5;
 const CTRL_C_ROWS = 6;
@@ -198,7 +199,13 @@ function loop(): void {
         );
       }
     }
-    Atomics.add(ctrl!, CTRL_DONE, 1);
-    Atomics.notify(ctrl!, CTRL_DONE);
+    // Only the last worker to arrive at the barrier flips the
+    // BARRIER signal and wakes the sim worker. Removes N-1 wake-ups
+    // per dispatch on machines with non-trivial Atomics wake latency.
+    const newDone = Atomics.add(ctrl!, CTRL_DONE, 1) + 1;
+    if (newDone === nWorkers) {
+      Atomics.store(ctrl!, CTRL_BARRIER, 1);
+      Atomics.notify(ctrl!, CTRL_BARRIER);
+    }
   }
 }
