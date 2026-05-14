@@ -1128,14 +1128,12 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5) / (800 * 600);
+// Temporary 3x bump on default particle density (and matching spawn
+// cap) to stress the parallel pool above its 4000-particle threshold
+// for profiling. Revert before shipping.
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 3) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
-// Hard cap on the per-second spawn rate. Without this the world tries
-// to fill thousands of particles per second from the top of the water,
-// which looks like a wall of stuff falling at startup. Refill after
-// eating still works because pop * eat-rate stays well under this cap
-// for normal populations (~20 cells eating ~3/sec = 60/sec).
-const MAX_SPAWN_PER_SEC = 200;
+const MAX_SPAWN_PER_SEC = 600;
 
 // Recompute every world field that scales with width/height. Called on
 // resize so a window expansion actually fills the new space with food
