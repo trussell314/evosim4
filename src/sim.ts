@@ -1141,7 +1141,7 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5) / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
@@ -2523,6 +2523,15 @@ export function createWorld(
   };
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
+  // Reset module-level caches that aren't on the world object. These
+  // are process-globals indexed by particle/creature slot or by sim
+  // time -- if a previous world left them populated, the new world
+  // sees stale state until the cache happens to refresh. Tests + any
+  // future multi-world / hot-reload path needs this.
+  pebbleCountCache = 0;
+  pebbleCountStaleTicks = PEBBLE_COUNT_REFRESH_TICKS;
+  lastSpeciesPruneAt = -SPECIES_PRUNE_INTERVAL_SEC;
+  NEXT_CREATURE_ID = 1;
   // Rocks disabled. rebuildObstacleIndex still runs to set the indexes
   // to a consistent empty state so the obstacle-collision early exits
   // (world.obstacles.length === 0) trip cleanly.
@@ -2866,7 +2875,12 @@ function noteCreatureDeath(world: World, c: Creature): void {
 // of entries, all dead, and gradually slow the renderer. Drop any
 // species that has been extinct AND off the visible phylogeny window
 // for a generous grace period. Also drop their phylogeny edges.
-const SPECIES_GRACE_SEC = 240;
+// 60s was 240s. The longer grace let world.species balloon to
+// 1000+ entries during high-mutation periods, and every render
+// iterates the snapshot's species list -- spiky cost at extinction
+// events. 60s still preserves recently-lost species in the
+// phylogeny strip long enough to read; older species fall off.
+const SPECIES_GRACE_SEC = 60;
 const SPECIES_PRUNE_INTERVAL_SEC = 5;
 let lastSpeciesPruneAt = -SPECIES_PRUNE_INTERVAL_SEC;
 function pruneSpecies(world: World): void {
@@ -3351,23 +3365,21 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.forces += n - m; m = n;
     updateCreatures(world, dt);
     n = performance.now(); p.creatures += n - m; m = n;
-    // Mirror the non-profile hot path: creature collisions and sediment
-    // collisions run as concurrent-with-barrier hooks inside
-    // resolveCollisions on the parallel pool path. particleColl ends
-    // up reading "wall-clock time of resolveCollisions" -- which on the
-    // pool path is dominated by the worker compute barrier and is
-    // mostly overlapped with creature/sediment work. creatureColl and
-    // sedimentColl record the JS-time spent in the hooks themselves
-    // (subtractable from particleColl to estimate "free" overlap).
-    let pccAcc = 0, pscAcc = 0;
+    // Mirror the non-profile hot path: creature-vs-creature collisions
+    // overlap with the parallel particle-collision phase as a hook.
+    // Sediment collisions are hoisted out of the hook -- they mutate
+    // particle SAB columns directly so they can't run concurrent with
+    // the particle workers.
+    let pccAcc = 0;
     resolveCollisions(
       world,
       () => { const t = performance.now(); resolveCreatureCollisions(world); pccAcc += performance.now() - t; },
-      () => { const t = performance.now(); resolveCreatureSedimentCollisions(world); pscAcc += performance.now() - t; },
+      undefined,
     );
     n = performance.now(); p.particleColl += n - m; m = n;
     p.creatureColl += pccAcc;
-    p.sedimentColl += pscAcc;
+    resolveCreatureSedimentCollisions(world);
+    n = performance.now(); p.sedimentColl += n - m; m = n;
     resolveObstacleCollisions(world);
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
@@ -3391,16 +3403,18 @@ export function step(world: World, dt: number): void {
     applyBondSprings(world, dt);
     applyForces(world, dt);
     updateCreatures(world, dt);
-    // Hand creature-vs-creature and creature-vs-sediment collisions
-    // to resolveCollisions as concurrent-with-barrier hooks. On the
-    // parallel pool path they run alongside the particle collision
-    // workers (which only touch the particle SAB); on the serial path
-    // they run after resolveCollisions, preserving original ordering.
+    // Hand creature-vs-creature collisions to the resolveCollisions
+    // hook so it overlaps with the parallel particle-collision phase.
+    // resolveCreatureSedimentCollisions used to be a hook too but it
+    // writes particle positions/velocities directly; running it
+    // concurrent with the particle workers was a data race on the
+    // particle SAB columns. Run it serially after the barrier.
     resolveCollisions(
       world,
       () => resolveCreatureCollisions(world),
-      () => resolveCreatureSedimentCollisions(world),
+      undefined,
     );
+    resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
     applyWalls(world);
     aerate(world, dt);
@@ -5272,9 +5286,11 @@ export function applyCollisionsRowRange(
 // during each respective collision-phase barrier (parallel path only).
 // In the serial fallback they run after the particle collision pass to
 // preserve the original step ordering. Both callbacks must be safe to
-// execute alongside particle position/velocity mutations -- creature
-// collisions and creature-vs-sediment collisions qualify because they
-// only touch the creature stores, never the particle SAB.
+// execute alongside particle position/velocity mutations -- only
+// creature-vs-creature collisions qualify (touches creature stores
+// only). resolveCreatureSedimentCollisions used to be passed here as
+// duringPhase1 but it mutates particle SAB columns and so cannot
+// safely overlap; it now runs serially in step() after this returns.
 function resolveCollisions(
   world: World,
   duringPhase0?: () => void,
@@ -5788,6 +5804,12 @@ interface SavedWorld {
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
+  // Pheromone field as a flat array of cell values. Re-applied if the
+  // saved cols/rows match the freshly-resized world; otherwise
+  // dropped silently (different world dimensions = different grid).
+  // Older saves without this field reload with an empty pheromone
+  // field (creatures' established trails vanish until they re-emit).
+  pheromone?: { cols: number; rows: number; values: number[] };
 }
 
 function snapshotSparseCol(cols: Float32Array[], i: number, n: number): SavedSparse[] {
@@ -5889,6 +5911,9 @@ export function serializeWorld(w: World): string {
     species: speciesList,
     particles: w.particles.map(snapshotParticle),
     creatures: w.creatures.map(snapshotCreature),
+    pheromone: w.pheromone.length > 0
+      ? { cols: w.pheromoneCols, rows: w.pheromoneRows, values: Array.from(w.pheromone) }
+      : undefined,
   };
   // Second pass for bonds: now that every creature has an index in
   // saved.creatures, translate each cell's bond partners into those
@@ -5976,7 +6001,18 @@ export function applySavedWorld(world: World, json: string): boolean {
   while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
   world.species.clear();
   world.phylogenyEvents.length = 0;
+  // Restore pheromone trails if the saved grid dimensions match the
+  // current world's. Different dimensions (e.g., world resized
+  // between save and load) drop silently to a clean field.
   world.pheromone.fill(0);
+  if (saved.pheromone
+    && saved.pheromone.cols === world.pheromoneCols
+    && saved.pheromone.rows === world.pheromoneRows
+    && saved.pheromone.values.length === world.pheromone.length) {
+    for (let i = 0; i < saved.pheromone.values.length; i++) {
+      world.pheromone[i] = saved.pheromone.values[i];
+    }
+  }
   world.t = saved.t;
   world.nextLineageRoot = saved.nextLineageRoot;
   world.extinctionCount = saved.extinctionCount;
