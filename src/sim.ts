@@ -2563,13 +2563,44 @@ function spawnFounder(world: World): Creature {
 // cost for fewer big sand misses -- not worth it at current scale.
 const SAND_BIG_R_MIN = 5;
 const SAND_BIG_R_MAX = 8;
-// Target: a visibly continuous sandy floor (not just a sparse dotted
-// line). With pebble diameter ~10-16px and world width 800px, that's
-// ~100-130 pebbles spread across the bottom -- enough to read as a
-// proper sediment surface with light stacking. Sand is ~23% of all
-// particle spawns, steady-state target population is ~2300, so we
-// need ~0.04-0.05 of all spawns to be big sand -> ~0.20 of sand spawns.
-const SAND_BIG_FRACTION = 0.20;
+// Random-pebble injection into the normal weighted replenish flow is
+// disabled now that pebbles have a dedicated spawn path with its own
+// count target (PEBBLE_TARGET below). Keeping spawnRadius() in place
+// so the wiring is reversible by flipping this back to >0.
+const SAND_BIG_FRACTION = 0;
+// Dedicated pebble population for the sediment bed. Independent of
+// world.particleTarget so the floor doesn't crowd out tiny sand /
+// organic / etc that the biology layer depends on. Total particle
+// count at steady state ends up ≈ particleTarget + PEBBLE_TARGET.
+//
+// 1100 pebbles at diameter 10-16px is ~10x the previous floor
+// density -- explicitly requested. At ~150 px² per pebble that's
+// ~165k px² of visual area on an 800-wide floor, enough for a thick
+// stacked sediment band. Lower this if the floor reads as too deep.
+const PEBBLE_TARGET = 1100;
+// Per-second spawn rate when below target. Sized to fill the bed in
+// roughly 10 sim-seconds from a cold world without overshooting the
+// per-frame replenish budget.
+const PEBBLE_SPAWN_RATE = 120;
+// Refresh interval for the cached pebble count. Counting every call
+// would be a full O(N) scan per replenish; doing it every N refresh
+// ticks is fine because the count drifts at <<1 pebble/tick.
+const PEBBLE_COUNT_REFRESH_TICKS = 30;
+let pebbleCountCache = 0;
+let pebbleCountStaleTicks = PEBBLE_COUNT_REFRESH_TICKS; // force first refresh
+
+function countPebbles(world: World): number {
+  const ps = world.particleStore;
+  const PR = ps.r;
+  const PMAT = ps.material;
+  const sandIdx = MATERIAL_INDEX.sand;
+  const n = world.particles.length;
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    if (PMAT[i] === sandIdx && PR[i] >= SAND_BIG_R_MIN) count++;
+  }
+  return count;
+}
 
 function spawnRadius(mat: MaterialId): number {
   if (mat === "sand" && Math.random() < SAND_BIG_FRACTION) {
@@ -2682,6 +2713,11 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     const dy = p.y - y;
     const dz = p.z - z;
     if (dx * dx + dy * dy + dz * dz >= rSq) continue;
+    // Pebbles (large sand grains, part of the sediment bed) are not
+    // absorbed -- a founder spawning near the floor would otherwise
+    // inhale a full pebble's worth of sand mass and skew its starting
+    // reserves wildly. Leave them in the world.
+    if (p.material === "sand" && p.r >= SAND_BIG_R_MIN) continue;
     c.reserves[p.material] += mass(p);
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
@@ -3362,11 +3398,43 @@ function decayParticles(world: World, dt: number): void {
 }
 
 function replenishParticles(world: World, dt: number): void {
-  if (world.particles.length >= world.particleTarget) return;
+  // Dedicated pebble path: maintain PEBBLE_TARGET large sand grains
+  // for the sediment floor, independent of the normal per-material
+  // replenish below. Cached count refreshed every N ticks to avoid
+  // an O(N) scan per replenish call.
+  pebbleCountStaleTicks++;
+  if (pebbleCountStaleTicks >= PEBBLE_COUNT_REFRESH_TICKS) {
+    pebbleCountCache = countPebbles(world);
+    pebbleCountStaleTicks = 0;
+  }
+  if (pebbleCountCache < PEBBLE_TARGET) {
+    const pebbleExpected = PEBBLE_SPAWN_RATE * dt;
+    let pebbleSpawn = Math.floor(pebbleExpected);
+    if (Math.random() < pebbleExpected - pebbleSpawn) pebbleSpawn++;
+    pebbleSpawn = Math.min(pebbleSpawn, PEBBLE_TARGET - pebbleCountCache);
+    for (let i = 0; i < pebbleSpawn; i++) {
+      const r = SAND_BIG_R_MIN + Math.random() * (SAND_BIG_R_MAX - SAND_BIG_R_MIN);
+      pushParticle(world, {
+        x: Math.random() * world.width,
+        y: world.surfaceY + r,
+        z: r + Math.random() * (world.depth - 2 * r),
+        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+        r,
+        material: "sand",
+      });
+      pebbleCountCache++;
+    }
+  }
+
+  // Normal per-material replenish. Cap accommodates the pebble bed
+  // on top of particleTarget so the biology mix isn't squeezed by
+  // the sediment bed.
+  const replenishCap = world.particleTarget + PEBBLE_TARGET;
+  if (world.particles.length >= replenishCap) return;
   const expected = world.particleSpawnRate * dt;
   let toSpawn = Math.floor(expected);
   if (Math.random() < expected - toSpawn) toSpawn++;
-  for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
+  for (let i = 0; i < toSpawn && world.particles.length < replenishCap; i++) {
     const mat = pickMaterial();
     const r = spawnRadius(mat);
     pushParticle(world, {
