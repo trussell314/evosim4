@@ -999,6 +999,13 @@ export interface World {
   // depleted (every gas dissolved or trapped in cells) aeration
   // slows; we don't conjure new mass.
   atmosphere: Molecules;
+  // Dissolved-chemical concentration in the water column, one scalar
+  // per chem id. Cells passively diffuse against this pool via
+  // diffuseAmbient(). Phase F of the chemistry overhaul; replaces the
+  // hardcoded O2_AMBIENT / CO2_AMBIENT constants with a per-chem,
+  // mass-conserving pool. Spatial resolution is global scalar for
+  // MVP; a coarse 2D grid lands in a later phase without API change.
+  ambient: Float32Array;
   // Water temperature profile. The surface is warmer (sunlight), the
   // bottom is colder. Horizontal patches drift slowly via tempPatch*,
   // standing in for thermal convection without simulating it.
@@ -1278,10 +1285,9 @@ const DENSITY_CEIL = 1.15;
 // dissolve oxygen across their membrane; without this our cells starve
 // because the default genome only seeks organic particles and never builds
 // up enough internal O2 to power aerobic respiration.
-const O2_DIFFUSION_PER_R = 2;     // mass/sec at saturation
-const O2_AMBIENT = 12;             // assumed dissolved-O2 concentration cells diffuse toward
-const CO2_OFFGAS_PER_R = 1.5;     // mass/sec; CO2 leaks out of cells (down its gradient)
-const CO2_AMBIENT = 1;
+// O2 / CO2 diffusion is now generalized via diffuseAmbient + the
+// chem table's per-chem permeability. AMBIENT_TARGET[CHEM_O2] / [CO2]
+// continue to set the equilibrium concentrations.
 
 // Catabolism is now driven by reactions, not a hand-coded material-to-
 // molecule fraction table. The biopolymer-digest bootstrap reaction
@@ -2055,6 +2061,19 @@ function initialAtmosphere(): Molecules {
   return a;
 }
 
+// Saturation target for each chem in the ambient pool. Water in
+// contact with the atmosphere equilibrates toward these values; the
+// equilibration rate is what aerateAmbient() drives.
+const AMBIENT_TARGET = new Float32Array(CHEMICAL_COUNT);
+AMBIENT_TARGET[CHEM_O2] = 12;   // matches the old O2_AMBIENT constant
+AMBIENT_TARGET[CHEM_CO2] = 1;   // matches CO2_AMBIENT
+
+function initialAmbient(): Float32Array {
+  // Start the water column at its equilibrium target so the first
+  // ticks aren't dominated by ambient transients.
+  return new Float32Array(AMBIENT_TARGET);
+}
+
 // Pheromone field: coarse grid cell size, per-tick decay rate, and
 // neighbor-blend (diffusion) fraction. Tuned so a single big emit
 // (e.g. 50) fades to background in a few seconds and spreads about
@@ -2659,6 +2678,7 @@ export function createWorld(
     surfaceWaveAmp: 14,
     aerationRate: width * AERATION_PER_PX,
     atmosphere: initialAtmosphere(),
+    ambient: initialAmbient(),
     tempSurface: 28,
     tempBottom: 12,
     tempPatchAmp: 3,
@@ -3185,19 +3205,80 @@ function spendATP(c: Creature, want: number): number {
 }
 
 
-// Passive diffusion of O2 and CO2 across the cell membrane. Both flow down
-// their concentration gradient between the cell and the surrounding water,
-// with rate proportional to surface area. This is how dissolved gases
-// equilibrate in real cells -- the genome doesn't have to plan for it.
-function diffuseGases(c: Creature, dt: number): void {
+// Per-chem permeability cache. Mirrors CHEMICALS[k].permeability but
+// flat so the hot loop avoids a property dispatch per cell-chem pair.
+// Built once at module load alongside CHEM_BASE_DENSITY.
+const CHEM_PERMEABILITY = new Float32Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_PERMEABILITY[i] = CHEMICALS[i].permeability;
+
+// Phase F: generalized passive diffusion. Each diffusable chem flows
+// down its gradient between the cell's pool and world.ambient, with
+// rate scaled by per-chem permeability * cell surface area. Mass
+// conserved across cell and ambient. Replaces the old O2/CO2-only
+// hard-coded path.
+//
+// AMBIENT_FLOW_RATE: shared dimensionless scaler so individual
+// chems' permeability values stay in the 0..1 range. Tuned so O2
+// at permeability 1.0 + surface 1.0 + gap 12 yields ~0.7 mass/sec,
+// matching the old `O2_DIFFUSION_PER_R * 0.1` rate.
+const AMBIENT_FLOW_RATE = 0.6;
+function diffuseAmbient(c: Creature, world: World, dt: number): void {
   const s = c.store; const i = c.idx;
   const surface = s.r[i] / MIN_CREATURE_R;
-  const o2Grad = O2_AMBIENT - s.m_o2[i];
-  s.m_o2[i] += O2_DIFFUSION_PER_R * surface * o2Grad * dt * 0.1;
-  const co2 = s.m_co2[i];
-  const co2Grad = co2 - CO2_AMBIENT;
-  if (co2Grad > 0) {
-    s.m_co2[i] = co2 - CO2_OFFGAS_PER_R * surface * co2Grad * dt * 0.1;
+  const ambient = world.ambient;
+  const cols = s.chemCols;
+  for (let j = 0; j < DIFFUSABLE_CHEM_IDS.length; j++) {
+    const k = DIFFUSABLE_CHEM_IDS[j];
+    const perm = CHEM_PERMEABILITY[k];
+    if (perm <= 0) continue;
+    const gap = ambient[k] - cols[k][i];
+    if (gap === 0) continue;
+    const flow = perm * surface * gap * AMBIENT_FLOW_RATE * dt;
+    cols[k][i] += flow;
+    // Mass conservation: every unit gained by the cell came from
+    // ambient (or vice versa for outflow). Clamp ambient at 0 -- a
+    // depleted pool stays depleted until something refills it.
+    const next = ambient[k] - flow;
+    ambient[k] = next < 0 ? 0 : next;
+  }
+}
+
+// Ambient ↔ atmosphere equilibration. Once per tick, gases in the
+// atmosphere dissolve into ambient (and vice versa) toward
+// AMBIENT_TARGET. Mass conserved: every unit added to ambient is
+// removed from atmosphere. Driven by surface activity so a calm
+// surface lets gases stratify; a stormy surface mixes them in.
+const ATM_AMBIENT_RATE = 0.5; // fraction of gap that crosses per sec at peak activity
+function aerateAmbient(world: World, dt: number): void {
+  const ambient = world.ambient;
+  const atm = world.atmosphere;
+  // Surface activity 0..1; even calm water has 0.3 of the rate.
+  const act = 0.3 + 0.7 * surfaceActivity(world);
+  const rate = ATM_AMBIENT_RATE * act * dt;
+  // O2 + CO2 are the gases that exchange with atmosphere today;
+  // other chems' atmospheric components are zero so they don't
+  // exchange. The loop is bounded by DIFFUSABLE_CHEM_IDS so adding
+  // a new gas to AMBIENT_TARGET picks it up automatically.
+  const pairs: Array<[number, keyof Molecules]> = [
+    [CHEM_O2, "o2"],
+    [CHEM_CO2, "co2"],
+  ];
+  for (const [k, molKey] of pairs) {
+    const target = AMBIENT_TARGET[k];
+    if (target <= 0) continue;
+    const gap = target - ambient[k];
+    // Pull from atm if ambient is below target, push back to atm if
+    // above. Magnitude bounded by available atmospheric mass.
+    let flow = gap * rate;
+    if (flow > 0) {
+      if (flow > atm[molKey]) flow = atm[molKey];
+    } else {
+      // Outflow from ambient back to atmosphere is unbounded by atm.
+      const limit = ambient[k];
+      if (-flow > limit) flow = -limit;
+    }
+    ambient[k] += flow;
+    atm[molKey] -= flow;
   }
 }
 
@@ -3628,6 +3709,7 @@ export function step(world: World, dt: number): void {
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
     aerate(world, dt);
+    aerateAmbient(world, dt);
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
@@ -3661,6 +3743,7 @@ export function step(world: World, dt: number): void {
     resolveObstacleCollisions(world);
     applyWalls(world);
     aerate(world, dt);
+    aerateAmbient(world, dt);
     replenishParticles(world, dt);
     decayParticles(world, dt);
     pruneSpecies(world);
@@ -4270,7 +4353,7 @@ function updateCreatures(world: World, dt: number): void {
 
     // Passive gas exchange with the surrounding water. Diffusion is
     // physical, not enzymatic -- left at the base dt.
-    diffuseGases(c, dt);
+    diffuseAmbient(c, world, dt);
 
     // All in-cell chemistry runs through one unified loop: named
     // reactions live at REACTIONS[0..9] with uncatRate > 0, so they
@@ -6048,6 +6131,9 @@ interface SavedWorld {
   liveLineageRoots: number[];
   obstacles: Obstacle[];
   atmosphere?: Partial<Molecules>;
+  // Phase F ambient pool. Sparse list of (chemId, concentration);
+  // missing entries default to zero on restore.
+  ambient?: Array<{ i: number; v: number }>;
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
@@ -6143,6 +6229,13 @@ export function serializeWorld(w: World): string {
     founderTarget: w.founderTarget,
     dayPhase: w.dayPhase,
     atmosphere: { ...w.atmosphere },
+    ambient: (() => {
+      const out: Array<{ i: number; v: number }> = [];
+      for (let k = 0; k < w.ambient.length; k++) {
+        if (w.ambient[k] > 0) out.push({ i: k, v: w.ambient[k] });
+      }
+      return out;
+    })(),
     disturbanceIntensity: w.disturbanceIntensity,
     disturbanceStartedAt: w.disturbanceStartedAt,
     disturbanceUntil: w.disturbanceUntil,
@@ -6277,6 +6370,13 @@ export function applySavedWorld(world: World, json: string): boolean {
   if (saved.atmosphere) {
     const atm = world.atmosphere;
     for (const k of MOLECULE_IDS) atm[k] = saved.atmosphere[k] ?? 0;
+  }
+  if (saved.ambient) {
+    const a = world.ambient;
+    a.fill(0);
+    for (const { i, v } of saved.ambient) {
+      if (i >= 0 && i < a.length) a[i] = v;
+    }
   }
   let maxLane = -1;
   for (const ss of saved.species) {

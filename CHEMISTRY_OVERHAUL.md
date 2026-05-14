@@ -345,15 +345,15 @@ no separate reserve dump.
 Tests: a creature that eats glucose particles can run aerobic
 respiration. A creature with zero enzyme can't process biopolymer.
 
-### Phase E — ATP into chem pool
+### Phase E — ATP into chem pool *(deferred)*
 
-`Creature.energy` becomes `chemCols[ATP_ID]`. The reaction engine
-already treats ATP as a chemical for accounting purposes; this
-change makes it literally a chemical column. ATP-cost ops
-(`THRUST`, `REPRODUCE`, etc.) read/write the column.
-
-Tests: existing behavior preserved; energy conservation in
-reactions unchanged.
+The reaction engine already treats ATP as a balanced chemical via
+`atpDelta`: every reaction's effect on `Creature.energy` is
+mass-conserving against the ADP pool. The remaining benefit of
+moving the storage from `c.energy` into `chemCols[ATP_ID]` is
+purely cosmetic uniformity; deferred to a future session because
+no current code path needs it. If ATP-tagged free particles or
+ambient ATP exchange ever become a thing, this phase lands first.
 
 ### Phase F — Ambient pool & generalized diffusion
 
