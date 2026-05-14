@@ -1,4 +1,26 @@
 import "./style.css";
+
+// Register the COI service worker before anything else. On a host
+// that doesn't send COOP/COEP (e.g. GitHub Pages), the SW intercepts
+// our own fetches and tacks the headers on, which is enough to flip
+// self.crossOriginIsolated to true and let stage A's particle
+// subworker pool spawn. On hosts that already send the headers, the
+// SW is harmless (just a no-op rewrite). First install requires a
+// reload to put the SW in front of the document load.
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.crossOriginIsolated) {
+  // Relative path so it picks up Vite's base prefix at build time;
+  // public/coi-serviceworker.js is copied to dist/ root.
+  const swUrl = `${import.meta.env.BASE_URL}coi-serviceworker.js`;
+  navigator.serviceWorker.register(swUrl, { scope: import.meta.env.BASE_URL })
+    .then((reg) => {
+      if (reg.active && !window.crossOriginIsolated) window.location.reload();
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("[coi] service worker registration failed:", err);
+    });
+}
+
 import {
   createWorld,
   MATERIALS,
