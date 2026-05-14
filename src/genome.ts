@@ -132,7 +132,7 @@ export const N_REACTIONS = CATALYST_COUNT;
 // Number of distinct chemical species the cell pool tracks (8 named
 // + 56 generic, defined in sim.ts). Exposed here because the VM mods
 // SENSE_CHEMICAL's operand by it -- part of the genome ABI.
-export const CHEMICAL_COUNT = 64;
+export const CHEMICAL_COUNT = 96;
 
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list

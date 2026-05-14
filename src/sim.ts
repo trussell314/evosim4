@@ -415,9 +415,10 @@ const CREATURE_F32_COLS = [
   "m_biomass", "m_waste", "m_adp", "m_ribosome",
   "m_biopolymer", "m_membrane",
   "m_photoreceptor", "m_chemoreceptor", "m_mechanoreceptor", "m_thermoreceptor",
+  "m_marker0", "m_marker1", "m_marker2", "m_marker3",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
-const CREATURE_U32_COLS = ["fpLo", "fpHi"] as const;
+const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
 
 function allocCreatureBuffer(cap: number): { buffer: ArrayBufferLike; offsets: CreatureSharedLayout["offsets"] } {
   const align = (n: number): number => (n + 7) & ~7;
@@ -486,6 +487,10 @@ export class CreatureStore {
   m_chemoreceptor!: Float32Array;
   m_mechanoreceptor!: Float32Array;
   m_thermoreceptor!: Float32Array;
+  m_marker0!: Float32Array;
+  m_marker1!: Float32Array;
+  m_marker2!: Float32Array;
+  m_marker3!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -509,8 +514,13 @@ export class CreatureStore {
   // contact recognition by ADHERE / ENGULF. Each cell's top 8
   // chemicals by mass are packed into a 64-bit set (two Uint32Arrays
   // because JS bitops are 32-bit). Refreshed once per tick.
-  fpLo!: Uint32Array;
-  fpHi!: Uint32Array;
+  // Surface fingerprint: top-FP_SIZE chems packed into a 128-bit set
+  // (four 32-bit words). Word i covers chem ids [32i .. 32i+31].
+  // Phase I widened from 64 -> 128 bits to accommodate CHEMICAL_COUNT=96.
+  fpW0!: Uint32Array;
+  fpW1!: Uint32Array;
+  fpW2!: Uint32Array;
+  fpW3!: Uint32Array;
   constructor(initialCap = 256) {
     // Round up to the parallel-friendly preallocated ceiling. Future
     // creature subworkers will hold views over the same buffer.
@@ -561,9 +571,15 @@ export class CreatureStore {
     this.m_chemoreceptor = new Float32Array(b, o.base.m_chemoreceptor, cap);
     this.m_mechanoreceptor = new Float32Array(b, o.base.m_mechanoreceptor, cap);
     this.m_thermoreceptor = new Float32Array(b, o.base.m_thermoreceptor, cap);
+    this.m_marker0 = new Float32Array(b, o.base.m_marker0, cap);
+    this.m_marker1 = new Float32Array(b, o.base.m_marker1, cap);
+    this.m_marker2 = new Float32Array(b, o.base.m_marker2, cap);
+    this.m_marker3 = new Float32Array(b, o.base.m_marker3, cap);
     this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
-    this.fpLo = new Uint32Array(b, o.base.fpLo, cap);
-    this.fpHi = new Uint32Array(b, o.base.fpHi, cap);
+    this.fpW0 = new Uint32Array(b, o.base.fpW0, cap);
+    this.fpW1 = new Uint32Array(b, o.base.fpW1, cap);
+    this.fpW2 = new Uint32Array(b, o.base.fpW2, cap);
+    this.fpW3 = new Uint32Array(b, o.base.fpW3, cap);
     this.catalystCols = new Array(CATALYST_COUNT);
     for (let k = 0; k < CATALYST_COUNT; k++) {
       this.catalystCols[k] = new Float32Array(b, o.catalyst[k], cap);
@@ -580,6 +596,7 @@ export class CreatureStore {
       this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
       this.m_biopolymer, this.m_membrane,
       this.m_photoreceptor, this.m_chemoreceptor, this.m_mechanoreceptor, this.m_thermoreceptor,
+      this.m_marker0, this.m_marker1, this.m_marker2, this.m_marker3,
     ];
     this.chemCols = new Array(CHEMICAL_COUNT);
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
@@ -621,7 +638,7 @@ export class CreatureStore {
     this.bornAt[i] = 0;
     this.ingestCooldown[i] = 0;
     this.repairTicks[i] = 0;
-    this.fpLo[i] = 0; this.fpHi[i] = 0;
+    this.fpW0[i] = 0; this.fpW1[i] = 0; this.fpW2[i] = 0; this.fpW3[i] = 0;
     this.ax[i] = 0; this.ay[i] = 0;
     this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
@@ -630,6 +647,8 @@ export class CreatureStore {
     this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
     this.m_photoreceptor[i] = 0; this.m_chemoreceptor[i] = 0;
     this.m_mechanoreceptor[i] = 0; this.m_thermoreceptor[i] = 0;
+    this.m_marker0[i] = 0; this.m_marker1[i] = 0;
+    this.m_marker2[i] = 0; this.m_marker3[i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
     // Named chemCols slots 0..7 are aliases of molCols and already
     // cleared above; only the generic slice (8..63) needs its own
@@ -676,6 +695,14 @@ export class MoleculesView {
   set mechanoreceptor(v: number) { this.c.store.m_mechanoreceptor[this.c.idx] = v; }
   get thermoreceptor(): number { return this.c.store.m_thermoreceptor[this.c.idx]; }
   set thermoreceptor(v: number) { this.c.store.m_thermoreceptor[this.c.idx] = v; }
+  get marker0(): number { return this.c.store.m_marker0[this.c.idx]; }
+  set marker0(v: number) { this.c.store.m_marker0[this.c.idx] = v; }
+  get marker1(): number { return this.c.store.m_marker1[this.c.idx]; }
+  set marker1(v: number) { this.c.store.m_marker1[this.c.idx] = v; }
+  get marker2(): number { return this.c.store.m_marker2[this.c.idx]; }
+  set marker2(v: number) { this.c.store.m_marker2[this.c.idx] = v; }
+  get marker3(): number { return this.c.store.m_marker3[this.c.idx]; }
+  set marker3(v: number) { this.c.store.m_marker3[this.c.idx] = v; }
 }
 
 // Reserves were retired in phase D of the chemistry overhaul.
@@ -734,7 +761,7 @@ export class Creature {
   // Setter: copy field-by-field from any Molecules-shaped object into
   // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
   // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number }) {
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number; marker0?: number; marker1?: number; marker2?: number; marker3?: number }) {
     const s = this.store; const i = this.idx;
     s.m_glucose[i] = m.glucose ?? 0;
     s.m_fattyAcid[i] = m.fattyAcid ?? 0;
@@ -754,6 +781,10 @@ export class Creature {
     s.m_chemoreceptor[i] = m.chemoreceptor ?? 0;
     s.m_mechanoreceptor[i] = m.mechanoreceptor ?? 0;
     s.m_thermoreceptor[i] = m.thermoreceptor ?? 0;
+    s.m_marker0[i] = m.marker0 ?? 0;
+    s.m_marker1[i] = m.marker1 ?? 0;
+    s.m_marker2[i] = m.marker2 ?? 0;
+    s.m_marker3[i] = m.marker3 ?? 0;
   }
   get x(): number { return this.store.x[this.idx]; }
   set x(v: number) { this.store.x[this.idx] = v; }
@@ -845,6 +876,10 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.chemoreceptor !== undefined) store.m_chemoreceptor[idx] = m.chemoreceptor;
     if (m.mechanoreceptor !== undefined) store.m_mechanoreceptor[idx] = m.mechanoreceptor;
     if (m.thermoreceptor !== undefined) store.m_thermoreceptor[idx] = m.thermoreceptor;
+    if (m.marker0 !== undefined) store.m_marker0[idx] = m.marker0;
+    if (m.marker1 !== undefined) store.m_marker1[idx] = m.marker1;
+    if (m.marker2 !== undefined) store.m_marker2[idx] = m.marker2;
+    if (m.marker3 !== undefined) store.m_marker3[idx] = m.marker3;
   }
   return c;
 }
@@ -886,6 +921,10 @@ export interface Molecules {
   chemoreceptor: number;   // gates SENSE_GRAD / DENSITY / KIN
   mechanoreceptor: number; // gates SENSE_PRESSURE / WALL
   thermoreceptor: number;  // gates SENSE_TEMP
+  marker0: number;     // identity-only; produced by procedural reactions, used in fingerprint
+  marker1: number;
+  marker2: number;
+  marker3: number;
 }
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
@@ -893,6 +932,7 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "minerals", "biomass", "waste", "ribosome",
   "biopolymer", "membrane",
   "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
+  "marker0", "marker1", "marker2", "marker3",
 ];
 
 // Per-byte genome cost (BUILD_KEYS, genomeMoleculeCost,
@@ -907,6 +947,7 @@ export function emptyMolecules(): Molecules {
     o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0, ribosome: 0,
     biopolymer: 0, membrane: 0,
     photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0,
+    marker0: 0, marker1: 0, marker2: 0, marker3: 0,
   };
 }
 
@@ -1368,8 +1409,8 @@ const CAT_REF = 5;
 const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
-const CHEMICAL_COUNT = 64;
-const NAMED_CHEMICAL_COUNT = 18;
+const CHEMICAL_COUNT = 96;
+const NAMED_CHEMICAL_COUNT = 22;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
 // Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
@@ -1381,6 +1422,7 @@ const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "waste", "chlorophyll", "enzyme", "ribosome",
   "biopolymer", "membrane",
   "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
+  "marker0", "marker1", "marker2", "marker3",
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
 // Stable across the migration; phase E renumbers ATP to 0 and shifts these.
@@ -1409,6 +1451,13 @@ const CHEM_PHOTORECEPTOR = 14;
 const CHEM_CHEMORECEPTOR = 15;
 const CHEM_MECHANORECEPTOR = 16;
 const CHEM_THERMORECEPTOR = 17;
+// Marker chems live at slots 18..21. Identity-only -- produced as
+// random side-products of procedural reactions whose product list
+// happens to include them. Fingerprint top-N includes markers
+// naturally because cells that accumulate one will rank it high.
+// Constants aren't separately exported; the fingerprint code iterates
+// over all chems and the chem table's role tag does the gating.
+void 0;
 // Receptor saturation reference. Above this pool size sense signals
 // run at full strength; below it they scale linearly toward zero.
 const RECEPTOR_REF = 1.0;
@@ -1505,6 +1554,10 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* chemo  */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#64c8d8" },
   /* mech   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#c8d864" },
   /* thermo */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#d8a064" },
+  /* mark0  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e84a4a" },
+  /* mark1  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4ae84a" },
+  /* mark2  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4a4ae8" },
+  /* mark3  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e8e84a" },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // Initialize the exported per-chem density LUT. Hot loops reuse this
@@ -1884,7 +1937,10 @@ function popcount32(x: number): number {
 function fingerprintOverlap(a: Creature, b: Creature): number {
   const sa = a.store; const sb = b.store;
   const ai = a.idx; const bi = b.idx;
-  return popcount32(sa.fpLo[ai] & sb.fpLo[bi]) + popcount32(sa.fpHi[ai] & sb.fpHi[bi]);
+  return popcount32(sa.fpW0[ai] & sb.fpW0[bi])
+       + popcount32(sa.fpW1[ai] & sb.fpW1[bi])
+       + popcount32(sa.fpW2[ai] & sb.fpW2[bi])
+       + popcount32(sa.fpW3[ai] & sb.fpW3[bi]);
 }
 function updateSurfaceFingerprint(c: Creature): void {
   const s = c.store; const i = c.idx;
@@ -1905,16 +1961,23 @@ function updateSurfaceFingerprint(c: Creature): void {
       fpScratchIds[minIdx] = chem;
     }
   }
-  // Pack ids into a 64-bit set (lo: ids 0..31, hi: ids 32..63).
-  let lo = 0, hi = 0;
+  // Pack ids into a 128-bit set across four 32-bit words.
+  // Word w covers chem ids [32w .. 32w+31].
+  let w0 = 0, w1 = 0, w2 = 0, w3 = 0;
   for (let k = 0; k < FP_SIZE; k++) {
     if (fpScratchVals[k] < 0) continue; // unfilled slot
     const id = fpScratchIds[k];
-    if (id < 32) lo |= (1 << id);
-    else hi |= (1 << (id - 32));
+    const word = id >>> 5;        // id / 32
+    const bit = 1 << (id & 31);   // id % 32
+    if (word === 0) w0 |= bit;
+    else if (word === 1) w1 |= bit;
+    else if (word === 2) w2 |= bit;
+    else w3 |= bit;
   }
-  s.fpLo[i] = lo >>> 0;
-  s.fpHi[i] = hi >>> 0;
+  s.fpW0[i] = w0 >>> 0;
+  s.fpW1[i] = w1 >>> 0;
+  s.fpW2[i] = w2 >>> 0;
+  s.fpW3[i] = w3 >>> 0;
 }
 function refreshSurfaceFingerprints(world: World): void {
   for (const c of world.creatures) {
@@ -5332,9 +5395,12 @@ function populateSensors(c: Creature, world: World): void {
     // Cheap byte hash of the neighbor's full fingerprint -- xor low
     // and high words byte-by-byte so the genome can use it as a
     // tribe / signature recognizer.
-    const lo = o.store.fpLo[o.idx];
-    const hi = o.store.fpHi[o.idx];
-    const xored = (lo ^ hi) >>> 0;
+    // Hash all four fingerprint words together for a single byte.
+    const w0 = o.store.fpW0[o.idx];
+    const w1 = o.store.fpW1[o.idx];
+    const w2 = o.store.fpW2[o.idx];
+    const w3 = o.store.fpW3[o.idx];
+    const xored = (w0 ^ w1 ^ w2 ^ w3) >>> 0;
     VM_SENSORS.neighborHash =
       ((xored & 0xFF) ^ ((xored >>> 8) & 0xFF) ^ ((xored >>> 16) & 0xFF) ^ ((xored >>> 24) & 0xFF)) & 0xFF;
   }
@@ -6678,6 +6744,10 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       chemoreceptor: m.chemoreceptor,
       mechanoreceptor: m.mechanoreceptor,
       thermoreceptor: m.thermoreceptor,
+      marker0: m.marker0,
+      marker1: m.marker1,
+      marker2: m.marker2,
+      marker3: m.marker3,
     },
     vmPc: c.vm.pc,
     // The renderer reads the stack length and a short preview; a slice

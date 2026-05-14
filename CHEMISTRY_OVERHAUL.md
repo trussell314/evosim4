@@ -437,9 +437,11 @@ completion, a population stabilizes.
 User-confirmed before implementation starts. Revise here if any
 flip mid-migration.
 
-1. **Total chemical count: 96.** Headroom past the doc's
-   bootstrap+50 mock target. Surface fingerprint widens from
-   64-bit to 128-bit (two `Uint32` pairs already pattern).
+1. **Total chemical count: 96.** Phase I sets this. 22 named
+   bootstrap slots (12 metabolic, 2 bulk biomass / membrane, 4
+   receptor chems, 4 markers) + 74 procedurally rolled mock chems.
+   Surface fingerprint widens from 64-bit to 128-bit (four
+   `Uint32` words, ids 0..127 packable).
 2. **ATP is `chemCols[0]`.** `Creature.energy` is retired in
    phase E; all ATP-cost ops read/write the chem column. Energy
    accounting is plain chemistry from that phase on.
