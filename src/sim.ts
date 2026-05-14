@@ -2534,6 +2534,11 @@ const FOUNDER_TARGET = 25;
 // any creatures enter the simulation -- otherwise founders spawn into
 // an empty/loading world and the early dynamics look off.
 const FOUNDER_SPAWN_DELAY_SEC = 60;
+// Defer everything-but-pebbles for the early game. Pebbles spawn from
+// t=0 so the sediment bed forms first; normal per-material replenish
+// and aeration hold until WATER_FILL_DELAY_SEC so the floor is settled
+// before the water column populates. Founders gate is later still.
+const WATER_FILL_DELAY_SEC = 30;
 
 function spawnFounder(world: World): Creature {
   const x = world.width * (0.1 + 0.8 * Math.random());
@@ -3434,6 +3439,7 @@ function replenishParticles(world: World, dt: number): void {
   // Normal per-material replenish. Cap accommodates the pebble bed
   // on top of particleTarget so the biology mix isn't squeezed by
   // the sediment bed.
+  if (world.t < WATER_FILL_DELAY_SEC) return;
   const replenishCap = world.particleTarget + PEBBLE_TARGET;
   if (world.particles.length >= replenishCap) return;
   const expected = world.particleSpawnRate * dt;
@@ -3460,6 +3466,7 @@ function replenishParticles(world: World, dt: number): void {
 // carry molecule-level O2 -- cells that ingest them get straight O2 in
 // their molecule pool, just like other molecule-tagged particles.
 function aerate(world: World, dt: number): void {
+  if (world.t < WATER_FILL_DELAY_SEC) return;
   if (world.particles.length >= world.particleTarget) return;
   // Surface chop drives entrainment of air bubbles. Quiet surface =>
   // baseline aeration; storms and choppy periods => much more O2 mixed in.
