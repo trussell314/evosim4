@@ -250,6 +250,23 @@ function setupParticlePool(w: World): void {
       !(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
     return;
   }
+  // Probe whether the COI service worker is intercepting fetches made
+  // from THIS (worker) context. If it is, the response will carry the
+  // SW-injected COEP=require-corp / CORP=cross-origin headers. If not,
+  // sub-worker script loads will silently fail to satisfy parent COEP
+  // and the workers will never execute. Probe a known same-origin URL
+  // under the SW scope.
+  fetch("./", { cache: "no-store" }).then((r) => {
+    const h = r.headers;
+    // eslint-disable-next-line no-console
+    console.warn("[pool probe]", r.url, r.status,
+      "coop=", h.get("cross-origin-opener-policy"),
+      "coep=", h.get("cross-origin-embedder-policy"),
+      "corp=", h.get("cross-origin-resource-policy"));
+  }).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn("[pool probe] fetch failed:", err);
+  });
   const storeLayout = w.particleStore.sharedLayout();
   if (!(storeLayout.buffer instanceof SharedArrayBuffer)) return;
   const collisionLayout = getCollisionSharedLayout();
