@@ -2257,6 +2257,15 @@ const OBSTACLE_BAND_W = 64;
 let OBSTACLE_BANDS: Obstacle[][] = [];
 let OBSTACLE_BANDS_COLS = 0;
 let OBSTACLES_MIN_Y = Infinity;
+// Per-cell bitmap: 1 if any obstacle (with particle-radius margin)
+// touches the cell. Lets collideObstaclesSoa reject a particle that
+// happens to be in a gap between obstacles with a single byte read,
+// avoiding the per-band-obstacle AABB sweep + ~30-lobe inner loop on
+// what is the dominant in-transit-particle population near the floor.
+const OBSTACLE_CELL_SIZE = 12;
+let OBSTACLE_CELL_GRID: Uint8Array = new Uint8Array(0);
+let OBSTACLE_CELL_COLS = 0;
+let OBSTACLE_CELL_ROWS = 0;
 
 function rebuildObstacleIndex(world: World): void {
   OBSTACLES_MIN_Y = Infinity;
@@ -2270,6 +2279,26 @@ function rebuildObstacleIndex(world: World): void {
     const b0 = Math.max(0, Math.floor((ob.minX - margin) / OBSTACLE_BAND_W));
     const b1 = Math.min(OBSTACLE_BANDS_COLS - 1, Math.floor((ob.maxX + margin) / OBSTACLE_BAND_W));
     for (let i = b0; i <= b1; i++) OBSTACLE_BANDS[i].push(ob);
+  }
+  // Build the cell-level bitmap. Margin matches the band index so the
+  // worst-case particle just touching the AABB still hits the bitmap.
+  OBSTACLE_CELL_COLS = Math.max(1, Math.ceil(world.width / OBSTACLE_CELL_SIZE));
+  OBSTACLE_CELL_ROWS = Math.max(1, Math.ceil(world.height / OBSTACLE_CELL_SIZE));
+  const cellCount = OBSTACLE_CELL_COLS * OBSTACLE_CELL_ROWS;
+  if (OBSTACLE_CELL_GRID.length !== cellCount) {
+    OBSTACLE_CELL_GRID = new Uint8Array(cellCount);
+  } else {
+    OBSTACLE_CELL_GRID.fill(0);
+  }
+  for (const ob of world.obstacles) {
+    const x0 = Math.max(0, Math.floor((ob.minX - margin) / OBSTACLE_CELL_SIZE));
+    const x1 = Math.min(OBSTACLE_CELL_COLS - 1, Math.floor((ob.maxX + margin) / OBSTACLE_CELL_SIZE));
+    const y0 = Math.max(0, Math.floor((ob.minY - margin) / OBSTACLE_CELL_SIZE));
+    const y1 = Math.min(OBSTACLE_CELL_ROWS - 1, Math.floor((ob.maxY + margin) / OBSTACLE_CELL_SIZE));
+    for (let y = y0; y <= y1; y++) {
+      const row = y * OBSTACLE_CELL_COLS;
+      for (let x = x0; x <= x1; x++) OBSTACLE_CELL_GRID[row + x] = 1;
+    }
   }
 }
 
@@ -2309,6 +2338,15 @@ function collideObstaclesSoaSingle(
   if (Y[idx] + rk < minY) return;
   const xk = X[idx], yk = Y[idx];
   if (xk !== xk || yk !== yk || rk !== rk) return;
+  // Cell-bitmap early exit -- same idea as the particle loop above.
+  const cellSize = OBSTACLE_CELL_SIZE;
+  const cellCols = OBSTACLE_CELL_COLS;
+  const cellRows = OBSTACLE_CELL_ROWS;
+  let gcx = (xk / cellSize) | 0;
+  let gcy = (yk / cellSize) | 0;
+  if (gcx < 0) gcx = 0; else if (gcx >= cellCols) gcx = cellCols - 1;
+  if (gcy < 0) gcy = 0; else if (gcy >= cellRows) gcy = cellRows - 1;
+  if (!OBSTACLE_CELL_GRID[gcy * cellCols + gcx]) return;
   let bx = Math.floor(xk / OBSTACLE_BAND_W);
   if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
   const obs = OBSTACLE_BANDS[bx];
@@ -2353,6 +2391,9 @@ function collideObstaclesSoa(
   // Defensive: if the obstacle index wasn't built (cols=0) the per-
   // particle clamp below would land bx at -1 and throw on undefined.
   if (OBSTACLE_BANDS_COLS <= 0) return;
+  const cellSize = OBSTACLE_CELL_SIZE;
+  const cellCols = OBSTACLE_CELL_COLS;
+  const cellRows = OBSTACLE_CELL_ROWS;
   for (let k = 0; k < n; k++) {
     if (ASLEEP[k]) continue;
     const yk = Y[k]; const rk = R[k];
@@ -2363,6 +2404,13 @@ function collideObstaclesSoa(
     // comparison is false), leaving bx as NaN and OBSTACLE_BANDS[NaN]
     // as undefined. Skip and let upstream code recover the particle.
     if (xk !== xk || yk !== yk || rk !== rk) continue;
+    // Cell-bitmap early exit: a single byte read rejects particles in
+    // obstacle-free cells before the per-band AABB sweep.
+    let gcx = (xk / cellSize) | 0;
+    let gcy = (yk / cellSize) | 0;
+    if (gcx < 0) gcx = 0; else if (gcx >= cellCols) gcx = cellCols - 1;
+    if (gcy < 0) gcy = 0; else if (gcy >= cellRows) gcy = cellRows - 1;
+    if (!OBSTACLE_CELL_GRID[gcy * cellCols + gcx]) continue;
     let bx = Math.floor(xk / OBSTACLE_BAND_W);
     if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
     const obs = OBSTACLE_BANDS[bx];
