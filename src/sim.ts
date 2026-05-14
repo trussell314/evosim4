@@ -2514,25 +2514,26 @@ export function createWorld(width: number, height: number): World {
   // Each founder is independent (its own genome, its own lineageRoot
   // id) so we get several parallel lineages to watch. Particles
   // trickle in via replenishParticles() afterward.
-  const initialFounders = INITIAL_FOUNDER_MIN + Math.floor(Math.random() * (INITIAL_FOUNDER_MAX - INITIAL_FOUNDER_MIN + 1));
-  for (let i = 0; i < initialFounders; i++) {
-    const f = spawnFounder(world);
-    // The very first founder also anchors the color palette so other
-    // cells visually contrast with it.
-    if (i === 0) {
-      world.anchorGenome = new Uint8Array(f.genome);
-      f.color = genomeColor(f.genome, world.anchorGenome);
-    }
-  }
+  //
+  // Founder spawning is held off until FOUNDER_SPAWN_DELAY_SEC of sim
+  // time has passed so the pebble bed forms, waves develop, and the
+  // water column populates before any life enters the world. The
+  // continuous top-up loop in step() gates on world.t as well.
   return world;
 }
 
-// Founder spawn count + steady-state target. Initial world drops in
-// random[MIN, MAX] founders; later top-ups push the live count back
-// toward TARGET whenever it falls below.
-const INITIAL_FOUNDER_MIN = 15;
-const INITIAL_FOUNDER_MAX = 25;
+// Steady-state target for live founder lineages. Top-up loop pushes
+// the live count back toward TARGET whenever it falls below. Initial
+// founder spawn is now deferred to the same top-up path (gated by
+// FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
+// batch" constants any more.
 const FOUNDER_TARGET = 25;
+// Hold off all founder spawning (initial + top-up) for the first
+// FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
+// pebble bed time to settle and the water column to populate before
+// any creatures enter the simulation -- otherwise founders spawn into
+// an empty/loading world and the early dynamics look off.
+const FOUNDER_SPAWN_DELAY_SEC = 20;
 
 function spawnFounder(world: World): Creature {
   const x = world.width * (0.1 + 0.8 * Math.random());
@@ -3358,7 +3359,11 @@ export function step(world: World, dt: number): void {
   const capMult = 2 + deficit * 0.8;
   const allDead = currentLineages.size === 0;
   const overCap = world.particles.length >= world.particleTarget * capMult;
-  if (world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
+  // Suppress founder spawning entirely until the new-world delay has
+  // elapsed. After that the loop runs every step as usual; on a
+  // reloaded save world.t is already past the delay so it's a no-op.
+  const delayDone = world.t >= FOUNDER_SPAWN_DELAY_SEC;
+  if (delayDone && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     const need = world.founderTarget - currentLineages.size;
     for (let i = 0; i < need; i++) {

@@ -1127,7 +1127,10 @@ function updateDroplets(): void {
       y: surfY,
       vx: nx * baseSpeed + tx * tangentialNoise,
       vy: ny * baseSpeed + ty * tangentialNoise,
-      r: 0.8 + Math.random() * 1.4,
+      // Size scales with how high on the wave we spawn. Peak ejections
+      // throw chunky droplets; mid-slope sheds stay small. Keeps a bit
+      // of random spread so droplets in the same splash look varied.
+      r: 1.2 + heightFactor * 4 + Math.random() * 1.5,
       life: 1.2 + Math.random() * 0.6,
     });
   }
