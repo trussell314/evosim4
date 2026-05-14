@@ -3504,11 +3504,14 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
 // Atomics. Stays null for tests and any context without
 // crossOriginIsolated SAB support; sim falls back to single-threaded.
 //
-// Atomics.wait round-trip on a barrier is ~0.1-1ms in browsers. Below
-// this threshold the per-particle savings from splitting work across
-// the pool don't pay back the dispatch overhead, so we stay serial
-// even when the pool is wired up.
-const PARALLEL_PARTICLE_MIN = 800;
+// Atomics.wait round-trip on a barrier varies widely across machines
+// (~0.1ms to >10ms). Below this threshold the per-particle savings
+// from splitting work across the pool don't pay back the dispatch
+// overhead, so we stay serial even when the pool is wired up. Picked
+// well above the typical mid-game particle count -- the pool is only
+// a clear win at multi-thousand-particle loads on hardware with
+// non-trivial wake latency.
+const PARALLEL_PARTICLE_MIN = 4000;
 export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => void;
 let particleForceDispatcher: ParticleForceDispatcher | null = null;
 export function setParticleForceDispatcher(d: ParticleForceDispatcher | null): void {
