@@ -17,6 +17,7 @@ import {
   createWorld,
   getCollisionSharedLayout,
   makeProfile,
+  resetProfile,
   serializeWorld,
   setCollisionPhaseDispatcher,
   setParticleForceDispatcher,
@@ -110,6 +111,11 @@ self.addEventListener("message", (e: MessageEvent) => {
     }
     case "init": {
       world = createWorld(m.width, m.height);
+      // Enable in-engine sub-step profile by default so the [prof] log
+      // can break down the "creature" bucket into pheromone / bonds /
+      // forces / updateCreatures / particleColl / etc. The toggleProfile
+      // message still flips it off-on if a caller needs to.
+      world.profile = makeProfile();
       if (m.savedJson) {
         try {
           applySavedWorld(world, m.savedJson);
@@ -230,6 +236,26 @@ function maybeLogProfile(): void {
     + `snap=${fmt(profSnapshotMs)} `
     + `tick=${fmt(profTickMs)}`,
   );
+  // Second line breaks down the "creature" bucket using the in-engine
+  // world.profile sub-counters. Lets us see which serial sub-step is
+  // dominating (updateCreatures vs particleColl vs obstacleColl vs ...).
+  // Hidden behind a separate console.log so callers can tail just the
+  // top-line if they prefer.
+  const wp = world?.profile;
+  if (wp && wp.ticks > 0) {
+    const t = wp.ticks;
+    const wfmt = (v: number) => (v / t).toFixed(2);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[prof.sub] pher=${wfmt(wp.pheromone)} bonds=${wfmt(wp.bonds)} `
+      + `forces=${wfmt(wp.forces)} creatures=${wfmt(wp.creatures)} `
+      + `pColl=${wfmt(wp.particleColl)} cColl=${wfmt(wp.creatureColl)} `
+      + `sColl=${wfmt(wp.sedimentColl)} oColl=${wfmt(wp.obstacleColl)} `
+      + `walls=${wfmt(wp.walls)} aerate=${wfmt(wp.aerate)} `
+      + `replenish=${wfmt(wp.replenish)} prune=${wfmt(wp.prune)}`,
+    );
+    resetProfile(wp);
+  }
   profForceDispatchMs = 0;
   profForceBarrierMs = 0;
   profCollisionDispatchMs = 0;

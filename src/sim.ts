@@ -1128,12 +1128,14 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-// Temporary 3x bump on default particle density (and matching spawn
-// cap) to stress the parallel pool above its 4000-particle threshold
-// for profiling. Revert before shipping.
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 3) / (800 * 600);
+const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5) / (800 * 600);
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
-const MAX_SPAWN_PER_SEC = 600;
+// Hard cap on the per-second spawn rate. Without this the world tries
+// to fill thousands of particles per second from the top of the water,
+// which looks like a wall of stuff falling at startup. Refill after
+// eating still works because pop * eat-rate stays well under this cap
+// for normal populations (~20 cells eating ~3/sec = 60/sec).
+const MAX_SPAWN_PER_SEC = 200;
 
 // Recompute every world field that scales with width/height. Called on
 // resize so a window expansion actually fills the new space with food
@@ -3149,12 +3151,23 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.forces += n - m; m = n;
     updateCreatures(world, dt);
     n = performance.now(); p.creatures += n - m; m = n;
-    resolveCollisions(world);
+    // Mirror the non-profile hot path: creature collisions and sediment
+    // collisions run as concurrent-with-barrier hooks inside
+    // resolveCollisions on the parallel pool path. particleColl ends
+    // up reading "wall-clock time of resolveCollisions" -- which on the
+    // pool path is dominated by the worker compute barrier and is
+    // mostly overlapped with creature/sediment work. creatureColl and
+    // sedimentColl record the JS-time spent in the hooks themselves
+    // (subtractable from particleColl to estimate "free" overlap).
+    let pccAcc = 0, pscAcc = 0;
+    resolveCollisions(
+      world,
+      () => { const t = performance.now(); resolveCreatureCollisions(world); pccAcc += performance.now() - t; },
+      () => { const t = performance.now(); resolveCreatureSedimentCollisions(world); pscAcc += performance.now() - t; },
+    );
     n = performance.now(); p.particleColl += n - m; m = n;
-    resolveCreatureCollisions(world);
-    n = performance.now(); p.creatureColl += n - m; m = n;
-    resolveCreatureSedimentCollisions(world);
-    n = performance.now(); p.sedimentColl += n - m; m = n;
+    p.creatureColl += pccAcc;
+    p.sedimentColl += pscAcc;
     resolveObstacleCollisions(world);
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
