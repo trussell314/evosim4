@@ -442,6 +442,7 @@ const CREATURE_F32_COLS = [
   "m_glucose", "m_fattyAcid", "m_aminoAcid", "m_minerals",
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
   "m_biomass", "m_waste", "m_adp", "m_ribosome",
+  "m_biopolymer", "m_membrane",
   "r_rock", "r_sand", "r_clay", "r_organic", "r_lipid", "r_gas",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
@@ -508,6 +509,8 @@ export class CreatureStore {
   m_waste!: Float32Array;
   m_adp!: Float32Array;
   m_ribosome!: Float32Array;
+  m_biopolymer!: Float32Array;
+  m_membrane!: Float32Array;
   // reserves (parallel to MATERIAL_IDS order)
   r_rock!: Float32Array;
   r_sand!: Float32Array;
@@ -583,6 +586,8 @@ export class CreatureStore {
     this.m_waste = new Float32Array(b, o.base.m_waste, cap);
     this.m_adp = new Float32Array(b, o.base.m_adp, cap);
     this.m_ribosome = new Float32Array(b, o.base.m_ribosome, cap);
+    this.m_biopolymer = new Float32Array(b, o.base.m_biopolymer, cap);
+    this.m_membrane = new Float32Array(b, o.base.m_membrane, cap);
     this.r_rock = new Float32Array(b, o.base.r_rock, cap);
     this.r_sand = new Float32Array(b, o.base.r_sand, cap);
     this.r_clay = new Float32Array(b, o.base.r_clay, cap);
@@ -607,6 +612,7 @@ export class CreatureStore {
       this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
       this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
+      this.m_biopolymer, this.m_membrane,
     ];
     this.chemCols = new Array(CHEMICAL_COUNT);
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
@@ -654,6 +660,7 @@ export class CreatureStore {
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
     this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
     this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
+    this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
     this.r_rock[i] = 0; this.r_sand[i] = 0; this.r_clay[i] = 0;
     this.r_organic[i] = 0; this.r_lipid[i] = 0; this.r_gas[i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
@@ -690,6 +697,10 @@ export class MoleculesView {
   set adp(v: number) { this.c.store.m_adp[this.c.idx] = v; }
   get ribosome(): number { return this.c.store.m_ribosome[this.c.idx]; }
   set ribosome(v: number) { this.c.store.m_ribosome[this.c.idx] = v; }
+  get biopolymer(): number { return this.c.store.m_biopolymer[this.c.idx]; }
+  set biopolymer(v: number) { this.c.store.m_biopolymer[this.c.idx] = v; }
+  get membrane(): number { return this.c.store.m_membrane[this.c.idx]; }
+  set membrane(v: number) { this.c.store.m_membrane[this.c.idx] = v; }
 }
 
 export class ReservesView {
@@ -758,7 +769,7 @@ export class Creature {
   // Setter: copy field-by-field from any Molecules-shaped object into
   // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
   // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number }) {
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number }) {
     const s = this.store; const i = this.idx;
     s.m_glucose[i] = m.glucose ?? 0;
     s.m_fattyAcid[i] = m.fattyAcid ?? 0;
@@ -772,6 +783,8 @@ export class Creature {
     s.m_waste[i] = m.waste ?? 0;
     s.m_adp[i] = m.adp ?? 0;
     s.m_ribosome[i] = m.ribosome ?? 0;
+    s.m_biopolymer[i] = m.biopolymer ?? 0;
+    s.m_membrane[i] = m.membrane ?? 0;
   }
   get reserves(): ReservesView { return this._r ??= new ReservesView(this); }
   set reserves(r: { rock?: number; sand?: number; clay?: number; organic?: number; lipid?: number; gas?: number }) {
@@ -868,6 +881,8 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.waste !== undefined) store.m_waste[idx] = m.waste;
     if (m.adp !== undefined) store.m_adp[idx] = m.adp;
     if (m.ribosome !== undefined) store.m_ribosome[idx] = m.ribosome;
+    if (m.biopolymer !== undefined) store.m_biopolymer[idx] = m.biopolymer;
+    if (m.membrane !== undefined) store.m_membrane[idx] = m.membrane;
   }
   if (init.reserves) {
     const r = init.reserves;
@@ -907,11 +922,14 @@ export interface Molecules {
   biomass: number;      // structural; part of cell volume
   waste: number;        // toxic byproduct of fermentation
   ribosome: number;     // protein-synthesis machinery; multiplies biosynth rate
+  biopolymer: number;   // bulk food substrate; broken to glu/aa/fa by enzyme
+  membrane: number;     // structural lipid bilayer; required for fission
 }
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
   "o2", "co2", "minerals", "biomass", "waste", "ribosome",
+  "biopolymer", "membrane",
 ];
 
 // Per-byte genome cost (BUILD_KEYS, genomeMoleculeCost,
@@ -924,6 +942,7 @@ export function emptyMolecules(): Molecules {
     adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
     chlorophyll: 0, enzyme: 0,
     o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0, ribosome: 0,
+    biopolymer: 0, membrane: 0,
   };
 }
 
@@ -1416,27 +1435,39 @@ const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
 const CHEMICAL_COUNT = 64;
-const NAMED_CHEMICAL_COUNT = 12;
-// Order matches chemical slot 0..11. Each entry is a key of Molecules
+const NAMED_CHEMICAL_COUNT = 14;
+// Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
-// Phase 2 promotes all current Molecules to named chemicals so the
-// reaction engine can address every cellular species directly.
+// Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
+// chemistry overhaul; biopolymer is the bulk-food substrate that
+// replaces the old "organic" material, and membrane is the structural
+// lipid bilayer required for fission.
 const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "biomass", "adp",
   "waste", "chlorophyll", "enzyme", "ribosome",
+  "biopolymer", "membrane",
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
+// Stable across the migration; phase E renumbers ATP to 0 and shifts these.
 const CHEM_ADP = 7;
 // chlorophyll, enzyme, ribosome have specific roles as rate multipliers:
 //   chl   -> photosynth (mandatory: no chl -> no photosynth)
 //   ribo  -> all biosynth reactions (mandatory: no ribo -> no biosynth)
-//   enz   -> catabolize (optional boost; no enz still catabolizes slowly)
+//   enz   -> catabolize (mandatory: no enz -> no digestion of biopolymer)
 // Real biology has matching analogs: pigment for carbon fixation, the
 // ribosomal machinery for protein synthesis, digestive enzymes for
 // breaking down ingested food.
 const CHEM_CHL = 9;
 const CHEM_ENZ = 10;
 const CHEM_RIBO = 11;
+// Phase C additions. Used by phase D's biopolymer-digestion bootstrap
+// reaction and by the fission membrane-floor gate (planned phase D).
+// Re-exported below for cross-module reference once those land.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const CHEM_BIOPOLYMER = 12;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const CHEM_MEMBRANE = 13;
+void CHEM_BIOPOLYMER; void CHEM_MEMBRANE;
 const RIBO_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
@@ -1524,6 +1555,8 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* chl    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 5,    role: "pigment",   color: "#5fa850" },
   /* enz    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.5,  vaporPressure: 0,  meltingPoint: 90,   permeability: 0,   bondEnergy: 5,    role: "digester",  color: "#e0a070" },
   /* ribo   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3,  vaporPressure: 0,  meltingPoint: 70,   permeability: 0,   bondEnergy: 5,    role: "mrna",      color: "#c8a4dc" },
+  /* biop   */ { molarMass: 1.0, density: 1.05, defaultPhase: "solid",   solubility: 0.05, vaporPressure: 0,  meltingPoint: 250,  permeability: 0,   bondEnergy: 25,   role: "none",      color: "#7fb069" },
+  /* memb   */ { molarMass: 1.0, density: 0.8,  defaultPhase: "liquid",  solubility: 0.01, vaporPressure: 0,  meltingPoint: 50,   permeability: 0,   bondEnergy: 40,   role: "membrane",  color: "#f0d264" },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
@@ -6575,6 +6608,8 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       biomass: m.biomass,
       waste: m.waste,
       ribosome: m.ribosome,
+      biopolymer: m.biopolymer,
+      membrane: m.membrane,
     },
     reserves: {
       rock: r.rock,

@@ -88,7 +88,7 @@ function quietWorld(): World {
     currentAmp: 0,
     vmInstrBudget: 8,
     obstacles: [],
-    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0, biomass: 0, waste: 0, ribosome: 0 },
+    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0, biomass: 0, waste: 0, ribosome: 0, biopolymer: 0, membrane: 0 },
   };
 }
 
