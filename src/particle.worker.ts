@@ -17,7 +17,9 @@ import {
   type ParticleForceParams,
 } from "./sim";
 
-const PARAM_COUNT = 22;
+// Must match PARAM_COUNT in sim.worker.ts (the producer side). One
+// slot per field in ParticleForceParams. Last slot added: worldFloorY.
+const PARAM_COUNT = 23;
 
 // Control buffer layout (Int32):
 //   [0] phase   -- sim worker increments each tick

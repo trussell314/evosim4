@@ -365,6 +365,13 @@ export function pushParticle(
 export function removeParticleAt(world: World, arrIdx: number): void {
   const ps = world.particles;
   const store = world.particleStore;
+  // Keep the cached pebble count honest. Without this, ingest of a
+  // pebble (creature INGEST doesn't filter by size) leaves the
+  // cached count high until the next 30-tick refresh, suppressing
+  // pebble replenish for up to half a sim-second.
+  if (store.material[arrIdx] === MATERIAL_INDEX.sand && store.r[arrIdx] >= SAND_BIG_R_MIN) {
+    if (pebbleCountCache > 0) pebbleCountCache--;
+  }
   const last = ps.length - 1;
   if (arrIdx !== last) {
     store.removeSwapPop(arrIdx);
@@ -2532,6 +2539,11 @@ export function createWorld(
   // (no warmup) and get founders synchronously here so existing
   // unit tests keep working.
   if (!opts?.delayedSpawn) {
+    // Skip ahead past the spawn-delay gates first so founders' bornAt
+    // (set inside spawnFounder from world.t) matches the wall clock
+    // they're entering at. Otherwise tests see creatures with
+    // bornAt=0 and age=61 immediately.
+    world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
     const initialFounders = 15 + Math.floor(Math.random() * 11); // 15-25
     for (let i = 0; i < initialFounders; i++) {
       const f = spawnFounder(world);
@@ -2540,9 +2552,6 @@ export function createWorld(
         f.color = genomeColor(f.genome, world.anchorGenome);
       }
     }
-    // Skip ahead past the spawn-delay gates so replenish + aerate
-    // also work immediately for direct callers.
-    world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
   }
   return world;
 }

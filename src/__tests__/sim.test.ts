@@ -218,7 +218,10 @@ describe("createWorld", () => {
     expect(w.species.size).toBeGreaterThanOrEqual(15);
     expect(w.species.size).toBeLessThanOrEqual(25);
     for (const sp of w.species.values()) {
-      expect(sp.firstSeen).toBe(0);
+      // Founders enter at world creation time. createWorld in the
+      // test path bumps w.t past the warmup delays before spawning,
+      // so firstSeen lines up with w.t rather than 0.
+      expect(sp.firstSeen).toBe(w.t);
       expect(sp.parents.size).toBe(0);
     }
     expect(w.phylogenyEvents.length).toBe(0);
