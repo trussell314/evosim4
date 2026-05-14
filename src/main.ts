@@ -71,7 +71,7 @@ import {
   type CreatureSnapshot,
   type SpeciesSnapshot,
 } from "./sim";
-import { disassemble, walkGenome, OP } from "./genome";
+import { disassemble, walkGenome, OP, CATALYST_COUNT } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -2216,6 +2216,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   const ingest = new Set<number>();
   const excrete = new Set<number>();
   const sensors = new Set<string>();
+  const catalystSlots = new Set<number>();
   // Uses the canonical walker from genome.ts so this stays in lockstep
   // with the VM. Any future op added to genome.ts's OPERANDS table is
   // automatically picked up here.
@@ -2236,6 +2237,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SYNTH_ENZ: synthEnz = true; break;
       case OP.SYNTH_CHL: synthChl = true; break;
       case OP.SYNTH_RIBO: synthRibo = true; break;
+      case OP.SYNTH_CAT: catalystSlots.add((operand ?? 0) % CATALYST_COUNT); break;
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
       case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
@@ -2276,6 +2278,17 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   if (synthEnz) synth.push("enzymes");
   if (synthRibo) synth.push("ribosomes");
   if (synth.length > 0) parts.push("Builds " + synth.join(", ") + ".");
+
+  // Catalysts (generic-chemistry side). SYNTH_CAT picks a slot via
+  // operand % CATALYST_COUNT, so we can statically project which
+  // slots the cell will boost. Only mention when present -- absence
+  // is the common case and adds no signal.
+  if (catalystSlots.size > 0) {
+    const sorted = Array.from(catalystSlots).sort((a, b) => a - b);
+    const shown = sorted.slice(0, 6).join(", ");
+    const more = sorted.length > 6 ? `, +${sorted.length - 6} more` : "";
+    parts.push(`Catalyzes generic-chem slot${sorted.length === 1 ? "" : "s"} ${shown}${more}.`);
+  }
 
   // Reproduction -- only mention when present; sterile lineages
   // self-evidently die so the absence speaks for itself in context
