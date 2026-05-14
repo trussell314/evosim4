@@ -403,8 +403,8 @@ function poolDiagSnapshot(): string {
   return parts.join(" ");
 }
 
-function dispatchParticleForces(np: number, p: ParticleForceParams): void {
-  if (!pool) return;
+function dispatchParticleForces(np: number, p: ParticleForceParams): () => void {
+  if (!pool) return () => {};
   const tStart = performance.now();
   const { ctrl, params, nWorkers } = pool;
   // Pack params into the Float64 block in the layout particle.worker
@@ -442,15 +442,18 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
-  const tBarrier = performance.now();
-  profForceDispatchMs += tBarrier - tStart;
-  const ok = waitForBarrier(ctrl, nWorkers, "force");
-  profForceBarrierMs += performance.now() - tBarrier;
-  if (!ok) return;
+  const tFireDone = performance.now();
+  profForceDispatchMs += tFireDone - tStart;
+  // Return a wait fn so the caller can do unrelated work first.
+  return () => {
+    const tWait = performance.now();
+    waitForBarrier(ctrl, nWorkers, "force");
+    profForceBarrierMs += performance.now() - tWait;
+  };
 }
 
-function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): void {
-  if (!pool) return;
+function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): () => void {
+  if (!pool) return () => {};
   const tStart = performance.now();
   const { ctrl, nWorkers } = pool;
   Atomics.store(ctrl, CTRL_CMD, CMD_COLLISIONS);
@@ -464,11 +467,13 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
-  const tBarrier = performance.now();
-  profCollisionDispatchMs += tBarrier - tStart;
-  const ok = waitForBarrier(ctrl, nWorkers, "collision");
-  profCollisionBarrierMs += performance.now() - tBarrier;
-  if (!ok) return;
+  const tFireDone = performance.now();
+  profCollisionDispatchMs += tFireDone - tStart;
+  return () => {
+    const tWait = performance.now();
+    waitForBarrier(ctrl, nWorkers, "collision");
+    profCollisionBarrierMs += performance.now() - tWait;
+  };
 }
 
 // Bounded barrier wait. Returns true on success, false if the deadline

@@ -3173,9 +3173,16 @@ export function step(world: World, dt: number): void {
     applyBondSprings(world, dt);
     applyForces(world, dt);
     updateCreatures(world, dt);
-    resolveCollisions(world);
-    resolveCreatureCollisions(world);
-    resolveCreatureSedimentCollisions(world);
+    // Hand creature-vs-creature and creature-vs-sediment collisions
+    // to resolveCollisions as concurrent-with-barrier hooks. On the
+    // parallel pool path they run alongside the particle collision
+    // workers (which only touch the particle SAB); on the serial path
+    // they run after resolveCollisions, preserving original ordering.
+    resolveCollisions(
+      world,
+      () => resolveCreatureCollisions(world),
+      () => resolveCreatureSedimentCollisions(world),
+    );
     resolveObstacleCollisions(world);
     applyWalls(world);
     aerate(world, dt);
@@ -3510,7 +3517,11 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
 // a clear win at multi-thousand-particle loads on hardware with
 // non-trivial wake latency.
 const PARALLEL_PARTICLE_MIN = 4000;
-export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => void;
+// Dispatcher is fire-only: it kicks the workers and returns a wait
+// function. Callers run concurrent CPU work (creature loop, creature
+// collisions) and invoke the wait fn when they need particle results
+// settled. Hides barrier latency behind useful work.
+export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => () => void;
 let particleForceDispatcher: ParticleForceDispatcher | null = null;
 export function setParticleForceDispatcher(d: ParticleForceDispatcher | null): void {
   particleForceDispatcher = d;
@@ -3524,12 +3535,13 @@ function applyForces(world: World, dt: number): void {
   const np = world.particles.length;
   const params = buildParticleForceParams(world);
   params.dt = dt;
+  // Async dispatch: workers start the particle force pass on a slice
+  // of the SAB-backed store while we run the creature force loop
+  // below on the sim worker. Wait for the barrier just before returning
+  // so any code after applyForces observes settled particle state.
+  let forceWait: (() => void) | null = null;
   if (particleForceDispatcher && np >= PARALLEL_PARTICLE_MIN) {
-    // Subworker pool runs the particle loop in parallel chunks; the
-    // sim worker is free to run the creature loop below concurrently
-    // (the dispatcher waits before returning, so by the time the
-    // creature loop finishes both pieces are done).
-    particleForceDispatcher(np, params);
+    forceWait = particleForceDispatcher(np, params);
   } else {
     applyParticleForcesRange(
       ps.x, ps.y, ps.z, ps.vx, ps.vy, ps.vz,
@@ -3611,6 +3623,10 @@ function applyForces(world: World, dt: number): void {
     CY[i] = yi + vyi * dt;
     CZ[i] = CZ[i] + vzi * dt;
   }
+  // Settle particle force pass before returning. By the time we get
+  // here, the workers have usually finished already and this is a
+  // cheap no-op; otherwise the sim worker blocks until the barrier.
+  if (forceWait) forceWait();
 }
 
 const VM_SENSORS: VMSensors = {
@@ -4900,7 +4916,10 @@ function forCreaturesNear(
 // to a subworker pool that holds views over the same SAB-backed
 // particle store + collision grid. Stays null in tests / non-isolated
 // contexts; the serial path below runs in that case.
-export type CollisionPhaseDispatcher = (cols: number, rows: number, rowParity: 0 | 1, e: number) => void;
+// Fire-only: kicks workers for the given parity, returns a wait fn.
+// Callers can run unrelated work (creature collisions, sediment, etc)
+// between firing and waiting to hide the barrier latency.
+export type CollisionPhaseDispatcher = (cols: number, rows: number, rowParity: 0 | 1, e: number) => () => void;
 let collisionPhaseDispatcher: CollisionPhaseDispatcher | null = null;
 export function setCollisionPhaseDispatcher(d: CollisionPhaseDispatcher | null): void {
   collisionPhaseDispatcher = d;
@@ -4955,10 +4974,27 @@ export function applyCollisionsRowRange(
   }
 }
 
-function resolveCollisions(world: World): void {
+// duringPhase0 and duringPhase1 run concurrently with the worker pool
+// during each respective collision-phase barrier (parallel path only).
+// In the serial fallback they run after the particle collision pass to
+// preserve the original step ordering. Both callbacks must be safe to
+// execute alongside particle position/velocity mutations -- creature
+// collisions and creature-vs-sediment collisions qualify because they
+// only touch the creature stores, never the particle SAB.
+function resolveCollisions(
+  world: World,
+  duringPhase0?: () => void,
+  duringPhase1?: () => void,
+): void {
+  let pendingP0 = duringPhase0;
+  let pendingP1 = duringPhase1;
   const store = world.particleStore;
   const n = world.particles.length;
-  if (n < 2) return;
+  if (n < 2) {
+    if (pendingP0) pendingP0();
+    if (pendingP1) pendingP1();
+    return;
+  }
   const e = world.restitution;
   const cellSize = GRID_CELL_SIZE;
   const cols = Math.max(1, Math.ceil(world.width / cellSize));
@@ -5022,8 +5058,15 @@ function resolveCollisions(world: World): void {
     }
 
     if (collisionPhaseDispatcher && n >= PARALLEL_PARTICLE_MIN) {
-      collisionPhaseDispatcher(cols, rows, 0, e);
-      collisionPhaseDispatcher(cols, rows, 1, e);
+      const wait0 = collisionPhaseDispatcher(cols, rows, 0, e);
+      // Run hooks on the first iter only; subsequent iters have no
+      // useful work to hide and we want hook side-effects to happen
+      // exactly once per step.
+      if (pendingP0) { pendingP0(); pendingP0 = undefined; }
+      wait0();
+      const wait1 = collisionPhaseDispatcher(cols, rows, 1, e);
+      if (pendingP1) { pendingP1(); pendingP1 = undefined; }
+      wait1();
     } else {
       // Serial fallback: iterate every row.
       for (let cy = 0; cy < rows; cy++) {
@@ -5054,6 +5097,10 @@ function resolveCollisions(world: World): void {
       }
     }
   }
+  // Serial path falls through with pending hooks. Run them now (after
+  // particle collisions are settled, matching the original step order).
+  if (pendingP0) pendingP0();
+  if (pendingP1) pendingP1();
 }
 
 // Soft positional separation for overlapping creatures + symmetric
