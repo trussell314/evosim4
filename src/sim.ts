@@ -1130,6 +1130,7 @@ export function resetProfile(p: WorldProfile): void {
   p.ticks = 0;
   p.pheromone = 0; p.bonds = 0; p.forces = 0; p.creatures = 0;
   p.particleColl = 0; p.creatureColl = 0; p.sedimentColl = 0;
+  p.obstacleColl = 0;
   p.walls = 0; p.aerate = 0; p.replenish = 0; p.prune = 0;
 }
 
@@ -3376,7 +3377,12 @@ export function step(world: World, dt: number): void {
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
     decayParticles(world, dt);
-    n = performance.now(); p.replenish += n - m; m = n;
+    // Decay is currently disabled by const, so the bucket isn't
+    // separately tracked. The original code added decay's time to
+    // `replenish` again (copy-paste -- same field as the line above),
+    // double-counting. Skip past it instead so replenish stays
+    // accurate and prune measures only pruneSpecies.
+    m = performance.now();
     pruneSpecies(world);
     n = performance.now(); p.prune += n - m;
     p.ticks++;
@@ -3831,10 +3837,12 @@ function applyForces(world: World, dt: number): void {
       params,
     );
   }
-  // The creature loop ran below regardless; if dispatcher was async
-  // it would need a Promise/await, but our dispatcher is a synchronous
-  // barrier (Atomics.wait) so the particle work is guaranteed to be
-  // settled by the time we reach the creature loop's reads.
+  // The dispatcher is actually async: it kicks the worker pool and
+  // returns a wait fn. The creature loop below runs concurrent with
+  // the particle workers; the wait fn is invoked at the end of this
+  // function so any caller reading particles after applyForces sees
+  // a settled state. Creature columns are independent of particle
+  // SAB columns so the concurrent work is safe.
   const t = params.t;
   const drag = params.drag;
   const grav = params.gravity;
@@ -5742,6 +5750,12 @@ interface SavedParticle {
   vx: number; vy: number; vz: number;
   r: number; material: MaterialId;
   density?: number;
+  // Optional: persist sleep state so settled sediment doesn't all
+  // wake up and bounce on reload (would take SLEEP_THRESHOLD_TICKS
+  // sim-ticks to re-settle, looks like a glitch). Older saves
+  // without this field default to 0 = wake immediately, which is
+  // the previous behavior.
+  quietTicks?: number;
   molecules?: Record<string, number>;
   // Sparse: pairs of (slotInGenericRange, value) for nonzero entries.
   // Only present for corpse particles that inherited a cell's
@@ -5822,6 +5836,8 @@ function snapshotParticle(p: Particle): SavedParticle {
     r: p.r, material: p.material,
   };
   if (p.density !== undefined) out.density = p.density;
+  const q = p.quietTicks ?? 0;
+  if (q > 0) out.quietTicks = q;
   if (p.molecules) {
     const m: Record<string, number> = {};
     let any = false;
@@ -5979,6 +5995,13 @@ export function applySavedWorld(world: World, json: string): boolean {
   // Rocks have been removed; drop any obstacles a pre-removal save
   // carried so loading an old save doesn't bring them back.
   world.obstacles = [];
+  // Rebuild the module-global obstacle indexes from the (now empty)
+  // obstacle list. Without this they'd retain whatever the previous
+  // world left there: stale OBSTACLE_BANDS pointers, an
+  // OBSTACLES_MIN_Y of Infinity from the wrong layout, etc. The
+  // early-out in resolveObstacleCollisions hides it today, but the
+  // moment rocks come back this becomes a silent corruption path.
+  rebuildObstacleIndex(world);
   if (saved.atmosphere) {
     const atm = world.atmosphere;
     for (const k of MOLECULE_IDS) atm[k] = saved.atmosphere[k] ?? 0;
@@ -6008,6 +6031,7 @@ export function applySavedWorld(world: World, json: string): boolean {
       vx: sp.vx, vy: sp.vy, vz: sp.vz,
       r: sp.r, material: sp.material,
       density: sp.density,
+      quietTicks: sp.quietTicks,
       molecules: sp.molecules ? { ...emptyMolecules(), ...sp.molecules } : undefined,
       genericChem,
     });

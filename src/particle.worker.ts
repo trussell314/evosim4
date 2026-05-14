@@ -17,6 +17,13 @@ import {
   type ParticleForceParams,
 } from "./sim";
 
+// Zero-length stub passed to applyParticleForcesRange when the
+// collision SAB isn't shared (cviews === null). Out-of-bounds reads
+// on a Uint8Array return 0, so ASLEEP[i] is always falsy and the
+// freeze branch is skipped without an extra null check in the
+// hot loop.
+const EMPTY_ASLEEP = new Uint8Array(0);
+
 // Must match PARAM_COUNT in sim.worker.ts (the producer side). One
 // slot per field in ParticleForceParams. Last slot added: worldFloorY.
 const PARAM_COUNT = 23;
@@ -176,11 +183,17 @@ function loop(): void {
         const extra = workerIndex < rem ? 1 : 0;
         const to = from + chunk + extra;
         const params = readForceParams();
+        // ASLEEP view is only present when the collision SAB layout
+        // was shared. Without it we still want to compute forces
+        // correctly -- pass an empty Uint8Array so the freeze branch
+        // (yi+ri >= floorY && ASLEEP[i]) never trips and every
+        // particle gets full force application.
+        const asleepView = cviews ? cviews.asleep : EMPTY_ASLEEP;
         applyParticleForcesRange(
           pviews.PX, pviews.PY, pviews.PZ,
           pviews.PVX, pviews.PVY, pviews.PVZ,
           pviews.PR, pviews.PDENS, pviews.PMAT,
-          cviews!.asleep,
+          asleepView,
           matBase, from, to, params,
         );
       }
