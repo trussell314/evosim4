@@ -2261,53 +2261,72 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
 
   const parts: string[] = [];
 
-  // Trophic mode -- always one phrase, varies per cell.
-  if (predate || engulf) parts.push("Hunts other cells.");
-  else if (ingest.size > 0) {
-    parts.push(`Eats ${Array.from(ingest).map(mat).join(" + ")}.`);
-  } else if (synthChl) parts.push("Photoautotroph: fixes CO2 via chlorophyll.");
-  else if (thrust) parts.push("Swims, doesn't eat.");
-  else parts.push("Drifts; no intake.");
+  // 1. Ingests -- materials the cell will swallow, plus the predation
+  // path if any. Pure photo cells get an autotroph note.
+  if (predate || engulf) parts.push("Ingests: other cells (predator).");
+  else if (ingest.size > 0) parts.push(`Ingests: ${Array.from(ingest).map(mat).join(", ")}.`);
+  else if (synthChl) parts.push("Ingests: nothing (photoautotroph, fixes CO2).");
+  else parts.push("Ingests: nothing.");
 
-  // Synthesis -- only show what's present.
+  // 2. Metabolism -- which biosynthesis pathways the genome unlocks.
+  // Aerobic respiration / fermentation / beta-oxidation run on every
+  // cell with substrates regardless of genome, so they aren't listed
+  // (they don't differentiate cells). Photosynthesis only runs if
+  // chlorophyll exists, which requires SYNTH_CHL.
   const synth: string[] = [];
   if (synthBio) synth.push("biomass");
   if (synthAA) synth.push("aa");
   if (synthFA) synth.push("fa");
-  if (synthChl) synth.push("chlorophyll");
   if (synthEnz) synth.push("enzymes");
   if (synthRibo) synth.push("ribosomes");
-  if (synth.length > 0) parts.push("Builds " + synth.join(", ") + ".");
+  if (synthChl) synth.push("chlorophyll (photosynth)");
+  parts.push(synth.length > 0
+    ? `Metabolism: synthesizes ${synth.join(", ")}.`
+    : "Metabolism: catabolism only (no synthesis ops).");
 
-  // Catalysts (generic-chemistry side). SYNTH_CAT picks a slot via
-  // operand % CATALYST_COUNT, so we can statically project which
-  // slots the cell will boost. Only mention when present -- absence
-  // is the common case and adds no signal.
-  if (catalystSlots.size > 0) {
-    const sorted = Array.from(catalystSlots).sort((a, b) => a - b);
+  // 3. Catalysis (non-metabolic specialty) -- SYNTH_CAT targeting
+  // generic reaction slots (>= 10, past the named pathway slots).
+  // Catalyst slots < 10 boost named metabolism instead; surface those
+  // separately so the user can tell which axis the cell specializes in.
+  const NAMED_SLOTS: Record<number, string> = {
+    0: "aerobic respiration", 1: "fermentation", 2: "beta-oxidation",
+    3: "photosynthesis", 4: "aa synth", 5: "fa synth",
+    6: "chl synth", 7: "enz synth", 8: "ribosome synth", 9: "biomass synth",
+  };
+  const namedCats: string[] = [];
+  const specialtyCats: number[] = [];
+  for (const slot of catalystSlots) {
+    if (slot < 10) namedCats.push(NAMED_SLOTS[slot] ?? `slot ${slot}`);
+    else specialtyCats.push(slot);
+  }
+  if (specialtyCats.length > 0) {
+    const sorted = specialtyCats.sort((a, b) => a - b);
     const shown = sorted.slice(0, 6).join(", ");
     const more = sorted.length > 6 ? `, +${sorted.length - 6} more` : "";
-    parts.push(`Catalyzes generic-chem slot${sorted.length === 1 ? "" : "s"} ${shown}${more}.`);
+    parts.push(`Catalyzes (specialty chem): slot${sorted.length === 1 ? "" : "s"} ${shown}${more}.`);
+  }
+  if (namedCats.length > 0) {
+    parts.push(`Catalyzes (metabolic boost): ${namedCats.join(", ")}.`);
   }
 
-  // Reproduction -- only mention when present; sterile lineages
-  // self-evidently die so the absence speaks for itself in context
-  // with the species' phylogeny lifespan.
-  if (reproduce) {
-    parts.push(gated ? "Divides conditionally." : "Divides reflexively (no gate).");
-  }
+  // 4. Excretes -- material reserves vented by EXCRETE. Now also
+  // carries proportional molecules + generic chemistry (engine
+  // change) so excretion is a real environmental output, not just
+  // a waste dump.
+  parts.push(excrete.size > 0
+    ? `Excretes: ${Array.from(excrete).map(mat).join(", ")} (with bundled molecules + chemistry).`
+    : "Excretes: nothing.");
 
-  // Extras (action ops beyond move/eat/reproduce).
+  // Reproduction, extras, sensors (sterile lineages get nothing
+  // since the phylogeny strip's lifespan already conveys that).
+  if (reproduce) parts.push(gated ? "Divides conditionally." : "Divides reflexively (no gate).");
   const extras: string[] = [];
   if (repair) extras.push("repairs DNA");
   if (emit) extras.push("emits pheromone");
   if (adhere) extras.push("adheres");
-  if (excrete.size > 0) extras.push("excretes " + Array.from(excrete).map(mat).join("/"));
   if (selfModifies) extras.push("self-modifies");
   if (turn && !thrust) extras.push("turns in place");
   if (extras.length > 0) parts.push(extras.join(", ").replace(/^./, (c) => c.toUpperCase()) + ".");
-
-  // Sensors -- only when present.
   if (sensors.size > 0) {
     parts.push(`Senses ${Array.from(sensors).join(", ")}${gated ? " (gated)" : " (ungated)"}.`);
   }

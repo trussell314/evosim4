@@ -3317,6 +3317,7 @@ function spawnExcretedParticle(
   material: MaterialId,
   m: number,
   molecules?: Molecules,
+  genericChem?: Float32Array,
 ): void {
   if (m < EXCRETE_MIN_AMOUNT) {
     // Round-off; just drop it on the floor of the cell (lose to environment).
@@ -3336,6 +3337,7 @@ function spawnExcretedParticle(
     r: pr,
     material,
     molecules,
+    genericChem,
   });
 }
 
@@ -4310,7 +4312,13 @@ function updateCreatures(world: World, dt: number): void {
       spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
 
-    // VM-controlled excretion (vent specific reserves on demand).
+    // VM-controlled excretion. Releases a particle of the requested
+    // material PLUS a proportional slice of the cell's molecule pool
+    // and generic chemistry, so cells can deliberately share chemistry
+    // with neighbors (real microbes excrete signaling molecules and
+    // siderophores; gating excretion to death-only would lose that
+    // selection pressure). Slice fraction = (excreted mass / cell
+    // total mass) so the chemistry cost scales with the bulk you ship.
     for (let i = 0; i < 6; i++) {
       const requested = vmOut.excrete[i];
       if (requested <= 0) continue;
@@ -4319,7 +4327,32 @@ function updateCreatures(world: World, dt: number): void {
       const amount = Math.min(requested, available);
       if (amount < EXCRETE_MIN_AMOUNT) continue;
       c.reserves[matId] -= amount;
-      spawnExcretedParticle(c, world, matId, amount);
+      const totalMass = Math.max(1, creatureTotalMass(c) + amount);
+      const slice = amount / totalMass;
+      // Bundle molecules.
+      let payloadMol: Molecules | undefined;
+      const cm = c.molecules;
+      for (const k of MOLECULE_IDS) {
+        const give = cm[k] * slice;
+        if (give <= 0) continue;
+        cm[k] -= give;
+        if (!payloadMol) payloadMol = emptyMolecules();
+        payloadMol[k] = give;
+      }
+      // Bundle generic chem. Allocate the Float32Array only if at
+      // least one slot has nonzero payload; otherwise the particle
+      // gets no chem array (cheaper).
+      const gcCols = c.store.genericChemCols;
+      const ci = c.idx;
+      let payloadChem: Float32Array | undefined;
+      for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+        const give = gcCols[k][ci] * slice;
+        if (give <= 0) continue;
+        gcCols[k][ci] -= give;
+        if (!payloadChem) payloadChem = new Float32Array(GENERIC_CHEMICAL_COUNT);
+        payloadChem[k] = give;
+      }
+      spawnExcretedParticle(c, world, matId, amount, payloadMol, payloadChem);
     }
 
     if (c.ingestCooldown > 0) {
