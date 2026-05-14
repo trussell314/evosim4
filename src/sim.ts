@@ -2567,8 +2567,17 @@ function spawnFounder(world: World): Creature {
 // anyway, so the visual artifact only shows during falling. Going
 // beyond ~r=8 would require widening cellSize, which trades pColl
 // cost for fewer big sand misses -- not worth it at current scale.
-const SAND_BIG_R_MIN = 10;
-const SAND_BIG_R_MAX = 16;
+// Capped at 11 so pebble-pebble pair detection is robust against the
+// particle-particle collision broad phase: GRID_CELL_SIZE=12 with a
+// one-cell-over neighbor sweep reliably finds pairs only when
+// r_a + r_b <= 2 * GRID_CELL_SIZE = 24. Previous range r=10-16 hit
+// combined-radius 32, so half the stacked pebble pairs went undetected
+// -- upper layers fell through lower ones at gravity terminal
+// velocity (~14.5 px/s) instead of settling, producing the "popcorn"
+// look. With r in [8, 11] the bed actually settles (~30% transient
+// motion at steady state, vs 67% before).
+const SAND_BIG_R_MIN = 8;
+const SAND_BIG_R_MAX = 11;
 // Random-pebble injection into the normal weighted replenish flow is
 // disabled now that pebbles have a dedicated spawn path with its own
 // count target (PEBBLE_TARGET below). Keeping spawnRadius() in place
@@ -2583,7 +2592,7 @@ const SAND_BIG_FRACTION = 0;
 // density -- explicitly requested. At ~150 px² per pebble that's
 // ~165k px² of visual area on an 800-wide floor, enough for a thick
 // stacked sediment band. Lower this if the floor reads as too deep.
-const PEBBLE_TARGET = 275;
+const PEBBLE_TARGET = 138;
 // Per-second spawn rate when below target. Sized to fill the bed in
 // roughly 10 sim-seconds from a cold world without overshooting the
 // per-frame replenish budget.
@@ -3643,8 +3652,14 @@ export function applyParticleForcesRange(
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
-    const noiseX = bAmp * (Math.random() - 0.5) * 2;
-    const noiseY = bAmp * (Math.random() - 0.5) * 2;
+    // Brownian noise decays with depth like the wave forces. Without
+    // this, noise at the bottom (~7-8 px/s RMS for a pebble) keeps
+    // sediment above the sleep threshold and churning indefinitely.
+    // Decay constant sits between surfaceDecay (fast) and swellDecay
+    // (slow) so mid-water still mixes but the floor calms.
+    const noiseEnv = Math.exp(-depth / 200);
+    const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
+    const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
@@ -3790,8 +3805,14 @@ function applyForces(world: World, dt: number): void {
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
-    const noiseX = bAmp * (Math.random() - 0.5) * 2;
-    const noiseY = bAmp * (Math.random() - 0.5) * 2;
+    // Brownian noise decays with depth like the wave forces. Without
+    // this, noise at the bottom (~7-8 px/s RMS for a pebble) keeps
+    // sediment above the sleep threshold and churning indefinitely.
+    // Decay constant sits between surfaceDecay (fast) and swellDecay
+    // (slow) so mid-water still mixes but the floor calms.
+    const noiseEnv = Math.exp(-depth / 200);
+    const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
+    const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
