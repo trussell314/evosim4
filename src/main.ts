@@ -1570,6 +1570,15 @@ function drawPhylogeny(): void {
     const prev = peakBiomassByKey.get(key) ?? 0;
     if (b > prev) peakBiomassByKey.set(key, b);
   }
+  // Prune entries for species the sim no longer tracks. Without this,
+  // peakBiomassByKey grows monotonically (one float per ever-seen
+  // species) over a long session. The sim already drops a species
+  // from snapshot.species after SPECIES_GRACE_SEC of zero population.
+  if (peakBiomassByKey.size > snapshotSpeciesByKey.size * 2) {
+    for (const key of peakBiomassByKey.keys()) {
+      if (!snapshotSpeciesByKey.has(key)) peakBiomassByKey.delete(key);
+    }
+  }
   let maxBio = 0;
   for (const sp of visible) {
     const b = bioByKey.get(sp.key) ?? 0;
