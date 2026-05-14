@@ -2506,7 +2506,9 @@ export function createWorld(width: number, height: number): World {
   };
   // Allocate the pheromone grid sized to the world.
   resizePheromone(world);
-  generateObstacles(world);
+  // Rocks disabled. rebuildObstacleIndex still runs to set the indexes
+  // to a consistent empty state so the obstacle-collision early exits
+  // (world.obstacles.length === 0) trip cleanly.
   rebuildObstacleIndex(world);
   // World starts empty: just water and a handful of founder cells.
   // Each founder is independent (its own genome, its own lineageRoot
@@ -5724,7 +5726,9 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.nextDisturbanceAt = saved.nextDisturbanceAt;
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
   world.liveLineageRoots = new Set(saved.liveLineageRoots);
-  world.obstacles = saved.obstacles;
+  // Rocks have been removed; drop any obstacles a pre-removal save
+  // carried so loading an old save doesn't bring them back.
+  world.obstacles = [];
   if (saved.atmosphere) {
     const atm = world.atmosphere;
     for (const k of MOLECULE_IDS) atm[k] = saved.atmosphere[k] ?? 0;
