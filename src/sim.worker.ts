@@ -215,6 +215,8 @@ interface ParticlePool {
   params: Float64Array;
   nWorkers: number;
   phase: number;
+  initAcked: boolean[];
+  wakeAcked: boolean[];
 }
 let pool: ParticlePool | null = null;
 
@@ -266,6 +268,8 @@ function setupParticlePool(w: World): void {
   const ctrl = new Int32Array(ctrlBuf);
   const params = new Float64Array(paramsBuf);
   const workers: Worker[] = [];
+  const initAcked = new Array<boolean>(nWorkers).fill(false);
+  const wakeAcked = new Array<boolean>(nWorkers).fill(false);
   for (let i = 0; i < nWorkers; i++) {
     const wk = new Worker(new URL("./particle.worker.ts", import.meta.url), {
       type: "module",
@@ -281,6 +285,12 @@ function setupParticlePool(w: World): void {
     wk.addEventListener("messageerror", () => {
       teardownPool(`worker ${i} messageerror`);
     });
+    wk.addEventListener("message", (e: MessageEvent) => {
+      const m = e.data;
+      if (!m || typeof m !== "object") return;
+      if (m.type === "ack-init") initAcked[m.workerIndex | 0] = true;
+      else if (m.type === "ack-wake") wakeAcked[m.workerIndex | 0] = true;
+    });
     wk.postMessage({
       type: "init",
       particleLayout: storeLayout,
@@ -293,9 +303,16 @@ function setupParticlePool(w: World): void {
     });
     workers.push(wk);
   }
-  pool = { workers, ctrl, params, nWorkers, phase: 0 };
+  pool = { workers, ctrl, params, nWorkers, phase: 0, initAcked, wakeAcked };
   setParticleForceDispatcher(dispatchParticleForces);
   if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
+}
+
+function poolDiagSnapshot(): string {
+  if (!pool) return "no pool";
+  const init = pool.initAcked.map((v, i) => v ? null : i).filter((v) => v !== null);
+  const wake = pool.wakeAcked.map((v, i) => v ? null : i).filter((v) => v !== null);
+  return `init-missing=[${init.join(",")}] wake-missing=[${wake.join(",")}]`;
 }
 
 function dispatchParticleForces(np: number, p: ParticleForceParams): void {
@@ -363,7 +380,8 @@ function waitForBarrier(ctrl: Int32Array, nWorkers: number, label: string): bool
   while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      teardownPool(`${label} barrier timed out (${nWorkers - Atomics.load(ctrl, CTRL_DONE)}/${nWorkers} workers unresponsive)`);
+      const diag = poolDiagSnapshot();
+      teardownPool(`${label} barrier timed out (${nWorkers - Atomics.load(ctrl, CTRL_DONE)}/${nWorkers} unresponsive; ${diag})`);
       return false;
     }
     Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE), remaining);

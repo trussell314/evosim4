@@ -122,16 +122,26 @@ self.addEventListener("message", (e: MessageEvent) => {
   }
   pviews = rebuildParticleViews(m.particleLayout);
   if (m.collisionLayout) cviews = rebuildCollisionViews(m.collisionLayout);
+  // Ack init so the parent can distinguish "worker never loaded" from
+  // "worker loaded but the Atomics barrier never woke it".
+  (self as unknown as Worker).postMessage({ type: "ack-init", workerIndex });
   loop();
 });
 
 function loop(): void {
+  let firstWake = true;
   let lastPhase = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     Atomics.wait(ctrl!, CTRL_PHASE, lastPhase);
     const phase = Atomics.load(ctrl!, CTRL_PHASE);
     lastPhase = phase;
+    if (firstWake) {
+      firstWake = false;
+      // Confirms Atomics.notify actually woke us, separate from the
+      // first-phase ack of completion below.
+      (self as unknown as Worker).postMessage({ type: "ack-wake", workerIndex });
+    }
     const cmd = Atomics.load(ctrl!, CTRL_CMD);
     if (cmd === CMD_FORCES) {
       const np = Atomics.load(ctrl!, CTRL_NP);
