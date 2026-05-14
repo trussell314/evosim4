@@ -2541,9 +2541,31 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 const WATER_FILL_DELAY_SEC = 30;
 
 function spawnFounder(world: World): Creature {
-  const x = world.width * (0.1 + 0.8 * Math.random());
-  const y = world.height * (0.1 + 0.6 * Math.random());
   const z = world.depth * 0.5;
+  // Reject-sample positions until we find one that's not within
+  // FOUNDER_MIN_SPACING of an existing creature. With ~25 founders
+  // dropped at once into a 720x420 region, pure uniform random gives
+  // ~1.2 overlapping pairs per batch in expectation -- enough that
+  // "every reset has a cell inside another" was reliably true.
+  // Spacing is 6x MIN_CREATURE_R so even after the founder scoop
+  // bulks a body up modestly, neighbours stay distinct.
+  const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
+  const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
+  let x = 0, y = 0;
+  const creatures = world.creatures;
+  const nc = creatures.length;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    x = world.width * (0.1 + 0.8 * Math.random());
+    y = world.height * (0.1 + 0.6 * Math.random());
+    let okay = true;
+    for (let k = 0; k < nc; k++) {
+      const other = creatures[k];
+      const dx = other.x - x;
+      const dy = other.y - y;
+      if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+    }
+    if (okay) break;
+  }
   const c = makeCreature(world, x, y, z);
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
@@ -5307,6 +5329,43 @@ function resolveCollisions(
   // particle collisions are settled, matching the original step order).
   if (pendingP0) pendingP0();
   if (pendingP1) pendingP1();
+
+  // Dedicated pebble-pair sweep. The 12px collision broad-phase + one-
+  // neighbor sweep guarantees pair detection only when r_a+r_b<=24;
+  // two pebbles with r=11 sum to 22 (detectable) but their centers can
+  // be in cells 2 apart, missing the sweep. Missed pairs accumulate
+  // overlap silently until they happen to land in adjacent cells,
+  // then the giant correction kicks them into the air -- the
+  // "popcorn" symptom. An O(P²) pass with P~PEBBLE_TARGET (~138) is
+  // ~9.5k early-rejected checks per tick, cheap, and catches every
+  // pair regardless of grid alignment.
+  resolvePebblePairs(world, e);
+}
+
+// Build pebble index list lazily; sized to particle store cap so we
+// never reallocate at runtime.
+let PEBBLE_IDX_BUFFER = new Int32Array(0);
+
+function resolvePebblePairs(world: World, e: number): void {
+  const store = world.particleStore;
+  const PMAT = store.material;
+  const PR = store.r;
+  const sandIdx = MATERIAL_INDEX.sand;
+  const n = world.particles.length;
+  if (PEBBLE_IDX_BUFFER.length < n) PEBBLE_IDX_BUFFER = new Int32Array(n);
+  let pn = 0;
+  for (let i = 0; i < n; i++) {
+    if (PMAT[i] === sandIdx && PR[i] >= SAND_BIG_R_MIN) PEBBLE_IDX_BUFFER[pn++] = i;
+  }
+  if (pn < 2) return;
+  const PX = store.x, PY = store.y, PZ = store.z;
+  const PVX = store.vx, PVY = store.vy, PVZ = store.vz;
+  for (let i = 0; i < pn; i++) {
+    const ai = PEBBLE_IDX_BUFFER[i];
+    for (let j = i + 1; j < pn; j++) {
+      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP, ai, PEBBLE_IDX_BUFFER[j], e);
+    }
+  }
 }
 
 // Soft positional separation for overlapping creatures + symmetric
