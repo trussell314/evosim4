@@ -2533,7 +2533,7 @@ const FOUNDER_TARGET = 25;
 // pebble bed time to settle and the water column to populate before
 // any creatures enter the simulation -- otherwise founders spawn into
 // an empty/loading world and the early dynamics look off.
-const FOUNDER_SPAWN_DELAY_SEC = 20;
+const FOUNDER_SPAWN_DELAY_SEC = 60;
 
 function spawnFounder(world: World): Creature {
   const x = world.width * (0.1 + 0.8 * Math.random());
