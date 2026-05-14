@@ -2296,9 +2296,11 @@ function collideObstaclesSoaSingle(
   X: Float32Array, Y: Float32Array, VX: Float32Array, VY: Float32Array, R: Float32Array,
   idx: number, e: number, minY: number,
 ): void {
+  if (OBSTACLE_BANDS_COLS <= 0) return;
   const rk = R[idx];
   if (Y[idx] + rk < minY) return;
   const xk = X[idx], yk = Y[idx];
+  if (xk !== xk || yk !== yk || rk !== rk) return;
   let bx = Math.floor(xk / OBSTACLE_BAND_W);
   if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
   const obs = OBSTACLE_BANDS[bx];
@@ -2339,10 +2341,18 @@ function collideObstaclesSoa(
   n: number, e: number, minY: number, _pad: number,
 ): void {
   void _pad;
+  // Defensive: if the obstacle index wasn't built (cols=0) the per-
+  // particle clamp below would land bx at -1 and throw on undefined.
+  if (OBSTACLE_BANDS_COLS <= 0) return;
   for (let k = 0; k < n; k++) {
     const yk = Y[k]; const rk = R[k];
     if (yk + rk < minY) continue;
     const xk = X[k];
+    // NaN in any of the coordinate / radius reads would propagate
+    // through Math.floor and bypass both clamp branches (every NaN
+    // comparison is false), leaving bx as NaN and OBSTACLE_BANDS[NaN]
+    // as undefined. Skip and let upstream code recover the particle.
+    if (xk !== xk || yk !== yk || rk !== rk) continue;
     let bx = Math.floor(xk / OBSTACLE_BAND_W);
     if (bx < 0) bx = 0; else if (bx >= OBSTACLE_BANDS_COLS) bx = OBSTACLE_BANDS_COLS - 1;
     const obs = OBSTACLE_BANDS[bx];

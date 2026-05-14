@@ -1167,7 +1167,12 @@ function render(): void {
         continue;
       }
     }
-    SUB_BUCKETS[bucket * N_MATERIALS + matIdx[p.material]].push(p);
+    const mi = matIdx[p.material];
+    // A snapshot particle whose material isn't in our render table
+    // (corrupted state from a partial worker load, an old save, etc.)
+    // would index SUB_BUCKETS at NaN and crash .push. Skip it.
+    if (mi === undefined) continue;
+    SUB_BUCKETS[bucket * N_MATERIALS + mi].push(p);
   }
   const tinted = TINTED_COLORS;
   for (let i = N_RENDER_BUCKETS - 1; i >= 0; i--) {
