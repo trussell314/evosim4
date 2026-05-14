@@ -11,6 +11,13 @@ const crossOriginIsolationHeaders = {
 
 export default defineConfig({
   base: "/evosim4/",
+  build: {
+    // Sourcemaps emit alongside the bundle (foo.js.map). Browsers fetch
+    // them on demand from devtools; pages without devtools open pay
+    // nothing. Worth the few KB to get readable stack traces in
+    // production failures.
+    sourcemap: true,
+  },
   server: {
     host: true,
     port: 5173,
@@ -21,5 +28,8 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    rollupOptions: {
+      output: { sourcemap: true },
+    },
   },
 });
