@@ -2567,8 +2567,8 @@ function spawnFounder(world: World): Creature {
 // anyway, so the visual artifact only shows during falling. Going
 // beyond ~r=8 would require widening cellSize, which trades pColl
 // cost for fewer big sand misses -- not worth it at current scale.
-const SAND_BIG_R_MIN = 5;
-const SAND_BIG_R_MAX = 8;
+const SAND_BIG_R_MIN = 10;
+const SAND_BIG_R_MAX = 16;
 // Random-pebble injection into the normal weighted replenish flow is
 // disabled now that pebbles have a dedicated spawn path with its own
 // count target (PEBBLE_TARGET below). Keeping spawnRadius() in place
@@ -2583,7 +2583,7 @@ const SAND_BIG_FRACTION = 0;
 // density -- explicitly requested. At ~150 px² per pebble that's
 // ~165k px² of visual area on an 800-wide floor, enough for a thick
 // stacked sediment band. Lower this if the floor reads as too deep.
-const PEBBLE_TARGET = 1100;
+const PEBBLE_TARGET = 550;
 // Per-second spawn rate when below target. Sized to fill the bed in
 // roughly 10 sim-seconds from a cold world without overshooting the
 // per-frame replenish budget.
