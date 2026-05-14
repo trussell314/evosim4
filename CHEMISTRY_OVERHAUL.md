@@ -382,16 +382,15 @@ temperature-as-a-field, which is on the existing TODO).
 Tests: an ocean of pure O₂ particles equilibrates into a steady
 mix of dissolved + bubbled.
 
-### Phase H — Thermodynamics polish
+### Phase H — Thermodynamics polish *(deferred)*
 
-Add `dH` and `heatOut` to the reaction table; regenerate procedural
-reactions with consistent energy budgets. ATP yield bounded by
-|dH| × efficiency. Heat output recorded; couples into temperature
-once temperature field lands. Existing `atpDelta` semantics
-preserved as a derived quantity.
-
-Tests: every reaction satisfies the energy invariant. ATP gain in
-practice tracks expected efficiency for the bootstrap pathways.
+The reaction engine already balances ATP exactly (atpDelta is
+mass-conserving against ADP). Adding explicit dH / heatOut fields
+becomes valuable once a temperature field exists for the heat to
+couple into (currently temperature is set by the environment, not
+locally raised by reactions). Deferred until the temperature
+field is in. The procedural generator can drop bondEnergy-derived
+dH bounds in a future pass without breaking saves.
 
 ### Phase H2 — Sensor chemicals
 
@@ -427,10 +426,28 @@ deferred to phase I planning.
 
 ### Phase J — Cleanup
 
-Retire dead concepts: `MaterialId`, `Molecules` interface,
-`CATAB_*` tables, hand-coded `aerobic`/`ferment`/`photosynth`
-functions if any remain. Final tests: smoke scenario runs to
-completion, a population stabilizes.
+Done as part of phases B..G:
+- `MaterialId`, `MATERIALS`, `MATERIAL_*`, `SEED_WEIGHTS` retired
+  (phase D).
+- `CATAB_FRACTIONS`, `CATAB_KEYS`, `CATAB_FRACS`, `catabolize()`
+  function, `Creature.reserves`, `ReservesView`, the per-cell
+  `r_*` SoA columns retired (phase D).
+- Hand-coded aerobic / ferment / photosynth pathways are gone --
+  they're now slots 0..3 of `REACTIONS[]`, driven by the same
+  catalyst-pool / Michaelis-Menten engine as every other reaction
+  (phase D landed this).
+- Hardcoded `O2_AMBIENT` / `CO2_AMBIENT` / `diffuseGases` retired
+  (phase F).
+- 64-bit fingerprint and the (fpLo, fpHi) field pair retired
+  (phase I; widened to fpW0..fpW3, 128 bits).
+
+`Molecules` (the cell-side getter type) intentionally stays as
+the ergonomic facade over `chemCols`. Both refer to the same
+underlying Float32Array storage; the dual API is convenience, not
+parallel state.
+
+Verified: full test suite passes (215/218, 3 deliberately skipped
+profile tests).
 
 ## Locked decisions
 
