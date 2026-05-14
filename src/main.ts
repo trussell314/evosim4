@@ -19,19 +19,22 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
   //      resolves with reg.active set but controller === null and no
   //      controllerchange will fire. Reload manually.
   //   C) SW controlling but headers still not applied. Reload as well.
-  // A sessionStorage guard prevents an infinite reload loop if the SW
-  // exists but fails to add headers for some reason.
-  const RELOAD_GUARD_KEY = "coi-sw-reload-attempted";
-  const alreadyReloaded = (() => {
-    try { return sessionStorage.getItem(RELOAD_GUARD_KEY) === "1"; } catch { return false; }
-  })();
+  // A time-stamped sessionStorage guard prevents an infinite reload
+  // loop without pinning the session to "give up" forever -- if the
+  // user manually refreshes more than RELOAD_GUARD_MS later, the
+  // stamp is treated as stale and we try again. The auto-reload from
+  // a still-fresh stamp is what stops a busy loop.
+  const RELOAD_GUARD_KEY = "coi-sw-reload-attempted-at";
+  const RELOAD_GUARD_MS = 5000;
   const reloadOnce = (): void => {
-    if (alreadyReloaded) {
+    let lastAt = 0;
+    try { lastAt = Number(sessionStorage.getItem(RELOAD_GUARD_KEY)) || 0; } catch { /* ignore */ }
+    if (Date.now() - lastAt < RELOAD_GUARD_MS) {
       // eslint-disable-next-line no-console
-      console.warn("[coi] SW registered but page still not isolated after reload; giving up");
+      console.warn("[coi] SW registered but page still not isolated after recent reload; not retrying");
       return;
     }
-    try { sessionStorage.setItem(RELOAD_GUARD_KEY, "1"); } catch { /* private mode */ }
+    try { sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now())); } catch { /* private mode */ }
     window.location.reload();
   };
   if (!navigator.serviceWorker.controller) {
@@ -49,9 +52,9 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
       console.warn("[coi] service worker registration failed:", err);
     });
 } else if (typeof window !== "undefined" && window.crossOriginIsolated) {
-  // Page reached isolation; clear the one-shot guard so future
-  // unrelated reloads aren't pinned to "already tried".
-  try { sessionStorage.removeItem("coi-sw-reload-attempted"); } catch { /* ignore */ }
+  // Page reached isolation; clear the guard stamp so future
+  // unrelated reloads aren't pinned to "recently tried".
+  try { sessionStorage.removeItem("coi-sw-reload-attempted-at"); } catch { /* ignore */ }
 }
 
 import {
