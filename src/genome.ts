@@ -939,18 +939,16 @@ export function viableGenome(genome: Uint8Array): boolean {
   return true;
 }
 
-// Sample a random genome size in [8, 100] with a gradual bias toward
-// smaller. Floor raised to 8 because the viability filter now wants
-// 5 distinct required ops + 2 operand bytes (SYNTH_CAT, plus at
-// least one INGEST or other operand-bearing op). Sizes smaller than
-// that always fail the filter and waste reroll budget.
+// Sample a random genome size in [12, 100] with a gradual bias toward
+// smaller. Floor raised to 12 to match the new viability floor:
+// 5 universal required ops + 2 trophic-branch ops (e.g. SYNTH_ENZ for
+// heterotrophs; SYNTH_AA + SYNTH_FA for autotrophs) + operand bytes.
+// Smaller genomes always fail and waste reroll budget.
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // CDF of P(k) ∝ (101 - k) for k in [8, 100] sums to (93*94)/2 = 4371.
-  // Solving u * 4371 = (101-k)(94+(101-k))/2 inverts to:
-  //   k = (201 - sqrt(38025 - 37242*u)) / 2  (approx; we clamp anyway)
+  // Triangular falloff on [12, 100]; clamping handles the math.
   const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(8, Math.min(100, k));
+  return Math.max(12, Math.min(100, k));
 }
 
 // Generate a random viable genome. Size is sampled from the triangular

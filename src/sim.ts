@@ -122,6 +122,11 @@ export class ParticleStore {
   // indefinitely.
   age = new Float32Array(0);
   molecules: (Molecules | null)[] = [];
+  // Generic-chemical payload (chemCols slots 8..63). Stays null for
+  // the typical particle; allocated only when a dying cell's generic
+  // pool got dumped here so it can be re-absorbed on ingest. Length
+  // GENERIC_CHEMICAL_COUNT when present.
+  genericChem: (Float32Array | null)[] = [];
   constructor(initialCap = 256) { this.grow(initialCap); }
   grow(newCap: number): void {
     if (newCap <= this.cap) return;
@@ -138,6 +143,7 @@ export class ParticleStore {
     const nq = new Int32Array(newCap); nq.set(old.quietTicks); this.quietTicks = nq;
     const na = new Float32Array(newCap); na.set(old.age); this.age = na;
     while (this.molecules.length < newCap) this.molecules.push(null);
+    while (this.genericChem.length < newCap) this.genericChem.push(null);
     this.cap = newCap;
   }
   // Append a slot with the given field values. Returns the new slot
@@ -164,8 +170,10 @@ export class ParticleStore {
       this.quietTicks[i] = this.quietTicks[last];
       this.age[i] = this.age[last];
       this.molecules[i] = this.molecules[last];
+      this.genericChem[i] = this.genericChem[last];
     }
     this.molecules[last] = null;
+    this.genericChem[last] = null;
     this.n--;
   }
 }
@@ -206,6 +214,8 @@ export class Particle {
   set quietTicks(v: number | undefined) { this.store.quietTicks[this.idx] = v ?? 0; }
   get molecules(): Molecules | undefined { return this.store.molecules[this.idx] ?? undefined; }
   set molecules(v: Molecules | undefined) { this.store.molecules[this.idx] = v ?? null; }
+  get genericChem(): Float32Array | undefined { return this.store.genericChem[this.idx] ?? undefined; }
+  set genericChem(v: Float32Array | undefined) { this.store.genericChem[this.idx] = v ?? null; }
 }
 
 // Push a new particle to world.particles AND to the underlying store,
@@ -220,6 +230,7 @@ export function pushParticle(
     material: MaterialId;
     density?: number;
     molecules?: Molecules;
+    genericChem?: Float32Array;
     quietTicks?: number;
   },
 ): Particle {
@@ -237,6 +248,7 @@ export function pushParticle(
   store.quietTicks[i] = opts.quietTicks ?? 0;
   store.age[i] = 0;
   store.molecules[i] = opts.molecules ?? null;
+  store.genericChem[i] = opts.genericChem ?? null;
   const h = new Particle(store, i);
   world.particles.push(h);
   return h;
@@ -268,6 +280,7 @@ export interface ParticleData {
   r: number;
   material: MaterialId;
   molecules?: Molecules;
+  genericChem?: Float32Array;
   quietTicks?: number;
   density?: number;
 }
@@ -1243,7 +1256,28 @@ const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
 interface ChemicalDef {
   name: string;
   mass: number; // unit mass per "mole" -- 1 for named (matches existing model)
+  // Whether this chemical crosses the inner/host membrane in
+  // endosymbiont diffusion. Small molecules diffuse (glucose, gases,
+  // amino acids); structural / machinery molecules don't (biomass,
+  // chl, enz, ribo). All generic chemicals diffuse by default.
+  diffusable: boolean;
 }
+// (NAMED_DIFFUSABLE is referenced by buildChemicalTable below; declared
+// before CHEMICALS so the temporal-dead-zone doesn't bite at module init.)
+const NAMED_DIFFUSABLE: ReadonlyArray<boolean> = [
+  /* o2     */ true,
+  /* co2    */ true,
+  /* glu    */ true,
+  /* aa     */ true,
+  /* fa     */ true,
+  /* min    */ true,
+  /* biomass*/ false,
+  /* adp    */ true,
+  /* waste  */ true,
+  /* chl    */ false,
+  /* enz    */ false,
+  /* ribo   */ false,
+];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
 // chemCols[k] (k < 8). Resolved against MOLECULE_INDEX which is
@@ -1252,15 +1286,20 @@ const CHEM_NAMED_MOL_IDX: number[] = NAMED_CHEMICALS.map((n) => MOLECULE_INDEX[n
 
 function buildChemicalTable(): ChemicalDef[] {
   const out: ChemicalDef[] = [];
-  for (const n of NAMED_CHEMICALS) out.push({ name: n, mass: 1 });
+  for (let i = 0; i < NAMED_CHEMICALS.length; i++) {
+    out.push({ name: NAMED_CHEMICALS[i], mass: 1, diffusable: NAMED_DIFFUSABLE[i] });
+  }
   // Deterministic per-chemical mass for the generic pool, drawn
   // from a small set so reactions across runs have the same balance.
   // Skew toward small masses (most biology is light chemistry).
+  // Generic chemicals all diffuse -- they're abstract molecules and
+  // letting them flow between endosymbiont and host enables real
+  // metabolic cooperation.
   const rng = mulberry32(0xC8E3_15CA);
   for (let i = NAMED_CHEMICAL_COUNT; i < CHEMICAL_COUNT; i++) {
     const u = rng();
     const mass = 0.5 + u * u * 4.5; // 0.5 .. 5.0, skewed low
-    out.push({ name: `c${i.toString(16).padStart(2, "0")}`, mass });
+    out.push({ name: `c${i.toString(16).padStart(2, "0")}`, mass, diffusable: true });
   }
   return out;
 }
@@ -1610,9 +1649,13 @@ function mulberry32(seed: number): () => number {
 // eventually drops below MIN_VIABLE_BIOMASS, at which point it
 // autolyzes.
 const BIOMASS_DECAY_PER_SEC = 0.005;
-const ENZYME_DECAY_PER_SEC = 0.005;
-const CHLORO_DECAY_PER_SEC = 0.005;
-const RIBO_DECAY_PER_SEC = 0.003;
+// The three mandatory-machinery molecules (chl/enz/ribo) gate hard at
+// zero now, so their decay is what eventually kills a starving cell.
+// Lowered to ~0.001 so cells survive temporary substrate shortages
+// (~10 min half-life) instead of collapsing within seconds of stalling.
+const ENZYME_DECAY_PER_SEC = 0.001;
+const CHLORO_DECAY_PER_SEC = 0.001;
+const RIBO_DECAY_PER_SEC = 0.001;
 const MIN_VIABLE_BIOMASS = 0.5;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
@@ -2434,9 +2477,6 @@ function spendATP(c: Creature, want: number): number {
   return got;
 }
 
-function sat(x: number, km: number = KM_DEFAULT): number {
-  return x > 0 ? x / (x + km) : 0;
-}
 
 // Convert undigested reserves into named molecules. Mass-conserving:
 // each row of CATAB_FRACTIONS sums to 1.
@@ -2505,10 +2545,64 @@ const BIOSYNTH_ATP_FLOOR = 4;
 // biosynthesize() retired in phase 2 -- all biosynth pathways are now
 // table entries in REACTIONS[4..9] driven by runGenericReactions().
 
-// Build catalyst into the catalystCols[slot] pool. Same shape as
-// biosynthesize() but the product lives in the per-slot Float32Array
-// rather than a Molecules key. Substrate is 0.5 aa + 0.5 min, same as
-// enzymes / chlorophyll / ribosomes.
+// Generic reaction runner for paths outside the REACTIONS table -- the
+// engine itself inlines the same logic for perf, but for one-off
+// reactions where the product lives somewhere other than chemCols
+// (catalystCols, or a future "atmosphere", etc.) this shares the
+// substrate gate + MM saturation + ATP/ADP bookkeeping so we don't
+// drift from the engine's math. Caller's writeProduct(amt) sees the
+// final reaction extent and handles wherever the product belongs.
+function runSyntheticReaction(
+  c: Creature, dt: number,
+  sChem: ArrayLike<number>, sCount: ArrayLike<number>,
+  atpDelta: number, vmax: number, atpFloor: boolean,
+  writeProduct: (amt: number) => void,
+): void {
+  const s = c.store; const i = c.idx;
+  const KM = KM_DEFAULT;
+  let limit = Infinity;
+  let satProduct = 1;
+  for (let j = 0; j < sChem.length; j++) {
+    const have = s.chemCols[sChem[j]][i];
+    const need = sCount[j];
+    const ratio = have / need;
+    if (ratio < limit) limit = ratio;
+    satProduct *= ratio / (ratio + KM);
+  }
+  if (limit <= 0) return;
+  if (atpDelta < 0) {
+    const floor = atpFloor ? BIOSYNTH_ATP_FLOOR : 0;
+    const eAvail = (s.energy[i] - floor) / -atpDelta;
+    if (eAvail <= 0) return;
+    if (eAvail < limit) limit = eAvail;
+    satProduct *= eAvail / (eAvail + KM);
+  } else if (atpDelta > 0) {
+    const adpAvail = s.chemCols[CHEM_ADP][i] / atpDelta;
+    if (adpAvail <= 0) return;
+    if (adpAvail < limit) limit = adpAvail;
+    satProduct *= adpAvail / (adpAvail + KM);
+  }
+  const rate = vmax * satProduct;
+  let amt = rate * dt;
+  if (amt > limit) amt = limit;
+  if (amt <= 0) return;
+  for (let j = 0; j < sChem.length; j++) {
+    s.chemCols[sChem[j]][i] -= sCount[j] * amt;
+  }
+  if (atpDelta !== 0) {
+    s.energy[i] += atpDelta * amt;
+    s.chemCols[CHEM_ADP][i] -= atpDelta * amt;
+  }
+  writeProduct(amt);
+}
+
+// Catalyst synthesis. Catalysts live in catalystCols[slot] rather
+// than in chemCols, so this can't be a REACTIONS-table entry; but
+// the substrate / ATP / saturation math is the same as every biosynth
+// reaction, so we delegate to runSyntheticReaction. Substrate fixed
+// at 0.5 aa + 0.5 min (same as enzymes / chlorophyll / ribosomes).
+const CAT_SUBSTRATE_CHEM = new Uint8Array([3, 5]); // aa, min in chemCols
+const CAT_SUBSTRATE_COUNT = new Float32Array([0.5, 0.5]);
 function biosynthCatalyst(
   c: Creature,
   dt: number,
@@ -2516,25 +2610,13 @@ function biosynthCatalyst(
   atpCost: number,
   slot: number,
 ): void {
-  const s = c.store; const i = c.idx;
-  const colA = s.molCols[MOLECULE_INDEX["aminoAcid"]];
-  const colB = s.molCols[MOLECULE_INDEX["minerals"]];
-  const colP = s.catalystCols[slot];
-  const a = colA[i], b = colB[i], e = s.energy[i];
-  if (a <= 0 || b <= 0 || e <= BIOSYNTH_ATP_FLOOR) return;
-  const aFrac = a / 0.5, bFrac = b / 0.5;
-  const eAvail = (e - BIOSYNTH_ATP_FLOOR) / atpCost;
-  const rate = vmax * sat(aFrac) * sat(bFrac) * sat(eAvail);
-  const rdt = rate * dt;
-  let amt = rdt < aFrac ? rdt : aFrac;
-  if (bFrac < amt) amt = bFrac;
-  if (eAvail < amt) amt = eAvail;
-  if (amt <= 0) return;
-  colA[i] = a - 0.5 * amt;
-  colB[i] = b - 0.5 * amt;
-  s.energy[i] = e - atpCost * amt;
-  colP[i] += amt;
-  s.m_adp[i] += atpCost * amt;
+  const col = c.store.catalystCols[slot];
+  const i = c.idx;
+  runSyntheticReaction(
+    c, dt, CAT_SUBSTRATE_CHEM, CAT_SUBSTRATE_COUNT,
+    -atpCost, vmax, /* atpFloor */ true,
+    (amt) => { col[i] += amt; },
+  );
 }
 
 function autoExcrete(c: Creature, world: World): void {
@@ -2631,9 +2713,13 @@ function maintenanceDecay(c: Creature, dt: number): void {
 // surplus ATP / glucose / etc. flows where it's useful. This is the
 // whole "subsumed cell becomes organelle" mechanic.
 const ORGANELLE_DIFFUSE_PER_SEC = 0.5;   // fraction of (inner - host) gap that crosses per sec
-const ORGANELLE_DIFFUSE_KEYS: (keyof Molecules)[] = [
-  "glucose", "fattyAcid", "aminoAcid", "minerals", "o2", "co2", "adp", "waste",
-];
+// Cached list of chemical ids whose CHEMICALS[id].diffusable is true.
+// Built once from the table so the hot loop iterates a tight array.
+const DIFFUSABLE_CHEM_IDS: number[] = (() => {
+  const out: number[] = [];
+  for (let i = 0; i < CHEMICAL_COUNT; i++) if (CHEMICALS[i].diffusable) out.push(i);
+  return out;
+})();
 function runOrganelleChemistry(
   inner: Creature,
   host: Creature,
@@ -2647,21 +2733,26 @@ function runOrganelleChemistry(
   runGenericReactions(inner, dtT, light, inner.organelleSynthMask);
   maintenanceDecay(inner, dt);
 
-  // Bidirectional diffusion of small molecules + ATP between inner
-  // and host. Net flow toward the lower concentration -- surplus
-  // products leak out, scarce substrates leak in. Mass-conserving.
+  // Bidirectional diffusion across the inner/host membrane. Net flow
+  // toward the lower concentration -- surplus products leak out,
+  // scarce substrates leak in. Diffusable set is driven by the
+  // Chemical table's `diffusable` flag, so adding a new chemical
+  // automatically participates (or doesn't) based on its type.
   const rate = ORGANELLE_DIFFUSE_PER_SEC * dt;
-  // ATP
+  // ATP isn't a chemical slot but it does cross the membrane like one.
   const dAtp = (inner.energy - host.energy) * rate;
   inner.energy -= dAtp;
   host.energy += dAtp;
-  // Tracked molecules
-  const innerMol = inner.molecules;
-  const hostMol = host.molecules;
-  for (const k of ORGANELLE_DIFFUSE_KEYS) {
-    const d = (innerMol[k] - hostMol[k]) * rate;
-    innerMol[k] = innerMol[k] - d;
-    hostMol[k] = hostMol[k] + d;
+  const innerCols = inner.store.chemCols;
+  const hostCols = host.store.chemCols;
+  const ii = inner.idx, hi = host.idx;
+  for (let j = 0; j < DIFFUSABLE_CHEM_IDS.length; j++) {
+    const k = DIFFUSABLE_CHEM_IDS[j];
+    const ic = innerCols[k];
+    const hc = hostCols[k];
+    const d = (ic[ii] - hc[hi]) * rate;
+    ic[ii] -= d;
+    hc[hi] += d;
   }
 }
 
@@ -3513,6 +3604,18 @@ function updateCreatures(world: World, dt: number): void {
             c.reserves[MATERIAL_IDS[k]] += other.reserves[MATERIAL_IDS[k]];
           }
           for (const mk of MOLECULE_IDS) c.molecules[mk] += other.molecules[mk];
+          // Generic chem transfers directly too -- predator absorbs
+          // the prey's full chemistry, including any abstract
+          // molecules the prey had been accumulating.
+          {
+            const myCols = c.store.genericChemCols;
+            const otherCols = other.store.genericChemCols;
+            const ci = c.idx; const oi = other.idx;
+            for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+              myCols[k][ci] += otherCols[k][oi];
+              otherCols[k][oi] = 0;
+            }
+          }
           c.energy += other.energy;
           for (const inner of other.contents) c.contents.push(inner);
           other.contents.length = 0;
@@ -3549,6 +3652,16 @@ function updateCreatures(world: World, dt: number): void {
               for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
             } else {
               c.reserves[p.material] += mass(p);
+            }
+            // Generic-chemical payload (cells dump their generic pool
+            // into one organic particle on death). Transfer into the
+            // eater's generic chem cols.
+            if (p.genericChem) {
+              const gcCols = c.store.genericChemCols;
+              const ci = c.idx;
+              for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+                gcCols[k][ci] += p.genericChem[k];
+              }
             }
             spendATP(c, INGEST_ENERGY_COST);
             // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
@@ -3695,22 +3808,42 @@ function releaseReservesAsParticles(c: Creature, world: World): void {
       }
     }
   }
-  // Generic chemicals don't (yet) have a particle representation.
-  // On death they release as bulk organic, weighted by their per-
-  // chemical mass so cells that accumulated heavy generics drop a
-  // proportionally larger pile.
+  // Generic chemicals get their own corpse particle so the chemical
+  // identity survives the cell's death (mass + chem signature both
+  // re-enter the world and can be ingested by another cell, which
+  // re-absorbs the generic chem directly into its own pool). One
+  // particle per cell to keep particle counts down; species can
+  // recover specialized chemistry by predating each other.
   {
     const cols = c.store.genericChemCols;
     const ci = c.idx;
-    let organicMass = 0;
+    const payload = new Float32Array(GENERIC_CHEMICAL_COUNT);
+    let totalMass = 0;
+    let any = false;
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       const v = cols[k][ci];
       if (v > 0) {
-        organicMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].mass;
+        payload[k] = v;
+        totalMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].mass;
         cols[k][ci] = 0;
+        any = true;
       }
     }
-    if (organicMass > 0) c.reserves.organic += organicMass;
+    if (any && totalMass >= 0.5) {
+      const density = MATERIALS.organic.density;
+      const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(totalMass, density));
+      pushParticle(world, {
+        x: c.x + (Math.random() - 0.5) * 6,
+        y: c.y + (Math.random() - 0.5) * 6,
+        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
+        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
+        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
+        r,
+        material: "organic",
+        genericChem: payload,
+      });
+    }
   }
 
   // Group molecules by their natural bucket. ATP loses its terminal
@@ -4710,7 +4843,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:4:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:5:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -4733,6 +4866,12 @@ interface SavedCreature {
   // itself carry contents in real biology, so we snapshot the same
   // structure -- though the sim currently only nests one level deep.
   contents?: SavedCreature[];
+  // ADHERE bond partners as indices into the saved.creatures array.
+  // Bonds only exist among top-level world.creatures (engulfed cells
+  // don't run VM and can't fire ADHERE), so this is a flat index
+  // list. Restored in a second pass once every Creature instance
+  // exists. Empty when no bonds (most cells).
+  bonds?: number[];
 }
 interface SavedParticle {
   x: number; y: number; z: number;
@@ -4740,6 +4879,10 @@ interface SavedParticle {
   r: number; material: MaterialId;
   density?: number;
   molecules?: Record<string, number>;
+  // Sparse: pairs of (slotInGenericRange, value) for nonzero entries.
+  // Only present for corpse particles that inherited a cell's
+  // accumulated generic-chemical pool.
+  generics?: SavedSparse[];
 }
 interface SavedSpecies {
   key: string; color: string; firstSeen: number; lastSeen: number;
@@ -4824,6 +4967,14 @@ function snapshotParticle(p: Particle): SavedParticle {
     }
     if (any) out.molecules = m;
   }
+  if (p.genericChem) {
+    const sparse: SavedSparse[] = [];
+    for (let k = 0; k < p.genericChem.length; k++) {
+      const v = p.genericChem[k];
+      if (v > 0) sparse.push({ i: k, v });
+    }
+    if (sparse.length > 0) out.generics = sparse;
+  }
   return out;
 }
 
@@ -4859,6 +5010,23 @@ export function serializeWorld(w: World): string {
     particles: w.particles.map(snapshotParticle),
     creatures: w.creatures.map(snapshotCreature),
   };
+  // Second pass for bonds: now that every creature has an index in
+  // saved.creatures, translate each cell's bond partners into those
+  // indices. Cells engulfed in contents[] are skipped (they don't
+  // form bonds), and partners that aren't in the top-level
+  // creatures array (shouldn't happen but defensive) are dropped.
+  const idxByCreature = new Map<Creature, number>();
+  for (let i = 0; i < w.creatures.length; i++) idxByCreature.set(w.creatures[i], i);
+  for (let i = 0; i < w.creatures.length; i++) {
+    const c = w.creatures[i];
+    if (c.bonds.length === 0) continue;
+    const idxs: number[] = [];
+    for (const partner of c.bonds) {
+      const pi = idxByCreature.get(partner);
+      if (pi !== undefined) idxs.push(pi);
+    }
+    if (idxs.length > 0) saved.creatures[i].bonds = idxs;
+  }
   return JSON.stringify(saved);
 }
 
@@ -4964,17 +5132,40 @@ export function applySavedWorld(world: World, json: string): boolean {
   }
   world.nextSpeciesLane = maxLane + 1;
   for (const sp of saved.particles) {
+    let genericChem: Float32Array | undefined;
+    if (sp.generics && sp.generics.length > 0) {
+      genericChem = new Float32Array(GENERIC_CHEMICAL_COUNT);
+      for (const e of sp.generics) genericChem[e.i] = e.v;
+    }
     pushParticle(world, {
       x: sp.x, y: sp.y, z: sp.z,
       vx: sp.vx, vy: sp.vy, vz: sp.vz,
       r: sp.r, material: sp.material,
       density: sp.density,
       molecules: sp.molecules ? { ...emptyMolecules(), ...sp.molecules } : undefined,
+      genericChem,
     });
   }
   for (const sc of saved.creatures) {
     const c = restoreCreature(world, sc);
     world.creatures.push(c);
+  }
+  // Second pass: wire bonds. Each saved.creatures[i].bonds holds the
+  // partner indices into the same array, which now corresponds 1:1
+  // with world.creatures (we pushed in the same order). Each bond is
+  // symmetric, but we record it from both sides so we don't have to
+  // worry about ordering -- duplicates checked with includes().
+  for (let i = 0; i < saved.creatures.length; i++) {
+    const sc = saved.creatures[i];
+    if (!sc.bonds || sc.bonds.length === 0) continue;
+    const c = world.creatures[i];
+    for (const pi of sc.bonds) {
+      if (pi < 0 || pi >= world.creatures.length) continue;
+      const partner = world.creatures[pi];
+      if (partner === c) continue;
+      if (!c.bonds.includes(partner)) c.bonds.push(partner);
+      if (!partner.bonds.includes(c)) partner.bonds.push(c);
+    }
   }
   return true;
 }

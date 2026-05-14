@@ -1968,9 +1968,17 @@ function maybeAnalyzeGenomes(): void {
     block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
     const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
     // Genome id + size up front in a bigger weight so the eye lands
-    // there first; the rest is the supporting stats line.
+    // there first; the rest is the supporting stats line. Trophic
+    // mode shown as a small color-coded chip so autotroph vs
+    // heterotroph vs predator is glanceable.
+    const tm = trophicMode(sp.genome);
+    const trophicChip =
+      `<span style="display:inline-block;padding:1px 5px;border-radius:3px;` +
+      `background:${tm.bg};color:${tm.fg};font-size:9px;font-weight:bold;` +
+      `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
     const headLine =
       `${dot}<b>#${i + 1}</b>  ` +
+      `${trophicChip}` +
       `<b style="font-size:13px;letter-spacing:0.5px;">${sp.key.slice(0, 6)}</b>` +
       `<span style="opacity:.7"> (${sp.genome.length}b)</span>  ${status}`;
     const statsLine =
@@ -1989,6 +1997,31 @@ function maybeAnalyzeGenomes(): void {
     block.appendChild(proseDiv);
     analysisBody.appendChild(block);
   }
+}
+
+// Trophic mode chip for the sidebar: same op-presence rules viableGenome
+// uses to decide whether a candidate is a photoautotroph, heterotroph,
+// predator, or mixotroph (both photo + animal eating). Color-coded so
+// the eye groups species by lifestyle.
+type TrophicMode = { label: string; bg: string; fg: string };
+const TROPHIC_AUTO: TrophicMode = { label: "auto", bg: "#1e4d2b", fg: "#9efba8" };
+const TROPHIC_HET: TrophicMode  = { label: "het",  bg: "#1c3b5a", fg: "#9ec7ff" };
+const TROPHIC_PRED: TrophicMode = { label: "pred", bg: "#5a1c1c", fg: "#ff9e9e" };
+const TROPHIC_MIXO: TrophicMode = { label: "mixo", bg: "#5a4a1c", fg: "#ffe49e" };
+function trophicMode(genome: Uint8Array): TrophicMode {
+  let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
+  walkGenome(genome, (op) => {
+    if (op === OP.INGEST) hasIngest = true;
+    else if (op === OP.PREDATE) hasPredate = true;
+    else if (op === OP.ENGULF) hasEngulf = true;
+    else if (op === OP.SYNTH_CHL) hasChl = true;
+  });
+  const eatsOther = hasPredate || hasEngulf;
+  const eatsParticles = hasIngest;
+  if (hasChl && !eatsOther && !eatsParticles) return TROPHIC_AUTO;
+  if (hasChl && (eatsOther || eatsParticles)) return TROPHIC_MIXO;
+  if (eatsOther) return TROPHIC_PRED;
+  return TROPHIC_HET;
 }
 
 // Walk a genome and describe it in plain prose. Same fact extraction
