@@ -218,6 +218,25 @@ interface ParticlePool {
 }
 let pool: ParticlePool | null = null;
 
+// Upper bound on how long a barrier wait can block before we assume a
+// subworker has gone AWOL (failed to load, threw silently, etc.) and
+// tear the pool down. Picked well above any realistic per-phase time
+// (single-digit ms) but small enough to recover within a frame budget.
+const BARRIER_TIMEOUT_MS = 500;
+
+function teardownPool(reason: string): void {
+  if (!pool) return;
+  for (const wk of pool.workers) {
+    try { wk.terminate(); } catch { /* ignore */ }
+  }
+  pool = null;
+  setParticleForceDispatcher(null);
+  setCollisionPhaseDispatcher(null);
+  pendingSimError = { message: `[pool] ${reason}`, at: world ? world.t : 0 };
+  // eslint-disable-next-line no-console
+  console.error("[sim worker] particle pool torn down:", reason);
+}
+
 function setupParticlePool(w: World): void {
   // Sanity-check SAB availability. createWorld already allocated the
   // particle store on the appropriate buffer type; if that buffer is
@@ -250,6 +269,17 @@ function setupParticlePool(w: World): void {
   for (let i = 0; i < nWorkers; i++) {
     const wk = new Worker(new URL("./particle.worker.ts", import.meta.url), {
       type: "module",
+    });
+    // Worker errors (load failures, uncaught throws) don't surface in
+    // the console for sub-workers spawned from another worker, so
+    // attach handlers that tear the pool down and flag a sim error.
+    // Without this the sim deadlocks at the next barrier with no
+    // diagnostic.
+    wk.addEventListener("error", (ev) => {
+      teardownPool(`worker ${i} error: ${ev.message || "unknown"}`);
+    });
+    wk.addEventListener("messageerror", () => {
+      teardownPool(`worker ${i} messageerror`);
     });
     wk.postMessage({
       type: "init",
@@ -305,12 +335,7 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): void {
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
-  // Barrier: wait until every worker has bumped done. Loop because
-  // wait() can return without the condition being met (spurious wake,
-  // timeout, or notify from another channel).
-  while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
-    Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE));
-  }
+  if (!waitForBarrier(ctrl, nWorkers, "force")) return;
 }
 
 function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): void {
@@ -326,7 +351,22 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
   pool.phase++;
   Atomics.store(ctrl, CTRL_PHASE, pool.phase);
   Atomics.notify(ctrl, CTRL_PHASE, nWorkers);
+  if (!waitForBarrier(ctrl, nWorkers, "collision")) return;
+}
+
+// Bounded barrier wait. Returns true on success, false if the deadline
+// expires (in which case the pool has already been torn down and the
+// caller should give up on this phase). The sim's next step will use
+// the serial fallback that the cleared dispatchers route to.
+function waitForBarrier(ctrl: Int32Array, nWorkers: number, label: string): boolean {
+  const deadline = performance.now() + BARRIER_TIMEOUT_MS;
   while (Atomics.load(ctrl, CTRL_DONE) < nWorkers) {
-    Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE));
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      teardownPool(`${label} barrier timed out (${nWorkers - Atomics.load(ctrl, CTRL_DONE)}/${nWorkers} workers unresponsive)`);
+      return false;
+    }
+    Atomics.wait(ctrl, CTRL_DONE, Atomics.load(ctrl, CTRL_DONE), remaining);
   }
+  return true;
 }
