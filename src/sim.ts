@@ -2708,6 +2708,45 @@ function seedInitialParticles(world: World): void {
       });
     }
   }
+  seedAdpParticles(world);
+}
+
+// Primordial adenosine: spawn N organic particles each carrying a
+// small adp molecule payload. Adenosine (adp + atp) is otherwise a
+// closed pool in this sim's food web -- death / predation / excretion
+// cycle it between cells but nothing creates it from outside, so a
+// one-time seed gives the initial population a richer ATP economy
+// than just the founder adp:5 inheritance can support. Models
+// "primordial salvage food" -- pre-biotic adenosine that cells
+// scavenge before evolving their own synthesis.
+//
+// Particles are molecule-tagged so INGEST routes them straight into
+// c.molecules.adp (no catabolism needed); see the if(p.molecules)
+// branch of the INGEST handler. Material is organic for visual /
+// gravity consistency with other molecule-bearing particles.
+const SEED_ADP_PARTICLES = 500;
+const SEED_ADP_PER_PARTICLE = 1.0;
+
+function seedAdpParticles(world: World): void {
+  const W = world.width;
+  const H = world.height;
+  const surfaceY = world.surfaceY;
+  const yRange = (H - surfaceY) * 0.85;
+  for (let i = 0; i < SEED_ADP_PARTICLES; i++) {
+    const r = 1 + Math.random() * 1.5;
+    const molecules = emptyMolecules();
+    molecules.adp = SEED_ADP_PER_PARTICLE;
+    pushParticle(world, {
+      x: Math.random() * W,
+      y: surfaceY + Math.random() * yRange,
+      z: r + Math.random() * (world.depth - 2 * r),
+      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+      r,
+      material: "organic",
+      density: rollDensity("organic"),
+      molecules,
+    });
+  }
 }
 
 // Pebble-sized sand grains. A SAND_BIG_FRACTION of new sand particles

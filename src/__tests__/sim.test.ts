@@ -177,13 +177,13 @@ afterEach(() => {
 describe("createWorld", () => {
   it("populated world with ecology fields", () => {
     const w = createWorld(800, 600);
-    // World seeds ~500 starter particles (varied chemistry) up front,
-    // then 15-25 founders that scoop nearby particles into their
-    // initial reserves -- so live particle count lands in a wide
-    // band rather than at exactly 500. Founders are guaranteed to
-    // exist; replenish + aerate kick in via step() afterwards.
-    expect(w.particles.length).toBeGreaterThan(300);
-    expect(w.particles.length).toBeLessThanOrEqual(500);
+    // World seeds ~500 chemistry-bearing particles + 500 primordial
+    // adp particles up front, then 15-25 founders that scoop nearby
+    // particles into their initial reserves -- so live particle count
+    // lands in a wide band centred around 1000. Founders are
+    // guaranteed; replenish + aerate kick in via step() afterwards.
+    expect(w.particles.length).toBeGreaterThan(700);
+    expect(w.particles.length).toBeLessThanOrEqual(1000);
     expect(w.creatures.length).toBeGreaterThanOrEqual(15);
     expect(w.creatures.length).toBeLessThanOrEqual(25);
     expect(w.extinctionCount).toBe(0);
