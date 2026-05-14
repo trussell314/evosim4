@@ -195,7 +195,8 @@ describe("createWorld", () => {
       expect(p.z).toBeGreaterThanOrEqual(p.r);
       expect(p.z).toBeLessThanOrEqual(w.depth - p.r);
       expect(p.r).toBeGreaterThanOrEqual(1);
-      expect(p.r).toBeLessThanOrEqual(2.5);
+      // Big-sand variant lets sand grains spawn up to ~r=8.
+      expect(p.r).toBeLessThanOrEqual(8);
       expect(MATERIALS[p.material]).toBeDefined();
     }
   });

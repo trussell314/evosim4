@@ -2546,14 +2546,45 @@ function spawnFounder(world: World): Creature {
   return c;
 }
 
+// Pebble-sized sand grains. A SAND_BIG_FRACTION of new sand particles
+// spawn at this much larger radius so the same world looks "full of
+// sand" with far fewer entries in the O(N) per-tick buckets (forces,
+// snapshot, render). Physics scales correctly without changes: the
+// existing math uses radius for drag and density (not radius) for
+// gravity/buoyancy.
+//
+// Cap chosen vs the collision broad-phase cellSize=12px. The
+// neighbor-cell sweep guarantees pair soundness when r_a+r_b <=
+// cellSize, so two big grains in adjacent cells can occasionally
+// miss a collision while in transit (radius 8 + 8 = 16 > 12). Once
+// they settle and go asleep the pair-check is short-circuited
+// anyway, so the visual artifact only shows during falling. Going
+// beyond ~r=8 would require widening cellSize, which trades pColl
+// cost for fewer big sand misses -- not worth it at current scale.
+const SAND_BIG_R_MIN = 5;
+const SAND_BIG_R_MAX = 8;
+// Target: roughly 10% bottom-row visual coverage. With pebble diameter
+// ~10-16px and world width 800px, that's ~20-30 pebbles spread across
+// the floor (some stacked). Sand is ~23% of all particle spawns, the
+// steady-state target population is ~2300, so we want ~0.011 of all
+// spawns to be big sand -> 0.011/0.23 ≈ 0.05 of sand spawns.
+const SAND_BIG_FRACTION = 0.05;
+
+function spawnRadius(mat: MaterialId): number {
+  if (mat === "sand" && Math.random() < SAND_BIG_FRACTION) {
+    return SAND_BIG_R_MIN + Math.random() * (SAND_BIG_R_MAX - SAND_BIG_R_MIN);
+  }
+  return 1 + Math.random() * 1.5;
+}
+
 export function seedParticles(world: World, n: number): void {
   world.particles.length = 0;
   world.particleStore.n = 0;
   for (let i = 0; i < n; i++) {
-    const r = 1 + Math.random() * 1.5;
+    const mat = pickMaterial();
+    const r = spawnRadius(mat);
     // Spawn below the surface so the initial state matches the wall.
     const yRange = (world.height - world.surfaceY) * 0.85;
-    const mat = pickMaterial();
     pushParticle(world, {
       x: Math.random() * world.width,
       y: world.surfaceY + Math.random() * yRange,
@@ -3335,8 +3366,8 @@ function replenishParticles(world: World, dt: number): void {
   let toSpawn = Math.floor(expected);
   if (Math.random() < expected - toSpawn) toSpawn++;
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
-    const r = 1 + Math.random() * 1.5;
     const mat = pickMaterial();
+    const r = spawnRadius(mat);
     pushParticle(world, {
       x: Math.random() * world.width,
       y: world.surfaceY + r,
