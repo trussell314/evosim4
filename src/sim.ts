@@ -395,51 +395,118 @@ export interface ParticleData {
 // accessors index into the store. molecules and reserves are exposed
 // via two helper classes (MoleculesView, ReservesView) that proxy
 // their named fields into the right column.
+// Fixed preallocated cap for CreatureStore. MAX_CREATURES (400) is
+// the hard ceiling on world.creatures; engulfed prey occupies extra
+// slots inside hosts, so we need headroom above 400. 768 keeps the
+// per-column stride at 3 KB (cap * 4), which means the 64 chemistry
+// columns the runGenericReactions inner loop touches per cell fit in
+// ~192 KB -- comfortably inside L2 -- when the loop sweeps cells. SAB-
+// backed columns can't grow without invalidating subworker views, so
+// this is the hard cap.
+const CREATURE_STORE_PREALLOC_CAP = 768;
+
+// Layout descriptor for CreatureStore. Mirrors ParticleSharedLayout's
+// role: subworkers receive this in their init message and rebuild
+// Float32 / Int32 / Uint32 views over the shared buffer.
+export interface CreatureSharedLayout {
+  buffer: ArrayBufferLike;
+  cap: number;
+  // Offsets are stored as a flat record so subworker code can walk
+  // it without needing the full Creature column inventory hard-coded.
+  // catalyst[k] = byte offset for catalyst column k. Same for generic.
+  offsets: {
+    base: Record<string, number>; // primitive + molecule + reserve cols
+    catalyst: number[];           // CATALYST_COUNT entries
+    generic: number[];            // GENERIC_CHEMICAL_COUNT entries
+  };
+}
+
+const CREATURE_F32_COLS = [
+  "x", "y", "z", "vx", "vy", "vz",
+  "r", "density",
+  "energy", "senseRange", "thrustAccel",
+  "bornAt", "ingestCooldown",
+  "ax", "ay",
+  "m_glucose", "m_fattyAcid", "m_aminoAcid", "m_minerals",
+  "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
+  "m_biomass", "m_waste", "m_adp", "m_ribosome",
+  "r_rock", "r_sand", "r_clay", "r_organic", "r_lipid", "r_gas",
+] as const;
+const CREATURE_I32_COLS = ["repairTicks"] as const;
+const CREATURE_U32_COLS = ["fpLo", "fpHi"] as const;
+
+function allocCreatureBuffer(cap: number): { buffer: ArrayBufferLike; offsets: CreatureSharedLayout["offsets"] } {
+  const align = (n: number): number => (n + 7) & ~7;
+  const f32Size = cap * 4;
+  const i32Size = cap * 4;
+  const u32Size = cap * 4;
+  let o = 0;
+  const base: Record<string, number> = {};
+  for (const k of CREATURE_F32_COLS) { base[k] = o; o = align(o + f32Size); }
+  for (const k of CREATURE_I32_COLS) { base[k] = o; o = align(o + i32Size); }
+  for (const k of CREATURE_U32_COLS) { base[k] = o; o = align(o + u32Size); }
+  const catalyst: number[] = [];
+  for (let k = 0; k < CATALYST_COUNT; k++) { catalyst.push(o); o = align(o + f32Size); }
+  const generic: number[] = [];
+  for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) { generic.push(o); o = align(o + f32Size); }
+  const total = o;
+  let buffer: ArrayBufferLike;
+  if (typeof SharedArrayBuffer !== "undefined" &&
+      typeof globalThis !== "undefined" &&
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
+    buffer = new SharedArrayBuffer(total);
+  } else {
+    buffer = new ArrayBuffer(total);
+  }
+  return { buffer, offsets: { base, catalyst, generic } };
+}
+
 export class CreatureStore {
   cap = 0;
   highWater = 0;
   free: number[] = [];
+  buffer!: ArrayBufferLike;
+  offsets!: CreatureSharedLayout["offsets"];
   // primitive position/velocity/shape
-  x: Float32Array; y: Float32Array; z: Float32Array;
-  vx: Float32Array; vy: Float32Array; vz: Float32Array;
-  r: Float32Array; density: Float32Array;
+  x!: Float32Array; y!: Float32Array; z!: Float32Array;
+  vx!: Float32Array; vy!: Float32Array; vz!: Float32Array;
+  r!: Float32Array; density!: Float32Array;
   // metabolism / lifecycle
-  energy: Float32Array;
-  senseRange: Float32Array;
-  thrustAccel: Float32Array;
-  bornAt: Float32Array;
-  ingestCooldown: Float32Array;
-  repairTicks: Int32Array;
+  energy!: Float32Array;
+  senseRange!: Float32Array;
+  thrustAccel!: Float32Array;
+  bornAt!: Float32Array;
+  ingestCooldown!: Float32Array;
+  repairTicks!: Int32Array;
   // Total mechanical force on the cell this tick, recorded by
   // applyForces. Read by populateSensors to feed SENSE_PRESSURE_X/Y.
   // pressureY also gets a static depth term added before VM read.
-  ax: Float32Array;
-  ay: Float32Array;
+  ax!: Float32Array;
+  ay!: Float32Array;
   // molecule pools (parallel to MOLECULE_IDS order)
-  m_glucose: Float32Array;
-  m_fattyAcid: Float32Array;
-  m_aminoAcid: Float32Array;
-  m_minerals: Float32Array;
-  m_chlorophyll: Float32Array;
-  m_enzyme: Float32Array;
-  m_o2: Float32Array;
-  m_co2: Float32Array;
-  m_biomass: Float32Array;
-  m_waste: Float32Array;
-  m_adp: Float32Array;
-  m_ribosome: Float32Array;
+  m_glucose!: Float32Array;
+  m_fattyAcid!: Float32Array;
+  m_aminoAcid!: Float32Array;
+  m_minerals!: Float32Array;
+  m_chlorophyll!: Float32Array;
+  m_enzyme!: Float32Array;
+  m_o2!: Float32Array;
+  m_co2!: Float32Array;
+  m_biomass!: Float32Array;
+  m_waste!: Float32Array;
+  m_adp!: Float32Array;
+  m_ribosome!: Float32Array;
   // reserves (parallel to MATERIAL_IDS order)
-  r_rock: Float32Array;
-  r_sand: Float32Array;
-  r_clay: Float32Array;
-  r_organic: Float32Array;
-  r_lipid: Float32Array;
-  r_gas: Float32Array;
+  r_rock!: Float32Array;
+  r_sand!: Float32Array;
+  r_clay!: Float32Array;
+  r_organic!: Float32Array;
+  r_lipid!: Float32Array;
+  r_gas!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
-  // reaction's rate via (1 + pool/CAT_REF). Storage is array-of-
-  // arrays (not a single 2D) so each slot has its own contiguous
-  // typed array, matching the rest of the SoA layout.
+  // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
+  // a contiguous region of the shared buffer.
   catalystCols!: Float32Array[];
   // Parallel arrays of column refs for indexed access in hot loops.
   // resCols[matIdx] -> r_<mat>; molCols[molKey] -> m_<key>. Initialized
@@ -449,12 +516,10 @@ export class CreatureStore {
   // Unified chemical pool addressed by the generic-reaction engine.
   // chemCols[0..7] alias molCols entries (the named chemicals) so a
   // write through either path hits the same Float32Array. chemCols
-  // [8..63] are independent typed arrays for the abstract generic
-  // chemicals (no Molecules key, no particle representation in
-  // phase 1 -- they exist only as intracellular pools).
+  // [8..63] are independent views over the generic slice of the
+  // shared buffer.
   chemCols!: Float32Array[];
-  // Backing storage for the generic slice (chemCols[8..63]). Kept
-  // separate so grow() can resize them without touching molCols.
+  // Backing storage for the generic slice (chemCols[8..63]).
   genericChemCols!: Float32Array[];
   // Surface fingerprint -- the cell's "phenotype on display" used for
   // contact recognition by ADHERE / ENGULF. Each cell's top 8
@@ -463,82 +528,66 @@ export class CreatureStore {
   fpLo!: Uint32Array;
   fpHi!: Uint32Array;
   constructor(initialCap = 256) {
-    const blank = new Float32Array(0);
-    const blanki = new Int32Array(0);
-    this.x = blank; this.y = blank; this.z = blank;
-    this.vx = blank; this.vy = blank; this.vz = blank;
-    this.r = blank; this.density = blank;
-    this.energy = blank; this.senseRange = blank; this.thrustAccel = blank;
-    this.bornAt = blank; this.ingestCooldown = blank; this.repairTicks = blanki;
-    const blanku = new Uint32Array(0);
-    this.fpLo = blanku; this.fpHi = blanku;
-    this.ax = blank; this.ay = blank;
-    this.m_glucose = blank; this.m_fattyAcid = blank; this.m_aminoAcid = blank;
-    this.m_minerals = blank; this.m_chlorophyll = blank; this.m_enzyme = blank;
-    this.m_o2 = blank; this.m_co2 = blank; this.m_biomass = blank;
-    this.m_waste = blank; this.m_adp = blank; this.m_ribosome = blank;
-    this.r_rock = blank; this.r_sand = blank; this.r_clay = blank;
-    this.r_organic = blank; this.r_lipid = blank; this.r_gas = blank;
-    this.catalystCols = [];
-    for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols.push(blank);
-    this.genericChemCols = [];
-    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) this.genericChemCols.push(blank);
-    this.chemCols = new Array(CHEMICAL_COUNT).fill(blank);
-    this.grow(initialCap);
+    // Round up to the parallel-friendly preallocated ceiling. Future
+    // creature subworkers will hold views over the same buffer.
+    const cap = Math.max(initialCap, CREATURE_STORE_PREALLOC_CAP);
+    const { buffer, offsets } = allocCreatureBuffer(cap);
+    this.cap = cap;
+    this.buffer = buffer;
+    this.offsets = offsets;
+    this.rebuildViews();
   }
-  grow(newCap: number): void {
-    if (newCap <= this.cap) return;
-    const grow1 = (a: Float32Array): Float32Array => {
-      const n = new Float32Array(newCap); n.set(a); return n;
-    };
-    const grow1i = (a: Int32Array): Int32Array => {
-      const n = new Int32Array(newCap); n.set(a); return n;
-    };
-    this.x = grow1(this.x); this.y = grow1(this.y); this.z = grow1(this.z);
-    this.vx = grow1(this.vx); this.vy = grow1(this.vy); this.vz = grow1(this.vz);
-    this.r = grow1(this.r); this.density = grow1(this.density);
-    this.energy = grow1(this.energy);
-    this.senseRange = grow1(this.senseRange);
-    this.thrustAccel = grow1(this.thrustAccel);
-    this.bornAt = grow1(this.bornAt);
-    this.ingestCooldown = grow1(this.ingestCooldown);
-    this.repairTicks = grow1i(this.repairTicks);
-    {
-      const grow1u = (a: Uint32Array): Uint32Array => {
-        const n = new Uint32Array(newCap); n.set(a); return n;
-      };
-      this.fpLo = grow1u(this.fpLo);
-      this.fpHi = grow1u(this.fpHi);
-    }
-    this.ax = grow1(this.ax);
-    this.ay = grow1(this.ay);
-    this.m_glucose = grow1(this.m_glucose);
-    this.m_fattyAcid = grow1(this.m_fattyAcid);
-    this.m_aminoAcid = grow1(this.m_aminoAcid);
-    this.m_minerals = grow1(this.m_minerals);
-    this.m_chlorophyll = grow1(this.m_chlorophyll);
-    this.m_enzyme = grow1(this.m_enzyme);
-    this.m_o2 = grow1(this.m_o2);
-    this.m_co2 = grow1(this.m_co2);
-    this.m_biomass = grow1(this.m_biomass);
-    this.m_waste = grow1(this.m_waste);
-    this.m_adp = grow1(this.m_adp);
-    this.m_ribosome = grow1(this.m_ribosome);
-    this.r_rock = grow1(this.r_rock);
-    this.r_sand = grow1(this.r_sand);
-    this.r_clay = grow1(this.r_clay);
-    this.r_organic = grow1(this.r_organic);
-    this.r_lipid = grow1(this.r_lipid);
-    this.r_gas = grow1(this.r_gas);
+  sharedLayout(): CreatureSharedLayout {
+    return { buffer: this.buffer, cap: this.cap, offsets: this.offsets };
+  }
+  private rebuildViews(): void {
+    const b = this.buffer;
+    const o = this.offsets;
+    const cap = this.cap;
+    this.x = new Float32Array(b, o.base.x, cap);
+    this.y = new Float32Array(b, o.base.y, cap);
+    this.z = new Float32Array(b, o.base.z, cap);
+    this.vx = new Float32Array(b, o.base.vx, cap);
+    this.vy = new Float32Array(b, o.base.vy, cap);
+    this.vz = new Float32Array(b, o.base.vz, cap);
+    this.r = new Float32Array(b, o.base.r, cap);
+    this.density = new Float32Array(b, o.base.density, cap);
+    this.energy = new Float32Array(b, o.base.energy, cap);
+    this.senseRange = new Float32Array(b, o.base.senseRange, cap);
+    this.thrustAccel = new Float32Array(b, o.base.thrustAccel, cap);
+    this.bornAt = new Float32Array(b, o.base.bornAt, cap);
+    this.ingestCooldown = new Float32Array(b, o.base.ingestCooldown, cap);
+    this.ax = new Float32Array(b, o.base.ax, cap);
+    this.ay = new Float32Array(b, o.base.ay, cap);
+    this.m_glucose = new Float32Array(b, o.base.m_glucose, cap);
+    this.m_fattyAcid = new Float32Array(b, o.base.m_fattyAcid, cap);
+    this.m_aminoAcid = new Float32Array(b, o.base.m_aminoAcid, cap);
+    this.m_minerals = new Float32Array(b, o.base.m_minerals, cap);
+    this.m_chlorophyll = new Float32Array(b, o.base.m_chlorophyll, cap);
+    this.m_enzyme = new Float32Array(b, o.base.m_enzyme, cap);
+    this.m_o2 = new Float32Array(b, o.base.m_o2, cap);
+    this.m_co2 = new Float32Array(b, o.base.m_co2, cap);
+    this.m_biomass = new Float32Array(b, o.base.m_biomass, cap);
+    this.m_waste = new Float32Array(b, o.base.m_waste, cap);
+    this.m_adp = new Float32Array(b, o.base.m_adp, cap);
+    this.m_ribosome = new Float32Array(b, o.base.m_ribosome, cap);
+    this.r_rock = new Float32Array(b, o.base.r_rock, cap);
+    this.r_sand = new Float32Array(b, o.base.r_sand, cap);
+    this.r_clay = new Float32Array(b, o.base.r_clay, cap);
+    this.r_organic = new Float32Array(b, o.base.r_organic, cap);
+    this.r_lipid = new Float32Array(b, o.base.r_lipid, cap);
+    this.r_gas = new Float32Array(b, o.base.r_gas, cap);
+    this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
+    this.fpLo = new Uint32Array(b, o.base.fpLo, cap);
+    this.fpHi = new Uint32Array(b, o.base.fpHi, cap);
+    this.catalystCols = new Array(CATALYST_COUNT);
     for (let k = 0; k < CATALYST_COUNT; k++) {
-      this.catalystCols[k] = grow1(this.catalystCols[k]);
+      this.catalystCols[k] = new Float32Array(b, o.catalyst[k], cap);
     }
+    this.genericChemCols = new Array(GENERIC_CHEMICAL_COUNT);
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
-      this.genericChemCols[k] = grow1(this.genericChemCols[k]);
+      this.genericChemCols[k] = new Float32Array(b, o.generic[k], cap);
     }
-    this.cap = newCap;
-    // Rebuild column-by-name arrays so chemistry hot loops can iterate
-    // them by integer index. Order matches MATERIAL_IDS / MOLECULE_IDS.
     this.resCols = [this.r_rock, this.r_sand, this.r_clay, this.r_organic, this.r_lipid, this.r_gas];
     // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll,
     // enzyme, o2, co2, minerals, biomass, waste, ribosome
@@ -547,15 +596,23 @@ export class CreatureStore {
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
       this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
     ];
-    // chemCols[0..7] alias the named slice of molCols (so writes via
-    // either reach the same array); chemCols[8..63] point into the
-    // independent genericChemCols storage.
+    this.chemCols = new Array(CHEMICAL_COUNT);
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
       this.chemCols[k] = this.molCols[CHEM_NAMED_MOL_IDX[k]];
     }
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       this.chemCols[NAMED_CHEMICAL_COUNT + k] = this.genericChemCols[k];
     }
+  }
+  grow(newCap: number): void {
+    if (newCap <= this.cap) return;
+    // Same constraint as ParticleStore: subworker views over the
+    // shared buffer can't follow a realloc. Preallocate above to
+    // avoid this path.
+    throw new Error(
+      `CreatureStore grow ${this.cap} -> ${newCap} would invalidate ` +
+      `subworker views; raise CREATURE_STORE_PREALLOC_CAP instead.`,
+    );
   }
   // Returns a fresh slot. Reuses freed slots first; grows on overflow.
   alloc(): number {
