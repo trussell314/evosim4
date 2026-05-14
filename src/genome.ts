@@ -935,7 +935,27 @@ export function viableGenome(genome: Uint8Array): boolean {
   // Heterotrophs need digestive enzymes to convert reserves -> molecules.
   if (isHeterotroph && !hasEnz) return false;
   // Pure photoautotrophs need their own building-block factory.
+  // Note: this branch is bypassed for chlorophyll carriers that ALSO
+  // have any heterotroph op (PREDATE / ENGULF / INGEST), since those
+  // ops can supply fa/aa from prey or seeded particles without an
+  // internal synthesis pathway. The condition is `!isHeterotroph`
+  // exactly so the hybrid case (chl + predate) skips the autotroph
+  // synth requirement -- audit suggestion #4.
   if (hasChl && !isHeterotroph && (!hasAA || !hasFA)) return false;
+  // Amino-acid acquisition path. Required so that any growth op that
+  // costs amino acid (planned: per-op aa cost on SYNTH_*/REPRODUCE/
+  // splice) has a viable supply. Sources:
+  //   - SYNTH_AA: internal synthesis from non-aa precursors (exempt
+  //     from the per-op aa cost itself; it's the producer).
+  //   - PREDATE/ENGULF: extract the prey's free aa directly.
+  //   - INGEST: graze seeded organic particles carrying aa payloads.
+  // None of these go through the ribosome (which itself requires aa
+  // to synth under the planned cost rule), so there's no chicken-
+  // and-egg lock -- audit suggestion #2.
+  // If aa seeding is ever removed from the world spawn config, drop
+  // `hasIngest` from this clause so INGEST-only lineages auto-reject.
+  const hasAaSource = hasAA || hasPredate || hasEngulf || hasIngest;
+  if (!hasAaSource) return false;
   return true;
 }
 

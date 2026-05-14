@@ -2536,6 +2536,13 @@ export function createWorld(
   // to a consistent empty state so the obstacle-collision early exits
   // (world.obstacles.length === 0) trip cleanly.
   rebuildObstacleIndex(world);
+  // Seed the world with a variety of particles up front. Distribution
+  // is intentionally uneven: mineral substrate dominates, with rare
+  // payload-bearing organics that give early cells a direct (rather
+  // than synthesis-only) path to specific molecules. Runs for both
+  // delayed and immediate-spawn worlds -- the warmup gates only
+  // suppress *replenish* / aerate / founders, not the initial mix.
+  seedInitialParticles(world);
   // World starts empty: just water and a handful of founder cells.
   // Each founder is independent (its own genome, its own lineageRoot
   // id) so we get several parallel lineages to watch. Particles
@@ -2616,6 +2623,110 @@ function spawnFounder(world: World): Creature {
   world.creatures.push(c);
   noteCreatureBirth(world, c, undefined);
   return c;
+}
+
+// Initial particle seeding. Called once per world creation, before
+// any time-gated replenish kicks in. Distribution is intentionally
+// skewed (substrate >> trophically-useful chemistry >> rare specialty)
+// so early cells have a varied environment without flattening the
+// food web. Payload amounts are small -- a fraction of typical
+// per-tick synthesis output -- so seeded molecules supplement
+// internal biochemistry rather than replacing it.
+const SEED_SPEC: Array<{
+  mat: MaterialId;
+  count: number;
+  // Each entry: with probability p, attach `amount` of molecule `mol`.
+  // Independent rolls so a single particle can carry 0..N payloads.
+  payloads: Array<{ p: number; mol: keyof Molecules; amount: number }>;
+  // Number of generic-chemical (catalyst) slots to populate on each
+  // seeded particle and the max amount per slot. Bootstraps the
+  // catalyst pool at world start so cells aren't waiting on the
+  // first death-release to encounter any chemistry beyond named
+  // molecules. Per-particle slots are picked at random so the
+  // primordial soup is varied rather than concentrated on one slot.
+  genericSlots: number;
+  genericAmount: number;
+}> = [
+  // Organic dominates trophic input. Most are raw substrate; a
+  // minority carry partially-decomposed molecules. Richest in
+  // catalysts since organic biomatter is where catalysts evolved.
+  {
+    mat: "organic",
+    count: 200,
+    payloads: [
+      { p: 0.15, mol: "glucose", amount: 0.4 },
+      { p: 0.06, mol: "aminoAcid", amount: 0.3 },
+      { p: 0.02, mol: "fattyAcid", amount: 0.2 },
+    ],
+    genericSlots: 3,
+    genericAmount: 0.2,
+  },
+  // Clay holds trace minerals + adsorbed chemistry.
+  {
+    mat: "clay",
+    count: 100,
+    payloads: [{ p: 0.04, mol: "minerals", amount: 0.5 }],
+    genericSlots: 2,
+    genericAmount: 0.15,
+  },
+  // Sand: pure mineral substrate, light catalyst presence.
+  { mat: "sand", count: 100, payloads: [], genericSlots: 1, genericAmount: 0.1 },
+  // Rock: similar to sand but slightly lower catalyst yield.
+  { mat: "rock", count: 50, payloads: [], genericSlots: 1, genericAmount: 0.08 },
+  // Lipid: half carry free fatty acid; lipid-bound enzymes a real
+  // signature so catalyst presence is moderate.
+  {
+    mat: "lipid",
+    count: 30,
+    payloads: [{ p: 0.5, mol: "fattyAcid", amount: 0.3 }],
+    genericSlots: 2,
+    genericAmount: 0.15,
+  },
+  // Gas is rare at seed (most gas enters via aerate later); no
+  // generic chemistry rides on bubbles.
+  { mat: "gas", count: 20, payloads: [], genericSlots: 0, genericAmount: 0 },
+];
+
+function buildSeedGenericChem(slots: number, amount: number): Float32Array | undefined {
+  if (slots <= 0) return undefined;
+  const chem = new Float32Array(GENERIC_CHEMICAL_COUNT);
+  for (let i = 0; i < slots; i++) {
+    const slot = Math.floor(Math.random() * GENERIC_CHEMICAL_COUNT);
+    // += so a re-rolled slot accumulates instead of overwriting.
+    chem[slot] += Math.random() * amount;
+  }
+  return chem;
+}
+
+function seedInitialParticles(world: World): void {
+  const W = world.width;
+  const H = world.height;
+  const surfaceY = world.surfaceY;
+  const yRange = (H - surfaceY) * 0.85;
+  for (const spec of SEED_SPEC) {
+    for (let i = 0; i < spec.count; i++) {
+      const r = 1 + Math.random() * 1.5;
+      let molecules: Molecules | undefined;
+      for (const p of spec.payloads) {
+        if (Math.random() < p.p) {
+          if (!molecules) molecules = emptyMolecules();
+          molecules[p.mol] = p.amount;
+        }
+      }
+      const genericChem = buildSeedGenericChem(spec.genericSlots, spec.genericAmount);
+      pushParticle(world, {
+        x: Math.random() * W,
+        y: surfaceY + Math.random() * yRange,
+        z: r + Math.random() * (world.depth - 2 * r),
+        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+        r,
+        material: spec.mat,
+        density: rollDensity(spec.mat),
+        molecules,
+        genericChem,
+      });
+    }
+  }
 }
 
 // Pebble-sized sand grains. A SAND_BIG_FRACTION of new sand particles
