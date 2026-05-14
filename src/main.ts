@@ -11,9 +11,24 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
   // Relative path so it picks up Vite's base prefix at build time;
   // public/coi-serviceworker.js is copied to dist/ root.
   const swUrl = `${import.meta.env.BASE_URL}coi-serviceworker.js`;
+  // First visit: the SW is still installing when register() resolves,
+  // so reg.active is null and the document load happened without the
+  // COOP/COEP rewrite. Reload once the SW takes control of this client
+  // so the next navigation flows through the header rewrite.
+  if (!navigator.serviceWorker.controller) {
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      window.location.reload();
+    }, { once: true });
+  }
   navigator.serviceWorker.register(swUrl, { scope: import.meta.env.BASE_URL })
     .then((reg) => {
-      if (reg.active && !window.crossOriginIsolated) window.location.reload();
+      // Subsequent visit: a SW is already controlling but the page
+      // still isn't isolated (e.g. the SW pre-dates the fetch handler).
+      // Force a reload so the active worker rewrites headers on the
+      // next document load.
+      if (navigator.serviceWorker.controller && reg.active && !window.crossOriginIsolated) {
+        window.location.reload();
+      }
     })
     .catch((err) => {
       // eslint-disable-next-line no-console
