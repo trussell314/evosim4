@@ -324,7 +324,7 @@ const CTRL_SLOTS = 9;
 const CMD_FORCES = 0;
 const CMD_COLLISIONS = 1;
 // Params block: 22 Float64 slots.
-const PARAM_COUNT = 22;
+const PARAM_COUNT = 23;
 
 interface ParticlePool {
   // Worker refs live on the main thread; sim worker only talks to them
@@ -463,6 +463,7 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): () => void 
   params[19] = p.updraftEnv;
   params[20] = p.colDepth;
   params[21] = p.currentDrift;
+  params[22] = p.worldFloorY;
   // Publish np, reset done, then bump phase and notify all workers.
   // The phase counter is what subworkers Atomics.wait()'d on; bumping
   // it wakes them. After they finish each adds 1 to the done counter;

@@ -114,6 +114,7 @@ function readForceParams(): ParticleForceParams {
     updraftEnv: p[19],
     colDepth: p[20],
     currentDrift: p[21],
+    worldFloorY: p[22],
   };
 }
 
