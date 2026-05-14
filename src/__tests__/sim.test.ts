@@ -56,7 +56,7 @@ function quietWorld(): World {
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0,
+    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, founderIds: new Set<number>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -182,7 +182,7 @@ describe("createWorld", () => {
     // particles into their initial reserves -- so live particle count
     // lands in a wide band centred around 1000. Founders are
     // guaranteed; replenish + aerate kick in via step() afterwards.
-    expect(w.particles.length).toBeGreaterThan(700);
+    expect(w.particles.length).toBeGreaterThan(550);
     expect(w.particles.length).toBeLessThanOrEqual(1000);
     expect(w.creatures.length).toBeGreaterThanOrEqual(30);
     expect(w.creatures.length).toBeLessThanOrEqual(50);

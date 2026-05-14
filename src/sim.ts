@@ -1003,6 +1003,9 @@ export interface World {
   // disable spontaneous founder spawning while they assert specific
   // population shapes.
   founderTarget: number;
+  // Set of creature IDs that were spawned as founders (vs. born from
+  // fission). Used by the age-based founder-cull -- see FOUNDER_LIFESPAN_SEC.
+  founderIds: Set<number>;
   gravity: number;
   drag: number;
   surfaceAmp: number;
@@ -2498,6 +2501,13 @@ export function createWorld(
     liveLineageRoots: new Set(),
     nextLineageRoot: 0,
     founderTarget: FOUNDER_TARGET,
+    // Transient set of currently-alive founder cell IDs. Used to give
+    // every founder a fixed 180s lifespan after spawn so the founders
+    // can't dominate indefinitely -- their descendants have to take
+    // over the niche, or it goes extinct and the top-up loop seeds a
+    // fresh lineage. NOT persisted across save/load; reloaded saves
+    // lose tracking and existing founders live full lives.
+    founderIds: new Set<number>(),
     gravity: 60,
     drag: 0.6,
     surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
@@ -2599,6 +2609,12 @@ const FOUNDER_TARGET = 50;
 // any creatures enter the simulation -- otherwise founders spawn into
 // an empty/loading world and the early dynamics look off.
 const FOUNDER_SPAWN_DELAY_SEC = 60;
+// Founders live for exactly this many sim-seconds after they're
+// spawned, then autolyze regardless of biomass / energy state. Forces
+// turnover: descendants must take over the niche, otherwise the
+// lineage goes extinct and the top-up loop seeds a fresh genome
+// elsewhere. Replaces the "founder dominance forever" steady state.
+const FOUNDER_LIFESPAN_SEC = 180;
 // Defer everything-but-pebbles for the early game. Pebbles spawn from
 // t=0 so the sediment bed forms first; normal per-material replenish
 // and aeration hold until WATER_FILL_DELAY_SEC so the floor is settled
@@ -2635,6 +2651,7 @@ function spawnFounder(world: World): Creature {
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
   world.creatures.push(c);
+  world.founderIds.add(c.id);
   noteCreatureBirth(world, c, undefined);
   return c;
 }
@@ -4530,12 +4547,18 @@ function updateCreatures(world: World, dt: number): void {
     //  4. No amino acid: with the per-op aa cost on growth ops, an
     //     aa-empty cell is functionally paralyzed. Catch it here so
     //     it doesn't sit indefinitely just decaying biomass.
+    //  5. Founder old-age: founders die after FOUNDER_LIFESPAN_SEC so
+    //     they can't sit forever -- descendants have to carry the
+    //     lineage forward or the top-up reseeds with fresh genomes.
     const m = c.molecules;
+    const founderTooOld = world.founderIds.has(c.id)
+      && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC;
     if (
       (c.energy <= 0 && noFuel(c))
       || m.biomass < MIN_VIABLE_BIOMASS
       || m.ribosome < MIN_VIABLE_RIBOSOME
       || m.aminoAcid < MIN_VIABLE_AMINOACID
+      || founderTooOld
     ) {
       dead.push(c);
     }
@@ -4579,6 +4602,10 @@ function updateCreatures(world: World, dt: number): void {
           ch.store.release(ch.idx);
           c.division = null;
         }
+        // Drop the founder ID tracking for any cell that's leaving
+        // world.creatures (spilled or absorbed), so the set doesn't
+        // accumulate stale ids across the run.
+        world.founderIds.delete(c.id);
         if (spillSet.has(c)) {
           releaseReservesAsParticles(c, world);
           c.store.release(c.idx);
