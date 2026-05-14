@@ -215,8 +215,10 @@ interface ParticlePool {
   params: Float64Array;
   nWorkers: number;
   phase: number;
+  loadAcked: boolean[];
   initAcked: boolean[];
   wakeAcked: boolean[];
+  initErrors: (string | null)[];
 }
 let pool: ParticlePool | null = null;
 
@@ -268,8 +270,10 @@ function setupParticlePool(w: World): void {
   const ctrl = new Int32Array(ctrlBuf);
   const params = new Float64Array(paramsBuf);
   const workers: Worker[] = [];
+  const loadAcked = new Array<boolean>(nWorkers).fill(false);
   const initAcked = new Array<boolean>(nWorkers).fill(false);
   const wakeAcked = new Array<boolean>(nWorkers).fill(false);
+  const initErrors: (string | null)[] = new Array(nWorkers).fill(null);
   for (let i = 0; i < nWorkers; i++) {
     const wk = new Worker(new URL("./particle.worker.ts", import.meta.url), {
       type: "module",
@@ -288,8 +292,12 @@ function setupParticlePool(w: World): void {
     wk.addEventListener("message", (e: MessageEvent) => {
       const m = e.data;
       if (!m || typeof m !== "object") return;
-      if (m.type === "ack-init") initAcked[m.workerIndex | 0] = true;
+      // ack-load doesn't carry a workerIndex (posted before init runs);
+      // tag it by closure-captured i instead.
+      if (m.type === "ack-load") loadAcked[i] = true;
+      else if (m.type === "ack-init") initAcked[m.workerIndex | 0] = true;
       else if (m.type === "ack-wake") wakeAcked[m.workerIndex | 0] = true;
+      else if (m.type === "ack-init-error") initErrors[m.workerIndex | 0] = String(m.error || "unknown");
     });
     wk.postMessage({
       type: "init",
@@ -303,16 +311,26 @@ function setupParticlePool(w: World): void {
     });
     workers.push(wk);
   }
-  pool = { workers, ctrl, params, nWorkers, phase: 0, initAcked, wakeAcked };
+  pool = { workers, ctrl, params, nWorkers, phase: 0, loadAcked, initAcked, wakeAcked, initErrors };
   setParticleForceDispatcher(dispatchParticleForces);
   if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
 }
 
 function poolDiagSnapshot(): string {
   if (!pool) return "no pool";
+  const load = pool.loadAcked.map((v, i) => v ? null : i).filter((v) => v !== null);
   const init = pool.initAcked.map((v, i) => v ? null : i).filter((v) => v !== null);
   const wake = pool.wakeAcked.map((v, i) => v ? null : i).filter((v) => v !== null);
-  return `init-missing=[${init.join(",")}] wake-missing=[${wake.join(",")}]`;
+  const errs = pool.initErrors
+    .map((e, i) => e ? `${i}:${e}` : null)
+    .filter((v): v is string => v !== null);
+  const parts = [
+    `load-missing=[${load.join(",")}]`,
+    `init-missing=[${init.join(",")}]`,
+    `wake-missing=[${wake.join(",")}]`,
+  ];
+  if (errs.length) parts.push(`init-errors={${errs.join("; ")}}`);
+  return parts.join(" ");
 }
 
 function dispatchParticleForces(np: number, p: ParticleForceParams): void {

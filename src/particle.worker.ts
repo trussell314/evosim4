@@ -107,25 +107,36 @@ function readForceParams(): ParticleForceParams {
   };
 }
 
+// Earliest possible signal that the script reached module-top. If the
+// parent never sees ack-load, the worker script itself isn't running
+// (load failure, COEP rejection, or top-level throw before this line).
+(self as unknown as Worker).postMessage({ type: "ack-load" });
+
 self.addEventListener("message", (e: MessageEvent) => {
   const m = e.data;
-  if (m.type !== "init") return;
-  workerIndex = m.workerIndex | 0;
-  nWorkers = Math.max(1, m.nWorkers | 0);
-  matBase = m.matBase;
-  ctrl = new Int32Array(m.controlBuffer);
-  paramsView = new Float64Array(m.paramsBuffer);
-  if (paramsView.length < PARAM_COUNT) {
-    // eslint-disable-next-line no-console
-    console.error("[particle worker] paramsBuffer too small");
-    return;
+  if (!m || m.type !== "init") return;
+  try {
+    workerIndex = m.workerIndex | 0;
+    nWorkers = Math.max(1, m.nWorkers | 0);
+    matBase = m.matBase;
+    if (!m.controlBuffer || !m.paramsBuffer) {
+      throw new Error(`missing buffers: ctrl=${!!m.controlBuffer} params=${!!m.paramsBuffer}`);
+    }
+    ctrl = new Int32Array(m.controlBuffer);
+    paramsView = new Float64Array(m.paramsBuffer);
+    if (paramsView.length < PARAM_COUNT) {
+      throw new Error(`paramsBuffer too small: ${paramsView.length} < ${PARAM_COUNT}`);
+    }
+    pviews = rebuildParticleViews(m.particleLayout);
+    if (m.collisionLayout) cviews = rebuildCollisionViews(m.collisionLayout);
+    // Ack init so the parent can distinguish "worker never loaded" from
+    // "worker loaded but the Atomics barrier never woke it".
+    (self as unknown as Worker).postMessage({ type: "ack-init", workerIndex });
+    loop();
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    (self as unknown as Worker).postMessage({ type: "ack-init-error", workerIndex, error: msg });
   }
-  pviews = rebuildParticleViews(m.particleLayout);
-  if (m.collisionLayout) cviews = rebuildCollisionViews(m.collisionLayout);
-  // Ack init so the parent can distinguish "worker never loaded" from
-  // "worker loaded but the Atomics barrier never woke it".
-  (self as unknown as Worker).postMessage({ type: "ack-init", workerIndex });
-  loop();
 });
 
 function loop(): void {
