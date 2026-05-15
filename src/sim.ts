@@ -3000,7 +3000,13 @@ export function createWorld(
     tempPatchAmp: 3,
     tempPatchLength: 360,
     tempPatchPeriod: 38,
-    restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
+    // Soft side walls: bounces lose most of their energy so a
+    // particle smacking the wall under wave forcing comes to rest
+    // there for one frame instead of pinging back into a tight
+    // wall-margin column. Combined with the density-scaled wall
+    // repulsion in applyParticleForcesRange, the steady state has
+    // very few particles within WALL_REPEL_DIST of either side.
+    restitution: 0.15, xWallRestitution: 0.05, zWallRestitution: 0.6,
     collisionIters: 1,
     species: new Map(),
     phylogenyEvents: [],
@@ -4077,9 +4083,16 @@ function spawnExcretedParticle(
   const pr = Math.max(1.5, radiusForMass(m, density));
   const angle = Math.random() * Math.PI * 2;
   const ejectV = 25;
+  // Clamp the spawn position so a wall-hugging cell can't drop a
+  // particle right at (or outside) the wall, where the wall clamp
+  // would pin it indefinitely. Margin = pr + 4 keeps the particle
+  // a few px clear of either side and the surface line.
+  const margin = pr + 4;
+  const sx = Math.max(margin, Math.min(world.width - margin, c.x + Math.cos(angle) * (c.r + pr + 1)));
+  const sy = Math.max(world.surfaceY + margin, Math.min(world.height - margin, c.y + Math.sin(angle) * (c.r + pr + 1)));
   pushParticle(world, {
-    x: c.x + Math.cos(angle) * (c.r + pr + 1),
-    y: c.y + Math.sin(angle) * (c.r + pr + 1),
+    x: sx,
+    y: sy,
     z: Math.min(world.depth - pr, Math.max(pr, c.z)),
     vx: Math.cos(angle) * ejectV,
     vy: Math.sin(angle) * ejectV,
@@ -4597,13 +4610,18 @@ export function applyParticleForcesRange(
   const currentDrift = p.currentDrift;
   const floorY = p.worldFloorY;
   const worldW = p.worldWidth;
-  // Gas-only wall repulsion. Buoyant particles (density < 0.5) within
-  // GAS_WALL_REPEL_DIST of a side wall get a horizontal nudge inward,
-  // peaking at the wall and falling off linearly. Lets bubbles that
-  // would otherwise stack against the wall drift to open water where
-  // buoyancy can actually carry them up to the surface to escape.
-  const GAS_WALL_REPEL_DIST = 24;
-  const GAS_WALL_REPEL_A = 40;
+  // Wall-repulsion for floating / suspended particles. Strength
+  // peaks at the wall and falls off linearly over WALL_REPEL_DIST,
+  // and scales as (1.5 - density)/1.5 -- gases (0.14) get full
+  // strength, aqueous chems (~1.0) get a third, sand-grade solids
+  // (>= 1.5) get nothing. Keeps the wall-margin column free of the
+  // build-up that otherwise forms when cells excrete near a wall
+  // (excretion spawns at cell-radius offset from cell.x; cells
+  // hugging the wall spawn particles right against it) or when
+  // wave forcing slams aqueous particles into the wall faster than
+  // the soft bounce can re-clear them.
+  const WALL_REPEL_DIST = 48;
+  const WALL_REPEL_A = 60;
   for (let i = from; i < to; i++) {
     const xi = PX[i], yi = PY[i], ri = PR[i];
     // Freeze asleep particles ONLY when they're resting at the
@@ -4643,14 +4661,15 @@ export function applyParticleForcesRange(
     const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     let ax = surface + swell + current + noiseX;
-    // Buoyant wall-repulsion. Only fires for gas-phase particles
-    // (density << 1); heavier particles fall to the floor naturally
-    // and don't form the columnar pile-up problem.
-    if (density < 0.5) {
-      if (xi < GAS_WALL_REPEL_DIST) {
-        ax += GAS_WALL_REPEL_A * (1 - xi / GAS_WALL_REPEL_DIST);
-      } else if (xi > worldW - GAS_WALL_REPEL_DIST) {
-        ax -= GAS_WALL_REPEL_A * (1 - (worldW - xi) / GAS_WALL_REPEL_DIST);
+    // Wall-repulsion, density-scaled. Gases get full push; aqueous
+    // chems get a third; solids (sand, mineral grains) fall to the
+    // floor on their own and don't need pushing.
+    const densityFactor = density >= 1.5 ? 0 : (1.5 - density) / 1.5;
+    if (densityFactor > 0) {
+      if (xi < WALL_REPEL_DIST) {
+        ax += WALL_REPEL_A * densityFactor * (1 - xi / WALL_REPEL_DIST);
+      } else if (xi > worldW - WALL_REPEL_DIST) {
+        ax -= WALL_REPEL_A * densityFactor * (1 - (worldW - xi) / WALL_REPEL_DIST);
       }
     }
     const ayTot = ay + splash + updraft + noiseY;
