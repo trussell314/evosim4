@@ -555,7 +555,10 @@ describe("creature: excretion", () => {
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     step(w, 1 / 60);
     const newP = w.particles.filter((p) => !before.has(p));
@@ -591,7 +594,10 @@ describe("creature: excretion", () => {
     const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 30;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     step(w, 1 / 60);
     const newP = w.particles.filter((p) => !before.has(p) && (p.chemId === CHEM_IDS.o2 || p.chemId === CHEM_IDS.co2));
@@ -638,7 +644,10 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const targets: object[] = [];
     for (let i = 0; i < 5; i++) {
       const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
@@ -651,7 +660,10 @@ describe("creature: ingestion cost and cooldown", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const tgt = new Set<unknown>();
     for (let i = 0; i < 3; i++) {
       const p = pushParticle(w, { x: c.x + i*0.5, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 2.6 });
@@ -1250,7 +1262,10 @@ describe("creature: death by starvation", () => {
     // Strip molecules so the only mass to release is the rock reserve;
     // biomass would otherwise spawn organic-tagged corpse particles too.
     c.molecules = emptyMolecules();
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -1416,7 +1431,10 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
     const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
     c.molecules.biopolymer = 0;
     w.creatures.push(c);
-    for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
+    // Prefill kept well under particleTarget (550); over-cap excretion
+    // now routes to ambient instead of spawning, so the test world
+    // needs headroom for the spawn assertion to hold.
+    for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     const dt = 1 / 60;
     const e0 = c.energy;

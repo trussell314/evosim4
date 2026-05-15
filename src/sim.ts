@@ -3013,7 +3013,15 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 // turnover: descendants must take over the niche, otherwise the
 // lineage goes extinct and the top-up loop seeds a fresh genome
 // elsewhere. Replaces the "founder dominance forever" steady state.
-const FOUNDER_LIFESPAN_SEC = 180;
+// Bumped 180 -> 300s after K-4/K-5: founders now have to bootstrap a
+// receptor pool (SYNTH CHEMO is mRNA-gated and 0.15/s endergonic)
+// before they can sense food at all, so the first half of a founder's
+// life is spent blind. 300s gives enough room to build receptors,
+// chase a food patch, and reach first fission. Founders that DO
+// reproduce graduate out of the cull entirely (see advanceDivision)
+// so the "no immortal founders" property is preserved -- the cull
+// only takes founders that never managed to spawn a descendant.
+const FOUNDER_LIFESPAN_SEC = 300;
 // Defer everything-but-pebbles for the early game. Pebbles spawn from
 // t=0 so the sediment bed forms first; normal per-material replenish
 // and aeration hold until WATER_FILL_DELAY_SEC so the floor is settled
@@ -3976,6 +3984,20 @@ function spawnExcretedParticle(
 ): void {
   if (m < EXCRETE_MIN_AMOUNT) {
     // Round-off; just drop it on the floor of the cell (lose to environment).
+    return;
+  }
+  // Particle-count valve: when the world is already at/over its
+  // particle budget, dump excretion straight into the ambient pool
+  // instead of spawning a new particle. Mass-conserving (cells
+  // diffuse against ambient via diffuseAmbient), and it stops
+  // autoExcrete + VM-driven EXCRETE from blowing past the target
+  // when dissolution can't keep up. Payload (molecules /
+  // genericChem from autoExcrete) is dropped on the floor in this
+  // path -- payload only matters when the particle is later
+  // ingested whole, and a particle that never spawned can't be
+  // ingested anyway.
+  if (world.particles.length >= world.particleTarget) {
+    world.ambient[chemId] += m;
     return;
   }
   const density = CHEM_BASE_DENSITY[chemId];
@@ -5534,6 +5556,15 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   child.vy = c.vy;
   world.creatures.push(child);
   noteCreatureBirth(world, child, c.speciesKey);
+  // A founder that successfully spawns a viable child has carried its
+  // lineage forward -- graduate it out of the founder-cull. The cull
+  // only exists to retire founders that never manage to reproduce.
+  // Lineage turnover is preserved: descendants are never founders, so
+  // a colony of children + grandchildren still has a normal lifespan
+  // distribution, just without the artificial 300s wall on the founder.
+  if (world.founderIds.has(c.id)) {
+    world.founderIds.delete(c.id);
+  }
 }
 
 function populateSensors(c: Creature, _world: World): void {
