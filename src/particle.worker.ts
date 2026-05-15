@@ -26,7 +26,7 @@ const EMPTY_ASLEEP = new Uint8Array(0);
 
 // Must match PARAM_COUNT in sim.worker.ts (the producer side). One
 // slot per field in ParticleForceParams. Last slot added: worldFloorY.
-const PARAM_COUNT = 23;
+const PARAM_COUNT = 24;
 
 // Control buffer layout (Int32):
 //   [0] phase   -- sim worker increments each tick
@@ -124,6 +124,7 @@ function readForceParams(): ParticleForceParams {
     colDepth: p[20],
     currentDrift: p[21],
     worldFloorY: p[22],
+    worldWidth: p[23],
   };
 }
 

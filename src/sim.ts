@@ -2305,6 +2305,11 @@ const SPLASH_GAIN = 1.5;
 const AERATION_PER_PX = 0.005;
 const AERATION_O2_PER_BUBBLE = 4;
 const AERATION_BUBBLE_DROP_SPEED = 14;
+// Distance from each side wall in which aeration bubbles refuse to
+// spawn. Same motivation as the gas-only wall-repulsion term: keep
+// fresh bubbles out of the strip where they'd start their life
+// already collision-pinned against a wall.
+const AERATION_WALL_INSET = 32;
 // Total mass per bubble (drawn from the atmosphere). Composition is
 // sampled from atmospheric mole fractions, so a CO2-rich atmosphere
 // yields CO2-rich bubbles (and O2-depleted ones).
@@ -4384,8 +4389,16 @@ function aerate(world: World, dt: number): void {
       actualPulled += take;
     }
     totalAtm -= actualPulled;
+    // Inset the spawn x by AERATION_WALL_INSET on each side. Without
+    // the inset, bubbles spawn right against the wall and immediately
+    // contribute to the gas pile-up problem -- a new bubble dropping
+    // onto an existing wall column gets wedged in place by collisions
+    // with bubbles below. Spawning away from walls gives every bubble
+    // a clean shot at rising back up to the surface.
+    const insetMin = Math.min(AERATION_WALL_INSET, world.width * 0.25);
+    const insetMax = Math.max(world.width - insetMin, insetMin + r * 2);
     pushParticle(world, {
-      x: Math.random() * world.width,
+      x: insetMin + Math.random() * Math.max(0, insetMax - insetMin),
       // Just below the surface so the wall-escape pass doesn't immediately
       // strip the new bubble.
       y: world.surfaceY + r + 1,
@@ -4468,6 +4481,12 @@ export interface ParticleForceParams {
   // them to a fixed y instead of letting buoyancy bob them with
   // the waves.
   worldFloorY: number;
+  // World width. Used by the gas wall-repulsion term so buoyant
+  // particles get nudged away from the side walls (where they'd
+  // otherwise stack into vertical columns under particle-particle
+  // collisions, with new aeration bubbles piling onto the top of
+  // each column and pushing the bottom of the stack down).
+  worldWidth: number;
   surfaceY: number;
   surfaceDecay: number;
   swellDecay: number;
@@ -4519,6 +4538,14 @@ export function applyParticleForcesRange(
   const colDepth = p.colDepth;
   const currentDrift = p.currentDrift;
   const floorY = p.worldFloorY;
+  const worldW = p.worldWidth;
+  // Gas-only wall repulsion. Buoyant particles (density < 0.5) within
+  // GAS_WALL_REPEL_DIST of a side wall get a horizontal nudge inward,
+  // peaking at the wall and falling off linearly. Lets bubbles that
+  // would otherwise stack against the wall drift to open water where
+  // buoyancy can actually carry them up to the surface to escape.
+  const GAS_WALL_REPEL_DIST = 24;
+  const GAS_WALL_REPEL_A = 40;
   for (let i = from; i < to; i++) {
     const xi = PX[i], yi = PY[i], ri = PR[i];
     // Freeze asleep particles ONLY when they're resting at the
@@ -4557,7 +4584,17 @@ export function applyParticleForcesRange(
     const noiseEnv = Math.exp(-depth / 200);
     const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
-    const ax = surface + swell + current + noiseX;
+    let ax = surface + swell + current + noiseX;
+    // Buoyant wall-repulsion. Only fires for gas-phase particles
+    // (density << 1); heavier particles fall to the floor naturally
+    // and don't form the columnar pile-up problem.
+    if (density < 0.5) {
+      if (xi < GAS_WALL_REPEL_DIST) {
+        ax += GAS_WALL_REPEL_A * (1 - xi / GAS_WALL_REPEL_DIST);
+      } else if (xi > worldW - GAS_WALL_REPEL_DIST) {
+        ax -= GAS_WALL_REPEL_A * (1 - (worldW - xi) / GAS_WALL_REPEL_DIST);
+      }
+    }
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
     const dscaleDrag = drag * dragScale;
@@ -4579,6 +4616,7 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
     drag: world.drag,
     gravity: world.gravity,
     worldFloorY: world.height,
+    worldWidth: world.width,
     surfaceY: world.surfaceY,
     surfaceDecay: world.surfaceDecay,
     swellDecay: world.swellDecay,
