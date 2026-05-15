@@ -2562,8 +2562,22 @@ function advanceDisturbance(world: World, dt: number): void {
 // (small radius "+" pattern packed inside the polygon's footprint).
 // Total lobe count across all obstacles sits under 500; with the
 // band/cell broad-phase that's negligible per-tick work.
+// Master switch for the rock terrain. Disabled while the procedural
+// generator is being replaced with a hand-authored, save-stable
+// shape. When false, generateObstacles produces an empty world (no
+// seafloor, cave, or outcroppings) and the heightmap globals are
+// cleared so founder placement + obstacle collision behave as
+// "open water everywhere". All the generator + lobe-packing code is
+// kept intact below for the rework.
+const TERRAIN_ENABLED = false;
+
 export function generateObstacles(world: World): void {
   world.obstacles = [];
+  if (!TERRAIN_ENABLED) {
+    TERRAIN_HEIGHTMAP = new Float32Array(0);
+    TERRAIN_HEIGHTMAP_WIDTH = 0;
+    return;
+  }
   const W = world.width;
   const H = world.height;
   // Bedrock baseline: floor sits ~12% of world height above the bottom
