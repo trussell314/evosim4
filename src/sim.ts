@@ -44,9 +44,10 @@ import {
 // single chem id (uint8 into the chemical table) instead of a string
 // material label. The legacy MaterialId union, MATERIALS dict, and
 // material-density LUT are gone; their roles are absorbed by the chem
-// table and the SPAWN_CHEM_SPECS roster below. Pebbles are still a
-// thing -- they're identified by chemId === CHEM_MIN with r above
-// PEBBLE_R_MIN, not by a separate "sand" material.
+// table and the SPAWN_CHEM_SPECS roster below. The pebble-sized
+// mineral grain bed that used to form the seafloor has also been
+// retired -- the floor is now static rocky terrain (see
+// generateObstacles / buildTerrainBitmap).
 export type ChemId = number;
 // Flat Float32 lookup of each chemical's bulk density, indexed by
 // chem id. Used in the hot force loop and the sensor pass. Populated
@@ -349,15 +350,6 @@ export function pushParticle(
 export function removeParticleAt(world: World, arrIdx: number): void {
   const ps = world.particles;
   const store = world.particleStore;
-  // Keep the cached pebble count honest. Without this, ingest of a
-  // pebble (creature INGEST doesn't filter by size) leaves the
-  // cached count high until the next 30-tick refresh, suppressing
-  // pebble replenish for up to half a sim-second.
-  // Pebble cache decrement: large mineral grains are tracked separately
-  // for sediment-bed replenish targeting.
-  if (store.chemId[arrIdx] === CHEM_MIN && store.r[arrIdx] >= SAND_BIG_R_MIN) {
-    if (pebbleCountCache > 0) pebbleCountCache--;
-  }
   const last = ps.length - 1;
   if (arrIdx !== last) {
     store.removeSwapPop(arrIdx);
@@ -2534,209 +2526,436 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
-// Lay down the world's terrain: 25 heavy rocks dropped from above
-// at random x positions. Each rock falls until it hits the bedrock
-// or another rock, then slides sideways downhill if its initial
-// contact point isn't directly under the center -- a real rock
-// perched off-center on top of another rock tips and falls further
-// rather than balancing on a knife edge.
-// Number of discrete depth layers rocks can occupy. Rocks at
-// different layers don't interact during placement -- they can
-// visually overlap, simulating 3D depth on a 2D cross-section.
-const ROCK_Z_LAYERS = 5;
-
+// Procedurally-generated rocky terrain. Built once at world creation
+// and never modified after -- the obstacle collision broad-phase
+// (band index + cell bitmap) is rebuilt to match in rebuildObstacleIndex.
+//
+// Terrain is composed of three feature kinds, all packaged as
+// Obstacle polygons so the existing collision pipeline handles them
+// uniformly:
+//
+//   1. Seafloor: a chain of mostly-horizontal rock chunks along the
+//      world bottom. Their TOP profile follows a multi-octave value-
+//      noise heightmap, so the floor looks organic (varying bumps
+//      20-100px tall) instead of a flat shelf. Cut into multiple
+//      chunks (~6) so each chunk has a reasonable lobe count -- one
+//      mega-polygon's vertex-per-lobe count would balloon.
+//   2. Cave: a horseshoe-shaped solid (floor + ceiling + back wall)
+//      embedded in the seafloor along one side wall, leaving a
+//      hollow chamber with a narrow horizontal mouth facing inward.
+//      Built as three rectangle-ish polygons that together close off
+//      everything BUT the chamber interior + mouth.
+//   3. Outcropping(s): 1-2 wedge-shaped polygons jutting horizontally
+//      from a side wall, ~80-150px protrusion, ~30-60px thick at the
+//      wall and tapering toward the tip. Creates "overhang" pockets
+//      with water above AND below the wedge.
+//
+// All polygons get circle-lobe approximations via lobesFromTerrainPolygon
+// (small radius "+" pattern packed inside the polygon's footprint).
+// Total lobe count across all obstacles sits under 500; with the
+// band/cell broad-phase that's negligible per-tick work.
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   const W = world.width;
   const H = world.height;
-  const floorY = H - 4;
-  const ROCK_COUNT = 25;
-  const ROCK_R_MIN = 22;
-  const ROCK_R_MAX = 42;
-  const tones = ["#4a4038", "#3a322c", "#52463b", "#403631", "#473d34", "#574b40", "#3d342e"];
+  // Bedrock baseline: floor sits ~12% of world height above the bottom
+  // edge on average, with the multi-octave noise pushing it up by
+  // 20-100px in places. Keeps a decent water column even on a portrait
+  // layout while leaving a thick rock band at the floor.
+  const floorBase = H * 0.88;
+  const FLOOR_NOISE_AMP = 60; // max upward bump above floorBase
+  const FLOOR_NOISE_MIN = 8;  // minimum bump (so no chunk is razor-thin)
+  // Single shared earth-tone for all rock features. The per-pixel
+  // texture pass (buildTerrainBitmap in main.ts) modulates this with
+  // noise + lighting; storing one base tone keeps the bitmap writer
+  // simple and avoids "this rock is darker than that one for no
+  // reason" patches.
+  const baseTone = "#4a4038";
 
-  // One heightmap per z layer. A rock at layer k only sees / updates
-  // heightmaps[k]; rocks at other layers pass through it during
-  // placement. Each layer starts flat at the bedrock.
-  const heightmaps: Float32Array[] = [];
-  for (let k = 0; k < ROCK_Z_LAYERS; k++) {
-    const hm = new Float32Array(W);
-    hm.fill(floorY);
-    heightmaps.push(hm);
+  // ---- 1. Seafloor heightmap (multi-octave value noise) ----
+  // Value noise: integer-lattice random values, smooth-stepped between
+  // them, summed across octaves with halving amplitude and doubling
+  // frequency. Pure JS (no external assets) and deterministic per call
+  // -- though we ride Math.random for everything else here, so worlds
+  // generated in different orders won't match. That's fine; this is a
+  // fresh-world feature, not a save-state-restorable one.
+  const heightmap = new Float32Array(W);
+  const noiseSeed = Math.random() * 1e6;
+  const octaveCount = 4;
+  for (let x = 0; x < W; x++) {
+    let amp = 1;
+    let freq = 1 / 220; // base wavelength ~220px (~3-4 humps across a 720px world)
+    let sum = 0;
+    let norm = 0;
+    for (let o = 0; o < octaveCount; o++) {
+      sum += amp * smoothNoise1D(x * freq + noiseSeed + o * 1000);
+      norm += amp;
+      amp *= 0.5;
+      freq *= 2;
+    }
+    const n = sum / norm; // 0..1
+    heightmap[x] = floorBase - FLOOR_NOISE_MIN - n * (FLOOR_NOISE_AMP - FLOOR_NOISE_MIN);
   }
 
-  for (let i = 0; i < ROCK_COUNT; i++) {
-    const z = Math.floor(Math.random() * ROCK_Z_LAYERS);
-    const heightmap = heightmaps[z];
-    const baseR = ROCK_R_MIN + Math.random() * (ROCK_R_MAX - ROCK_R_MIN);
-    const elong = 0.85 + Math.random() * 0.9;
+  // ---- 2. Cave placement ----
+  // Pick a side and carve a chamber out of the bedrock. We mark the
+  // chamber interior so the seafloor polygon strip skips those x
+  // columns (they become part of the chamber floor/ceiling/back-wall
+  // obstacles instead).
+  const caveOnLeft = Math.random() < 0.5;
+  const caveHeight = 80 + Math.random() * 40;  // 80..120
+  const caveWidth = 120 + Math.random() * 60;  // 120..180
+  const mouthHeight = 25 + Math.random() * 15; // 25..40
+  const mouthDepth = 30 + Math.random() * 20;  // 30..50, controls how far the lip protrudes inward
+  // Vertical position: cave sits in the seafloor band. Top of chamber
+  // is a bit below the seafloor surface so the lip has thickness to
+  // it; bottom is bounded by the world's bottom edge.
+  const caveBottomY = H - 8;
+  const caveTopY = caveBottomY - caveHeight;
+  // Horizontal extent. Outer edge against the wall; inner edge faces
+  // the chamber mouth. mouthCenterY is mid-height of the mouth slot.
+  const caveOuterX = caveOnLeft ? 4 : W - 4;
+  const caveInnerX = caveOnLeft ? caveOuterX + caveWidth : caveOuterX - caveWidth;
+  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * Math.random());
+  const mouthTopY = mouthCenterY - mouthHeight / 2;
+  const mouthBottomY = mouthCenterY + mouthHeight / 2;
+  // Mark heightmap columns inside the cave footprint so the seafloor
+  // doesn't double-cover them. We'll lay the chamber's top (ceiling)
+  // surface in place of the heightmap value for those columns.
+  const caveX0 = Math.min(caveOuterX, caveInnerX);
+  const caveX1 = Math.max(caveOuterX, caveInnerX);
 
-    // Pick the random rest x first so we can sample the local slope
-    // there. The rock's settle tilt = atan(local slope), so a rock
-    // landing on a hillside lies along that hillside instead of
-    // being parallel to gravity. Plus a small random jitter so
-    // identical surfaces don't all produce identically-tilted rocks.
-    const rxInitial = baseR + Math.random() * (W - 2 * baseR);
-    const slopeWindow = Math.max(8, baseR * 0.5);
-    const hL = heightmap[Math.max(0, Math.floor(rxInitial - slopeWindow))];
-    const hR = heightmap[Math.min(W - 1, Math.floor(rxInitial + slopeWindow))];
-    const localSlope = (hR - hL) / (2 * slopeWindow);
-    const tilt = Math.atan(localSlope) + (Math.random() - 0.5) * 0.4;
+  // ---- 3. Cave polygons ----
+  // Floor slab: under the chamber, from outer wall to inner mouth.
+  // Ceiling slab: above the chamber, same x-range.
+  // Back wall slab: at the outer end, only the vertical strip between
+  //   the floor and the ceiling on the non-mouth side.
+  // Mouth lip: between caveInnerX and (caveInnerX +/- mouthDepth)
+  //   there's a partial overhang above mouthTopY and below mouthBottomY,
+  //   leaving only mouthHeight clear in between. We attach these as
+  //   extensions of the ceiling and floor polygons rather than separate
+  //   obstacles, so the polygons stay convex-ish for lobe packing.
+  const lipInnerX = caveOnLeft ? caveInnerX + mouthDepth : caveInnerX - mouthDepth;
 
-    // Build the polygon ONCE around (0, 0) with the chosen tilt; we
-    // translate to (rx, ry) at placement time. Compute its per-column
-    // bottom/top profile so collision uses the actual jagged shape.
-    const protoPoly = buildRockPolygon(0, 0, baseR, elong, tilt);
-    const profile = buildPolygonProfile(protoPoly);
-    const halfW = Math.max(-profile.minXi, profile.bottom.length + profile.minXi);
-
-    function supportY(rx: number): number {
-      let ry = floorY;
-      const baseX = Math.floor(rx) + profile.minXi;
-      for (let xi = 0; xi < profile.bottom.length; xi++) {
-        const b = profile.bottom[xi];
-        if (b === -Infinity) continue;
-        const wx = baseX + xi;
-        if (wx < 0 || wx >= W) continue;
-        const candidate = heightmap[wx] - b;
-        if (candidate < ry) ry = candidate;
-      }
-      return ry;
+  // Ceiling polygon: from outer wall to lip-inner-x at top, dropping
+  // down to caveTopY along the chamber span and stepping down again to
+  // mouthTopY across the lip span. Top edge follows the seafloor
+  // heightmap so the chamber roof is contiguous with the surrounding
+  // floor surface visually.
+  const ceilingPoly: { x: number; y: number }[] = [];
+  {
+    // Walk the top edge along the heightmap from outer to lip-inner.
+    const xStart = caveOnLeft ? caveOuterX : lipInnerX;
+    const xEnd = caveOnLeft ? lipInnerX : caveOuterX;
+    const TOP_STEP = 4;
+    for (let x = xStart; x <= xEnd; x += TOP_STEP) {
+      const ix = Math.max(0, Math.min(W - 1, Math.floor(x)));
+      ceilingPoly.push({ x, y: heightmap[ix] });
     }
-
-    let rx = Math.max(halfW, Math.min(W - halfW, rxInitial));
-
-    // Roll. Sample a 2-px shift each side; if either lets the rock
-    // drop further, move there. Converges when neither direction
-    // improves -- supported under center / wide flat / floor.
-    for (let iter = 0; iter < 80; iter++) {
-      const ry = supportY(rx);
-      const leftX = Math.max(halfW, rx - 2);
-      const rightX = Math.min(W - halfW, rx + 2);
-      const leftRy = supportY(leftX);
-      const rightRy = supportY(rightX);
-      if (leftRy > ry + 0.25 && leftRy >= rightRy) rx = leftX;
-      else if (rightRy > ry + 0.25) rx = rightX;
-      else break;
-    }
-    const ry = supportY(rx);
-
-    // Translate prototype polygon to final position.
-    const polygon = protoPoly.map((v) => ({ x: v.x + rx, y: v.y + ry }));
-    const lobes = lobesFromPolygon(rx, ry, polygon, baseR);
-    const tone = tones[Math.floor(Math.random() * tones.length)];
-    const ob = makeObstacleFromLobes(lobes, tone);
-    ob.polygon = polygon;
-    ob.z = z;
-    for (const v of polygon) {
-      if (v.x < ob.minX) ob.minX = v.x;
-      if (v.y < ob.minY) ob.minY = v.y;
-      if (v.x > ob.maxX) ob.maxX = v.x;
-      if (v.y > ob.maxY) ob.maxY = v.y;
-    }
-    world.obstacles.push(ob);
-
-    // Update this layer's heightmap using the polygon's top profile.
-    const baseX = Math.floor(rx) + profile.minXi;
-    for (let xi = 0; xi < profile.top.length; xi++) {
-      const t = profile.top[xi];
-      if (t === Infinity) continue;
-      const wx = baseX + xi;
-      if (wx < 0 || wx >= W) continue;
-      const topY = ry + t;
-      if (topY < heightmap[wx]) heightmap[wx] = topY;
+    ceilingPoly.push({ x: xEnd, y: heightmap[Math.max(0, Math.min(W - 1, Math.floor(xEnd)))] });
+    // Bottom edge: lip first (the part that hangs further down into
+    // the mouth slot), then the chamber roof. Direction depends on
+    // which wall we're attached to so the polygon stays CCW-ish.
+    if (caveOnLeft) {
+      // Currently at (xEnd = lipInnerX, top). Step down past the lip:
+      ceilingPoly.push({ x: lipInnerX, y: mouthTopY });
+      ceilingPoly.push({ x: caveInnerX, y: mouthTopY });
+      ceilingPoly.push({ x: caveInnerX, y: caveTopY });
+      ceilingPoly.push({ x: caveOuterX, y: caveTopY });
+    } else {
+      ceilingPoly.push({ x: caveOuterX, y: caveTopY });
+      ceilingPoly.push({ x: caveInnerX, y: caveTopY });
+      ceilingPoly.push({ x: caveInnerX, y: mouthTopY });
+      ceilingPoly.push({ x: lipInnerX, y: mouthTopY });
     }
   }
-  // Sort obstacles back-to-front so rendering passes (terrain bitmap,
-  // any per-frame redraw) paint deepest rocks first.
-  world.obstacles.sort((a, b) => b.z - a.z);
+
+  // Floor polygon: rectangle from outer wall to caveInnerX (no lip on
+  // the bottom -- visually the mouth is more interesting as a top lip),
+  // sitting below the chamber and above the world floor. We do drop a
+  // small lip on the bottom too for visual symmetry.
+  const floorPoly: { x: number; y: number }[] = [];
+  {
+    if (caveOnLeft) {
+      floorPoly.push({ x: caveOuterX, y: caveBottomY });
+      floorPoly.push({ x: caveInnerX, y: caveBottomY });
+      floorPoly.push({ x: caveInnerX, y: mouthBottomY });
+      floorPoly.push({ x: lipInnerX, y: mouthBottomY });
+      floorPoly.push({ x: lipInnerX, y: H });
+      floorPoly.push({ x: caveOuterX, y: H });
+    } else {
+      floorPoly.push({ x: caveInnerX, y: caveBottomY });
+      floorPoly.push({ x: caveOuterX, y: caveBottomY });
+      floorPoly.push({ x: caveOuterX, y: H });
+      floorPoly.push({ x: lipInnerX, y: H });
+      floorPoly.push({ x: lipInnerX, y: mouthBottomY });
+      floorPoly.push({ x: caveInnerX, y: mouthBottomY });
+    }
+  }
+
+  // Back wall polygon: vertical strip at the outer wall, from caveTopY
+  // (where the ceiling already covers down to) to caveBottomY (where
+  // the floor takes over). Width ~14px so there's actual rock between
+  // the chamber and the side wall (the side-wall body is implicit --
+  // creatures don't escape through world bounds).
+  const backWallPoly: { x: number; y: number }[] = [];
+  {
+    const wallThick = 14;
+    if (caveOnLeft) {
+      backWallPoly.push({ x: caveOuterX, y: caveTopY });
+      backWallPoly.push({ x: caveOuterX + wallThick, y: caveTopY });
+      backWallPoly.push({ x: caveOuterX + wallThick, y: caveBottomY });
+      backWallPoly.push({ x: caveOuterX, y: caveBottomY });
+    } else {
+      backWallPoly.push({ x: caveOuterX - wallThick, y: caveTopY });
+      backWallPoly.push({ x: caveOuterX, y: caveTopY });
+      backWallPoly.push({ x: caveOuterX, y: caveBottomY });
+      backWallPoly.push({ x: caveOuterX - wallThick, y: caveBottomY });
+    }
+  }
+
+  pushTerrainPolygon(world, ceilingPoly, baseTone);
+  pushTerrainPolygon(world, floorPoly, baseTone);
+  pushTerrainPolygon(world, backWallPoly, baseTone);
+
+  // ---- 4. Seafloor chunks ----
+  // The cave occupies [caveX0, caveX1] in the floor row, so the chain
+  // of seafloor chunks skips that span. Each chunk covers a horizontal
+  // slice ~120-180px wide with a top profile sampled from heightmap.
+  // Splitting keeps individual polygons small enough that lobe packing
+  // produces a reasonable approximation (one long thin polygon would
+  // either get under-sampled or balloon lobe count).
+  const CHUNK_W_MIN = 120, CHUNK_W_MAX = 180;
+  // Build the list of [x0, x1] spans that need seafloor chunks: the
+  // pre-cave segment and the post-cave segment.
+  const spans: [number, number][] = [];
+  if (caveX0 > 0) spans.push([0, caveX0]);
+  if (caveX1 < W) spans.push([caveX1, W]);
+  for (const [spanStart, spanEnd] of spans) {
+    let xStart = spanStart;
+    while (xStart < spanEnd) {
+      const target = CHUNK_W_MIN + Math.random() * (CHUNK_W_MAX - CHUNK_W_MIN);
+      let xEnd = Math.min(spanEnd, xStart + target);
+      // Snap last chunk to the span end -- avoids a tiny tail chunk.
+      if (spanEnd - xEnd < CHUNK_W_MIN * 0.6) xEnd = spanEnd;
+      const poly = buildFloorChunkPolygon(heightmap, xStart, xEnd, H);
+      pushTerrainPolygon(world, poly, baseTone);
+      xStart = xEnd;
+    }
+  }
+
+  // ---- 5. Outcroppings ----
+  // 1 or 2 wedge-shaped overhangs jutting horizontally from a side
+  // wall, above the seafloor band so there's water both above and
+  // below them. Random side per outcropping. We pick a y-band roughly
+  // in the middle vertical third of the water column so they don't
+  // collide with the cave (cave hugs the floor) or with surface waves.
+  const outcropCount = 1 + Math.floor(Math.random() * 2); // 1..2
+  for (let oc = 0; oc < outcropCount; oc++) {
+    const onLeft = Math.random() < 0.5;
+    const protrusion = 80 + Math.random() * 70; // 80..150
+    const thickness = 30 + Math.random() * 30;  // 30..60 at wall
+    const yCenter = H * (0.35 + Math.random() * 0.3); // 35-65% of height
+    const baseX = onLeft ? 4 : W - 4;
+    const tipX = onLeft ? baseX + protrusion : baseX - protrusion;
+    // Wedge polygon. Top edge sweeps gently down from base to tip;
+    // bottom edge sweeps up sharper so the wedge tapers toward the
+    // tip. Adds a couple of mid-edge vertices for organic look.
+    const top1 = yCenter - thickness * 0.55;
+    const bot1 = yCenter + thickness * 0.55;
+    const midX = onLeft ? baseX + protrusion * 0.5 : baseX - protrusion * 0.5;
+    const top2 = yCenter - thickness * 0.32 + (Math.random() - 0.5) * 6;
+    const bot2 = yCenter + thickness * 0.30 + (Math.random() - 0.5) * 6;
+    const tipY = yCenter + (Math.random() - 0.5) * thickness * 0.2;
+    const poly: { x: number; y: number }[] = onLeft
+      ? [
+        { x: baseX, y: top1 },
+        { x: midX, y: top2 },
+        { x: tipX, y: tipY },
+        { x: midX, y: bot2 },
+        { x: baseX, y: bot1 },
+      ]
+      : [
+        { x: baseX, y: top1 },
+        { x: baseX, y: bot1 },
+        { x: midX, y: bot2 },
+        { x: tipX, y: tipY },
+        { x: midX, y: top2 },
+      ];
+    pushTerrainPolygon(world, poly, baseTone);
+  }
+
+  // Stash the heightmap on the world for topTerrainYAtColumn /
+  // founderTerrainBlocked. Cheap (~few KB) and lets the founder
+  // placement do a single O(1) lookup per attempt instead of an
+  // O(obstacles) sweep.
+  TERRAIN_HEIGHTMAP = heightmap;
+  TERRAIN_HEIGHTMAP_WIDTH = W;
 }
 
-// Rasterize a polygon's per-column vertical extent. For each integer
-// x in the polygon's footprint, walks the edges to find the lowest
-// (max-y) and highest (min-y) points where any edge crosses that
-// column. Used so rock collision uses the actual jagged silhouette
-// instead of treating the rock as a circle of radius baseR.
-function buildPolygonProfile(polygon: { x: number; y: number }[]): {
-  minXi: number; bottom: Float32Array; top: Float32Array;
-} {
-  let minX = Infinity, maxX = -Infinity;
+// Heightmap of the seafloor surface, indexed by integer x. Used by
+// the founder placement code (topTerrainYAtColumn). The cave and
+// outcroppings are NOT folded into this map -- founderTerrainBlocked
+// does an obstacle-by-obstacle test for those because they're sparse
+// enough that a per-obstacle sweep is cheap, and they have non-
+// monotonic-in-y geometry (overhangs) that doesn't fit a heightmap.
+let TERRAIN_HEIGHTMAP: Float32Array = new Float32Array(0);
+let TERRAIN_HEIGHTMAP_WIDTH = 0;
+
+// True if a candidate body of radius `bodyR` centered at (x, y) would
+// overlap any rock. Conservative: tests the candidate disc against
+// every obstacle's lobes, which is what the runtime collision pass
+// would push out anyway. Used at founder spawn so cells don't enter
+// inside the cave, under an outcropping, or stuck in the seafloor.
+function founderTerrainBlocked(world: World, x: number, y: number, bodyR: number): boolean {
+  // Quick check against the seafloor heightmap. If the candidate body
+  // overlaps the heightmap rock at this column, reject. (The heightmap
+  // is the seafloor's top surface -- below it is rock.)
+  if (TERRAIN_HEIGHTMAP_WIDTH > 0) {
+    const ix = Math.max(0, Math.min(TERRAIN_HEIGHTMAP_WIDTH - 1, Math.floor(x)));
+    if (y + bodyR > TERRAIN_HEIGHTMAP[ix]) return true;
+  }
+  // Per-obstacle lobe test for the cave + outcroppings. With ~10-15
+  // obstacles and ~10 lobes each this is ~150 ops per attempt; fine.
+  for (const ob of world.obstacles) {
+    if (x + bodyR < ob.minX || x - bodyR > ob.maxX) continue;
+    if (y + bodyR < ob.minY || y - bodyR > ob.maxY) continue;
+    const lobes = ob.lobes;
+    for (let j = 0; j < lobes.length; j++) {
+      const l = lobes[j];
+      const dx = x - l.x;
+      const dy = y - l.y;
+      const minDist = bodyR + l.r;
+      if (dx * dx + dy * dy < minDist * minDist) return true;
+    }
+  }
+  return false;
+}
+
+// Topmost rock surface at column x. Used by external callers (debug
+// tooling, future spawn paths) that want the seafloor surface only.
+// Ignores cave and outcroppings -- those have overhang geometry and
+// "the top y" isn't well-defined for them.
+export function topTerrainYAtColumn(x: number): number {
+  if (TERRAIN_HEIGHTMAP_WIDTH === 0) return Infinity;
+  const ix = Math.max(0, Math.min(TERRAIN_HEIGHTMAP_WIDTH - 1, Math.floor(x)));
+  return TERRAIN_HEIGHTMAP[ix];
+}
+
+// Helper: build a seafloor chunk polygon. Top edge follows the
+// heightmap (sampled every TOP_STEP px); bottom edge runs along the
+// world bottom. Closes left-edge down -> bottom-right -> bottom-left.
+function buildFloorChunkPolygon(
+  heightmap: Float32Array, x0: number, x1: number, worldH: number,
+): { x: number; y: number }[] {
+  const TOP_STEP = 6;
+  const poly: { x: number; y: number }[] = [];
+  // Walk top edge left-to-right.
+  for (let x = x0; x < x1; x += TOP_STEP) {
+    const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
+    poly.push({ x, y: heightmap[ix] });
+  }
+  // Final top-right vertex pinned to the actual x1 so adjacent chunks
+  // meet exactly (no gap, no overlap visible after the bitmap paint).
+  const ixEnd = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x1 - 1)));
+  poly.push({ x: x1, y: heightmap[ixEnd] });
+  poly.push({ x: x1, y: worldH });
+  poly.push({ x: x0, y: worldH });
+  return poly;
+}
+
+// Push a terrain polygon as an Obstacle with lobes packed inside.
+// Centralizes the bounding-box / color / z bookkeeping the loop in
+// generateObstacles used to repeat per rock.
+function pushTerrainPolygon(world: World, polygon: { x: number; y: number }[], color: string): void {
+  if (polygon.length < 3) return;
+  const lobes = lobesFromTerrainPolygon(polygon);
+  const ob = makeObstacleFromLobes(lobes, color);
+  ob.polygon = polygon;
+  ob.z = 0;
+  for (const v of polygon) {
+    if (v.x < ob.minX) ob.minX = v.x;
+    if (v.y < ob.minY) ob.minY = v.y;
+    if (v.x > ob.maxX) ob.maxX = v.x;
+    if (v.y > ob.maxY) ob.maxY = v.y;
+  }
+  world.obstacles.push(ob);
+}
+
+// Pack a polygon's interior with collision lobes. Strategy: rasterize
+// a coarse interior grid (one sample every LOBE_PITCH px), keep any
+// grid point that's >=LOBE_R inside the polygon, drop a lobe there.
+// Yields a "+"-pattern fill that conservatively underapproximates
+// the polygon -- particles never tunnel through, but a particle can
+// graze a polygon corner without contact. Acceptable for terrain.
+function lobesFromTerrainPolygon(polygon: { x: number; y: number }[]): ObstacleLobe[] {
+  const LOBE_R = 9;
+  const LOBE_PITCH = 12;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const v of polygon) {
     if (v.x < minX) minX = v.x;
+    if (v.y < minY) minY = v.y;
     if (v.x > maxX) maxX = v.x;
+    if (v.y > maxY) maxY = v.y;
   }
-  const minXi = Math.floor(minX);
-  const maxXi = Math.ceil(maxX);
-  const n = maxXi - minXi + 1;
-  const bottom = new Float32Array(n).fill(-Infinity);
-  const top = new Float32Array(n).fill(Infinity);
-  for (let i = 0; i < polygon.length; i++) {
-    const v1 = polygon[i];
-    const v2 = polygon[(i + 1) % polygon.length];
-    const dx = v2.x - v1.x;
-    if (Math.abs(dx) < 1e-6) {
-      const xi = Math.round(v1.x) - minXi;
-      if (xi >= 0 && xi < n) {
-        if (v1.y > bottom[xi]) bottom[xi] = v1.y;
-        if (v2.y > bottom[xi]) bottom[xi] = v2.y;
-        if (v1.y < top[xi]) top[xi] = v1.y;
-        if (v2.y < top[xi]) top[xi] = v2.y;
+  const lobes: ObstacleLobe[] = [];
+  // Sample grid. Offset by half-pitch so two adjacent thin polygons
+  // (e.g. cave ceiling + lip) don't share a sample row and end up
+  // with concentric lobes redundantly covering the boundary.
+  for (let y = minY + LOBE_PITCH * 0.5; y <= maxY; y += LOBE_PITCH) {
+    for (let x = minX + LOBE_PITCH * 0.5; x <= maxX; x += LOBE_PITCH) {
+      if (pointInPolygon(x, y, polygon)) {
+        lobes.push({ x, y, r: LOBE_R });
       }
-      continue;
-    }
-    const xLo = Math.max(minXi, Math.floor(Math.min(v1.x, v2.x)));
-    const xHi = Math.min(maxXi, Math.ceil(Math.max(v1.x, v2.x)));
-    for (let x = xLo; x <= xHi; x++) {
-      const t = (x - v1.x) / dx;
-      if (t < 0 || t > 1) continue;
-      const y = v1.y + t * (v2.y - v1.y);
-      const xi = x - minXi;
-      if (y > bottom[xi]) bottom[xi] = y;
-      if (y < top[xi]) top[xi] = y;
     }
   }
-  return { minXi, bottom, top };
-}
-
-// Polygon vertices around a rock center. n vertices distributed around
-// 2pi with jittered angles + radii; offset toward an elongation axis so
-// the rock isn't radially symmetric.
-function buildRockPolygon(
-  cx: number, cy: number, baseR: number, elong: number, tilt: number,
-): { x: number; y: number }[] {
-  const n = 9 + Math.floor(Math.random() * 4);
-  const ca = Math.cos(tilt), sa = Math.sin(tilt);
-  const verts: { x: number; y: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    const t = i / n;
-    // Jitter angle around the even slice so corners aren't symmetric.
-    const ang = t * Math.PI * 2 + (Math.random() - 0.5) * (Math.PI / n);
-    // Vertex radius with strong variance. Some vertices close, some far.
-    const r = baseR * (0.7 + 0.55 * Math.random());
-    // Pre-rotation: ellipse aligned with x-axis, then tilt.
-    const ex = Math.cos(ang) * r * elong;
-    const ey = Math.sin(ang) * r;
-    verts.push({
-      x: cx + ca * ex - sa * ey,
-      y: cy + sa * ex + ca * ey,
-    });
-  }
-  return verts;
-}
-
-// Approximate the interior of a polygon with circle lobes for collision.
-// Strategy: one large centroid lobe (inscribed-ish) + a small lobe at
-// each vertex. Particles in the interior collide with the centroid;
-// particles approaching from outside the convex hull collide with the
-// nearest vertex lobe. Good enough for stylized terrain.
-function lobesFromPolygon(
-  cx: number, cy: number, polygon: { x: number; y: number }[], baseR: number,
-): ObstacleLobe[] {
-  const lobes: ObstacleLobe[] = [{ x: cx, y: cy, r: baseR * 0.85 }];
-  for (const v of polygon) {
-    lobes.push({ x: v.x, y: v.y, r: baseR * 0.22 });
+  // Edge fallback: a sliver polygon (e.g. very thin lip) might fit no
+  // interior sample. Drop a small lobe at each vertex so collision
+  // still has SOMETHING to push off.
+  if (lobes.length === 0) {
+    for (const v of polygon) lobes.push({ x: v.x, y: v.y, r: LOBE_R * 0.6 });
   }
   return lobes;
+}
+
+// Standard ray-cast point-in-polygon. Used by the lobe packer above.
+function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// 1D smooth value noise on the integer lattice. Two adjacent integers
+// produce hash-derived random values in [0,1]; we smoothstep between
+// them. Deterministic in t (so the same float input always returns
+// the same value), which matters for the multi-octave sum to be
+// repeatable across pixels.
+function smoothNoise1D(t: number): number {
+  const i = Math.floor(t);
+  const f = t - i;
+  const a = hash1D(i);
+  const b = hash1D(i + 1);
+  // Smoothstep (3f^2 - 2f^3) to soften the linear lerp -- without
+  // this, summed octaves get a sawtooth at lattice boundaries.
+  const s = f * f * (3 - 2 * f);
+  return a * (1 - s) + b * s;
+}
+
+// Cheap deterministic hash -> [0,1). Standard mulberry-style integer
+// hash. Not cryptographic, but produces uncorrelated values across
+// adjacent inputs which is all we need for value noise.
+function hash1D(x: number): number {
+  let h = (x | 0) ^ 0x9e3779b9;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  h = h ^ (h >>> 15);
+  return ((h >>> 0) % 65536) / 65536;
 }
 
 function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
@@ -3028,13 +3247,14 @@ export function createWorld(
   // time -- if a previous world left them populated, the new world
   // sees stale state until the cache happens to refresh. Tests + any
   // future multi-world / hot-reload path needs this.
-  pebbleCountCache = 0;
-  pebbleCountStaleTicks = PEBBLE_COUNT_REFRESH_TICKS;
   lastSpeciesPruneAt = -SPECIES_PRUNE_INTERVAL_SEC;
   NEXT_CREATURE_ID = 1;
-  // Rocks disabled. rebuildObstacleIndex still runs to set the indexes
-  // to a consistent empty state so the obstacle-collision early exits
-  // (world.obstacles.length === 0) trip cleanly.
+  // Build the static rocky terrain (seafloor + cave + outcroppings)
+  // and its collision broad-phase index. The terrain is procedurally
+  // generated once at world creation -- it never changes -- so the
+  // band index and cell bitmap built here are reused for every tick
+  // of obstacle collision afterward.
+  generateObstacles(world);
   rebuildObstacleIndex(world);
   // Seed the world with a variety of particles up front. Distribution
   // is intentionally uneven: mineral substrate dominates, with rare
@@ -3050,8 +3270,8 @@ export function createWorld(
   //
   // Production paths (sim.worker.ts main world init) pass
   // { delayedSpawn: true } so the user-facing experience gets a
-  // warmup window: pebbles drop first, water column fills around
-  // WATER_FILL_DELAY_SEC, founders enter around
+  // warmup window: terrain is already in place, water column fills
+  // around WATER_FILL_DELAY_SEC, founders enter around
   // FOUNDER_SPAWN_DELAY_SEC. Tests + direct callers use the default
   // (no warmup) and get founders synchronously here so existing
   // unit tests keep working.
@@ -3083,9 +3303,10 @@ export function createWorld(
 const FOUNDER_TARGET = 50;
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
-// pebble bed time to settle and the water column to populate before
-// any creatures enter the simulation -- otherwise founders spawn into
-// an empty/loading world and the early dynamics look off.
+// water column time to populate before any creatures enter the
+// simulation -- otherwise founders spawn into an empty/loading world
+// and the early dynamics look off. (Terrain is in place from t=0
+// already since it's procedurally generated at world creation.)
 const FOUNDER_SPAWN_DELAY_SEC = 60;
 // Founders live for exactly this many sim-seconds after they're
 // spawned, then autolyze regardless of biomass / energy state. Forces
@@ -3101,10 +3322,11 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 // so the "no immortal founders" property is preserved -- the cull
 // only takes founders that never managed to spawn a descendant.
 const FOUNDER_LIFESPAN_SEC = 300;
-// Defer everything-but-pebbles for the early game. Pebbles spawn from
-// t=0 so the sediment bed forms first; normal per-material replenish
-// and aeration hold until WATER_FILL_DELAY_SEC so the floor is settled
-// before the water column populates. Founders gate is later still.
+// Defer normal per-material replenish + aeration for the early game.
+// Holds until WATER_FILL_DELAY_SEC so the seed mix dominates the
+// initial chemistry and the column fills gradually instead of all at
+// once. Founders gate (FOUNDER_SPAWN_DELAY_SEC) sits a beat later.
+// The rock terrain itself is in place from t=0 -- no warmup needed.
 const WATER_FILL_DELAY_SEC = 30;
 
 function spawnFounder(world: World): Creature {
@@ -3118,39 +3340,23 @@ function spawnFounder(world: World): Creature {
   // bulks a body up modestly, neighbours stay distinct.
   const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
   const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
-  // Compute the topmost pebble surface for a given x column. Founders
-  // sampled below this y (deeper in the column) are rejected so we
-  // never spawn inside the sediment bed. Returns world.height+1 when
-  // no pebble overlaps the column.
-  const topPebbleYAtColumn = (cx: number): number => {
-    const ps = world.particleStore;
-    const PX = ps.x, PY = ps.y, PR = ps.r, PCHEM = ps.chemId;
-    const n = world.particles.length;
-    let topY = world.height + 1;
-    for (let i = 0; i < n; i++) {
-      if (PCHEM[i] !== CHEM_MIN) continue;
-      const r = PR[i];
-      if (r < SAND_BIG_R_MIN) continue;
-      if (Math.abs(PX[i] - cx) >= r) continue;
-      const top = PY[i] - r;
-      if (top < topY) topY = top;
-    }
-    return topY;
-  };
   let x = 0, y = 0;
   const creatures = world.creatures;
   const nc = creatures.length;
   for (let attempt = 0; attempt < 32; attempt++) {
     x = world.width * (0.1 + 0.8 * Math.random());
     // Y range covers most of the water column (10%..90% of height),
-    // skipping just the surface band and the pebble bed at the floor.
+    // skipping just the surface band and the rocky terrain at the floor.
     y = world.height * (0.1 + 0.8 * Math.random());
     let okay = true;
-    // Sediment-bed avoidance: refuse to place a founder below the
-    // topmost pebble in this column. MIN_CREATURE_R margin keeps the
-    // newborn's body above the pebble top, not just its center.
-    const pebbleTop = topPebbleYAtColumn(x);
-    if (y + MIN_CREATURE_R > pebbleTop) { okay = false; }
+    // Terrain avoidance: refuse to place a founder at-or-below the
+    // topmost rock surface in this column. topTerrainYAtColumn handles
+    // the cave + overhangs too by reporting any rock the candidate
+    // body would overlap (we test the founder's x,y as if it were a
+    // solid disc of radius MIN_CREATURE_R + margin against obstacle
+    // lobes), so founders don't spawn inside the cave chamber or
+    // under an outcropping where they'd be stuck.
+    if (founderTerrainBlocked(world, x, y, MIN_CREATURE_R)) { okay = false; }
     if (okay) {
       for (let k = 0; k < nc; k++) {
         const other = creatures[k];
@@ -3251,77 +3457,12 @@ function seedAdpParticles(world: World): void {
   }
 }
 
-// Pebble-sized sand grains. A SAND_BIG_FRACTION of new sand particles
-// spawn at this much larger radius so the same world looks "full of
-// sand" with far fewer entries in the O(N) per-tick buckets (forces,
-// snapshot, render). Physics scales correctly without changes: the
-// existing math uses radius for drag and density (not radius) for
-// gravity/buoyancy.
-//
-// Cap chosen vs the collision broad-phase cellSize=12px. The
-// neighbor-cell sweep guarantees pair soundness when r_a+r_b <=
-// cellSize, so two big grains in adjacent cells can occasionally
-// miss a collision while in transit (radius 8 + 8 = 16 > 12). Once
-// they settle and go asleep the pair-check is short-circuited
-// anyway, so the visual artifact only shows during falling. Going
-// beyond ~r=8 would require widening cellSize, which trades pColl
-// cost for fewer big sand misses -- not worth it at current scale.
-// Capped at 11 so pebble-pebble pair detection is robust against the
-// particle-particle collision broad phase: GRID_CELL_SIZE=12 with a
-// one-cell-over neighbor sweep reliably finds pairs only when
-// r_a + r_b <= 2 * GRID_CELL_SIZE = 24. Previous range r=10-16 hit
-// combined-radius 32, so half the stacked pebble pairs went undetected
-// -- upper layers fell through lower ones at gravity terminal
-// velocity (~14.5 px/s) instead of settling, producing the "popcorn"
-// look. With r in [8, 11] the bed actually settles (~30% transient
-// motion at steady state, vs 67% before).
-const SAND_BIG_R_MIN = 8;
-const SAND_BIG_R_MAX = 11;
-// Random-pebble injection into the normal weighted replenish flow is
-// disabled now that pebbles have a dedicated spawn path with its own
-// count target (PEBBLE_TARGET below). Keeping spawnRadius() in place
-// so the wiring is reversible by flipping this back to >0.
-const SAND_BIG_FRACTION = 0;
-// Dedicated pebble population for the sediment bed. Independent of
-// world.particleTarget so the floor doesn't crowd out tiny sand /
-// organic / etc that the biology layer depends on. Total particle
-// count at steady state ends up ≈ particleTarget + PEBBLE_TARGET.
-//
-// 1100 pebbles at diameter 10-16px is ~10x the previous floor
-// density -- explicitly requested. At ~150 px² per pebble that's
-// ~165k px² of visual area on an 800-wide floor, enough for a thick
-// stacked sediment band. Lower this if the floor reads as too deep.
-const PEBBLE_TARGET = 414;
-// Per-second spawn rate when below target. Sized to fill the bed in
-// roughly 10 sim-seconds from a cold world without overshooting the
-// per-frame replenish budget.
-const PEBBLE_SPAWN_RATE = 120;
-// Refresh interval for the cached pebble count. Counting every call
-// would be a full O(N) scan per replenish; doing it every N refresh
-// ticks is fine because the count drifts at <<1 pebble/tick.
-const PEBBLE_COUNT_REFRESH_TICKS = 30;
-let pebbleCountCache = 0;
-let pebbleCountStaleTicks = PEBBLE_COUNT_REFRESH_TICKS; // force first refresh
-
-function countPebbles(world: World): number {
-  const ps = world.particleStore;
-  const PR = ps.r;
-  const PC = ps.chemId;
-  const n = world.particles.length;
-  let count = 0;
-  for (let i = 0; i < n; i++) {
-    if (PC[i] === CHEM_MIN && PR[i] >= SAND_BIG_R_MIN) count++;
-  }
-  return count;
-}
-
-function spawnRadius(chemId: number): number {
-  // Mineral particles can occasionally roll as pebble-sized grains
-  // (controlled by SAND_BIG_FRACTION; today 0). All others use the
-  // base 1..2.5 range.
-  if (chemId === CHEM_MIN && Math.random() < SAND_BIG_FRACTION) {
-    return SAND_BIG_R_MIN + Math.random() * (SAND_BIG_R_MAX - SAND_BIG_R_MIN);
-  }
+// Particle spawn radius. All particles -- mineral, organic, gas --
+// share the small 1..2.5px range now that the sediment bed is gone.
+// (Previously this branched on chemId to occasionally roll a large
+// "pebble" mineral grain that drove a procedural sand floor; the
+// floor is now static rock terrain, so the branch is dead.)
+function spawnRadius(_chemId: number): number {
   return 1 + Math.random() * 1.5;
 }
 
@@ -3450,11 +3591,6 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     const dy = p.y - y;
     const dz = p.z - z;
     if (dx * dx + dy * dy + dz * dz >= rSq) continue;
-    // Pebbles (large mineral grains, part of the sediment bed) are not
-    // absorbed -- a founder spawning near the floor would otherwise
-    // inhale a full pebble's worth of mineral mass and skew its
-    // starting chem pool wildly. Leave them in the world.
-    if (p.chemId === CHEM_MIN && p.r >= SAND_BIG_R_MIN) continue;
     cstore.chemCols[p.chemId][cidx] += mass(p);
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
@@ -4363,52 +4499,17 @@ function decayParticles(world: World, dt: number): void {
 
 function replenishParticles(world: World, dt: number): void {
   // particleSpawnRate <= 0 disables ALL spawning (used by tests that
-  // want a frozen world). founderTarget == 0 marks a test-style world
-  // that doesn't want the pebble sediment bed either.
+  // want a frozen world).
   if (world.particleSpawnRate <= 0) return;
-  const wantPebbles = world.founderTarget > 0;
-  // Dedicated pebble path: maintain PEBBLE_TARGET large sand grains
-  // for the sediment floor, independent of the normal per-material
-  // replenish below. Cached count refreshed every N ticks to avoid
-  // an O(N) scan per replenish call.
-  pebbleCountStaleTicks++;
-  if (pebbleCountStaleTicks >= PEBBLE_COUNT_REFRESH_TICKS) {
-    pebbleCountCache = countPebbles(world);
-    pebbleCountStaleTicks = 0;
-  }
-  if (wantPebbles && pebbleCountCache < PEBBLE_TARGET) {
-    const pebbleExpected = PEBBLE_SPAWN_RATE * dt;
-    let pebbleSpawn = Math.floor(pebbleExpected);
-    if (Math.random() < pebbleExpected - pebbleSpawn) pebbleSpawn++;
-    pebbleSpawn = Math.min(pebbleSpawn, PEBBLE_TARGET - pebbleCountCache);
-    for (let i = 0; i < pebbleSpawn; i++) {
-      const r = SAND_BIG_R_MIN + Math.random() * (SAND_BIG_R_MAX - SAND_BIG_R_MIN);
-      pushParticle(world, {
-        x: Math.random() * world.width,
-        y: world.surfaceY + r,
-        z: r + Math.random() * (world.depth - 2 * r),
-        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
-        r,
-        chemId: CHEM_MIN,
-        // Pebble density nudged toward the rock-end of the mineral
-        // range (was always-2.6 under the old MATERIALS["sand"]
-        // entry); jitter so the bed has a little variety.
-        density: 2.2 + Math.random() * 0.4,
-      });
-      pebbleCountCache++;
-    }
-  }
-
-  // Normal per-chem replenish. Cap accommodates the pebble bed
-  // on top of particleTarget so the biology mix isn't squeezed by
-  // the sediment bed.
+  // Normal per-chem replenish. The pebble sediment bed is gone --
+  // the floor is now static rock terrain (see generateTerrain) --
+  // so there's no separate large-grain target padding the cap.
   if (world.t < WATER_FILL_DELAY_SEC) return;
-  const replenishCap = world.particleTarget + (wantPebbles ? PEBBLE_TARGET : 0);
-  if (world.particles.length >= replenishCap) return;
+  if (world.particles.length >= world.particleTarget) return;
   const expected = world.particleSpawnRate * dt;
   let toSpawn = Math.floor(expected);
   if (Math.random() < expected - toSpawn) toSpawn++;
-  for (let i = 0; i < toSpawn && world.particles.length < replenishCap; i++) {
+  for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
     pushParticle(world, {
@@ -4653,8 +4754,8 @@ export function applyParticleForcesRange(
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
     // Brownian noise decays with depth like the wave forces. Without
-    // this, noise at the bottom (~7-8 px/s RMS for a pebble) keeps
-    // sediment above the sleep threshold and churning indefinitely.
+    // this, noise at the bottom (~7-8 px/s RMS on a small particle)
+    // keeps deep-water grains above the sleep threshold and churning.
     // Decay constant sits between surfaceDecay (fast) and swellDecay
     // (slow) so mid-water still mixes but the floor calms.
     const noiseEnv = Math.exp(-depth / 200);
@@ -4822,8 +4923,8 @@ function applyForces(world: World, dt: number): void {
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
     // Brownian noise decays with depth like the wave forces. Without
-    // this, noise at the bottom (~7-8 px/s RMS for a pebble) keeps
-    // sediment above the sleep threshold and churning indefinitely.
+    // this, noise at the bottom (~7-8 px/s RMS on a small particle)
+    // keeps deep-water grains above the sleep threshold and churning.
     // Decay constant sits between surfaceDecay (fast) and swellDecay
     // (slow) so mid-water still mixes but the floor calms.
     const noiseEnv = Math.exp(-depth / 200);
@@ -5231,14 +5332,6 @@ function updateCreatures(world: World, dt: number): void {
           // Chemicals outside the sensor set are not ingestable via
           // the legacy op -- a future op can lift that gate.
           if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;
-          // Pebble-grade mineral grains are sediment, not food. A
-          // cell that touches one with INGEST 0 active used to
-          // swallow the whole rock (~40x its own mass), which is
-          // how the sand bed slowly settled to a single layer over
-          // long runs. Skip anything pebble-sized; cells get their
-          // mineral nutrition from the small mineral particles
-          // replenish spawns + the dissolved-ambient pool.
-          if (chemId === CHEM_MIN && p.r >= SAND_BIG_R_MIN) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
@@ -6257,42 +6350,6 @@ function resolveCollisions(
   // particle collisions are settled, matching the original step order).
   if (pendingP0) pendingP0();
   if (pendingP1) pendingP1();
-
-  // Dedicated pebble-pair sweep. The 12px collision broad-phase + one-
-  // neighbor sweep guarantees pair detection only when r_a+r_b<=24;
-  // two pebbles with r=11 sum to 22 (detectable) but their centers can
-  // be in cells 2 apart, missing the sweep. Missed pairs accumulate
-  // overlap silently until they happen to land in adjacent cells,
-  // then the giant correction kicks them into the air -- the
-  // "popcorn" symptom. An O(P²) pass with P~PEBBLE_TARGET (~138) is
-  // ~9.5k early-rejected checks per tick, cheap, and catches every
-  // pair regardless of grid alignment.
-  resolvePebblePairs(world, e);
-}
-
-// Build pebble index list lazily; sized to particle store cap so we
-// never reallocate at runtime.
-let PEBBLE_IDX_BUFFER = new Int32Array(0);
-
-function resolvePebblePairs(world: World, e: number): void {
-  const store = world.particleStore;
-  const PCHEM = store.chemId;
-  const PR = store.r;
-  const n = world.particles.length;
-  if (PEBBLE_IDX_BUFFER.length < n) PEBBLE_IDX_BUFFER = new Int32Array(n);
-  let pn = 0;
-  for (let i = 0; i < n; i++) {
-    if (PCHEM[i] === CHEM_MIN && PR[i] >= SAND_BIG_R_MIN) PEBBLE_IDX_BUFFER[pn++] = i;
-  }
-  if (pn < 2) return;
-  const PX = store.x, PY = store.y, PZ = store.z;
-  const PVX = store.vx, PVY = store.vy, PVZ = store.vz;
-  for (let i = 0; i < pn; i++) {
-    const ai = PEBBLE_IDX_BUFFER[i];
-    for (let j = i + 1; j < pn; j++) {
-      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP, ai, PEBBLE_IDX_BUFFER[j], e);
-    }
-  }
 }
 
 // Soft positional separation for overlapping creatures + symmetric
@@ -6852,15 +6909,12 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.nextDisturbanceAt = saved.nextDisturbanceAt;
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
   world.liveLineageRoots = new Set(saved.liveLineageRoots);
-  // Rocks have been removed; drop any obstacles a pre-removal save
-  // carried so loading an old save doesn't bring them back.
+  // Terrain is procedural and deterministic-from-fresh; we don't
+  // serialize it. Regenerate from the world dimensions instead of
+  // restoring any obstacles the save may have carried. (Per project
+  // policy: no save-state compatibility, see CHEMISTRY_OVERHAUL.md.)
   world.obstacles = [];
-  // Rebuild the module-global obstacle indexes from the (now empty)
-  // obstacle list. Without this they'd retain whatever the previous
-  // world left there: stale OBSTACLE_BANDS pointers, an
-  // OBSTACLES_MIN_Y of Infinity from the wrong layout, etc. The
-  // early-out in resolveObstacleCollisions hides it today, but the
-  // moment rocks come back this becomes a silent corruption path.
+  generateObstacles(world);
   rebuildObstacleIndex(world);
   if (saved.atmosphere) {
     const atm = world.atmosphere;

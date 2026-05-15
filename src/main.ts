@@ -1042,18 +1042,9 @@ const TOXIC_WASTE_FRAC = 0.5;
 
 // Map water temperature (°C) to a tint. Warm = lighter cyan, cool = deep
 // dark blue. Chosen so 20°C lands near the original water palette.
-// Lerp a "#rrggbb" hex color toward (tr, tg, tb) by `frac`.
-// Returns an "rgb(r,g,b)" string. Used by the obstacle renderer to
-// compute lighter top and darker bottom stops in one helper.
-function hexLerp(hex: string, tr: number, tg: number, tb: number, frac: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const lr = Math.round(r + (tr - r) * frac);
-  const lg = Math.round(g + (tg - g) * frac);
-  const lb = Math.round(b + (tb - b) * frac);
-  return `rgb(${lr},${lg},${lb})`;
-}
+// (hexLerp removed -- the procedural rock texture in buildTerrainBitmap
+// no longer composes colors from per-obstacle gradient stops; it
+// computes per-pixel RGB from base tone + noise + lighting directly.)
 
 // Scale an "rgb(r,g,b)" string toward black by `mult` in [0..1].
 // Used to apply the day/night dimming to the water gradient.
@@ -1706,25 +1697,27 @@ function buildTerrainBitmap(): void {
   off.height = h;
   const octx = off.getContext("2d");
   if (!octx) return;
-  // Obstacles are already sorted by z descending in generateObstacles
-  // (deepest first). Painting in that order = back-to-front. Deeper
-  // rocks (higher z) are darkened to suggest depth fog; foreground
-  // rocks paint over them at full saturation.
+  // Procedural rock texturing. The plan:
+  //   1. Stamp each obstacle polygon as a solid base-tone fill so the
+  //      texturing pass only has to consider pixels that are rock.
+  //      We pull the pixel buffer once and modify in place so the
+  //      texture noise doesn't go through canvas state-change cost.
+  //   2. Per pixel marked rock: composite base tone + noise +
+  //      directional lighting + occasional dark fissure. Lighting
+  //      uses a per-column "rock surface y" (the topmost rock pixel
+  //      at that x) so pixels near the top of the rock get the
+  //      lit-from-above highlight, and deeper pixels get the shadow.
+  //   3. Stroke a thin edge on top so the polygon silhouette is
+  //      crisp at the rock/water boundary.
+  //
+  // Cost: O(rock pixel count) once at world load. With a default
+  // 720x420 world and ~80-100k rock pixels we're at a few ms in dev,
+  // which is invisible (called once, off the hot path).
+
+  // Pass 1: solid base fill. Picks up alpha=255 inside the polygon
+  // so the pixel-write pass can use the alpha channel as a mask.
+  octx.fillStyle = "#000000"; // alpha tag color -- overwritten in pass 2
   for (const ob of snapshot.obstacles) {
-    // depthFade in 0 (foreground) .. 0.72 (back layer). Apply as an
-    // additional darkening to each gradient stop and the stroke.
-    // All hexLerp calls work off ob.color (a hex string) directly --
-    // composing hexLerp on its own output produces NaN colors
-    // because hexLerp returns "rgb(...)" and re-parses as hex.
-    const depthFade = 0.18 * (ob.z ?? 0);
-    const grad = octx.createLinearGradient(0, ob.minY, 0, ob.maxY);
-    // Top highlight: less bright when deeper.
-    grad.addColorStop(0, hexLerp(ob.color, 255, 255, 255, 0.20 * (1 - depthFade)));
-    // Mid: original color darkened by depthFade.
-    grad.addColorStop(0.4, hexLerp(ob.color, 0, 0, 0, depthFade));
-    // Bottom shadow: existing darkening plus depth.
-    grad.addColorStop(1, hexLerp(ob.color, 0, 0, 0, Math.min(0.85, 0.45 + 0.4 * depthFade)));
-    octx.fillStyle = grad;
     octx.beginPath();
     if (ob.polygon && ob.polygon.length >= 3) {
       octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
@@ -1739,11 +1732,122 @@ function buildTerrainBitmap(): void {
       }
     }
     octx.fill();
-    octx.strokeStyle = hexLerp(ob.color, 0, 0, 0, Math.min(0.95, 0.55 + 0.3 * depthFade));
-    octx.lineWidth = 1;
+  }
+
+  // Build a per-column "topmost rock y" map for lighting. Scan the
+  // alpha channel of the just-filled bitmap; first non-transparent
+  // pixel from the top is the rock surface for that column. Anywhere
+  // there's no rock, mark the surface as h+1 so the lighting term
+  // becomes maximally dark (no upward-facing surface above).
+  const imgData = octx.getImageData(0, 0, w, h);
+  const buf = imgData.data;
+  const topY = new Int32Array(w);
+  for (let x = 0; x < w; x++) {
+    let foundY = h + 1;
+    for (let y = 0; y < h; y++) {
+      if (buf[(y * w + x) * 4 + 3] !== 0) { foundY = y; break; }
+    }
+    topY[x] = foundY;
+  }
+
+  // Pass 2: per-rock-pixel coloring. Iterate the buffer once and
+  // rewrite every alpha != 0 pixel. Base tone is a warm dark gray
+  // (matches the obstacle's ob.color but we don't pull from it --
+  // procedural texture provides all the per-pixel variation).
+  const BASE_R = 74, BASE_G = 64, BASE_B = 56; // ~#4a4038
+  // Noise amplitude per channel. Big enough to read as "rock", small
+  // enough to stay in the dark-brown band.
+  const NOISE_AMP = 22;
+  // Lighting: pixels within LIGHT_FALLOFF px below the local top get
+  // a highlight; below that, the rock fades to shadow. LIGHT_MAX is
+  // the max upward-facing brightness boost; SHADOW_MAX is the
+  // downward-facing darkening.
+  const LIGHT_FALLOFF = 18;
+  const LIGHT_MAX = 36;
+  const SHADOW_MAX = 28;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      if (buf[idx + 3] === 0) continue;
+      // Multi-octave value noise on (x, y). hash2D is cheap and
+      // produces uncorrelated values; smoothing isn't needed for
+      // texture (we WANT high-frequency grain at the pixel level).
+      const n1 = hash2D(x, y);              // -0.5..0.5
+      const n2 = hash2D(x >> 2, y >> 2);    // coarser, lower-freq mottling
+      const n3 = hash2D(x >> 5, y >> 5);    // very low freq, big patches
+      const noise = (n1 * 0.5 + n2 * 0.35 + n3 * 0.6) * NOISE_AMP;
+      // Lighting. depthFromTop = how far below the local rock surface
+      // this pixel is. Negative shouldn't happen (we sampled topY
+      // from the same alpha mask), but clamp defensively.
+      const surf = topY[x];
+      const depthFromTop = Math.max(0, y - surf);
+      let lighting = 0;
+      if (depthFromTop < LIGHT_FALLOFF) {
+        // Upward-facing: brighter. Quadratic falloff feels more like
+        // rim-light than linear.
+        const t = 1 - depthFromTop / LIGHT_FALLOFF;
+        lighting = LIGHT_MAX * t * t;
+      } else {
+        // Below the lit band, darken proportionally with depth but
+        // saturate at SHADOW_MAX so deep interiors aren't pitch black.
+        const t = Math.min(1, (depthFromTop - LIGHT_FALLOFF) / 60);
+        lighting = -SHADOW_MAX * t;
+      }
+      // Cracks/fissures. Use a thresholded noise channel so the
+      // darkening only triggers on a sparse subset of pixels. Two
+      // overlapping low-freq fields ORed -> short curving cracks.
+      // crackVal close to 0.5 means edges of two noise fields meet
+      // -- those become the crack pixels.
+      const c1 = Math.abs(hash2D(x >> 1, y >> 3));
+      const c2 = Math.abs(hash2D(x >> 3, y >> 1));
+      let crackDark = 0;
+      if (c1 < 0.06 || c2 < 0.06) crackDark = -34;
+      // Compose. Clamp to [0,255]; the base + noise + lighting +
+      // crack can over/underflow the byte range on extreme inputs.
+      const r = clamp255(BASE_R + noise + lighting + crackDark);
+      const g = clamp255(BASE_G + noise * 0.9 + lighting * 0.95 + crackDark);
+      const b = clamp255(BASE_B + noise * 0.8 + lighting * 0.85 + crackDark);
+      buf[idx] = r;
+      buf[idx + 1] = g;
+      buf[idx + 2] = b;
+      // alpha already 255 from the fill
+    }
+  }
+  octx.putImageData(imgData, 0, 0);
+
+  // Pass 3: crisp outline along each polygon edge. Drawn on top of
+  // the textured fill so the silhouette pops against the water
+  // gradient. Very dark; near-black.
+  octx.strokeStyle = "rgba(20, 16, 12, 0.85)";
+  octx.lineWidth = 1;
+  for (const ob of snapshot.obstacles) {
+    if (!ob.polygon || ob.polygon.length < 3) continue;
+    octx.beginPath();
+    octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
+    for (let i = 1; i < ob.polygon.length; i++) {
+      octx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
+    }
+    octx.closePath();
     octx.stroke();
   }
   terrainBitmap = off;
+}
+
+// Pseudo-random hash on (x, y). Returns roughly uniform in [-0.5, 0.5).
+// Cheap 32-bit integer math; deterministic per (x, y) so the rock
+// texture is stable for the lifetime of the bitmap.
+function hash2D(x: number, y: number): number {
+  let h = (x | 0) * 374761393 + (y | 0) * 668265263;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  h = h ^ (h >>> 16);
+  return ((h >>> 0) / 0x100000000) - 0.5;
+}
+
+function clamp255(v: number): number {
+  if (v < 0) return 0;
+  if (v > 255) return 255;
+  return v | 0;
 }
 
 // Cell-fill gradient cache. cellShadingFill() used to build a fresh
