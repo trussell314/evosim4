@@ -1660,6 +1660,45 @@ describe("mass conservation", () => {
     expect(w.ambient[CHEM_IDS.glucose]).toBeLessThan(massBefore * 1.01);
   });
 
+  it("K-3 activation pass: photoreceptor visible -> activated_photo_visible scales with light", () => {
+    const w = quietWorld();
+    w.surfaceY = 8;
+    w.dayPhase = 0.25; // peak sun
+    // Cell near surface (light strong) with photoreceptor invested.
+    const lit = makeCreature({ x: 100, y: 30, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
+        photoreceptorVisible: 2 } });
+    w.creatures.push(lit);
+    // Cell with no receptor.
+    const blind = makeCreature({ x: 200, y: 30, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
+        photoreceptorVisible: 0 } });
+    w.creatures.push(blind);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    expect(lit.store.m_activatedPhotoVisible[lit.idx]).toBeGreaterThan(0);
+    expect(blind.store.m_activatedPhotoVisible[blind.idx]).toBe(0);
+  });
+
+  it("K-3 activation pass: chemoreceptor_biopolymer + nearby biopolymer -> gradient activation", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    // Plant a biopolymer cluster east of the cell.
+    for (let i = 0; i < 50; i++) {
+      pushParticle(w, { x: 600, y: 300 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 3,
+        chemId: CHEM_IDS.biopolymer, density: 1.0 });
+    }
+    const c = makeCreature({ x: 450, y: 300, energy: 50, senseRange: 300,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
+        chemoreceptorBiopolymer: 2 } });
+    w.creatures.push(c);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    // Positive activatedChemoBiopolymerX means gradient pulls toward +x (east).
+    expect(c.store.m_activatedChemoBiopolymerX[c.idx]).toBeGreaterThan(0);
+  });
+
   it("zero receptor pool gates the corresponding SENSE op output", () => {
     // Phase H2 invariant: a cell with no chemoreceptor reads zero
     // from SENSE_GRAD even when food particles are nearby. Same cell

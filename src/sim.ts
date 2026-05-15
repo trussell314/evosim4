@@ -1603,20 +1603,12 @@ const CHEM_ACT_MAG_X = 37;
 const CHEM_ACT_MAG_Y = 38;
 const CHEM_BOND = 39;
 const CHEM_REPAIR = 40;
-// Markers occupy 41..44. Constants not exported; iterated.
-// Reference the not-yet-used constants so noUnusedLocals doesn't
-// flag them; K-3 (activation pass) starts reading them.
-void [
-  CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
-  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-  CHEM_ACT_CHEMO_MINERALS_X, CHEM_ACT_CHEMO_MINERALS_Y,
-  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_FA_Y,
-  CHEM_ACT_CHEMO_MARKER0_X, CHEM_ACT_CHEMO_MARKER0_Y,
-  CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
-  CHEM_ACT_THERMO,
-  CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
-  CHEM_BOND, CHEM_REPAIR,
-];
+const CHEM_MARKER0 = 41;
+// Markers occupy 41..44; marker0 has a constant since the
+// chemoreceptor system targets it specifically.
+// K-3 activation pass uses CHEM_ACT_*, CHEM_MAGNETORECEPTOR.
+// CHEM_BOND / CHEM_REPAIR wait for K-5 to wire bonding + mutation.
+void [CHEM_BOND, CHEM_REPAIR];
 // Receptor saturation reference. Sat curve = pool / (pool + REF) so
 // pool at REF gives sat=0.5; pool at 9*REF gives sat=0.9. Set low so
 // even modest receptor investment yields most of the signal -- a
@@ -3606,6 +3598,92 @@ for (let i = 0; i < CHEMICAL_COUNT; i++) {
 // at permeability 1.0 + surface 1.0 + gap 12 yields ~0.7 mass/sec,
 // matching the old `O2_DIFFUSION_PER_R * 0.1` rate.
 const AMBIENT_FLOW_RATE = 0.6;
+
+// Phase K-3: activation pass. Each tick, populate activated_*
+// receptor chems from `receptor_pool * stimulus * dt`, with a
+// shared decay factor `1 - ACT_DECAY*dt` applied to the current
+// pool. Activated pools persist across ticks (cells get a short
+// time-series readout for free) but they're "computed" -- mass
+// conservation explicitly excludes signal chems.
+const ACT_DECAY = 2.0;            // per second; ~0.35s half-life
+const VEL_TO_FORCE_GAIN = 0.5;    // velocity contribution to perceived mech
+const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
+const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
+const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
+// Chemoreceptor target order MUST match NAMED_CHEMICALS layout
+// (slot index 0..3). Used by runActivation to iterate the 4
+// per-target chemo activation passes.
+const CHEMO_TARGET_RECEPTORS: ReadonlyArray<number> = [
+  CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS,
+  CHEM_CHEMORECEPTOR_FA, CHEM_CHEMORECEPTOR_MARKER0,
+];
+const CHEMO_TARGET_CHEMS: ReadonlyArray<number> = [
+  CHEM_BIOPOLYMER, CHEM_MIN, CHEM_FA, CHEM_MARKER0,
+];
+const CHEMO_TARGET_ACT_X: ReadonlyArray<number> = [
+  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_MINERALS_X,
+  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_MARKER0_X,
+];
+const CHEMO_TARGET_ACT_Y: ReadonlyArray<number> = [
+  CHEM_ACT_CHEMO_BIOPOLYMER_Y, CHEM_ACT_CHEMO_MINERALS_Y,
+  CHEM_ACT_CHEMO_FA_Y, CHEM_ACT_CHEMO_MARKER0_Y,
+];
+const _ACT_SCRATCH = new Float32Array(2);
+function runActivation(c: Creature, world: World, dt: number): void {
+  const s = c.store; const i = c.idx;
+  const cols = s.chemCols;
+  const k = Math.max(0, 1 - ACT_DECAY * dt);
+  const sunlight = solarLight(world);
+  const depthRatio = Math.max(0, c.y / LIGHT_DECAY);
+  // PHOTO: 3 bands. Visible attenuates at LIGHT_DECAY (the canonical
+  // depth e-fold). Long-penetrating attenuates 3x slower. Surface
+  // is depth-invariant -- cells anywhere read it equally.
+  const lightVis = Math.exp(-depthRatio) * sunlight;
+  const lightLong = Math.exp(-depthRatio / 3) * sunlight;
+  const lightSurf = sunlight;
+  cols[CHEM_ACT_PHOTO_VISIBLE][i] = cols[CHEM_ACT_PHOTO_VISIBLE][i] * k
+    + cols[CHEM_PHOTORECEPTOR_VISIBLE][i] * lightVis * dt;
+  cols[CHEM_ACT_PHOTO_LONG][i] = cols[CHEM_ACT_PHOTO_LONG][i] * k
+    + cols[CHEM_PHOTORECEPTOR_LONG][i] * lightLong * dt;
+  cols[CHEM_ACT_PHOTO_SURFACE][i] = cols[CHEM_ACT_PHOTO_SURFACE][i] * k
+    + cols[CHEM_PHOTORECEPTOR_SURFACE][i] * lightSurf * dt;
+  // THERMO: receptor * (local temp - baseline).
+  const tempOff = temperatureAt(world, c.x, c.y) - TEMP_BASELINE;
+  cols[CHEM_ACT_THERMO][i] = cols[CHEM_ACT_THERMO][i] * k
+    + cols[CHEM_THERMORECEPTOR][i] * tempOff * dt;
+  // MECH: receptor * (net force + velocity contribution).
+  const mechR = cols[CHEM_MECHANORECEPTOR][i];
+  if (mechR > 0) {
+    const fx = s.ax[i] + c.vx * VEL_TO_FORCE_GAIN;
+    const fy = s.ay[i] + c.vy * VEL_TO_FORCE_GAIN;
+    cols[CHEM_ACT_MECH_X][i] = cols[CHEM_ACT_MECH_X][i] * k + mechR * fx * dt;
+    cols[CHEM_ACT_MECH_Y][i] = cols[CHEM_ACT_MECH_Y][i] * k + mechR * fy * dt;
+  } else {
+    cols[CHEM_ACT_MECH_X][i] *= k;
+    cols[CHEM_ACT_MECH_Y][i] *= k;
+  }
+  // MAGNETO: receptor * fixed compass field.
+  const magR = cols[CHEM_MAGNETORECEPTOR][i];
+  cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * MAG_FIELD_X * dt;
+  cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * MAG_FIELD_Y * dt;
+  // CHEMO: 4 target-specific gradients. Skip targets the cell hasn't
+  // invested in -- gradients are spatial queries (cheap but not free).
+  const range = c.senseRange;
+  for (let t = 0; t < CHEMO_TARGET_RECEPTORS.length; t++) {
+    const recR = cols[CHEMO_TARGET_RECEPTORS[t]][i];
+    const ax = CHEMO_TARGET_ACT_X[t];
+    const ay = CHEMO_TARGET_ACT_Y[t];
+    if (recR <= 0) {
+      cols[ax][i] *= k;
+      cols[ay][i] *= k;
+      continue;
+    }
+    chemGradient(c.x, c.y, range, CHEMO_TARGET_CHEMS[t], _ACT_SCRATCH);
+    cols[ax][i] = cols[ax][i] * k + recR * _ACT_SCRATCH[0] * dt;
+    cols[ay][i] = cols[ay][i] * k + recR * _ACT_SCRATCH[1] * dt;
+  }
+}
+
 function diffuseAmbient(c: Creature, world: World, dt: number): void {
   const s = c.store; const i = c.idx;
   const surface = s.r[i] / MIN_CREATURE_R;
@@ -4882,6 +4960,12 @@ function updateCreatures(world: World, dt: number): void {
       // across the population. Inheritance through fission is what
       // produces a new lineage and a new color.
     }
+
+    // K-3 activation pass: refresh activated_* signal chems from
+    // (receptor pool * stimulus) before the VM reads them. Runs
+    // before populateSensors so chemConc snapshot reflects this
+    // tick's activations.
+    runActivation(c, world, dt);
 
     populateSensors(c, world);
 
