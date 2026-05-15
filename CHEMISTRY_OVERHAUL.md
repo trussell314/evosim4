@@ -424,6 +424,63 @@ options: (a) move to 128-bit fingerprint (two Uint32 pairs); or
 (b) keep 64 chemicals total and dedicate slots tighter. Decision
 deferred to phase I planning.
 
+### Phase K — Sense rework (Tier 3, queued)
+
+User-confirmed direction; sketch only, not yet implemented.
+
+**Activated-receptor model.** Sensing is a two-part chemical pipeline:
+
+1. The cell synthesizes (or steals) a receptor chemical.
+2. Environmental conditions react with the receptor to produce an
+   **activated-receptor** chemical the genome can read via the
+   normal `SENSE_CHEMICAL <id>` op.
+
+External SENSE_* ops (LIGHT, TEMP, PRESSURE_X/Y, GRAD_X/Y, DENSITY,
+PHEROMONE, KIN, NEIGHBOR_HASH, EM, WALL_X/Y) all retire. Genome
+reads sensory information solely by reading chem pools.
+
+**Unified SYNTH family.** Receptors, catalysts, and bootstrap chems
+are all variants of the same operation. Possible op shape:
+`SYNTH <kind> [<param>...]` where kind = bootstrap chem |
+catalyst | receptor. Some variants take 0 parameters (named
+bootstrap chem), some take 1 (catalyst slot id), some take 2+
+("which chem to bind / read against, what concentration"). All
+variants consume input substrate + ATP. None yields net energy
+(hand-wave for now: all synth is endergonic).
+
+**Sense → behavior link.** The receptor's activation pool is a
+chemical the genome reads like any other. Cells that evolve
+useful gene-circuits around those reads survive; cells that build
+receptors but ignore the reads waste ATP.
+
+**Per-modality notes.**
+- **Light**: intensity-only is fine for now. Reserve chem-table
+  space (or the receptor's parameter set) for frequency-band
+  selectivity later.
+
+**Implementation sketch (informational).**
+- New named chems: `activated_photoreceptor`, `activated_chemoreceptor_x`,
+  `activated_chemoreceptor_y`, `activated_mechanoreceptor_x/y`,
+  `activated_thermoreceptor`, `activated_magnetoreceptor_x/y` (if
+  magnetism). Bootstrap reservation grows accordingly; chem cap
+  has headroom.
+- New engine reactions populate activated chems each tick from the
+  cell's receptor pool × environmental input. Mass-conserving by
+  treating activation as catalysis (receptor + stimulus →
+  receptor + activated-receptor; activated-receptor decays back
+  to receptor over a short half-life so it tracks the input).
+- Direction encoded as paired X/Y chems (cells have no internal
+  spatial structure; X-component and Y-component are separate
+  pools). Magnitude derives from sqrt(x² + y²) via genome math.
+- For chemical gradients: per-target chemoreceptor variants
+  (cell picks the target chem at synth time via SYNTH parameter).
+  Two paths under consideration:
+  - A. Pre-built per-target receptors (cell synthesizes a
+    receptor for one target chem at a time; binds + activates
+    only that chem's gradient).
+  - B. Single generic gradient receptor whose tuning is set by
+    the SYNTH parameter and stays stable.
+
 ### Phase J — Cleanup
 
 Done as part of phases B..G:

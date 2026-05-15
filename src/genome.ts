@@ -37,88 +37,79 @@ export const OP = {
   SENSE_GRAD_Y:  0x41,
   SENSE_DENSITY: 0x42,
   SELF_ENERGY:   0x43,
-  SELF_RESERVE:  0x44,
-  SELF_VX:       0x45,
-  SELF_VY:       0x46,
+  // 0x44 (was SELF_RESERVE) retired -- SENSE_CHEMICAL covers the
+  // internal-pool reading job across all 96 chems.
+  SENSE_VX:      0x45,    // mechanoreceptor-gated: own velocity x
+  SENSE_VY:      0x46,    // mechanoreceptor-gated: own velocity y
   SENSE_CRE_DX:  0x47,
   SENSE_CRE_DY:  0x48,
   SENSE_CRE_DIST:0x49,
   SENSE_CRE_MASS:0x4A,
   SELF_MASS:     0x4B,
   SENSE_LIGHT:   0x4C,
-  SELF_BIOMASS:  0x4D,
-  SELF_AGE:      0x4E,
-  SELF_GLUCOSE:  0x4F,
+  SELF_MEMBRANE: 0x4D,    // own structural reserve (replaces SELF_BIOMASS)
+  // 0x4E (was SELF_AGE) retired -- cells can build a tick-counter via
+  // STORE/LOAD on a register bumped each pass through the genome.
+  // 0x4F, 0x56..0x59 (SELF_GLUCOSE/O2/FATTY/AMINO/WASTE) retired --
+  // SENSE_CHEMICAL <id> reads any chem pool by id.
 
   THRUST:        0x50,
   EXCRETE:       0x51,
   REPRODUCE:     0x52,
-  PREDATE:       0x53,   // ingest: absorb prey immediately into own reserves
-  TURN:          0x54,   // pop angle delta, rotate the cell's velocity
-  ENGULF:        0x55,   // swallow whole: prey persists alive in vacuole
+  PREDATE:       0x53,
+  TURN:          0x54,
+  ENGULF:        0x55,
 
-  SELF_O2:       0x56,
-  SELF_FATTY:    0x57,
-  SELF_AMINO:    0x58,
-  SELF_WASTE:    0x59,
   SENSE_WALL_X:  0x5A,
   SENSE_WALL_Y:  0x5B,
   SENSE_HEAD_X:  0x5C,
   SENSE_HEAD_Y:  0x5D,
-  INGEST:        0x5E,   // absorb a particle in radius (was implicit before)
-  SENSE_TEMP:    0x5F,   // local water temperature
-  EMIT:          0x60,   // pop intensity, add it to the pheromone field here
-  SENSE_PHEROMONE: 0x61, // push local pheromone concentration
-  ADHERE:        0x62,   // bond with nearest cell in range; forms colonies
-  REPAIR:        0x63,   // spend ATP to suppress somatic mutation briefly
-  SENSE_AMP:     0x64,   // passive: each copy expands the cell's sense range
-  POKE_BYTE:     0x65,   // pop (idx, val), write genome[idx % L] = val & 0xff
-  SPLICE_DUP:    0x66,   // pop (offset, length), duplicate that region in place
-  SPLICE_DEL:    0x67,   // pop (offset, length), delete that region from genome
-  THRUST_AMP:    0x68,   // passive: each copy boosts the cell's thrustAccel
-  // Active biosynthesis gates: a product is only built this tick if its
-  // SYNTH op was executed. Substrate + ATP cost still applies as before.
-  // Without these, biosynthesize() ran unconditionally every tick and
-  // newborns wasted ATP making chlorophyll/enzyme they didn't use.
+  INGEST:        0x5E,
+  SENSE_TEMP:    0x5F,
+  EMIT:          0x60,
+  SENSE_PHEROMONE: 0x61,
+  ADHERE:        0x62,
+  REPAIR:        0x63,
+  SENSE_AMP:     0x64,
+  POKE_BYTE:     0x65,
+  SPLICE_DUP:    0x66,
+  SPLICE_DEL:    0x67,
+  // 0x68 (was THRUST_AMP) retired -- it was a free passive boost with
+  // no biological cost. Cells stack THRUST ops if they want more thrust;
+  // each costs ATP.
   SYNTH_BIO:     0x69,
   SYNTH_AA:      0x6A,
   SYNTH_FA:      0x6B,
   SYNTH_ENZ:     0x6C,
   SYNTH_CHL:     0x6D,
-  SYNTH_MRNA:    0x6E,   // build mRNA; their count multiplies biosynth rate
+  SYNTH_MRNA:    0x6E,
 
-  // Generalized primitive sensors. The operand selects which "receptor
-  // type" / which band to read -- analogous to how real chemoreceptors
-  // each bind a specific molecule. Evolution rolls operand bytes;
-  // useful ones get selected.
-  SENSE_CHEMICAL:0x6F,   // <id>: id mod 7. 0-5 = material density at cell, 6 = pheromone.
-  SENSE_EM:      0x70,   // <band>: band mod 1 currently = visible light intensity (forward-compat).
-  SENSE_PRESSURE_X: 0x71, // horizontal mechanical force on cell (wave + current + contact)
-  SENSE_PRESSURE_Y: 0x72, // vertical mechanical force + static depth pressure (gravity * depth)
+  // Generalized chemistry / sensor operands. SENSE_CHEMICAL reads the
+  // cell's own pool of chem (operand mod CHEMICAL_COUNT). SENSE_EM
+  // picks one of the ambient EM bands. SENSE_PRESSURE_X/Y read the net
+  // mechanical force on the cell (mechanoreceptor-gated).
+  SENSE_CHEMICAL:0x6F,
+  SENSE_EM:      0x70,
+  SENSE_PRESSURE_X: 0x71,
+  SENSE_PRESSURE_Y: 0x72,
 
-  // Cell-recognition primitives. Returns information ABOUT a nearby
-  // cell so the genome can decide what to do with it. SENSE_KIN
-  // pushes the bit-overlap (0..8) between this cell's surface
-  // fingerprint (top 8 chems by mass) and the nearest cell's --
-  // higher = more chemically similar = more likely a relative.
-  // SENSE_NEIGHBOR_HASH pushes a single byte hash of the nearest
-  // cell's fingerprint, letting the genome recognize specific
-  // signatures and not just kinship-by-overlap. Both return 0 when
-  // no cell is in sense range.
+  // Cell-recognition primitives. SENSE_KIN pushes the bit-overlap
+  // (0..8) between this cell's surface fingerprint and the nearest
+  // cell's. SENSE_NEIGHBOR_HASH pushes a byte hash of the neighbor's
+  // fingerprint. Both are chemoreceptor-gated.
   SENSE_KIN:           0x74,
   SENSE_NEIGHBOR_HASH: 0x75,
 
-  // Generic catalyst synthesis. Operand picks which reaction the
-  // catalyst boosts. Each catalyst k accumulates in its own pool;
-  // the reaction's rate is multiplied by (1 + catalyst[k]/CAT_REF).
-  // Maps:
-  //   0 respirase  (aerobic respiration)
-  //   1 fermentase (fermentation)
-  //   2 lipase     (beta-oxidation of fatty acid)
-  //   3 catabase   (catabolism of ingested material)
+  // Generic catalyst synthesis. Operand picks one of the 256 reaction
+  // slots (named slots 0..15 are the bootstrap pathways; 16..255 are
+  // procedural). The catalyst pool for slot k accumulates each tick
+  // SYNTH_CAT runs with operand%256==k, multiplying that reaction's
+  // rate via (1 + pool/CAT_REF). ATP cost lives inside the catalyst-
+  // build path; the op itself just sets the bit.
   SYNTH_CAT:     0x73,
 
-  HALT:          0xFF,
+  // 0xFF (HALT) retired -- cells run until vmInstrBudget is exhausted.
+  // The byte left in old genomes falls through to the default NOP.
 } as const;
 
 // Number of catalyst slots. Kept in genome.ts (not sim.ts) because
@@ -147,7 +138,6 @@ OPERANDS[OP.JNZ] = 1;
 OPERANDS[OP.SENSE_GRAD_X] = 1;
 OPERANDS[OP.SENSE_GRAD_Y] = 1;
 OPERANDS[OP.SENSE_DENSITY] = 1;
-OPERANDS[OP.SELF_RESERVE] = 1;
 OPERANDS[OP.EXCRETE] = 1;
 OPERANDS[OP.INGEST] = 1;
 OPERANDS[OP.LOAD] = 1;
@@ -179,8 +169,13 @@ export function walkGenome(
 const NAME_BY_OP: Record<number, string> = {};
 for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 
+// Ops whose operand selects a sensor-chem slot (operand mod 6, indexes
+// into SENSOR_CHEMS in sim.ts). EXCRETE was widened in this cleanup
+// pass to take operand mod CHEMICAL_COUNT, but it still appears here
+// because the disassembler labels its operand against the same
+// sensor-chem mnemonics for the low slots.
 const MATERIAL_OPERAND = new Set<number>([
-  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY, OP.SELF_RESERVE, OP.EXCRETE, OP.INGEST,
+  OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY, OP.EXCRETE, OP.INGEST,
 ]);
 
 const STACK_MAX = 32;
@@ -251,6 +246,12 @@ export interface VMSensors {
   // neutrally buoyant.
   pressureX: number;
   pressureY: number;
+  // Velocity readout, mechanoreceptor-gated. Cells in the new model
+  // perceive their own motion via the same mechanoreceptor pathway
+  // they perceive external pressure -- there's no "free knowledge of
+  // self-motion" any more.
+  velX: number;
+  velY: number;
   // Internal chemical concentration, indexed by chemical id. SENSE_CHEMICAL
   // <id> mod CHEMICAL_COUNT reads this. Slots 0..7 are the named chemicals
   // (o2, co2, glucose, aa, fa, min, biomass, adp); 8..63 are abstract
@@ -265,19 +266,15 @@ export interface VMSensors {
   neighborHash: number;
 }
 
+// Self-state read by SELF_* ops. These are the values the cell knows
+// about itself with no receptor mediation -- ATP, total mass, and the
+// structural reserve (membrane). Per-chem internal pools are read via
+// SENSE_CHEMICAL <id>; velocity is read via SENSE_VX/VY (which gate
+// on mechanoreceptor in populateSensors).
 export interface VMSelf {
   energy: number;
-  vx: number;
-  vy: number;
-  reserve: Float32Array;
   mass: number;
-  biomass: number;
-  age: number;
-  glucose: number;
-  o2: number;
-  fattyAcid: number;
-  aminoAcid: number;
-  waste: number;
+  membrane: number;
 }
 
 export interface VMOutputs {
@@ -330,7 +327,9 @@ export interface VMOutputs {
 export function newOutputs(): VMOutputs {
   return {
     thrustX: 0, thrustY: 0, turn: 0,
-    excrete: new Float32Array(6),
+    // EXCRETE was widened to take operand mod CHEMICAL_COUNT, so the
+    // per-tick excretion request is sized to the full chem table.
+    excrete: new Float32Array(CHEMICAL_COUNT),
     reproduce: false, reproduceFraction: 0.4,
     predate: false, engulf: false, emit: 0, adhere: false,
     ingestMaterials: new Uint8Array(6),
@@ -431,22 +430,15 @@ export function runTick(
       case OP.SENSE_GRAD_Y:  { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, sensors.gradY[i]); break; }
       case OP.SENSE_DENSITY: { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, sensors.density[i]); break; }
       case OP.SELF_ENERGY:   vmPush(stack, self.energy); break;
-      case OP.SELF_RESERVE:  { const i = m6(genome[state.pc % L]); state.pc++; vmPush(stack, self.reserve[i]); break; }
-      case OP.SELF_VX:       vmPush(stack, self.vx); break;
-      case OP.SELF_VY:       vmPush(stack, self.vy); break;
+      case OP.SENSE_VX:      vmPush(stack, sensors.velX); break;
+      case OP.SENSE_VY:      vmPush(stack, sensors.velY); break;
       case OP.SENSE_CRE_DX:   vmPush(stack, sensors.creatureDx); break;
       case OP.SENSE_CRE_DY:   vmPush(stack, sensors.creatureDy); break;
       case OP.SENSE_CRE_DIST: vmPush(stack, sensors.creatureDist); break;
       case OP.SENSE_CRE_MASS: vmPush(stack, sensors.creatureMass); break;
       case OP.SELF_MASS:      vmPush(stack, self.mass); break;
       case OP.SENSE_LIGHT:    vmPush(stack, sensors.light); break;
-      case OP.SELF_BIOMASS:   vmPush(stack, self.biomass); break;
-      case OP.SELF_AGE:       vmPush(stack, self.age); break;
-      case OP.SELF_GLUCOSE:   vmPush(stack, self.glucose); break;
-      case OP.SELF_O2:        vmPush(stack, self.o2); break;
-      case OP.SELF_FATTY:     vmPush(stack, self.fattyAcid); break;
-      case OP.SELF_AMINO:     vmPush(stack, self.aminoAcid); break;
-      case OP.SELF_WASTE:     vmPush(stack, self.waste); break;
+      case OP.SELF_MEMBRANE:  vmPush(stack, self.membrane); break;
       case OP.SENSE_WALL_X:   vmPush(stack, sensors.wallX); break;
       case OP.SENSE_WALL_Y:   vmPush(stack, sensors.wallY); break;
       case OP.SENSE_HEAD_X:   vmPush(stack, sensors.headX); break;
@@ -500,10 +492,6 @@ export function runTick(
       // SENSE_AMP is a passive marker; its only effect is to widen
       // the cell's sense range, computed once at birth in sim.ts.
       case OP.SENSE_AMP:      break;
-      // THRUST_AMP is a passive trait marker; sim.ts derives
-      // c.thrustAccel from byte counts at birth (and on somatic
-      // mutation).
-      case OP.THRUST_AMP:     break;
       // POKE_BYTE: write to an arbitrary genome byte in place. (val, idx)
       // are popped; idx is taken mod L, value is masked to 8 bits.
       case OP.POKE_BYTE: {
@@ -541,7 +529,10 @@ export function runTick(
         break;
       }
       case OP.EXCRETE: {
-        const idx = m6(genome[state.pc % L]); state.pc++;
+        // Operand picks any chem in the table (mod CHEMICAL_COUNT).
+        // Cells can excrete any chem they hold, not just the 6 sensor
+        // chems the old m6-mask restricted them to.
+        const idx = genome[state.pc % L] % CHEMICAL_COUNT; state.pc++;
         out.excrete[idx] += Math.max(0, vmPop(stack));
         break;
       }
@@ -683,10 +674,8 @@ export function summarizeGenome(
       case OP.SENSE_HEAD_X: case OP.SENSE_HEAD_Y:
       case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
       case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS:
-      case OP.SELF_VX: case OP.SELF_VY: case OP.SELF_MASS:
-      case OP.SELF_BIOMASS: case OP.SELF_AGE: case OP.SELF_ENERGY:
-      case OP.SELF_GLUCOSE: case OP.SELF_O2: case OP.SELF_FATTY:
-      case OP.SELF_AMINO: case OP.SELF_WASTE: case OP.SELF_RESERVE: {
+      case OP.SENSE_VX: case OP.SENSE_VY: case OP.SELF_MASS:
+      case OP.SELF_MEMBRANE: case OP.SELF_ENERGY: {
         const name = NAME_BY_OP[op].toLowerCase();
         if (!seenSensor.has(name)) { seenSensor.add(name); sensors.push(name); }
         break;
@@ -946,15 +935,15 @@ export function computeSenseRange(genome: Uint8Array): number {
   return SENSE_BASE + SENSE_PER_AMP * Math.sqrt(amps);
 }
 
-// Thrust acceleration scales with THRUST_AMP byte count. Same sqrt
-// curve as sense range: linear-in-count cost (one byte each), sqrt
-// payoff so doubling thrust costs 4x DNA.
+// Thrust acceleration was previously scaled by a passive THRUST_AMP
+// op count. That op was retired in the chemistry-overhaul cleanup
+// pass (free passive boost with no biological cost). Cells now stack
+// THRUST ops at the cost of ATP per fire. Acceleration is a flat
+// constant -- evolution tunes effective speed via THRUST cadence.
 export const THRUST_BASE = 70;
 export const THRUST_PER_AMP = 25;
-export function computeThrustAccel(genome: Uint8Array): number {
-  let amps = 0;
-  for (let i = 0; i < genome.length; i++) if (genome[i] === OP.THRUST_AMP) amps++;
-  return THRUST_BASE + THRUST_PER_AMP * Math.sqrt(amps);
+export function computeThrustAccel(_genome: Uint8Array): number {
+  return THRUST_BASE;
 }
 
 // Viability predicate. A genome is "viable enough to bother
@@ -988,10 +977,9 @@ export function genomeSynthMask(genome: Uint8Array): number {
 // the OP table + this set.
 const SENSE_OPS: ReadonlySet<number> = new Set([
   OP.SENSE_GRAD_X, OP.SENSE_GRAD_Y, OP.SENSE_DENSITY,
-  OP.SELF_ENERGY, OP.SELF_RESERVE, OP.SELF_VX, OP.SELF_VY,
+  OP.SELF_ENERGY, OP.SENSE_VX, OP.SENSE_VY,
   OP.SENSE_CRE_DX, OP.SENSE_CRE_DY, OP.SENSE_CRE_DIST, OP.SENSE_CRE_MASS,
-  OP.SELF_MASS, OP.SENSE_LIGHT, OP.SELF_BIOMASS, OP.SELF_AGE,
-  OP.SELF_GLUCOSE, OP.SELF_O2, OP.SELF_FATTY, OP.SELF_AMINO, OP.SELF_WASTE,
+  OP.SELF_MASS, OP.SENSE_LIGHT, OP.SELF_MEMBRANE,
   OP.SENSE_WALL_X, OP.SENSE_WALL_Y, OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y,
   OP.SENSE_TEMP, OP.SENSE_PHEROMONE,
   OP.SENSE_CHEMICAL, OP.SENSE_EM, OP.SENSE_PRESSURE_X, OP.SENSE_PRESSURE_Y,
@@ -1109,34 +1097,24 @@ export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Ar
 export function makeDefaultGenome(): Uint8Array {
   return new Uint8Array([
     OP.SENSE_AMP,             // one sense amplifier -> 80px range
-    OP.THRUST_AMP,            // one thrust amplifier -> 95 px/s^2
-    // Phase D: SENSOR_CHEMS layout puts biopolymer (the bulk food) at
-    // operand 1, minerals at operand 0. Default heterotroph chases
-    // biopolymer and ingests both.
+    // Default heterotroph: chase biopolymer (operand 1 in the
+    // post-cleanup SENSOR_CHEMS layout: minerals=0, biopolymer=1).
     OP.SENSE_GRAD_X, 1,
     OP.SENSE_GRAD_Y, 1,
     OP.THRUST,
     OP.INGEST, 1,
     OP.INGEST, 0,
-    // Biosynthesis is now genome-gated. The starter cell is a
-    // heterotroph: it intends to digest ingested food into building
-    // blocks (enzyme + catabolize), then builds biomass directly
-    // from the catabolized aa + fa. Doesn't make chlorophyll.
-    OP.SYNTH_ENZ,      // mandatory for catabolize to fire (gates digestion)
+    // Biosynthesis: digest ingested biopolymer into glucose/aa/fa via
+    // enzyme; build membrane (the structural reserve) via SYNTH_BIO.
+    // mRNA gates every biosynth reaction.
+    OP.SYNTH_ENZ,
     OP.SYNTH_BIO,
-    // Ribosomes mandatory on every biosynth reaction's rate.
     OP.SYNTH_MRNA,
-    // Generic catalyst synthesis. Optional now -- evolution can tune
-    // which reaction slot benefits. Operand picks one of 256.
     OP.SYNTH_CAT, 0,
-    // Keep the genome stable as the cell ages. Costs 0.5 ATP per
-    // execution and refreshes a 30-tick window during which somatic
-    // mutation is suppressed.
     OP.REPAIR,
-    // Reproduction gate: only fission when well-stocked. Higher
-    // thresholds let the parent stockpile and pass a meaningful
-    // endowment to the child.
-    OP.SELF_BIOMASS,
+    // Reproduction gate: only fission when membrane + ATP are both
+    // healthy. SELF_MEMBRANE replaces the retired SELF_BIOMASS.
+    OP.SELF_MEMBRANE,
     OP.PUSH8, 30,
     OP.GT,
     OP.SELF_ENERGY,
@@ -1217,7 +1195,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_GRAD_X]:  2,
   [OP.SENSE_GRAD_Y]:  2,
   [OP.REPAIR]:        2,
-  [OP.SELF_BIOMASS]:  1.5,
+  [OP.SELF_MEMBRANE]: 1.5,
   [OP.SELF_ENERGY]:   1.5,
   [OP.GT]:            1.5,
   [OP.JZ]:            1.5,

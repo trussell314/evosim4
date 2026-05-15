@@ -25,6 +25,10 @@ import {
 } from "../sim";
 import { OP, makeDefaultGenome, newVMState, type VMState } from "../genome";
 
+// Sentinel byte used by tests as a "no more useful ops" marker. The
+// HALT op was retired but the mark pattern keeps tests readable.
+const HALT_MARK = 0xFF;
+
 // Drive any in-flight cell divisions to completion without advancing the
 // rest of the simulation. Tests that examine post-fission state can call
 // this immediately after the step that triggered REPRODUCE to bypass the
@@ -385,7 +389,7 @@ describe("creature: chemistry - catabolism + respiration", () => {
     const w = quietWorld();
     // Catabolize is gated on enzyme molecule (zero enz -> no digestion).
     const c = makeCreature({
-      energy: 100, genome: new Uint8Array([OP.HALT]),
+      energy: 100, genome: new Uint8Array([HALT_MARK]),
       molecules: { enzyme: 5 },
     });
     c.molecules.biopolymer = 50;
@@ -398,7 +402,7 @@ describe("creature: chemistry - catabolism + respiration", () => {
   });
   it("aerobic respiration: glucose + O2 produces ATP and CO2", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ energy: 0, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.glucose = 20;
     c.molecules.o2 = 20;
     c.molecules.adp = 200;
@@ -415,7 +419,7 @@ describe("creature: chemistry - catabolism + respiration", () => {
     // via passive diffusion; zero it out to keep the test focused
     // on the no-O2 ferment path.
     w.ambient[CHEM_IDS.o2] = 0;
-    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ energy: 0, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.glucose = 20;
     c.molecules.adp = 50;
     w.creatures.push(c);
@@ -425,7 +429,7 @@ describe("creature: chemistry - catabolism + respiration", () => {
   });
   it("no fuel + no ATP -> dies", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ energy: 0, genome: new Uint8Array([HALT_MARK]) });
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.includes(c)).toBe(false);
@@ -435,8 +439,8 @@ describe("creature: chemistry - catabolism + respiration", () => {
 describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   it("baseline metabolic drain is higher for cells with more stored mass", () => {
     const w = quietWorld();
-    const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
-    const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const small = makeCreature({ x: 100, y: 300, energy: 100, genome: new Uint8Array([HALT_MARK]) });
+    const big = makeCreature({ x: 700, y: 300, energy: 100, genome: new Uint8Array([HALT_MARK]) });
     big.molecules.minerals = 15000;
     w.creatures.push(small, big);
     step(w, 1.0);
@@ -446,14 +450,14 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
   });
   it("ingest cooldown shortens for bigger cells (membrane scales with perimeter)", () => {
     const wS = quietWorld();
-    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
+    const cs = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
     wS.creatures.push(cs);
     pushParticle(wS, { x: cs.x, y: cs.y, z: cs.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
     step(wS, 0.001);
     const cdSmall = cs.ingestCooldown;
 
     const wB = quietWorld();
-    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
+    const cb = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
     cb.molecules.minerals = 4000;
     wB.creatures.push(cb);
     pushParticle(wB, { x: cb.x, y: cb.y, z: cb.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
@@ -473,7 +477,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
       // one fee per run, which no longer separates big from small.
       const c = makeCreature({
         x: 100, y: 300, energy: 100,
-        genome: new Uint8Array([OP.PUSH8, 80, OP.THRUST, OP.HALT]),
+        genome: new Uint8Array([OP.PUSH8, 80, OP.THRUST, HALT_MARK]),
       });
       c.molecules.biopolymer = 0;
       c.molecules.minerals = rockMass;
@@ -496,7 +500,7 @@ describe("creature: cost-of-bigness (surface-area-vs-volume)", () => {
 describe("creature: chemistry - photosynthesis", () => {
   it("chlorophyll + CO2 + light fixes carbon (CO2 -> glucose + O2)", () => {
     const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.chlorophyll = 5;
     c.molecules.co2 = 20;
     w.creatures.push(c);
@@ -520,11 +524,11 @@ describe("creature: chemistry - photosynthesis", () => {
   });
   it("at depth, much less light -> much less photosynthesis", () => {
     const wS = quietWorld(), wD = quietWorld();
-    const surface = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const surface = makeCreature({ x: 400, y: 10, energy: 100, genome: new Uint8Array([HALT_MARK]) });
     surface.molecules.chlorophyll = 5;
     surface.molecules.co2 = 50;
     wS.creatures.push(surface);
-    const deep = makeCreature({ x: 400, y: 500, energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const deep = makeCreature({ x: 400, y: 500, energy: 100, genome: new Uint8Array([HALT_MARK]) });
     deep.molecules.chlorophyll = 5;
     deep.molecules.co2 = 50;
     wD.creatures.push(deep);
@@ -533,7 +537,7 @@ describe("creature: chemistry - photosynthesis", () => {
   });
   it("photosynthesis costs ATP (substrate-level: CO2 + ATP -> glucose + O2 + ADP)", () => {
     const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 10, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ x: 400, y: 10, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.chlorophyll = 5;
     c.molecules.co2 = 20;
     w.creatures.push(c);
@@ -548,8 +552,8 @@ describe("creature: chemistry - photosynthesis", () => {
 describe("creature: excretion", () => {
   it("EXCRETE spawns a particle of the requested material", () => {
     const w = quietWorld();
-    // SENSOR_CHEMS operand 3 -> O2 in the post-phase-D mapping.
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 3, OP.HALT]) });
+    // EXCRETE operand is now mod CHEMICAL_COUNT (96); CHEM_IDS.o2 == 0.
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 30;
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
@@ -562,7 +566,7 @@ describe("creature: excretion", () => {
   });
   it("caps at available reserve", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 100, OP.EXCRETE, 3, OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 100, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 5;
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -572,7 +576,7 @@ describe("creature: excretion", () => {
   it("skipped when reserve below threshold", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, 3, OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.PUSH8, 10, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 0.1;
     w.creatures.push(c);
     const before = w.particles.length;
@@ -585,7 +589,7 @@ describe("creature: excretion", () => {
   });
   it("particle spawns near the cell edge", () => {
     const w = quietWorld();
-    const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, 3, OP.HALT]) });
+    const c = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.PUSH8, 20, OP.EXCRETE, CHEM_IDS.o2, HALT_MARK]) });
     c.molecules.o2 = 30;
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
@@ -603,7 +607,7 @@ describe("creature: excretion", () => {
 // about per-material gates.
 const OMNIVORE = new Uint8Array([
   OP.INGEST, 0, OP.INGEST, 1, OP.INGEST, 2,
-  OP.INGEST, 3, OP.INGEST, 4, OP.INGEST, 5, OP.HALT,
+  OP.INGEST, 3, OP.INGEST, 4, OP.INGEST, 5, HALT_MARK,
 ]);
 
 describe("creature: ingestion cost and cooldown", () => {
@@ -700,7 +704,7 @@ describe("creature: ingestion (basic)", () => {
   it("INGEST is material-selective: rock genome ignores lipid", () => {
     const w = quietWorld();
     // INGEST 0 -> minerals slot only.
-    const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
+    const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
     w.creatures.push(c);
     const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
     const faBefore = c.molecules.fattyAcid;
@@ -722,7 +726,7 @@ describe("creature: VM execution cost", () => {
     // expected sub-1-ATP drain.
     const c = makeCreature({
       energy: 50,
-      genome: new Uint8Array([OP.NOP, OP.NOP, OP.NOP, OP.HALT]),
+      genome: new Uint8Array([OP.NOP, OP.NOP, OP.NOP, HALT_MARK]),
     });
     w.creatures.push(c);
     const e0 = c.energy;
@@ -780,7 +784,7 @@ describe("creature: TURN rotates velocity", () => {
     const w = quietWorld();
     const c = makeCreature({
       x: 400, y: 300, vx: 10, vy: 0, energy: 100,
-      genome: new Uint8Array([OP.HALT]),
+      genome: new Uint8Array([HALT_MARK]),
     });
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -917,8 +921,8 @@ describe("creature: predation (cell eats cell)", () => {
   function totalMass(c: Creature): number {
     return cellTotalMass(c);
   }
-  const inert = () => new Uint8Array([OP.HALT]);
-  const predator = () => new Uint8Array([OP.PREDATE, OP.HALT]);
+  const inert = () => new Uint8Array([HALT_MARK]);
+  const predator = () => new Uint8Array([OP.PREDATE, HALT_MARK]);
 
   it("big eats small on overlap with PREDATE", () => {
     const w = quietWorld();
@@ -1057,8 +1061,8 @@ describe("creature: predation (cell eats cell)", () => {
 
 describe("creature: engulf (swallow whole, membrane intact)", () => {
   beforeEach(() => stubRandom([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]));
-  const inert = () => new Uint8Array([OP.HALT]);
-  const swallower = () => new Uint8Array([OP.ENGULF, OP.HALT]);
+  const inert = () => new Uint8Array([HALT_MARK]);
+  const swallower = () => new Uint8Array([OP.ENGULF, HALT_MARK]);
 
   it("removes prey from world.creatures and parks it in predator.contents", () => {
     const w = quietWorld();
@@ -1118,7 +1122,7 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   });
   it("INGEST (PREDATE) absorbs the vacuole contents of its own prey", () => {
     const w = quietWorld();
-    const big = makeCreature({ x: 400, y: 300, energy: 200, genome: new Uint8Array([OP.PREDATE, OP.HALT]) });
+    const big = makeCreature({ x: 400, y: 300, energy: 200, genome: new Uint8Array([OP.PREDATE, HALT_MARK]) });
     fillCellChems(big, 1000 * 6);
     const mid = makeCreature({ x: 403, y: 300, energy: 50, genome: inert() });
     fillCellChems(mid, 30 * 6);
@@ -1303,7 +1307,7 @@ describe("creature: death by starvation", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
     // INGEST 1 -> biopolymer slot in the post-phase-D SENSOR_CHEMS mapping.
-    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, 1, OP.HALT]) });
+    const eater = makeCreature({ x: 400, y: 300, energy: 100, genome: new Uint8Array([OP.INGEST, 1, HALT_MARK]) });
     w.creatures.push(eater);
     const gluBefore = eater.molecules.glucose;
     const orgReserveBefore = eater.molecules.biopolymer;
@@ -1410,7 +1414,7 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
   it("INGEST op: energy drop ~ baseline + INGEST_ENERGY_COST", () => {
     const w = quietWorld();
     // Minimal genome that just triggers INGEST -- no thrust, no reproduce.
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
     c.molecules.biopolymer = 0;
     w.creatures.push(c);
     for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
@@ -1425,7 +1429,7 @@ describe("creature: ingestion charges exactly the per-event energy cost", () => 
   });
   it("no INGEST op: nearby particle is not absorbed", () => {
     const w = quietWorld();
-    const c = makeCreature({ energy: 100, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ energy: 100, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.biopolymer = 0;
     w.creatures.push(c);
     const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.minerals, density: 2.6 });
@@ -1472,7 +1476,7 @@ describe("temperature gradient", () => {
       const w = quietWorld();
       w.surfaceY = 0;
       w.tempSurface = temp; w.tempBottom = temp; w.tempPatchAmp = 0;
-      const c = makeCreature({ energy: 0, genome: new Uint8Array([OP.HALT]) });
+      const c = makeCreature({ energy: 0, genome: new Uint8Array([HALT_MARK]) });
       c.molecules.glucose = 50; c.molecules.o2 = 50; c.molecules.adp = 100;
       w.creatures.push(c);
       step(w, 0.5);
@@ -1503,7 +1507,7 @@ describe("aeration & surface escape", () => {
   it("creature clamps at the water surface", () => {
     const w = quietWorld();
     w.surfaceY = 50;
-    const c = makeCreature({ x: 400, y: 20, vy: -100, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const c = makeCreature({ x: 400, y: 20, vy: -100, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     w.creatures.push(c);
     step(w, 0.1);
     expect(w.creatures.length).toBe(1);
@@ -1544,8 +1548,8 @@ describe("adhesion (multicell bonds)", () => {
   };
   it("ADHERE bonds with the nearest other cell in range", () => {
     const w = quietWorld();
-    const a = makeCreature({ x: 400, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.ADHERE, OP.HALT]) });
-    const b = makeCreature({ x: 410, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.HALT]) });
+    const a = makeCreature({ x: 400, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.ADHERE, HALT_MARK]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([HALT_MARK]) });
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds).toContain(b);
@@ -1553,8 +1557,8 @@ describe("adhesion (multicell bonds)", () => {
   });
   it("bond breaks when cells are pulled far apart", () => {
     const w = quietWorld();
-    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
-    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     a.bonds.push(b); b.bonds.push(a);
     w.creatures.push(a, b);
     // Teleport b far away. Spring pass should snap the bond.
@@ -1565,8 +1569,8 @@ describe("adhesion (multicell bonds)", () => {
   });
   it("a dying cell is removed from its partners' bond lists", () => {
     const w = quietWorld();
-    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
-    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     a.bonds.push(b); b.bonds.push(a);
     // Force b to die: zero biomass + zero fuel.
     b.molecules.membrane = 0;
@@ -1585,7 +1589,7 @@ describe("pheromone field", () => {
     const w = quietWorld();
     const c = makeCreature({
       x: 100, y: 100, energy: 50,
-      genome: new Uint8Array([OP.PUSH8, 30, OP.EMIT, OP.HALT]),
+      genome: new Uint8Array([OP.PUSH8, 30, OP.EMIT, HALT_MARK]),
     });
     w.creatures.push(c);
     step(w, 1 / 60);
@@ -1668,7 +1672,7 @@ describe("mass conservation", () => {
     // Cell with zero chemoreceptor.
     const blind = makeCreature({
       x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, OP.HALT]),
+      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, HALT_MARK]),
       molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
         photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0 },
     });
@@ -1680,7 +1684,7 @@ describe("mass conservation", () => {
     // Same setup, but seeing cell.
     const seeing = makeCreature({
       x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, OP.HALT]),
+      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, HALT_MARK]),
     });
     w.creatures.push(seeing);
     step(w, 1 / 60);

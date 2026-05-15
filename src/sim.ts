@@ -4480,16 +4480,15 @@ const VM_SENSORS: VMSensors = {
   light: 0,
   emBands: new Float32Array(3),
   pressureX: 0, pressureY: 0,
+  velX: 0, velY: 0,
   chemConc: new Float32Array(CHEMICAL_COUNT),
   kinOverlap: 0,
   neighborHash: 0,
 };
 const VM_SELF: VMSelf = {
-  energy: 0, vx: 0, vy: 0,
-  reserve: new Float32Array(6),
+  energy: 0,
   mass: 0,
-  biomass: 0, age: 0,
-  glucose: 0, o2: 0, fattyAcid: 0, aminoAcid: 0, waste: 0,
+  membrane: 0,
 };
 // Loop structure note (stage B foundation):
 //   The per-creature work below splits naturally into two phases.
@@ -4630,30 +4629,17 @@ function updateCreatures(world: World, dt: number): void {
 
     populateSensors(c, world);
 
+    // Pure-self readouts: ATP, total mass, and the structural reserve.
+    // Per-chem internal pools are read via SENSE_CHEMICAL <id>;
+    // velocity is read via SENSE_VX/VY (mechanoreceptor-gated, set
+    // inside populateSensors above).
     VM_SELF.energy = c.energy;
-    VM_SELF.vx = c.vx;
-    VM_SELF.vy = c.vy;
-    // SELF_RESERVE reads VM_SELF.reserve[matIdx]; we map the legacy
-    // 6-slot operand to the cell's pool of the corresponding sensor chem.
-    // Index aligns with SENSOR_CHEMS: o2, co2, glu, biopolymer, fa, min.
     let selfMass = 0;
     const chemColsC = c.store.chemCols;
     const iC = c.idx;
-    for (let i = 0; i < 6; i++) {
-      const v = chemColsC[SENSOR_CHEMS[i]][iC];
-      VM_SELF.reserve[i] = v;
-      selfMass += v;
-    }
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) selfMass += chemColsC[k][iC];
     VM_SELF.mass = selfMass;
-    // SELF_BIOMASS now reads the membrane pool (the structural reserve
-    // that replaced the retired biomass chemical).
-    VM_SELF.biomass = c.molecules.membrane;
-    VM_SELF.age = world.t - c.bornAt;
-    VM_SELF.glucose = c.molecules.glucose;
-    VM_SELF.o2 = c.molecules.o2;
-    VM_SELF.fattyAcid = c.molecules.fattyAcid;
-    VM_SELF.aminoAcid = c.molecules.aminoAcid;
-    VM_SELF.waste = c.molecules.waste;
+    VM_SELF.membrane = c.molecules.membrane;
 
     // Per-species execution counters: each PC the VM lands on this
     // tick increments species.execCounts[pc]. species.vmTicks is
@@ -4747,23 +4733,22 @@ function updateCreatures(world: World, dt: number): void {
       spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
     }
 
-    // VM-controlled excretion. EXCRETE <operand> now picks a chemId via
-    // SENSOR_CHEMS[operand % 6] (same legacy operand range; same chems
-    // a cell can sense gradients of). The released particle carries
-    // the chosen chemical directly with no proportional pool slice --
-    // the cell is venting a specific chemical, not a generic
-    // "material reserve" any more.
-    for (let i = 0; i < 6; i++) {
-      const requested = vmOut.excrete[i];
-      if (requested <= 0) continue;
-      const chemId = SENSOR_CHEMS[i];
+    // VM-controlled excretion. EXCRETE <operand> picks any chem id
+    // (operand mod CHEMICAL_COUNT). Cells can excrete any chem they
+    // hold; no longer restricted to the 6 sensor-chem slots.
+    {
       const cols = c.store.chemCols;
       const ci = c.idx;
-      const available = cols[chemId][ci];
-      const amount = Math.min(requested, available);
-      if (amount < EXCRETE_MIN_AMOUNT) continue;
-      cols[chemId][ci] -= amount;
-      spawnExcretedParticle(c, world, chemId, amount);
+      const exc = vmOut.excrete;
+      for (let chemId = 0; chemId < CHEMICAL_COUNT; chemId++) {
+        const requested = exc[chemId];
+        if (requested <= 0) continue;
+        const available = cols[chemId][ci];
+        const amount = Math.min(requested, available);
+        if (amount < EXCRETE_MIN_AMOUNT) continue;
+        cols[chemId][ci] -= amount;
+        spawnExcretedParticle(c, world, chemId, amount);
+      }
     }
 
     if (c.ingestCooldown > 0) {
@@ -5498,6 +5483,10 @@ function populateSensors(c: Creature, world: World): void {
   VM_SENSORS.wallY *= mechSat;
   VM_SENSORS.pressureX *= mechSat;
   VM_SENSORS.pressureY *= mechSat;
+  // SENSE_VX/VY: own-velocity readouts via the mechanoreceptor pathway.
+  // Cells with no mechanoreceptor have no perception of their own motion.
+  VM_SENSORS.velX = c.vx * mechSat;
+  VM_SENSORS.velY = c.vy * mechSat;
   // Thermo gates the local temperature reading. The signal scales the
   // departure from a baseline (water midpoint ~15C); zero receptor =
   // always-baseline (no information).
