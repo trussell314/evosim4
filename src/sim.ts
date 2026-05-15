@@ -2912,6 +2912,25 @@ function spawnFounder(world: World): Creature {
   // bulks a body up modestly, neighbours stay distinct.
   const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
   const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
+  // Compute the topmost pebble surface for a given x column. Founders
+  // sampled below this y (deeper in the column) are rejected so we
+  // never spawn inside the sediment bed. Returns world.height+1 when
+  // no pebble overlaps the column.
+  const topPebbleYAtColumn = (cx: number): number => {
+    const ps = world.particleStore;
+    const PX = ps.x, PY = ps.y, PR = ps.r, PCHEM = ps.chemId;
+    const n = world.particles.length;
+    let topY = world.height + 1;
+    for (let i = 0; i < n; i++) {
+      if (PCHEM[i] !== CHEM_MIN) continue;
+      const r = PR[i];
+      if (r < SAND_BIG_R_MIN) continue;
+      if (Math.abs(PX[i] - cx) >= r) continue;
+      const top = PY[i] - r;
+      if (top < topY) topY = top;
+    }
+    return topY;
+  };
   let x = 0, y = 0;
   const creatures = world.creatures;
   const nc = creatures.length;
@@ -2921,11 +2940,18 @@ function spawnFounder(world: World): Creature {
     // skipping just the surface band and the pebble bed at the floor.
     y = world.height * (0.1 + 0.8 * Math.random());
     let okay = true;
-    for (let k = 0; k < nc; k++) {
-      const other = creatures[k];
-      const dx = other.x - x;
-      const dy = other.y - y;
-      if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+    // Sediment-bed avoidance: refuse to place a founder below the
+    // topmost pebble in this column. MIN_CREATURE_R margin keeps the
+    // newborn's body above the pebble top, not just its center.
+    const pebbleTop = topPebbleYAtColumn(x);
+    if (y + MIN_CREATURE_R > pebbleTop) { okay = false; }
+    if (okay) {
+      for (let k = 0; k < nc; k++) {
+        const other = creatures[k];
+        const dx = other.x - x;
+        const dy = other.y - y;
+        if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+      }
     }
     if (okay) break;
   }
