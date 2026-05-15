@@ -255,6 +255,12 @@ let workerSimMsThisFrame = 0;
 let workerAdvancedThisFrame = 0;
 let workerLastSimError: string | null = null;
 let workerLastSimErrorAt = 0;
+// Wall-clock timestamp when workerLastSimError was set. The error
+// banner auto-clears after SIM_ERROR_LINGER_MS of continued healthy
+// snapshots so a self-recovering pool teardown doesn't leave stale
+// red text on screen indefinitely.
+let workerLastSimErrorWallTs = 0;
+const SIM_ERROR_LINGER_MS = 5000;
 
 function maybeAutosave(): void {
   if (resetting) return;
@@ -345,6 +351,14 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     if (msg.err) {
       workerLastSimError = msg.err.message;
       workerLastSimErrorAt = msg.err.at;
+      workerLastSimErrorWallTs = performance.now();
+    } else if (workerLastSimError && msg.advanced > 0) {
+      // Snapshot advanced without a fresh error -- sim is recovering.
+      // Clear the banner after the linger window.
+      if (performance.now() - workerLastSimErrorWallTs > SIM_ERROR_LINGER_MS) {
+        workerLastSimError = null;
+        workerLastSimErrorAt = 0;
+      }
     }
     mpSnapshotsReceived++;
     mpSnapshotsAdvanced += msg.advanced;
