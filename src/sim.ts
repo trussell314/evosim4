@@ -2611,29 +2611,53 @@ export function generateObstacles(world: World): void {
   // columns (they become part of the chamber floor/ceiling/back-wall
   // obstacles instead).
   const caveOnLeft = Math.random() < 0.5;
-  const caveHeight = 80 + Math.random() * 40;  // 80..120
   const caveWidth = 120 + Math.random() * 60;  // 120..180
-  const mouthHeight = 25 + Math.random() * 15; // 25..40
-  const mouthDepth = 30 + Math.random() * 20;  // 30..50, controls how far the lip protrudes inward
-  // Vertical position: cave sits in the seafloor band. Top of chamber
-  // is a bit below the seafloor surface so the lip has thickness to
-  // it; bottom is bounded by the world's bottom edge.
-  const caveBottomY = H - 8;
-  const caveTopY = caveBottomY - caveHeight;
+  // Larger mouth so the opening is visually obvious. Previous 25..40
+  // tall / 30..50 deep slot read as "a faint scratch in the wall"
+  // even when the geometry was correct -- and combined with lobe
+  // overhang from the lip polygons it pinched closed for cells. The
+  // bigger mouth costs some "refuge" privacy but is unambiguously a
+  // doorway from across the world.
+  const mouthHeight = 45 + Math.random() * 20; // 45..65
+  const mouthDepth = 60 + Math.random() * 30;  // 60..90
   // Horizontal extent. Outer edge against the wall; inner edge faces
-  // the chamber mouth. mouthCenterY is mid-height of the mouth slot.
-  const caveOuterX = caveOnLeft ? 4 : W - 4;
+  // the chamber mouth. Anchor flush at x=0/W (was +/-4) so there's no
+  // sliver of seafloor between the cave back wall and the world edge.
+  const caveOuterX = caveOnLeft ? 0 : W;
   const caveInnerX = caveOnLeft ? caveOuterX + caveWidth : caveOuterX - caveWidth;
-  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * Math.random());
-  const mouthTopY = mouthCenterY - mouthHeight / 2;
-  const mouthBottomY = mouthCenterY + mouthHeight / 2;
-  // Mark heightmap columns inside the cave footprint so the seafloor
-  // doesn't double-cover them. The mouth lip extends past caveInnerX
-  // by mouthDepth (lipInnerX), so the excluded span must cover the
-  // lip as well -- otherwise the seafloor chunks paint over the mouth
-  // and the cave reads as a sealed pocket. Compute lipInnerX inline
-  // here so the exclusion is right; the value gets re-used below.
   const lipInnerXEarly = caveOnLeft ? caveInnerX + mouthDepth : caveInnerX - mouthDepth;
+  // Vertical position. caveTopY must sit BELOW the deepest heightmap
+  // value in the cave's footprint, otherwise the chamber's top pokes
+  // up out of the seafloor and the whole side-mouth illusion breaks
+  // (cave reads as a free-floating rectangle next to the rock).
+  // Compute that floor first, then size the chamber to fit between
+  // it and the world bottom.
+  const caveBottomY = H - 8;
+  const fpStart = Math.max(0, Math.min(W - 1, Math.floor(Math.min(caveOuterX, lipInnerXEarly))));
+  const fpEnd = Math.max(0, Math.min(W - 1, Math.floor(Math.max(caveOuterX, lipInnerXEarly))));
+  let deepestSurface = 0;
+  for (let xi = fpStart; xi <= fpEnd; xi++) {
+    if (heightmap[xi] > deepestSurface) deepestSurface = heightmap[xi];
+  }
+  // Want a ceiling of at least 12px of rock above the chamber so the
+  // lip has substance. Then the chamber height is whatever's left.
+  const CEILING_THICK_MIN = 12;
+  const caveTopY = Math.max(deepestSurface + CEILING_THICK_MIN, caveBottomY - 120);
+  const caveHeight = caveBottomY - caveTopY;
+  // Clamp mouth to fit cleanly inside the chamber. caveHeight can
+  // shrink below the original 80..120 range when the local heightmap
+  // is deep enough to force caveTopY downward; without this clamp the
+  // mouth slot can poke through the chamber's floor or ceiling and
+  // the lip polygons go inside-out.
+  const mouthHeightClamped = Math.min(mouthHeight, caveHeight * 0.6);
+  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * Math.random());
+  const mouthTopY = mouthCenterY - mouthHeightClamped / 2;
+  const mouthBottomY = mouthCenterY + mouthHeightClamped / 2;
+  // Mark heightmap columns inside the cave footprint so the seafloor
+  // chunks skip them. The mouth lip extends past caveInnerX by
+  // mouthDepth, so the excluded span must cover the lip as well --
+  // otherwise the seafloor chunks paint over the mouth and the cave
+  // reads as a sealed pocket.
   const caveX0 = Math.min(caveOuterX, caveInnerX, lipInnerXEarly);
   const caveX1 = Math.max(caveOuterX, caveInnerX, lipInnerXEarly);
 
