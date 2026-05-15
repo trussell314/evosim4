@@ -468,10 +468,9 @@ naturally produce different shapes of signal:
 - **array** (multi-dimensional): one chem per band; e.g.
   photoreceptor with frequency selectivity → one activated chem per
   band. Reserve chem-table headroom now.
-- **time-series / "GIF"**: the playful but real case where signals
-  evolve over time. Could fall out naturally if activated-receptor
-  decays slowly enough to retain history; cells read recent vs older
-  pools to derive rate-of-change. Open to better ideas.
+- **time-series**: signals that evolve over time fall out naturally
+  if activated-receptor decays slowly enough to retain history; cells
+  read recent vs older pool values to derive rate-of-change.
 
 **Per-modality starting positions.**
 - **Light**: intensity-only is fine for now. Reserve chem-table
