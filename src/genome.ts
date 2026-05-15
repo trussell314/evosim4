@@ -74,15 +74,12 @@ export const OP = {
   POKE_BYTE:     0x65,
   SPLICE_DUP:    0x66,
   SPLICE_DEL:    0x67,
-  // 0x68 (was THRUST_AMP) retired -- it was a free passive boost with
-  // no biological cost. Cells stack THRUST ops if they want more thrust;
-  // each costs ATP.
-  SYNTH_BIO:     0x69,
-  SYNTH_AA:      0x6A,
-  SYNTH_FA:      0x6B,
-  SYNTH_ENZ:     0x6C,
-  SYNTH_CHL:     0x6D,
-  SYNTH_MRNA:    0x6E,
+  // 0x68 (was THRUST_AMP) retired.
+  // 0x69 SYNTH -- unified biosynthesis op (replaces SYNTH_BIO/AA/FA/
+  // ENZ/CHL/MRNA/CAT). 2-byte operand: <kind, param>. See
+  // SYNTH_KIND_* constants and runTick dispatch for the kind table.
+  // Bytes 0x6A..0x6E (legacy SYNTH_AA/FA/ENZ/CHL/MRNA) decode to NOP.
+  SYNTH:         0x69,
 
   // Generalized chemistry / sensor operands. SENSE_CHEMICAL reads the
   // cell's own pool of chem (operand mod CHEMICAL_COUNT). SENSE_EM
@@ -100,17 +97,49 @@ export const OP = {
   SENSE_KIN:           0x74,
   SENSE_NEIGHBOR_HASH: 0x75,
 
-  // Generic catalyst synthesis. Operand picks one of the 256 reaction
-  // slots (named slots 0..15 are the bootstrap pathways; 16..255 are
-  // procedural). The catalyst pool for slot k accumulates each tick
-  // SYNTH_CAT runs with operand%256==k, multiplying that reaction's
-  // rate via (1 + pool/CAT_REF). ATP cost lives inside the catalyst-
-  // build path; the op itself just sets the bit.
-  SYNTH_CAT:     0x73,
+  // 0x73 (legacy SYNTH_CAT) folds into the unified SYNTH op as
+  // kind=CAT (param picks the catalyst slot).
 
-  // 0xFF (HALT) retired -- cells run until vmInstrBudget is exhausted.
-  // The byte left in old genomes falls through to the default NOP.
+  // 0xFF (HALT) retired.
 } as const;
+
+// SYNTH kinds. Op layout: SYNTH <kind, param>. Each kind sets one
+// bit in VMOutputs.synthMask (or, for multi-param kinds like PHOTO
+// and CHEMO, sets one of several bits keyed on param). CAT routes
+// to VMOutputs.catSynthMask separately. K-4 of the chemistry overhaul.
+export const SYNTH_KIND = {
+  BIO:     0,  // membrane synth (was SYNTH_BIO)
+  AA:      1,
+  FA:      2,
+  ENZ:     3,
+  CHL:     4,
+  MRNA:    5,
+  PHOTO:   6,  // param: band 0..2 (visible / long / surface)
+  CHEMO:   7,  // param: target 0..3 (biopolymer / minerals / fa / marker0)
+  MECH:    8,
+  THERMO:  9,
+  MAGNETO: 10,
+  BOND:    11,
+  REPAIR:  12,
+  CAT:     13, // param: catalyst slot 0..255
+} as const;
+export const SYNTH_KIND_COUNT = 14;
+// synthMask bit positions. Per-kind bits 0..5 + 13..17 use one bit
+// each; PHOTO occupies bits 6..8 (one per band), CHEMO occupies
+// bits 9..12 (one per target). 18 bits total.
+export const SYNTH_BIT_BIO = 0;
+export const SYNTH_BIT_AA = 1;
+export const SYNTH_BIT_FA = 2;
+export const SYNTH_BIT_ENZ = 3;
+export const SYNTH_BIT_CHL = 4;
+export const SYNTH_BIT_MRNA = 5;
+export const SYNTH_BIT_PHOTO_BASE = 6;     // +0..+2
+export const SYNTH_BIT_CHEMO_BASE = 9;     // +0..+3
+export const SYNTH_BIT_MECH = 13;
+export const SYNTH_BIT_THERMO = 14;
+export const SYNTH_BIT_MAGNETO = 15;
+export const SYNTH_BIT_BOND = 16;
+export const SYNTH_BIT_REPAIR = 17;
 
 // Number of catalyst slots. Kept in genome.ts (not sim.ts) because
 // the VM dispatch mods the operand by this -- it's part of the
@@ -144,7 +173,7 @@ OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
 OPERANDS[OP.SENSE_CHEMICAL] = 1;
 OPERANDS[OP.SENSE_EM] = 1;
-OPERANDS[OP.SYNTH_CAT] = 1;
+OPERANDS[OP.SYNTH] = 2;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
 // executable op position. `operand` is `undefined` if the op takes
@@ -473,20 +502,31 @@ export function runTick(
       case OP.EMIT:           out.emit += Math.max(0, vmPop(stack)); break;
       case OP.ADHERE:         out.adhere = true; break;
       case OP.REPAIR:         out.repair++; break;
-      case OP.SYNTH_BIO:      out.synthMask |= 1 << 0; break;
-      case OP.SYNTH_AA:       out.synthMask |= 1 << 1; break;
-      case OP.SYNTH_FA:       out.synthMask |= 1 << 2; break;
-      case OP.SYNTH_ENZ:      out.synthMask |= 1 << 3; break;
-      case OP.SYNTH_CHL:      out.synthMask |= 1 << 4; break;
-      case OP.SYNTH_MRNA:     out.synthMask |= 1 << 5; break;
-      case OP.SYNTH_CAT: {
-        // Operand picks which catalyst slot to build. Mod to the
-        // catalyst count keeps every operand byte targeting a real
-        // slot (no operand values waste). Sim keeps the catalyst
-        // table; the bit-mask handshake just tells it which to run.
-        const slot = genome[state.pc % L] % CATALYST_COUNT;
-        state.pc++;
-        out.catSynthMask |= 1 << slot;
+      // Unified SYNTH op (Tier 3 K-4). Two-byte operand: kind, param.
+      // Kind selects the chem family; param picks band (PHOTO) /
+      // target (CHEMO) / catalyst slot (CAT). Other kinds ignore
+      // param. Each kind sets one bit in synthMask; per-cell
+      // chemoreceptor target is implicit in the bit position.
+      case OP.SYNTH: {
+        const kindByte = genome[state.pc % L]; state.pc++;
+        const param = genome[state.pc % L]; state.pc++;
+        const kind = kindByte % SYNTH_KIND_COUNT;
+        switch (kind) {
+          case SYNTH_KIND.BIO:    out.synthMask |= 1 << SYNTH_BIT_BIO; break;
+          case SYNTH_KIND.AA:     out.synthMask |= 1 << SYNTH_BIT_AA; break;
+          case SYNTH_KIND.FA:     out.synthMask |= 1 << SYNTH_BIT_FA; break;
+          case SYNTH_KIND.ENZ:    out.synthMask |= 1 << SYNTH_BIT_ENZ; break;
+          case SYNTH_KIND.CHL:    out.synthMask |= 1 << SYNTH_BIT_CHL; break;
+          case SYNTH_KIND.MRNA:   out.synthMask |= 1 << SYNTH_BIT_MRNA; break;
+          case SYNTH_KIND.PHOTO:  out.synthMask |= 1 << (SYNTH_BIT_PHOTO_BASE + (param % 3)); break;
+          case SYNTH_KIND.CHEMO:  out.synthMask |= 1 << (SYNTH_BIT_CHEMO_BASE + (param % 4)); break;
+          case SYNTH_KIND.MECH:   out.synthMask |= 1 << SYNTH_BIT_MECH; break;
+          case SYNTH_KIND.THERMO: out.synthMask |= 1 << SYNTH_BIT_THERMO; break;
+          case SYNTH_KIND.MAGNETO: out.synthMask |= 1 << SYNTH_BIT_MAGNETO; break;
+          case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; break;
+          case SYNTH_KIND.REPAIR: out.synthMask |= 1 << SYNTH_BIT_REPAIR; break;
+          case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
+        }
         break;
       }
       // SENSE_AMP is a passive marker; its only effect is to widen
@@ -630,7 +670,7 @@ export function summarizeGenome(
       continue;
     }
     executableOps++;
-    const operand = operandLen === 1 ? genome[(i + 1) % genome.length] : 0;
+    const operand = operandLen >= 1 ? genome[(i + 1) % genome.length] : 0;
     switch (op) {
       case OP.THRUST:    thrust = true; break;
       case OP.TURN:      turn = true; break;
@@ -653,15 +693,26 @@ export function summarizeGenome(
         if (!excreteMaterials.includes(mat)) excreteMaterials.push(mat);
         break;
       }
-      case OP.SYNTH_BIO:  synthBio = true; break;
-      case OP.SYNTH_AA:   synthAA = true; break;
-      case OP.SYNTH_FA:   synthFA = true; break;
-      case OP.SYNTH_ENZ:  synthEnz = true; break;
-      case OP.SYNTH_CHL:  synthChl = true; break;
-      case OP.SYNTH_MRNA: synthRibo = true; break;
-      case OP.SYNTH_CAT: {
-        const slot = operand % CATALYST_COUNT;
-        if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
+      case OP.SYNTH: {
+        // operand here is the first operand byte (kind). The param
+        // byte is at genome[pc+2] (one past the kind).
+        const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
+        switch (kind) {
+          case SYNTH_KIND.BIO:    synthBio = true; break;
+          case SYNTH_KIND.AA:     synthAA = true; break;
+          case SYNTH_KIND.FA:     synthFA = true; break;
+          case SYNTH_KIND.ENZ:    synthEnz = true; break;
+          case SYNTH_KIND.CHL:    synthChl = true; break;
+          case SYNTH_KIND.MRNA:   synthRibo = true; break;
+          case SYNTH_KIND.CAT: {
+            const param = genome[(i + 2) % genome.length] ?? 0;
+            const slot = param % CATALYST_COUNT;
+            if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
+            break;
+          }
+          // Tier 3 sense-related SYNTH kinds don't get summary flags
+          // yet; HUD will pick them up via the chem-pool inspector.
+        }
         break;
       }
       case OP.JZ: case OP.JNZ: hasJump = true; break;
@@ -955,17 +1006,35 @@ export function computeThrustAccel(_genome: Uint8Array): number {
 
 // Static synthMask derived from genome op set. Used for engulfed
 // cells whose VM doesn't run -- their biosynthesis intent is locked
-// to whichever SYNTH_* ops happen to exist in their genome. Bits:
-//   0 BIO, 1 AA, 2 FA, 3 ENZ, 4 CHL, 5 RIBO.
+// to whichever SYNTH kinds happen to appear in their genome. K-4
+// rewrite: walk every SYNTH op, decode kind, set the matching bit.
 export function genomeSynthMask(genome: Uint8Array): number {
   let mask = 0;
-  walkGenome(genome, (op) => {
-    if (op === OP.SYNTH_BIO) mask |= 1 << 0;
-    else if (op === OP.SYNTH_AA) mask |= 1 << 1;
-    else if (op === OP.SYNTH_FA) mask |= 1 << 2;
-    else if (op === OP.SYNTH_ENZ) mask |= 1 << 3;
-    else if (op === OP.SYNTH_CHL) mask |= 1 << 4;
-    else if (op === OP.SYNTH_MRNA) mask |= 1 << 5;
+  walkGenome(genome, (op, _pc, operand) => {
+    if (op !== OP.SYNTH || operand === undefined) return;
+    const kind = operand % SYNTH_KIND_COUNT;
+    // PHOTO/CHEMO use param too; for static-mask purposes we OR all
+    // band/target bits since we don't know which the cell will fire.
+    switch (kind) {
+      case SYNTH_KIND.BIO:    mask |= 1 << SYNTH_BIT_BIO; break;
+      case SYNTH_KIND.AA:     mask |= 1 << SYNTH_BIT_AA; break;
+      case SYNTH_KIND.FA:     mask |= 1 << SYNTH_BIT_FA; break;
+      case SYNTH_KIND.ENZ:    mask |= 1 << SYNTH_BIT_ENZ; break;
+      case SYNTH_KIND.CHL:    mask |= 1 << SYNTH_BIT_CHL; break;
+      case SYNTH_KIND.MRNA:   mask |= 1 << SYNTH_BIT_MRNA; break;
+      case SYNTH_KIND.PHOTO:
+        mask |= (1 << SYNTH_BIT_PHOTO_BASE) | (1 << (SYNTH_BIT_PHOTO_BASE + 1)) | (1 << (SYNTH_BIT_PHOTO_BASE + 2));
+        break;
+      case SYNTH_KIND.CHEMO:
+        mask |= (1 << SYNTH_BIT_CHEMO_BASE) | (1 << (SYNTH_BIT_CHEMO_BASE + 1))
+              | (1 << (SYNTH_BIT_CHEMO_BASE + 2)) | (1 << (SYNTH_BIT_CHEMO_BASE + 3));
+        break;
+      case SYNTH_KIND.MECH:    mask |= 1 << SYNTH_BIT_MECH; break;
+      case SYNTH_KIND.THERMO:  mask |= 1 << SYNTH_BIT_THERMO; break;
+      case SYNTH_KIND.MAGNETO: mask |= 1 << SYNTH_BIT_MAGNETO; break;
+      case SYNTH_KIND.BOND:    mask |= 1 << SYNTH_BIT_BOND; break;
+      case SYNTH_KIND.REPAIR:  mask |= 1 << SYNTH_BIT_REPAIR; break;
+    }
   });
   return mask;
 }
@@ -1023,18 +1092,21 @@ export function viableGenome(genome: Uint8Array): boolean {
   let hasAA = false, hasFA = false, hasEnz = false;
   let hasSense = false;
   let hasThrust = false;
-  walkGenome(genome, (op) => {
+  walkGenome(genome, (op, _pc, operand) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
     else if (op === OP.ENGULF) hasEngulf = true;
-    else if (op === OP.SYNTH_CHL) hasChl = true;
     else if (op === OP.REPRODUCE) hasReproduce = true;
-    else if (op === OP.SYNTH_BIO) hasBio = true;
-    else if (op === OP.SYNTH_MRNA) hasMrna = true;
-    else if (op === OP.SYNTH_AA) hasAA = true;
-    else if (op === OP.SYNTH_FA) hasFA = true;
-    else if (op === OP.SYNTH_ENZ) hasEnz = true;
     else if (op === OP.THRUST) hasThrust = true;
+    else if (op === OP.SYNTH && operand !== undefined) {
+      const kind = operand % SYNTH_KIND_COUNT;
+      if (kind === SYNTH_KIND.BIO) hasBio = true;
+      else if (kind === SYNTH_KIND.MRNA) hasMrna = true;
+      else if (kind === SYNTH_KIND.AA) hasAA = true;
+      else if (kind === SYNTH_KIND.FA) hasFA = true;
+      else if (kind === SYNTH_KIND.ENZ) hasEnz = true;
+      else if (kind === SYNTH_KIND.CHL) hasChl = true;
+    }
     if (!hasSense && SENSE_OPS.has(op)) hasSense = true;
   });
   const isHeterotroph = hasIngest || hasPredate || hasEngulf;
@@ -1133,14 +1205,14 @@ export function makeDefaultGenome(): Uint8Array {
     OP.THRUST,
     OP.INGEST, 1,
     OP.INGEST, 0,
-    // Biosynthesis: digest ingested biopolymer into glucose/aa/fa via
-    // enzyme; build membrane (the structural reserve) via SYNTH_BIO.
-    // mRNA gates every biosynth reaction.
-    OP.SYNTH_ENZ,
-    OP.SYNTH_FA,
-    OP.SYNTH_BIO,
-    OP.SYNTH_MRNA,
-    OP.SYNTH_CAT, 0,
+    // Biosynthesis via unified SYNTH op. <kind, param> -- param is
+    // ignored for kinds that don't use it.
+    OP.SYNTH, SYNTH_KIND.ENZ, 0,
+    OP.SYNTH, SYNTH_KIND.FA, 0,
+    OP.SYNTH, SYNTH_KIND.BIO, 0,
+    OP.SYNTH, SYNTH_KIND.MRNA, 0,
+    OP.SYNTH, SYNTH_KIND.CHEMO, 0,  // chemoreceptor for biopolymer
+    OP.SYNTH, SYNTH_KIND.CAT, 0,    // catalyst for reaction slot 0
     OP.REPAIR,
     // Reproduction gate: only fission when membrane + ATP are both
     // healthy. SELF_MEMBRANE replaces the retired SELF_BIOMASS.
@@ -1216,11 +1288,11 @@ function randMutByte(rng: () => number, opBias: number = OP_BYTE_BIAS): number {
 const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.INGEST]:        3,
   [OP.REPRODUCE]:     3,
-  [OP.SYNTH_BIO]:     3,
-  [OP.SYNTH_MRNA]:    3, // mandatory for biosynthesis under strict mrna model
-  [OP.SYNTH_ENZ]:     3, // mandatory for heterotroph digestion (catabolize gates on enz)
-  [OP.SYNTH_AA]:      3, // mandatory for photoautotrophs (no INGEST -> no aa from food)
-  [OP.SYNTH_FA]:      3, // mandatory for photoautotrophs
+  // Unified SYNTH replaces 7 distinct SYNTH_* ops; bump its base
+  // weight so random genomes still roll enough SYNTH instances. Cells
+  // need multiple SYNTH ops (different kinds) for viability so this
+  // op is the most common in viable founders.
+  [OP.SYNTH]:        12,
   [OP.THRUST]:        2,
   [OP.SENSE_GRAD_X]:  2,
   [OP.SENSE_GRAD_Y]:  2,
@@ -1238,7 +1310,6 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.SENSE_PRESSURE_Y]: 1.5,
   [OP.SENSE_KIN]:           1.5,
   [OP.SENSE_NEIGHBOR_HASH]: 1,
-  [OP.SYNTH_CAT]:        1.5, // optional now -- evolutionary potential, not a viability gate
 };
 const SEED_OP_POOL: number[] = (() => {
   const pool: number[] = [];

@@ -71,7 +71,7 @@ import {
   type CreatureSnapshot,
   type SpeciesSnapshot,
 } from "./sim";
-import { disassemble, walkGenome, OP, CATALYST_COUNT } from "./genome";
+import { disassemble, walkGenome, OP, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -2211,11 +2211,11 @@ const TROPHIC_PRED: TrophicMode = { label: "pred", bg: "#5a1c1c", fg: "#ff9e9e" 
 const TROPHIC_MIXO: TrophicMode = { label: "mixo", bg: "#5a4a1c", fg: "#ffe49e" };
 function trophicMode(genome: Uint8Array): TrophicMode {
   let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
-  walkGenome(genome, (op) => {
+  walkGenome(genome, (op, _pc, operand) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
     else if (op === OP.ENGULF) hasEngulf = true;
-    else if (op === OP.SYNTH_CHL) hasChl = true;
+    else if (op === OP.SYNTH && (operand ?? 0) % SYNTH_KIND_COUNT === SYNTH_KIND.CHL) hasChl = true;
   });
   const eatsOther = hasPredate || hasEngulf;
   const eatsParticles = hasIngest;
@@ -2252,13 +2252,20 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.ADHERE: adhere = true; break;
       case OP.REPAIR: repair = true; break;
       case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL: selfModifies = true; break;
-      case OP.SYNTH_BIO: synthBio = true; break;
-      case OP.SYNTH_AA: synthAA = true; break;
-      case OP.SYNTH_FA: synthFA = true; break;
-      case OP.SYNTH_ENZ: synthEnz = true; break;
-      case OP.SYNTH_CHL: synthChl = true; break;
-      case OP.SYNTH_MRNA: synthRibo = true; break;
-      case OP.SYNTH_CAT: catalystSlots.add((operand ?? 0) % CATALYST_COUNT); break;
+      case OP.SYNTH: {
+        const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
+        switch (kind) {
+          case SYNTH_KIND.BIO: synthBio = true; break;
+          case SYNTH_KIND.AA: synthAA = true; break;
+          case SYNTH_KIND.FA: synthFA = true; break;
+          case SYNTH_KIND.ENZ: synthEnz = true; break;
+          case SYNTH_KIND.CHL: synthChl = true; break;
+          case SYNTH_KIND.MRNA: synthRibo = true; break;
+          // CAT param byte is genome[pc+2]; pull it directly.
+          case SYNTH_KIND.CAT: catalystSlots.add((genome[(_pc + 2) % genome.length] ?? 0) % CATALYST_COUNT); break;
+        }
+        break;
+      }
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
       case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;

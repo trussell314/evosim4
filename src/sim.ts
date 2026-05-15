@@ -23,6 +23,21 @@ import {
   computeSenseRange,
   computeThrustAccel,
   MAX_GENOME_BYTES,
+  SYNTH_KIND,
+  SYNTH_KIND_COUNT,
+  SYNTH_BIT_BIO,
+  SYNTH_BIT_AA,
+  SYNTH_BIT_FA,
+  SYNTH_BIT_ENZ,
+  SYNTH_BIT_CHL,
+  SYNTH_BIT_MRNA,
+  SYNTH_BIT_PHOTO_BASE,
+  SYNTH_BIT_CHEMO_BASE,
+  SYNTH_BIT_MECH,
+  SYNTH_BIT_THERMO,
+  SYNTH_BIT_MAGNETO,
+  SYNTH_BIT_BOND,
+  SYNTH_BIT_REPAIR,
 } from "./genome";
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
@@ -1607,8 +1622,8 @@ const CHEM_MARKER0 = 41;
 // Markers occupy 41..44; marker0 has a constant since the
 // chemoreceptor system targets it specifically.
 // K-3 activation pass uses CHEM_ACT_*, CHEM_MAGNETORECEPTOR.
-// CHEM_BOND / CHEM_REPAIR wait for K-5 to wire bonding + mutation.
-void [CHEM_BOND, CHEM_REPAIR];
+// K-4 wires CHEM_BOND / CHEM_REPAIR as biosynthesis products of the
+// unified SYNTH op (gateMask SYNTH_BIT_BOND / SYNTH_BIT_REPAIR).
 // Receptor saturation reference. Sat curve = pool / (pool + REF) so
 // pool at REF gives sat=0.5; pool at 9*REF gives sat=0.9. Set low so
 // even modest receptor investment yields most of the signal -- a
@@ -2043,7 +2058,7 @@ function buildReactionTable(): Reaction[] {
 // D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
 // H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
 // disassembler can label catalyst slots by their bootstrap pathway.
-export const NAMED_REACTION_COUNT = 16;
+export const NAMED_REACTION_COUNT = 24;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +
@@ -2088,15 +2103,15 @@ function installNamedReactions(out: Reaction[]): void {
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
   // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.
-  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, mrnaScale: true }); // synth_aa
-  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, mrnaScale: true }); // synth_fa
-  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, mrnaScale: true }); // synth_chl
-  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, mrnaScale: true }); // synth_enz
-  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, mrnaScale: true }); // synth_ribo
+  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << SYNTH_BIT_AA, atpFloor: true, mrnaScale: true }); // synth_aa
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true }); // synth_fa
+  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << SYNTH_BIT_CHL, atpFloor: true, mrnaScale: true }); // synth_chl
+  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << SYNTH_BIT_ENZ, atpFloor: true, mrnaScale: true }); // synth_enz
+  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << SYNTH_BIT_MRNA, atpFloor: true, mrnaScale: true }); // synth_ribo
   // synth_membrane via the SYNTH_BIO bit: aa + fa -> membrane lipid.
   // Replaces the retired synth_biomass; SYNTH_BIO now triggers
   // membrane growth instead of generic structural biomass.
-  out[9] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_MEMBRANE], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  out[9] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_MEMBRANE], [1], -1, 0.8, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true });
   // Biopolymer digestion. Mass-balanced split mirroring the old
   // CATAB_FRACTIONS for "organic": 0.5 glu + 0.3 aa + 0.2 fa per
   // biopolymer unit. Slightly exergonic (+1 ATP) to model the small
@@ -2104,22 +2119,30 @@ function installNamedReactions(out: Reaction[]): void {
   // proteins. Gated on enzyme: no enz, no digestion.
   out[10] = mk([CHEM_BIOPOLYMER], [1], [CHEM_GLU, CHEM_AA, CHEM_FA], [0.5, 0.3, 0.2], +1, 6, { enzScale: true });
   // Membrane biosynth. fa -> membrane lipid, endergonic, mRNA-gated.
-  // Driven by the same SYNTH bits as synth_biomass (gate 1 << 0) so
-  // a cell that biosynths a body also lays down membrane. Cheaper
-  // than chl/ribo so a growing cell can afford it.
-  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true }); // synth_memb
-  // Receptor biosynth (phase H2). Same shape as synth_chl / synth_enz:
-  // amino acid + minerals consumed, mRNA-gated, ATP cost. Lumped under
-  // the SYNTH_BIO bit so cells that maintain biomass also maintain
-  // sensing capacity -- an emergent property: starving cells lose
-  // both growth and their senses.
-  // K-1 transitional: slot 12 builds the visible-band photoreceptor;
-  // slot 13 builds the biopolymer-chemoreceptor. K-4 (unified SYNTH)
-  // replaces these with per-kind reactions selected by op param.
-  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_VISIBLE], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
-  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
-  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
-  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  // Driven by the same SYNTH bits as synth_biomass so a cell that
+  // biosynths a body also lays down membrane. Cheaper than chl/ribo
+  // so a growing cell can afford it.
+  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true }); // synth_memb
+  // Receptor biosynth, K-4 unified-SYNTH layout. Each receptor variant
+  // gates on its own bit so genome op param picks exactly which
+  // chemoreceptor / photoreceptor / etc the cell builds. All cost
+  // aa+min, are mRNA-gated, and decay (handled in K-3 activation /
+  // base metabolism). Sense modality emerges from which receptor
+  // chems the cell carries -- no hardcoded modality table.
+  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_VISIBLE], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 0), atpFloor: true, mrnaScale: true });
+  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_LONG], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 1), atpFloor: true, mrnaScale: true });
+  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_SURFACE], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 2), atpFloor: true, mrnaScale: true });
+  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 0), atpFloor: true, mrnaScale: true });
+  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MINERALS], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 1), atpFloor: true, mrnaScale: true });
+  out[17] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_FA], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 2), atpFloor: true, mrnaScale: true });
+  out[18] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MARKER0], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 3), atpFloor: true, mrnaScale: true });
+  out[19] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_MECH, atpFloor: true, mrnaScale: true });
+  out[20] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_THERMO, atpFloor: true, mrnaScale: true });
+  out[21] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MAGNETORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_MAGNETO, atpFloor: true, mrnaScale: true });
+  // Bond and repair chems: products of dedicated SYNTH kinds. K-5
+  // wires these into emergent adhesion + somatic-mutation control.
+  out[22] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_BOND], [1], -2, 0.3, { gateMask: 1 << SYNTH_BIT_BOND, atpFloor: true, mrnaScale: true });
+  out[23] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_REPAIR], [1], -3, 0.2, { gateMask: 1 << SYNTH_BIT_REPAIR, atpFloor: true, mrnaScale: true });
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -3402,8 +3425,11 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
   let hasChl = false, hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
-    if (b === OP.SYNTH_CHL) hasChl = true;
-    else if (b === OP.SYNTH_ENZ) hasEnz = true;
+    if (b === OP.SYNTH) {
+      const kind = (genome[(i + 1) % genome.length] ?? 0) % SYNTH_KIND_COUNT;
+      if (kind === SYNTH_KIND.CHL) hasChl = true;
+      else if (kind === SYNTH_KIND.ENZ) hasEnz = true;
+    }
   }
   // Minimal cell body: biomass just above MIN_VIABLE_MEMBRANE (the
   // membrane), a trickle of ADP and ATP to enable tick-1 chemistry,
