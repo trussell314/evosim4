@@ -3126,14 +3126,26 @@ function collideObstaclesSoa(
   n: number, e: number, minY: number, _pad: number,
 ): void {
   void _pad;
+  void ASLEEP;
   // Defensive: if the obstacle index wasn't built (cols=0) the per-
   // particle clamp below would land bx at -1 and throw on undefined.
   if (OBSTACLE_BANDS_COLS <= 0) return;
   const cellSize = OBSTACLE_CELL_SIZE;
   const cellCols = OBSTACLE_CELL_COLS;
   const cellRows = OBSTACLE_CELL_ROWS;
+  // ASLEEP used to gate this loop, on the assumption that an
+  // asleep particle = a frozen particle. That held when the only
+  // floor was a particle-pebble bed: pebbles slept at the world
+  // floor and the force loop genuinely zeroed their velocity. With
+  // the procedural rock terrain, "asleep" still gets set for any
+  // particle moving below SLEEP_SPEED_SQ -- including particles
+  // resting on top of seafloor rock -- but the force loop only
+  // freezes particles touching the world floor (y + r >= floorY).
+  // Asleep particles on a rock surface still get buoyancy + brownian
+  // applied, accumulate a slow drift, and tunnel into the rock since
+  // this loop never runs for them. Drop the ASLEEP skip; the
+  // OBSTACLE_CELL_GRID early-reject below is the real fast path.
   for (let k = 0; k < n; k++) {
-    if (ASLEEP[k]) continue;
     const yk = Y[k]; const rk = R[k];
     if (yk + rk < minY) continue;
     const xk = X[k];
