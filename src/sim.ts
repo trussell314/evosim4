@@ -5226,6 +5226,14 @@ function updateCreatures(world: World, dt: number): void {
           // Chemicals outside the sensor set are not ingestable via
           // the legacy op -- a future op can lift that gate.
           if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;
+          // Pebble-grade mineral grains are sediment, not food. A
+          // cell that touches one with INGEST 0 active used to
+          // swallow the whole rock (~40x its own mass), which is
+          // how the sand bed slowly settled to a single layer over
+          // long runs. Skip anything pebble-sized; cells get their
+          // mineral nutrition from the small mineral particles
+          // replenish spawns + the dissolved-ambient pool.
+          if (chemId === CHEM_MIN && p.r >= SAND_BIG_R_MIN) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
