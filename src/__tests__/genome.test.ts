@@ -19,35 +19,15 @@ import {
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
-  gradX: number[]; gradY: number[]; density: number[];
-  wallX: number; wallY: number; headX: number; headY: number; temp: number; pheromone: number;
-  creatureDx: number; creatureDy: number; creatureDist: number; creatureMass: number;
-  light: number;
+  chemConc: number[];
 }> = {}): VMSensors {
-  return {
-    gradX: new Float32Array(overrides.gradX ?? [0, 0, 0, 0, 0, 0]),
-    gradY: new Float32Array(overrides.gradY ?? [0, 0, 0, 0, 0, 0]),
-    density: new Float32Array(overrides.density ?? [0, 0, 0, 0, 0, 0]),
-    wallX: overrides.wallX ?? 0,
-    wallY: overrides.wallY ?? 0,
-    headX: overrides.headX ?? 0,
-    headY: overrides.headY ?? 0,
-    temp: overrides.temp ?? 0,
-    pheromone: overrides.pheromone ?? 0,
-    creatureDx: overrides.creatureDx ?? 0,
-    creatureDy: overrides.creatureDy ?? 0,
-    creatureDist: overrides.creatureDist ?? 0,
-    creatureMass: overrides.creatureMass ?? 0,
-    light: overrides.light ?? 0,
-    pressureX: 0,
-    pressureY: 0,
-    velX: 0,
-    velY: 0,
-    emBands: new Float32Array(3),
-    chemConc: new Float32Array(96),
-    kinOverlap: 0,
-    neighborHash: 0,
-  };
+  const cc = new Float32Array(96);
+  if (overrides.chemConc) {
+    for (let i = 0; i < overrides.chemConc.length && i < cc.length; i++) {
+      cc[i] = overrides.chemConc[i];
+    }
+  }
+  return { chemConc: cc };
 }
 
 function makeSelf(overrides: Partial<{
@@ -236,59 +216,28 @@ describe("VM scratch registers (LOAD / STORE)", () => {
 });
 
 describe("VM sensors", () => {
-  it("SENSE_GRAD_X/Y read by material index", () => {
-    expect(exec([OP.SENSE_GRAD_X, 3, HALT_MARK], { sensors: makeSensors({ gradX: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([40]);
-    expect(exec([OP.SENSE_GRAD_Y, 5, HALT_MARK], { sensors: makeSensors({ gradY: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([60]);
-  });
-  it("sensor operand wraps via modulo", () => {
-    expect(exec([OP.SENSE_GRAD_X, 8, HALT_MARK], { sensors: makeSensors({ gradX: [11, 12, 13, 14, 15, 16] }) }).state.stack).toEqual([13]);
-  });
   it("SELF_ENERGY", () => {
     expect(exec([OP.SELF_ENERGY, HALT_MARK], { self: makeSelf({ energy: 77 }) }).state.stack).toEqual([77]);
-  });
-  it("SENSE_CHEMICAL reads internal pool by chem id", () => {
-    const conc = new Float32Array(96);
-    conc[5] = 42;
-    expect(exec([OP.SENSE_CHEMICAL, 5, HALT_MARK], { sensors: { ...makeSensors(), chemConc: conc } }).state.stack).toEqual([42]);
-  });
-  it("SENSE_VX / SENSE_VY read mechano-gated velocity from sensors", () => {
-    const sensors = { ...makeSensors(), velX: 11, velY: -7 };
-    expect(exec([OP.SENSE_VX, OP.SENSE_VY, HALT_MARK], { sensors }).state.stack).toEqual([11, -7]);
-  });
-  it("SENSE_CRE_DX/DY/DIST/MASS", () => {
-    const sensors = makeSensors({ creatureDx: 7, creatureDy: -3, creatureDist: 15, creatureMass: 42 });
-    expect(exec([OP.SENSE_CRE_DX, OP.SENSE_CRE_DY, OP.SENSE_CRE_DIST, OP.SENSE_CRE_MASS, HALT_MARK], { sensors }).state.stack).toEqual([7, -3, 15, 42]);
   });
   it("SELF_MASS", () => {
     expect(exec([OP.SELF_MASS, HALT_MARK], { self: makeSelf({ mass: 88 }) }).state.stack).toEqual([88]);
   });
-  it("SENSE_LIGHT", () => {
-    expect(exec([OP.SENSE_LIGHT, HALT_MARK], { sensors: makeSensors({ light: 0.73 }) }).state.stack).toEqual([0.73]);
+  it("SELF_MEMBRANE", () => {
+    expect(exec([OP.SELF_MEMBRANE, HALT_MARK], { self: makeSelf({ membrane: 13.5 }) }).state.stack).toEqual([13.5]);
   });
-  it("SENSE_DENSITY reads count by material index", () => {
-    expect(exec([OP.SENSE_DENSITY, 3, HALT_MARK], { sensors: makeSensors({ density: [1, 2, 3, 4, 5, 6] }) }).state.stack).toEqual([4]);
+  it("SENSE_CHEMICAL reads internal pool by chem id", () => {
+    const cc = new Float32Array(96);
+    cc[5] = 42;
+    expect(exec([OP.SENSE_CHEMICAL, 5, HALT_MARK], { sensors: { chemConc: cc } }).state.stack).toEqual([42]);
   });
-  it("SENSE_DENSITY operand wraps via modulo", () => {
-    expect(exec([OP.SENSE_DENSITY, 7, HALT_MARK], { sensors: makeSensors({ density: [10, 20, 30, 40, 50, 60] }) }).state.stack).toEqual([20]);
-  });
-  it("SENSE_WALL_X / WALL_Y", () => {
-    expect(exec([OP.SENSE_WALL_X, OP.SENSE_WALL_Y, HALT_MARK], { sensors: makeSensors({ wallX: -0.7, wallY: 0.3 }) }).state.stack).toEqual([-0.7, 0.3]);
-  });
-  it("SENSE_HEAD_X / HEAD_Y", () => {
-    expect(exec([OP.SENSE_HEAD_X, OP.SENSE_HEAD_Y, HALT_MARK], { sensors: makeSensors({ headX: 0.6, headY: -0.8 }) }).state.stack).toEqual([0.6, -0.8]);
-  });
-  it("SENSE_TEMP pushes local water temperature", () => {
-    expect(exec([OP.SENSE_TEMP, HALT_MARK], { sensors: makeSensors({ temp: 22.5 }) }).state.stack).toEqual([22.5]);
-  });
-  it("SENSE_PHEROMONE pushes local field concentration", () => {
-    expect(exec([OP.SENSE_PHEROMONE, HALT_MARK], { sensors: makeSensors({ pheromone: 7 }) }).state.stack).toEqual([7]);
-  });
-  it("EMIT pops a non-negative value into out.emit", () => {
-    expect(exec([OP.PUSH8, 9, OP.EMIT, HALT_MARK]).out.emit).toBe(9);
-    // Negative input clamps to 0.
-    expect(exec([OP.PUSH8, 0xFE /* -2 */, OP.EMIT, HALT_MARK]).out.emit).toBe(0);
-    // Multiple emits accumulate.
-    expect(exec([OP.PUSH8, 3, OP.EMIT, OP.PUSH8, 4, OP.EMIT, HALT_MARK]).out.emit).toBe(7);
+  it("SENSE_CHEMICAL operand wraps mod CHEMICAL_COUNT (96)", () => {
+    // K-5: every external reading hits SENSE_CHEMICAL. Activated chems
+    // live around id 23 (chemo biopolymer X); a genome that wants
+    // "gradient toward food" reads that id directly.
+    const cc = new Float32Array(96);
+    cc[23] = 9.5;
+    // 23 + 96 = 119; mod 96 = 23, so the read still lands at slot 23.
+    expect(exec([OP.SENSE_CHEMICAL, 119, HALT_MARK], { sensors: { chemConc: cc } }).state.stack).toEqual([9.5]);
   });
 });
 
@@ -420,12 +369,14 @@ describe("disassemble", () => {
   });
   it("renders material operand by name when provided", () => {
     const names = ["rock", "sand", "clay", "organic", "lipid", "gas"];
-    const text = disassemble(new Uint8Array([OP.SENSE_GRAD_X, 3, OP.EXCRETE, 7, HALT_MARK]), names);
-    expect(text).toContain("sense_grad_x organic");
+    // EXCRETE / INGEST still pass through the material-operand naming
+    // map. With operand 7 mod 6 = 1, the name is "sand".
+    const text = disassemble(new Uint8Array([OP.INGEST, 3, OP.EXCRETE, 7, HALT_MARK]), names);
+    expect(text).toContain("ingest organic");
     expect(text).toContain("excrete sand");
   });
   it("renders material operand by index without names", () => {
-    expect(disassemble(new Uint8Array([OP.SENSE_GRAD_X, 2, HALT_MARK]))).toContain("sense_grad_x 2");
+    expect(disassemble(new Uint8Array([OP.INGEST, 2, HALT_MARK]))).toContain("ingest 2");
   });
   it("renders unknown bytes as db 0xNN", () => {
     expect(disassemble(new Uint8Array([0x7A]))).toContain("db 0x7a");
@@ -496,9 +447,11 @@ describe("makeDefaultGenome", () => {
   });
   it("contains the starter behavior bytes", () => {
     const g = makeDefaultGenome();
-    expect(Array.from(g)).toContain(OP.SENSE_GRAD_X);
+    // K-5: external sensing went through SENSE_CHEMICAL only.
+    expect(Array.from(g)).toContain(OP.SENSE_CHEMICAL);
     expect(g[g.length - 1]).toBe(OP.REPRODUCE);
     expect(Array.from(g)).toContain(OP.THRUST);
     expect(Array.from(g)).toContain(OP.SENSE_AMP);
+    expect(Array.from(g)).toContain(OP.SYNTH);
   });
 });

@@ -1231,7 +1231,7 @@ function render(): void {
 // Optional field overlay. Cycles off -> temp -> density via the `H` key.
 // Drawn on top of particles + cells but below the phylogeny strip so it
 // reads as an atmospheric tint rather than blocking the bodies.
-type HeatmapMode = "off" | "temp" | "density" | "pheromone";
+type HeatmapMode = "off" | "temp" | "density";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
@@ -1239,8 +1239,7 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "h" || e.key === "H") {
     heatmapMode =
       heatmapMode === "off" ? "temp" :
-      heatmapMode === "temp" ? "density" :
-      heatmapMode === "density" ? "pheromone" : "off";
+      heatmapMode === "temp" ? "density" : "off";
   } else if (e.key === "p" || e.key === "P") {
     // Profile lives on the worker's world. We can't read it back
     // synchronously, but the snapshot carries world.profile when set,
@@ -1259,7 +1258,6 @@ function dumpProfile(): void {
   if (!p || p.ticks === 0) return;
   const n = p.ticks;
   const rows: { phase: string; ms: number }[] = [
-    { phase: "pheromone", ms: p.pheromone / n },
     { phase: "bonds", ms: p.bonds / n },
     { phase: "forces", ms: p.forces / n },
     { phase: "creatures (VM+chem)", ms: p.creatures / n },
@@ -1330,35 +1328,6 @@ function drawHeatmap(): void {
   ctx.fillText(`heatmap: particle density (max ${maxC}/cell, H toggles)`, 8, surfaceY + 14);
     return;
   }
-  if (heatmapMode === "pheromone") {
-    // Render pheromone field directly. Grid size is snapshot.pheromoneCols/Rows.
-    let maxP = 0.001;
-    const pher = snapshot.pheromone;
-    for (let i = 0; i < pher.length; i++) if (pher[i] > maxP) maxP = pher[i];
-    const pCols = snapshot.pheromoneCols;
-    const pRows = snapshot.pheromoneRows;
-    const pCell = snapshot.width / pCols;
-    ctx.globalAlpha = HEATMAP_ALPHA;
-    for (let r = 0; r < pRows; r++) {
-      for (let c = 0; c < pCols; c++) {
-        const v = pher[r * pCols + c];
-        if (v <= 0) continue;
-        ctx.fillStyle = heatColorPheromone(v / maxP);
-        ctx.fillRect(c * pCell, r * pCell, pCell, pCell);
-      }
-    }
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.fillText(`heatmap: pheromone field (max ${maxP.toFixed(1)}, H toggles)`, 8, surfaceY + 14);
-  }
-}
-
-function heatColorPheromone(x: number): string {
-  // Cool purple → bright magenta gradient. Distinct from density yellow.
-  const r = Math.round(60 + 200 * x);
-  const g = Math.round(20 + 60 * x);
-  const b = Math.round(80 + 175 * x);
-  return `rgb(${r},${g},${b})`;
 }
 
 function heatColorTemp(t: number): string {
@@ -2029,7 +1998,7 @@ function statsLine(): string {
   const p = snapshot.profile;
   if (p && p.ticks > 0) {
     const total =
-      p.pheromone + p.bonds + p.forces + p.creatures +
+      p.bonds + p.forces + p.creatures +
       p.particleColl + p.creatureColl + p.sedimentColl + p.obstacleColl +
       p.walls + p.aerate + p.replenish + p.prune;
     s += `  [prof ${ (total / p.ticks).toFixed(2) }ms/tick over ${p.ticks}t]`;
@@ -2230,8 +2199,8 @@ function trophicMode(genome: Uint8Array): TrophicMode {
 // a human can read at a glance.
 function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<string>): string {
   let thrust = false, turn = false, reproduce = false;
-  let predate = false, engulf = false, emit = false, adhere = false;
-  let repair = false, selfModifies = false;
+  let predate = false, engulf = false;
+  let selfModifies = false;
   let hasJump = false, hasCmp = false;
   let synthBio = false, synthAA = false, synthFA = false, synthEnz = false, synthChl = false, synthRibo = false;
   const ingest = new Set<number>();
@@ -2248,9 +2217,6 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.REPRODUCE: reproduce = true; break;
       case OP.PREDATE: predate = true; break;
       case OP.ENGULF: engulf = true; break;
-      case OP.EMIT: emit = true; break;
-      case OP.ADHERE: adhere = true; break;
-      case OP.REPAIR: repair = true; break;
       case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL: selfModifies = true; break;
       case OP.SYNTH: {
         const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
@@ -2270,18 +2236,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
       case OP.LT: case OP.GT: case OP.EQ: case OP.NOT: case OP.AND: case OP.OR: hasCmp = true; break;
-      case OP.SENSE_GRAD_X: case OP.SENSE_GRAD_Y: sensors.add("food gradient"); break;
-      case OP.SENSE_DENSITY: sensors.add("crowding"); break;
-      case OP.SENSE_LIGHT: sensors.add("light"); break;
-      case OP.SENSE_TEMP: sensors.add("temperature"); break;
-      case OP.SENSE_PHEROMONE: sensors.add("pheromone"); break;
-      case OP.SENSE_WALL_X: case OP.SENSE_WALL_Y: sensors.add("walls"); break;
-      case OP.SENSE_HEAD_X: case OP.SENSE_HEAD_Y: sensors.add("heading"); break;
-      case OP.SENSE_CRE_DX: case OP.SENSE_CRE_DY:
-      case OP.SENSE_CRE_DIST: case OP.SENSE_CRE_MASS: sensors.add("other cells"); break;
       case OP.SENSE_CHEMICAL: sensors.add("chemicals"); break;
-      case OP.SENSE_EM: sensors.add("EM/light"); break;
-      case OP.SENSE_PRESSURE_X: case OP.SENSE_PRESSURE_Y: sensors.add("pressure"); break;
     }
   });
   const gated = hasJump && hasCmp;
@@ -2355,9 +2310,6 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   // since the phylogeny strip's lifespan already conveys that).
   if (reproduce) parts.push(gated ? "Divides conditionally." : "Divides reflexively (no gate).");
   const extras: string[] = [];
-  if (repair) extras.push("repairs DNA");
-  if (emit) extras.push("emits pheromone");
-  if (adhere) extras.push("adheres");
   if (selfModifies) extras.push("self-modifies");
   if (turn && !thrust) extras.push("turns in place");
   if (extras.length > 0) parts.push(extras.join(", ").replace(/^./, (c) => c.toUpperCase()) + ".");

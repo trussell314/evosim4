@@ -28,7 +28,6 @@ test.skip("profile under load", () => {
     { name: "sediment coll",       ms: p.sedimentColl / n },
     { name: "obstacle coll",       ms: p.obstacleColl / n },
     { name: "bonds",               ms: p.bonds / n },
-    { name: "pheromone",           ms: p.pheromone / n },
     { name: "aerate",              ms: p.aerate / n },
     { name: "replenish",           ms: p.replenish / n },
     { name: "prune",               ms: p.prune / n },

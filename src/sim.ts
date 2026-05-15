@@ -1177,13 +1177,6 @@ export interface World {
   // atmosphere; cells stay submerged below it; gas particles that drift
   // up past it escape to the atmosphere. Aeration drops fresh O2-rich
   // gas particles in just below the surface at a steady rate.
-  // 2D pheromone field on a coarse grid. Cells EMIT into the field at
-  // their position and SENSE the local concentration. Diffuses + decays
-  // each tick so signals fade and spread. Stigmergy substrate: alarm
-  // calls, mate-finding, "I ate good food here" trails.
-  pheromone: Float32Array;
-  pheromoneCols: number;
-  pheromoneRows: number;
   surfaceY: number;
   // Visible / physical vertical amplitude of the surface wave. The wall
   // and the renderer both use this so lipids (which float to the surface)
@@ -1265,7 +1258,6 @@ export interface World {
 
 export interface WorldProfile {
   ticks: number;
-  pheromone: number;
   bonds: number;
   forces: number;
   creatures: number;
@@ -1282,7 +1274,7 @@ export interface WorldProfile {
 export function makeProfile(): WorldProfile {
   return {
     ticks: 0,
-    pheromone: 0, bonds: 0, forces: 0, creatures: 0,
+    bonds: 0, forces: 0, creatures: 0,
     particleColl: 0, creatureColl: 0, sedimentColl: 0, obstacleColl: 0,
     walls: 0, aerate: 0, replenish: 0, prune: 0,
   };
@@ -1290,7 +1282,7 @@ export function makeProfile(): WorldProfile {
 
 export function resetProfile(p: WorldProfile): void {
   p.ticks = 0;
-  p.pheromone = 0; p.bonds = 0; p.forces = 0; p.creatures = 0;
+  p.bonds = 0; p.forces = 0; p.creatures = 0;
   p.particleColl = 0; p.creatureColl = 0; p.sedimentColl = 0;
   p.obstacleColl = 0;
   p.walls = 0; p.aerate = 0; p.replenish = 0; p.prune = 0;
@@ -1322,91 +1314,6 @@ export function resizeWorld(world: World, width: number, height: number): void {
   world.aerationRate = world.width * AERATION_PER_PX;
   world.particleTarget = Math.max(100, Math.round(world.width * world.height * PARTICLE_DENSITY_PER_AREA));
   world.particleSpawnRate = Math.min(MAX_SPAWN_PER_SEC, Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO));
-  resizePheromone(world);
-}
-
-function resizePheromone(world: World): void {
-  const cols = Math.max(1, Math.ceil(world.width / PHEROMONE_CELL));
-  const rows = Math.max(1, Math.ceil(world.height / PHEROMONE_CELL));
-  if (cols === world.pheromoneCols && rows === world.pheromoneRows && world.pheromone.length === cols * rows) {
-    return;
-  }
-  world.pheromone = new Float32Array(cols * rows);
-  world.pheromoneCols = cols;
-  world.pheromoneRows = rows;
-}
-
-export function pheromoneIndex(world: World, x: number, y: number): number {
-  const cx = Math.max(0, Math.min(world.pheromoneCols - 1, Math.floor(x / PHEROMONE_CELL)));
-  const cy = Math.max(0, Math.min(world.pheromoneRows - 1, Math.floor(y / PHEROMONE_CELL)));
-  return cy * world.pheromoneCols + cx;
-}
-
-// Pheromone field decay + diffusion. Called once per tick from step().
-// O(cols*rows): cheap at 32px cells on a 1920x1080 canvas (~2000 cells).
-// Scratch buffer for evolvePheromone -- preallocated module-level so
-// we don't churn the GC with a fresh Float32Array every tick. Resized
-// in resizePheromone alongside world.pheromone.
-let PHEROMONE_NEXT = new Float32Array(0);
-const PHEROMONE_EPS = 1e-4;
-function evolvePheromone(world: World, dt: number): void {
-  const cols = world.pheromoneCols;
-  const rows = world.pheromoneRows;
-  const f = world.pheromone;
-  const decay = Math.max(0, 1 - PHEROMONE_DECAY_PER_SEC * dt);
-  const diff = Math.max(0, Math.min(1, PHEROMONE_DIFFUSE_PER_SEC * dt));
-  // Decay + scan: shrink in place, and track whether any cell still
-  // has a meaningful value. If the field is empty we can bail before
-  // the diffusion pass.
-  let anyActive = false;
-  for (let i = 0; i < f.length; i++) {
-    const v = f[i] * decay;
-    f[i] = v;
-    if (v > PHEROMONE_EPS) anyActive = true;
-  }
-  if (!anyActive || diff <= 0 || cols < 2 || rows < 2) return;
-  if (PHEROMONE_NEXT.length < f.length) PHEROMONE_NEXT = new Float32Array(f.length);
-  const next = PHEROMONE_NEXT;
-  const oneMinusDiff = 1 - diff;
-  // Interior cells: every cell has 4 neighbors; no boundary checks.
-  // Skip the 4-edge frame which is handled in the boundary pass below.
-  for (let y = 1; y < rows - 1; y++) {
-    const row = y * cols;
-    for (let x = 1; x < cols - 1; x++) {
-      const i = row + x;
-      const avg = (f[i - 1] + f[i + 1] + f[i - cols] + f[i + cols]) * 0.25;
-      next[i] = f[i] * oneMinusDiff + avg * diff;
-    }
-  }
-  // Boundary cells: each has 2 or 3 neighbors. Handle the four edges.
-  for (let x = 0; x < cols; x++) {
-    // top row
-    const it = x;
-    let s = 0, n = 0;
-    if (x > 0)        { s += f[it - 1];    n++; }
-    if (x < cols - 1) { s += f[it + 1];    n++; }
-    s += f[it + cols]; n++;
-    next[it] = f[it] * oneMinusDiff + (s / n) * diff;
-    // bottom row
-    const ib = (rows - 1) * cols + x;
-    s = 0; n = 0;
-    if (x > 0)        { s += f[ib - 1];    n++; }
-    if (x < cols - 1) { s += f[ib + 1];    n++; }
-    s += f[ib - cols]; n++;
-    next[ib] = f[ib] * oneMinusDiff + (s / n) * diff;
-  }
-  for (let y = 1; y < rows - 1; y++) {
-    // left column
-    const il = y * cols;
-    let s = f[il + 1] + f[il - cols] + f[il + cols];
-    next[il] = f[il] * oneMinusDiff + (s / 3) * diff;
-    // right column
-    const ir = il + (cols - 1);
-    s = f[ir - 1] + f[ir - cols] + f[ir + cols];
-    next[ir] = f[ir] * oneMinusDiff + (s / 3) * diff;
-  }
-  // Copy next -> f via subarray-set for a single C-side memcpy.
-  f.set(next.subarray(0, f.length));
 }
 const MAX_CREATURES = 400;
 
@@ -1460,12 +1367,6 @@ const BIRTH_OFFSET_MULT = 3.0;
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
 const LIGHT_DECAY = 250;
-// Static depth contribution to vertical pressure. Scales (y - surfaceY)
-// to a comparable magnitude with the wave / current force components
-// so the genome's threshold logic gets a meaningful spread across the
-// water column. Tuned to give ~100 at the bottom of an 800x600 world.
-const PRESSURE_PER_DEPTH = 0.2;
-
 const DRAG_REF_R = 4;
 const MIN_CREATURE_R = 4;
 // Cell density: how strongly reserve composition shifts the effective
@@ -1624,11 +1525,6 @@ const CHEM_MARKER0 = 41;
 // K-3 activation pass uses CHEM_ACT_*, CHEM_MAGNETORECEPTOR.
 // K-4 wires CHEM_BOND / CHEM_REPAIR as biosynthesis products of the
 // unified SYNTH op (gateMask SYNTH_BIT_BOND / SYNTH_BIT_REPAIR).
-// Receptor saturation reference. Sat curve = pool / (pool + REF) so
-// pool at REF gives sat=0.5; pool at 9*REF gives sat=0.9. Set low so
-// even modest receptor investment yields most of the signal -- a
-// cell hitting pool ~0.5 already reads at sat 0.83.
-const RECEPTOR_REF = 0.1;
 const MRNA_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
@@ -2168,19 +2064,6 @@ function installNamedReactions(out: Reaction[]): void {
 const FP_SIZE = 8;
 const fpScratchIds = new Uint8Array(FP_SIZE);
 const fpScratchVals = new Float32Array(FP_SIZE);
-function popcount32(x: number): number {
-  x = (x | 0) - ((x >>> 1) & 0x55555555);
-  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-  return ((((x + (x >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24) | 0;
-}
-function fingerprintOverlap(a: Creature, b: Creature): number {
-  const sa = a.store; const sb = b.store;
-  const ai = a.idx; const bi = b.idx;
-  return popcount32(sa.fpW0[ai] & sb.fpW0[bi])
-       + popcount32(sa.fpW1[ai] & sb.fpW1[bi])
-       + popcount32(sa.fpW2[ai] & sb.fpW2[bi])
-       + popcount32(sa.fpW3[ai] & sb.fpW3[bi]);
-}
 function updateSurfaceFingerprint(c: Creature): void {
   const s = c.store; const i = c.idx;
   const cols = s.chemCols;
@@ -2367,8 +2250,16 @@ const MIN_VIABLE_AMINOACID = 0.001;
 // is effectively stable; an old cell accumulates DNA damage gradually.
 // At age 60s: ~7e-3/s (1 mutation per ~140s); 100s: ~0.02/s; 300s: ~0.18/s.
 const SOMATIC_MUTATION_AGE_COEF = 8e-7;
-const REPAIR_ATP_PER_OP = 0.5;
 const REPAIR_WINDOW_TICKS = 30;
+// K-5: chemistry-mediated DNA repair. CHEM_REPAIR pool above this
+// threshold each tick refreshes the cell's repairTicks window, which
+// somaticMutate already consults to suppress drift. CHEM_BOND pool
+// above its threshold lets two adjacent cells auto-bond. Both
+// thresholds are calibrated against the receptor RECEPTOR_REF
+// constant (0.1) so a single SYNTH op per couple of seconds keeps
+// either pool active.
+const REPAIR_ACTIVE_THRESH = 0.1;
+const BOND_FORMATION_THRESH = 0.1;
 // Horizontal current: amplitude (px/s^2 of acceleration) and the rate of
 // the slow direction-reversal oscillation (rad/sec; 2pi/600 ~ 10 sim-min).
 // Currently disabled (0) -- when on it piles sediment against one wall
@@ -2433,14 +2324,6 @@ function initialAmbient(): Float32Array {
   // ticks aren't dominated by ambient transients.
   return new Float32Array(AMBIENT_TARGET);
 }
-
-// Pheromone field: coarse grid cell size, per-tick decay rate, and
-// neighbor-blend (diffusion) fraction. Tuned so a single big emit
-// (e.g. 50) fades to background in a few seconds and spreads about
-// one grid cell per tick of diffusion.
-const PHEROMONE_CELL = 32;
-const PHEROMONE_DECAY_PER_SEC = 0.5;
-const PHEROMONE_DIFFUSE_PER_SEC = 0.6;
 
 // Adhesion: how many partners a single cell can be bonded to and the
 // spring + break distances. Bonds are mutual; the spring rest length
@@ -3044,9 +2927,6 @@ export function createWorld(
     tempPatchAmp: 3,
     tempPatchLength: 360,
     tempPatchPeriod: 38,
-    pheromone: new Float32Array(0),
-    pheromoneCols: 0,
-    pheromoneRows: 0,
     restitution: 0.15, xWallRestitution: 0.4, zWallRestitution: 0.6,
     collisionIters: 1,
     species: new Map(),
@@ -3064,8 +2944,6 @@ export function createWorld(
     vmInstrBudget: DEFAULT_VM_INSTR_BUDGET,
     obstacles: [],
   };
-  // Allocate the pheromone grid sized to the world.
-  resizePheromone(world);
   // Reset module-level caches that aren't on the world object. These
   // are process-globals indexed by particle/creature slot or by sim
   // time -- if a previous world left them populated, the new world
@@ -4239,10 +4117,8 @@ export function step(world: World, dt: number): void {
   const p = world.profile;
   if (p) {
     let m = performance.now();
-    evolvePheromone(world, dt);
-    let n = performance.now(); p.pheromone += n - m; m = n;
     applyBondSprings(world, dt);
-    n = performance.now(); p.bonds += n - m; m = n;
+    let n = performance.now(); p.bonds += n - m; m = n;
     applyForces(world, dt);
     n = performance.now(); p.forces += n - m; m = n;
     updateCreatures(world, dt);
@@ -4283,7 +4159,6 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.prune += n - m;
     p.ticks++;
   } else {
-    evolvePheromone(world, dt);
     applyBondSprings(world, dt);
     applyForces(world, dt);
     updateCreatures(world, dt);
@@ -4830,20 +4705,7 @@ function applyForces(world: World, dt: number): void {
 }
 
 const VM_SENSORS: VMSensors = {
-  gradX: new Float32Array(6),
-  gradY: new Float32Array(6),
-  density: new Float32Array(6),
-  wallX: 0, wallY: 0,
-  headX: 0, headY: 0,
-  temp: 0, pheromone: 0,
-  creatureDx: 0, creatureDy: 0, creatureDist: 0, creatureMass: 0,
-  light: 0,
-  emBands: new Float32Array(3),
-  pressureX: 0, pressureY: 0,
-  velX: 0, velY: 0,
   chemConc: new Float32Array(CHEMICAL_COUNT),
-  kinOverlap: 0,
-  neighborHash: 0,
 };
 const VM_SELF: VMSelf = {
   energy: 0,
@@ -5016,14 +4878,11 @@ function updateCreatures(world: World, dt: number): void {
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, vmOut, ec);
     if (sp) sp.vmTicks++;
     spendATP(c, vmOut.instructions * ENERGY_PER_INSTRUCTION);
-    if (vmOut.repair > 0) {
-      // Pay per-op so spamming REPAIR is expensive; refresh the window.
-      // 30 ticks ~= 0.5 sim-sec at FIXED_DT 1/60, enough to span a
-      // damage event without making the cell mutation-proof for life.
-      const want = vmOut.repair * REPAIR_ATP_PER_OP;
-      const paid = spendATP(c, want);
-      if (paid > 0) c.repairTicks = Math.max(c.repairTicks, REPAIR_WINDOW_TICKS);
-    }
+    // K-5: somatic-mutation suppression is now driven by CHEM_REPAIR
+    // pool (set by SYNTH REPAIR). The somaticMutate path consults
+    // c.repairTicks, but that window is now refreshed continuously
+    // by the per-tick repair-chem check below rather than by a
+    // discrete REPAIR op.
     // Apply pending genome self-modifications after VM exits. SPLICE_*
     // changed length, which would invalidate PC mid-tick; we let the
     // rest of this tick's ops finish first, then resize here.
@@ -5048,24 +4907,17 @@ function updateCreatures(world: World, dt: number): void {
 
     if (vmOut.reproduce) tryReproduce(c, world);
 
-    // Pheromone emission: cell adds intensity to the field at its
-    // position. Subsequent ticks decay + diffuse it.
-    if (vmOut.emit > 0) {
-      world.pheromone[pheromoneIndex(world, c.x, c.y)] += vmOut.emit;
-    }
-
-    // Adhesion: bond with the nearest creature in scanRange if not
-    // already bonded. Cap each cell at MAX_BONDS to keep the spring
-    // pass cheap and bounded.
-    if (vmOut.adhere && c.bonds.length < MAX_BONDS) {
-      // No engine-side recognition gate: the genome decides via
-      // SENSE_KIN / SENSE_NEIGHBOR_HASH before issuing ADHERE. The
-      // engine just wires up whatever the cell asked for. Same
-      // pattern as ENGULF / PREDATE.
+    // K-5: passive bond formation. Both this cell and the nearest
+    // neighbor must hold CHEM_BOND above BOND_FORMATION_THRESH; bonds
+    // self-form (and self-break in the bond-spring pass when either
+    // side drops below the threshold). No op required: the genome
+    // controls bonding by deciding whether to SYNTH BOND.
+    if (c.bonds.length < MAX_BONDS && c.store.chemCols[CHEM_BOND][c.idx] >= BOND_FORMATION_THRESH) {
       let nearest: Creature | null = null;
       let bestSq = (c.r + 24) * (c.r + 24);
       forCreaturesNear(c.x, c.y, c.r + 24, (other) => {
         if (other === c || eaten.has(other) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
+        if (other.store.chemCols[CHEM_BOND][other.idx] < BOND_FORMATION_THRESH) return;
         const dx = other.x - c.x;
         const dy = other.y - c.y;
         const dsq = dx * dx + dy * dy;
@@ -5075,6 +4927,14 @@ function updateCreatures(world: World, dt: number): void {
         c.bonds.push(nearest);
         (nearest as Creature).bonds.push(c);
       }
+    }
+
+    // K-5: continuous DNA-repair gating. Each tick, any cell whose
+    // CHEM_REPAIR pool is above the threshold gets its repairTicks
+    // window topped up. somaticMutate already consults the window so
+    // a cell that holds repair_chem high stays mutation-suppressed.
+    if (c.store.chemCols[CHEM_REPAIR][c.idx] >= REPAIR_ACTIVE_THRESH) {
+      c.repairTicks = Math.max(c.repairTicks, REPAIR_WINDOW_TICKS);
     }
 
     // Advance any in-flight fission. When progress hits 1, the stashed
@@ -5676,204 +5536,17 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   noteCreatureBirth(world, child, c.speciesKey);
 }
 
-function populateSensors(c: Creature, world: World): void {
-  const range = c.senseRange;
-  const rangeSq = range * range;
-  // Per-material food gradient: signed pull vector summed over every visible
-  // particle of that material. Each contribution is range * (dx, dy) / dsq,
-  // so a particle at the edge of sense range contributes a unit vector, one
-  // at half-range contributes ~2x, etc. The scaling keeps magnitudes in a
-  // useful range for THRUST (which clamps to thrustAccel ~ 70).
-  // Per-material gradient + density sampled from the prebuilt
-  // SENSOR_BIN_* fields. Each cell visits a small 2D window of bins
-  // around its position; each bin contributes (count, centroid)
-  // weighted as if all its particles sit at the centroid.
-  for (let i = 0; i < 6; i++) {
-    VM_SENSORS.gradX[i] = 0;
-    VM_SENSORS.gradY[i] = 0;
-    VM_SENSORS.density[i] = 0;
-  }
-  const span = Math.ceil(range / SENSOR_BIN);
-  let cbx = Math.floor(c.x / SENSOR_BIN);
-  let cby = Math.floor(c.y / SENSOR_BIN);
-  if (cbx < 0) cbx = 0; else if (cbx >= SENSOR_BIN_COLS) cbx = SENSOR_BIN_COLS - 1;
-  if (cby < 0) cby = 0; else if (cby >= SENSOR_BIN_ROWS) cby = SENSOR_BIN_ROWS - 1;
-  const x0 = Math.max(0, cbx - span);
-  const x1 = Math.min(SENSOR_BIN_COLS - 1, cbx + span);
-  const y0 = Math.max(0, cby - span);
-  const y1 = Math.min(SENSOR_BIN_ROWS - 1, cby + span);
-  // K-2: bins are now keyed by chem id; map the legacy 6-slot operand
-  // (m) through SENSOR_CHEMS first.
-  for (let m = 0; m < 6; m++) {
-    const chemId = SENSOR_CHEMS[m];
-    const cnt = SENSOR_BIN_COUNT[chemId];
-    const sxArr = SENSOR_BIN_SUMX[chemId];
-    const syArr = SENSOR_BIN_SUMY[chemId];
-    let gx = 0, gy = 0, dens = 0;
-    for (let by = y0; by <= y1; by++) {
-      const row = by * SENSOR_BIN_COLS;
-      for (let bx = x0; bx <= x1; bx++) {
-        const bin = row + bx;
-        const n = cnt[bin];
-        if (n === 0) continue;
-        const cx_bin = sxArr[bin] / n;
-        const cy_bin = syArr[bin] / n;
-        const dx = cx_bin - c.x;
-        const dy = cy_bin - c.y;
-        const dsq = dx * dx + dy * dy;
-        if (dsq >= rangeSq || dsq < 1) continue;
-        const w = range / dsq;
-        gx += dx * w * n;
-        gy += dy * w * n;
-        dens += n;
-      }
-    }
-    VM_SENSORS.gradX[m] = gx;
-    VM_SENSORS.gradY[m] = gy;
-    VM_SENSORS.density[m] = dens;
-  }
-  // Push-from-wall vector: range * (1/distLeft - 1/distRight). Magnitude
-  // ~unit when the cell is at sense range from one wall and far from the
-  // opposite one; 0 at the midpoint.
-  const distLeft   = Math.max(1, c.x);
-  const distRight  = Math.max(1, world.width - c.x);
-  const distTop    = Math.max(1, c.y);
-  const distBottom = Math.max(1, world.height - c.y);
-  VM_SENSORS.wallX = range * (1 / distLeft - 1 / distRight);
-  VM_SENSORS.wallY = range * (1 / distTop  - 1 / distBottom);
-  // Normalized heading: unit vector when moving, zero at rest.
-  const speed = Math.sqrt(c.vx * c.vx + c.vy * c.vy);
-  if (speed > 0.01) {
-    VM_SENSORS.headX = c.vx / speed;
-    VM_SENSORS.headY = c.vy / speed;
-  } else {
-    VM_SENSORS.headX = 0;
-    VM_SENSORS.headY = 0;
-  }
-  // Single scalar for legacy SENSE_LIGHT.
-  const surfaceSun = solarLight(world);
-  const visible = Math.exp(-c.y / LIGHT_DECAY) * surfaceSun;
-  VM_SENSORS.light = visible;
-  // Three EM bands with different attenuation profiles. Band 0 = visible
-  // (same as legacy `light`); band 1 = long-penetrating (3x slower
-  // depth falloff -- a depth ratio signal when divided into band 0);
-  // band 2 = depth-invariant surface sun (constant regardless of how
-  // deep the cell is, so the genome can read "is the sun out" without
-  // depth interference).
-  VM_SENSORS.emBands[0] = visible;
-  VM_SENSORS.emBands[1] = Math.exp(-c.y / (LIGHT_DECAY * 3)) * surfaceSun;
-  VM_SENSORS.emBands[2] = surfaceSun;
-  VM_SENSORS.temp = temperatureAt(world, c.x, c.y);
-  VM_SENSORS.pheromone = world.pheromone[pheromoneIndex(world, c.x, c.y)];
-  // Internal chemistry sense: snapshot the cell's own chemical pool
-  // so SENSE_CHEMICAL <id> can read any of the 64 chemicals.
-  {
-    const cols = c.store.chemCols;
-    const i = c.idx;
-    const cc = VM_SENSORS.chemConc;
-    for (let k = 0; k < CHEMICAL_COUNT; k++) cc[k] = cols[k][i];
-  }
-  VM_SENSORS.creatureDx = 0;
-  VM_SENSORS.creatureDy = 0;
-  VM_SENSORS.creatureDist = range;
-  VM_SENSORS.creatureMass = 0;
-  VM_SENSORS.kinOverlap = 0;
-  VM_SENSORS.neighborHash = 0;
-  // Mechanical pressure on the cell. ax/ay are the per-tick force
-  // components recorded by applyForces; pressureY also picks up a
-  // static depth term so deep cells see a steady signal even when
-  // neutrally buoyant (otherwise gravity nets to zero against
-  // buoyancy and depth becomes invisible).
-  VM_SENSORS.pressureX = c.store.ax[c.idx];
-  const depthBelowSurface = Math.max(0, c.y - world.surfaceY);
-  VM_SENSORS.pressureY = c.store.ay[c.idx] + depthBelowSurface * PRESSURE_PER_DEPTH;
-  let bestCreatureSq = rangeSq;
-  let nearestOther: Creature | null = null;
-  forCreaturesNear(c.x, c.y, range, (other) => {
-    if (other === c) return;
-    const dx = other.x - c.x;
-    const dy = other.y - c.y;
-    const dsq = dx * dx + dy * dy;
-    if (dsq < bestCreatureSq) {
-      bestCreatureSq = dsq;
-      VM_SENSORS.creatureDx = dx;
-      VM_SENSORS.creatureDy = dy;
-      VM_SENSORS.creatureDist = Math.sqrt(dsq);
-      VM_SENSORS.creatureMass = creatureTotalMass(other);
-      nearestOther = other;
-    }
-  });
-  if (nearestOther !== null) {
-    const o = nearestOther as Creature;
-    VM_SENSORS.kinOverlap = fingerprintOverlap(c, o);
-    // Cheap byte hash of the neighbor's full fingerprint -- xor low
-    // and high words byte-by-byte so the genome can use it as a
-    // tribe / signature recognizer.
-    // Hash all four fingerprint words together for a single byte.
-    const w0 = o.store.fpW0[o.idx];
-    const w1 = o.store.fpW1[o.idx];
-    const w2 = o.store.fpW2[o.idx];
-    const w3 = o.store.fpW3[o.idx];
-    const xored = (w0 ^ w1 ^ w2 ^ w3) >>> 0;
-    VM_SENSORS.neighborHash =
-      ((xored & 0xFF) ^ ((xored >>> 8) & 0xFF) ^ ((xored >>> 16) & 0xFF) ^ ((xored >>> 24) & 0xFF)) & 0xFF;
-  }
-  // Phase H2: gate external sensors on the corresponding receptor
-  // chemical's pool. Sat(v) = v / (v + REF) gives a smooth ramp from
-  // 0 (no receptor) to 1 (saturated). Self-sensors (energy, mass,
-  // own chem pool, age, head direction) do NOT gate -- a cell always
-  // knows its own state. External signals scale toward zero when the
-  // cell hasn't invested in receptors.
-  const sCols = c.store.chemCols; const sI = c.idx;
-  const sat = (v: number) => v / (v + RECEPTOR_REF);
-  // K-1: photoreceptor pool sums the 3 band variants; chemoreceptor
-  // pool sums the 4 per-target variants. Phase K-3's activation pass
-  // will refine this, but the current gating block stays usable for
-  // the legacy SENSE_LIGHT / SENSE_GRAD ops until K-5 retires them.
-  const photoSat = sat(
-    sCols[CHEM_PHOTORECEPTOR_VISIBLE][sI]
-    + sCols[CHEM_PHOTORECEPTOR_LONG][sI]
-    + sCols[CHEM_PHOTORECEPTOR_SURFACE][sI]
-  );
-  const chemoSat = sat(
-    sCols[CHEM_CHEMORECEPTOR_BIOPOLYMER][sI]
-    + sCols[CHEM_CHEMORECEPTOR_MINERALS][sI]
-    + sCols[CHEM_CHEMORECEPTOR_FA][sI]
-    + sCols[CHEM_CHEMORECEPTOR_MARKER0][sI]
-  );
-  const mechSat = sat(sCols[CHEM_MECHANORECEPTOR][sI]);
-  const thermoSat = sat(sCols[CHEM_THERMORECEPTOR][sI]);
-  // Photo gates light + EM bands + pheromone trail-following.
-  VM_SENSORS.light *= photoSat;
-  VM_SENSORS.emBands[0] *= photoSat;
-  VM_SENSORS.emBands[1] *= photoSat;
-  VM_SENSORS.emBands[2] *= photoSat;
-  VM_SENSORS.pheromone *= photoSat;
-  // Chemo gates external gradients/density and neighbor-cell features.
-  for (let i = 0; i < 6; i++) {
-    VM_SENSORS.gradX[i] *= chemoSat;
-    VM_SENSORS.gradY[i] *= chemoSat;
-    VM_SENSORS.density[i] *= chemoSat;
-  }
-  VM_SENSORS.kinOverlap *= chemoSat;
-  VM_SENSORS.neighborHash = Math.round(VM_SENSORS.neighborHash * chemoSat);
-  VM_SENSORS.creatureDx *= chemoSat;
-  VM_SENSORS.creatureDy *= chemoSat;
-  VM_SENSORS.creatureMass *= chemoSat;
-  // Mech gates wall + pressure (cell's perception of physical forces).
-  VM_SENSORS.wallX *= mechSat;
-  VM_SENSORS.wallY *= mechSat;
-  VM_SENSORS.pressureX *= mechSat;
-  VM_SENSORS.pressureY *= mechSat;
-  // SENSE_VX/VY: own-velocity readouts via the mechanoreceptor pathway.
-  // Cells with no mechanoreceptor have no perception of their own motion.
-  VM_SENSORS.velX = c.vx * mechSat;
-  VM_SENSORS.velY = c.vy * mechSat;
-  // Thermo gates the local temperature reading. The signal scales the
-  // departure from a baseline (water midpoint ~15C); zero receptor =
-  // always-baseline (no information).
-  const baseTemp = 15;
-  VM_SENSORS.temp = baseTemp + (VM_SENSORS.temp - baseTemp) * thermoSat;
+function populateSensors(c: Creature, _world: World): void {
+  // K-5: external sensing collapsed onto SENSE_CHEMICAL <id>. The K-3
+  // activation pass (runActivation, called every tick) writes
+  // activated_photo/chemo/mech/thermo/mag chems into the same per-cell
+  // pool, gated on the corresponding receptor chem. So this snapshot
+  // is the entire VMSensors payload now -- everything else is fallout
+  // of the genome reading the right chem id.
+  const cols = c.store.chemCols;
+  const i = c.idx;
+  const cc = VM_SENSORS.chemConc;
+  for (let k = 0; k < CHEMICAL_COUNT; k++) cc[k] = cols[k][i];
 }
 
 function creatureTotalMass(c: Creature): number {
@@ -6797,12 +6470,6 @@ interface SavedWorld {
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
-  // Pheromone field as a flat array of cell values. Re-applied if the
-  // saved cols/rows match the freshly-resized world; otherwise
-  // dropped silently (different world dimensions = different grid).
-  // Older saves without this field reload with an empty pheromone
-  // field (creatures' established trails vanish until they re-emit).
-  pheromone?: { cols: number; rows: number; values: number[] };
 }
 
 function snapshotSparseCol(cols: Float32Array[], i: number, n: number): SavedSparse[] {
@@ -6906,9 +6573,6 @@ export function serializeWorld(w: World): string {
     species: speciesList,
     particles: w.particles.map(snapshotParticle),
     creatures: w.creatures.map(snapshotCreature),
-    pheromone: w.pheromone.length > 0
-      ? { cols: w.pheromoneCols, rows: w.pheromoneRows, values: Array.from(w.pheromone) }
-      : undefined,
   };
   // Second pass for bonds: now that every creature has an index in
   // saved.creatures, translate each cell's bond partners into those
@@ -6990,18 +6654,6 @@ export function applySavedWorld(world: World, json: string): boolean {
   while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
   world.species.clear();
   world.phylogenyEvents.length = 0;
-  // Restore pheromone trails if the saved grid dimensions match the
-  // current world's. Different dimensions (e.g., world resized
-  // between save and load) drop silently to a clean field.
-  world.pheromone.fill(0);
-  if (saved.pheromone
-    && saved.pheromone.cols === world.pheromoneCols
-    && saved.pheromone.rows === world.pheromoneRows
-    && saved.pheromone.values.length === world.pheromone.length) {
-    for (let i = 0; i < saved.pheromone.values.length; i++) {
-      world.pheromone[i] = saved.pheromone.values[i];
-    }
-  }
   world.t = saved.t;
   world.nextLineageRoot = saved.nextLineageRoot;
   world.extinctionCount = saved.extinctionCount;
@@ -7166,9 +6818,6 @@ export interface RenderSnapshot extends WorldEnv {
   // live cells whose root isn't in this set has lost its founder and
   // is being carried by descendants only.
   livingFounderLineages: number[];
-  pheromone: Float32Array;
-  pheromoneCols: number;
-  pheromoneRows: number;
   // Static across the run, but we ship it once so the renderer can
   // bake the terrain bitmap on the first snapshot it sees.
   obstacles: Obstacle[];
@@ -7306,9 +6955,6 @@ export function takeSnapshot(world: World): RenderSnapshot {
       }
       return roots;
     })(),
-    pheromone: new Float32Array(world.pheromone),
-    pheromoneCols: world.pheromoneCols,
-    pheromoneRows: world.pheromoneRows,
     obstacles: world.obstacles,
     particles,
     creatures,

@@ -654,7 +654,7 @@ pass before pushing.
   tick. Wire into `updateCreatures` after reactions. Add constants
   (ACT_DECAY, VEL_TO_FORCE_GAIN, TEMP_BASELINE, MAG_FIELD_X/Y).
 
-- **K-4 — Unified SYNTH op.** Retire OP.SYNTH_BIO/AA/FA/ENZ/CHL/MRNA/CAT.
+- **K-4 — Unified SYNTH op.** ✅ Retire OP.SYNTH_BIO/AA/FA/ENZ/CHL/MRNA/CAT.
   Add OP.SYNTH with 2-byte operand. Add the 14-kind dispatch in
   `runTick`. Add `synthMask` bits 0..13. Update reaction gating
   (existing reactions move to new bit indices). Substrate
@@ -665,7 +665,7 @@ pass before pushing.
   synth reactions. Add bond/repair synth reactions. Total new
   named-reaction slots needed: see K-5 reaction count.
 
-- **K-5 — Retire SENSE_* + ADHERE/REPAIR + EMIT.** Remove ops from
+- **K-5 — Retire SENSE_* + ADHERE/REPAIR + EMIT.** ✅ Remove ops from
   enum, runTick switch, `OPERANDS`, `MATERIAL_OPERAND`,
   `SENSE_OPS`. Trim `VMSensors` fields (`gradX/Y/density`, `wallX/Y`,
   `headX/Y`, `temp`, `pheromone`, `light`, `emBands`, `pressureX/Y`,

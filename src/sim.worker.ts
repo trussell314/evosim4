@@ -247,7 +247,7 @@ function maybeLogProfile(): void {
     const wfmt = (v: number) => (v / t).toFixed(2);
     // eslint-disable-next-line no-console
     console.log(
-      `[prof.sub] pher=${wfmt(wp.pheromone)} bonds=${wfmt(wp.bonds)} `
+      `[prof.sub] bonds=${wfmt(wp.bonds)} `
       + `forces=${wfmt(wp.forces)} creatures=${wfmt(wp.creatures)} `
       + `pColl=${wfmt(wp.particleColl)} cColl=${wfmt(wp.creatureColl)} `
       + `sColl=${wfmt(wp.sedimentColl)} oColl=${wfmt(wp.obstacleColl)} `

@@ -67,9 +67,6 @@ function quietWorld(): World {
     aerationRate: 0,
     tempSurface: 20, tempBottom: 20, tempPatchAmp: 0,
     tempPatchLength: 400, tempPatchPeriod: 40,
-    pheromone: new Float32Array(25 * 19),
-    pheromoneCols: 25,
-    pheromoneRows: 19,
     restitution: 0.2,
     xWallRestitution: 0.4,
     zWallRestitution: 0.6,
@@ -1541,17 +1538,19 @@ describe("aeration & surface escape", () => {
 });
 
 describe("adhesion (multicell bonds)", () => {
-  // ADHERE now requires surface-chemistry recognition (top-8 chem
-  // fingerprint overlap >= 4 bits). Test cells need matching
-  // chemistry profiles to count as kin.
-  const kinChem = {
-    membrane: 50, glucose: 30, o2: 10, aminoAcid: 20,
-    fattyAcid: 15, minerals: 25, adp: 12, co2: 8,
-  };
-  it("ADHERE bonds with the nearest other cell in range", () => {
+  // K-5: bonds now form passively when both partners hold CHEM_BOND
+  // (chem id 39) above BOND_FORMATION_THRESH. No op needed -- a
+  // genome that wants colonies just SYNTHs bond_chem.
+  const CHEM_BOND_ID = 39;
+  function seedBondPool(c: ReturnType<typeof makeCreature>): void {
+    c.store.chemCols[CHEM_BOND_ID][c.idx] = 1.0;
+  }
+  it("two cells with bond_chem auto-bond in range", () => {
     const w = quietWorld();
-    const a = makeCreature({ x: 400, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([OP.ADHERE, HALT_MARK]) });
-    const b = makeCreature({ x: 410, y: 300, energy: 50, molecules: kinChem, genome: new Uint8Array([HALT_MARK]) });
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    seedBondPool(a);
+    seedBondPool(b);
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds).toContain(b);
@@ -1583,29 +1582,6 @@ describe("adhesion (multicell bonds)", () => {
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds.length).toBe(0);
-  });
-});
-
-describe("pheromone field", () => {
-  it("EMIT deposits into the field at the cell's position; SENSE reads it", () => {
-    const w = quietWorld();
-    const c = makeCreature({
-      x: 100, y: 100, energy: 50,
-      genome: new Uint8Array([OP.PUSH8, 30, OP.EMIT, HALT_MARK]),
-    });
-    w.creatures.push(c);
-    step(w, 1 / 60);
-    // After step's evolvePheromone runs before updateCreatures, the
-    // freshly emitted value is in the field but not yet decayed/diffused.
-    // The cell deposits at (100,100) -> cell (3, 3) in the 32px grid.
-    const idx = 3 * w.pheromoneCols + 3;
-    expect(w.pheromone[idx]).toBeGreaterThan(0);
-  });
-  it("field decays toward zero with no emissions", () => {
-    const w = quietWorld();
-    w.pheromone[0] = 100;
-    for (let i = 0; i < 600; i++) step(w, 1 / 60);
-    expect(w.pheromone[0]).toBeLessThan(1);
   });
 });
 
@@ -1699,39 +1675,35 @@ describe("mass conservation", () => {
     expect(c.store.m_activatedChemoBiopolymerX[c.idx]).toBeGreaterThan(0);
   });
 
-  it("zero receptor pool gates the corresponding SENSE op output", () => {
-    // Phase H2 invariant: a cell with no chemoreceptor reads zero
-    // from SENSE_GRAD even when food particles are nearby. Same cell
-    // with chemoreceptor saturated reads a nonzero value.
+  it("zero receptor pool keeps the activated chemo signal at zero", () => {
+    // K-5: gradient sensing is now activated-chemo (CHEM id 23 = X
+    // axis for biopolymer). The activation pass writes it only when
+    // the cell holds chemoreceptor_biopolymer (chem id 19) above
+    // zero. Otherwise the activated chem stays at zero -- and a
+    // genome reading SENSE_CHEMICAL 23 sees zero.
     const w = quietWorld();
     w.particleSpawnRate = 0;
-    // Plant a biopolymer cloud the cell could chase.
     for (let i = 0; i < 100; i++) {
       pushParticle(w, { x: 600, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 3,
         chemId: CHEM_IDS.biopolymer, density: 1.0 });
     }
-    // Cell with zero chemoreceptor.
     const blind = makeCreature({
       x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, HALT_MARK]),
+      genome: new Uint8Array([OP.SENSE_CHEMICAL, 23, OP.STORE, 0, HALT_MARK]),
       molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-        photoreceptorVisible: 0, photoreceptorLong: 0, photoreceptorSurface: 0,
-        chemoreceptorBiopolymer: 0, chemoreceptorMinerals: 0,
-        chemoreceptorFa: 0, chemoreceptorMarker0: 0,
-        mechanoreceptor: 0, thermoreceptor: 0 },
+        chemoreceptorBiopolymer: 0 },
     });
     w.creatures.push(blind);
     step(w, 1 / 60);
-    // After the genome runs, register 0 holds the gradient. Zero
-    // receptor -> chemoSat == 0 -> gradient zeroed.
     expect(blind.vm.regs[0]).toBe(0);
-    // Same setup, but seeing cell.
     const seeing = makeCreature({
       x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, HALT_MARK]),
+      genome: new Uint8Array([OP.SENSE_CHEMICAL, 23, OP.STORE, 0, HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
+        chemoreceptorBiopolymer: 2 },
     });
     w.creatures.push(seeing);
-    step(w, 1 / 60);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
     expect(seeing.vm.regs[0]).not.toBe(0);
   });
 
