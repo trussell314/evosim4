@@ -1789,7 +1789,7 @@ const SPAWN_CHEM_SPECS: SpawnChemSpec[] = [
   // some look like clay (lighter, slow sinkers), some like rock
   // (heavy seabed pieces).
   { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 }, seedGenericSlots: 1, seedGenericAmount: 0.12 },
-  { chemId: CHEM_FA,  weight: 0.5, initialCount: 30, seedGenericSlots: 2, seedGenericAmount: 0.15 },
+  { chemId: CHEM_FA,  weight: 1.5, initialCount: 90, seedGenericSlots: 2, seedGenericAmount: 0.15 },
   // Gas split: O2 60%, CO2 40% (matches the old material catab table).
   { chemId: CHEM_O2,  weight: 0.3, initialCount: 12 },
   { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
@@ -2382,6 +2382,14 @@ function initialAtmosphere(): Molecules {
 const AMBIENT_TARGET = new Float32Array(CHEMICAL_COUNT);
 AMBIENT_TARGET[CHEM_O2] = 12;   // matches the old O2_AMBIENT constant
 AMBIENT_TARGET[CHEM_CO2] = 1;   // matches CO2_AMBIENT
+// Free amino acid in the water column ("primordial soup"). Cells
+// diffuse against it via the standard ambient path, so a starving
+// founder gets a slow trickle of aa even before any digestion
+// fires. Tuned low (0.3) so the steady-state contribution is small
+// compared to in-cell biosynthesis -- it's a bootstrap aid, not a
+// free meal. Mass-conserving: cells return aa to ambient on
+// excretion / decay.
+AMBIENT_TARGET[CHEM_AA] = 0.3;
 
 function initialAmbient(): Float32Array {
   // Start the water column at its equilibrium target so the first
