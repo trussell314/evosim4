@@ -424,9 +424,9 @@ options: (a) move to 128-bit fingerprint (two Uint32 pairs); or
 (b) keep 64 chemicals total and dedicate slots tighter. Decision
 deferred to phase I planning.
 
-### Phase K — Sense rework (Tier 3, queued)
+### Phase K — Sense rework (Tier 3, queued for implementation)
 
-User-confirmed direction; sketch only, not yet implemented.
+User-confirmed design via interview. Decisions baked in below.
 
 **Activated-receptor model.** A sense requires two parts:
 
@@ -472,33 +472,225 @@ naturally produce different shapes of signal:
   if activated-receptor decays slowly enough to retain history; cells
   read recent vs older pool values to derive rate-of-change.
 
-**Per-modality starting positions.**
-- **Light**: intensity-only is fine for now. Reserve chem-table
-  space (or the receptor's parameter set) for frequency bands later.
-- **Pressure / motion**: 2D vector — `activated_mech_x/y` (signed,
-  populated from net force or velocity).
-- **Temperature**: scalar.
-- **Chemical gradient**: per target chem, 2D vector. Per-target
-  receptors (synthesized with target chem id as a parameter) keep
-  the chem count tractable.
-- **Magnetism** (optional): 2D vector.
+**Per-modality decisions (locked).**
+- **Light**: 3 frequency bands — visible, long-penetrating, surface
+  (depth-invariant). Three separate `photoreceptor_<band>` chems +
+  three `activated_photo_<band>` chems. Cells choose which bands to
+  invest in via SYNTH parameter. Cells derive depth from band
+  ratios.
+- **Pressure / motion**: 2D vector — `activated_mech_x/y`, populated
+  from net force on the cell plus a velocity contribution.
+- **Temperature**: scalar — `activated_thermo`, populated from
+  (local temp − baseline) × thermoreceptor.
+- **Chemical gradient**: per-target receptor variants. Each
+  "targetable" chem has its own `chemoreceptor_<target>` chem + its
+  own `activated_chemo_<target>_x/y` pair. Tier 3 picks 4 targets
+  (biopolymer, minerals, fattyAcid, marker0); expandable later.
+  Cells can sense multiple gradients simultaneously, no retargeting
+  cost.
+- **Magnetism**: included. `magnetoreceptor` + `activated_mag_x/y`.
+  Magnetic field is a fixed compass direction (e.g., −Y = north)
+  so cells get a navigation reference even before any magnetic
+  gameplay lands.
 
-**Implementation sketch (informational).**
-- New named chems: `activated_photoreceptor`,
-  `activated_chemoreceptor_x/y`, `activated_mechanoreceptor_x/y`,
-  `activated_thermoreceptor`, `activated_magnetoreceptor_x/y` (if
-  magnetism). Bootstrap reservation grows accordingly; chem cap
-  has headroom.
-- New engine reactions populate activated chems each tick from the
-  cell's receptor pool × environmental input. Mass-conserving by
-  treating activation as catalysis (receptor + stimulus →
-  receptor + activated-receptor; activated-receptor decays back
-  to receptor over a short half-life so it tracks the input).
-- Direction encoded as paired X/Y chems (cells have no internal
-  spatial structure; X-component and Y-component are separate
-  pools). Magnitude derives from sqrt(x² + y²) via genome math.
-- For chemical gradients: per-target chemoreceptor variants
-  (cell picks the target chem at synth time via SYNTH parameter).
+**Unified SYNTH op (locked).** All synthesis goes through a single
+parameterized op:
+
+```
+SYNTH <kind:u8> <param:u8>
+```
+
+Fixed 2-byte operand. Kinds (enumerated):
+
+| kind | name           | param           | substrate         | output                    |
+|------|----------------|-----------------|-------------------|---------------------------|
+| 0    | BIO            | ignored         | aa + fa           | membrane                  |
+| 1    | AA             | ignored         | glu + min         | aminoAcid                 |
+| 2    | FA             | ignored         | glu + min         | fattyAcid                 |
+| 3    | ENZ            | ignored         | aa                | enzyme                    |
+| 4    | CHL            | ignored         | aa + min          | chlorophyll               |
+| 5    | MRNA           | ignored         | aa + min          | mRNA                      |
+| 6    | PHOTO          | band (0..2)     | aa                | photoreceptor_<band>      |
+| 7    | CHEMO          | target (0..3)   | aa                | chemoreceptor_<target>    |
+| 8    | MECH           | ignored         | aa                | mechanoreceptor           |
+| 9    | THERMO         | ignored         | aa                | thermoreceptor            |
+| 10   | MAGNETO        | ignored         | aa                | magnetoreceptor           |
+| 11   | BOND           | ignored         | aa                | bond_chem (ADHERE rework) |
+| 12   | REPAIR         | ignored         | aa + min          | repair_chem (REPAIR rework) |
+| 13   | CAT            | slot (0..255)   | aa                | catalyst[slot] pool       |
+
+Substrate rule baked in: receptors and catalysts consume **amino
+acid only**; mRNA/chlorophyll/repair consume **amino acid +
+minerals** (nucleic-acid-like); membrane consumes **amino acid +
+fatty acid** (structural lipid); aa and fa are themselves
+synthesized from glucose + minerals.
+
+Each kind sets its own bit in `synthMask` (bits 0..13). Reactions
+gate on the appropriate bit; some kinds (PHOTO, CHEMO) also write
+the param into a per-cell scalar slot that the activation pass
+reads.
+
+Retires: OP.SYNTH_BIO, SYNTH_AA, SYNTH_FA, SYNTH_ENZ, SYNTH_CHL,
+SYNTH_MRNA, SYNTH_CAT (7 ops). Adds: OP.SYNTH (1 op). Net: −6 ops.
+
+**ADHERE / REPAIR rework (locked).** Both ops retire; their behavior
+becomes chemistry-driven:
+- `bond_chem`: each tick, any two cells in adhesion range whose
+  pools are both above a threshold form a bond automatically (no
+  op needed). Bonds break when either pool drops below threshold.
+- `repair_chem`: each tick's somatic mutation rate is scaled down
+  by a function of `repair_chem` pool. Cells that maintain the
+  pool drift less.
+
+The cell-side cost is in the SYNTH (substrates + ATP); the op was
+just a trigger and is no longer required.
+
+**Final chem table after Tier 3 (locked layout):**
+
+| ids   | block                                                                | count |
+|-------|----------------------------------------------------------------------|-------|
+| 0..12 | metabolism (o2 .. membrane, unchanged)                               | 13    |
+| 13..15 | photoreceptor_{visible, long, surface}                               | 3     |
+| 16..18 | activated_photo_{visible, long, surface}                             | 3     |
+| 19..22 | chemoreceptor_{biopolymer, minerals, fa, marker0}                    | 4     |
+| 23..30 | activated_chemo_{biopolymer, minerals, fa, marker0}_{x, y} (4 × 2)   | 8     |
+| 31     | mechanoreceptor                                                      | 1     |
+| 32..33 | activated_mech_{x, y}                                                | 2     |
+| 34     | thermoreceptor                                                       | 1     |
+| 35     | activated_thermo                                                     | 1     |
+| 36     | magnetoreceptor                                                      | 1     |
+| 37..38 | activated_mag_{x, y}                                                 | 2     |
+| 39     | bond_chem                                                            | 1     |
+| 40     | repair_chem                                                          | 1     |
+| 41..44 | marker0..marker3                                                     | 4     |
+| 45..95 | procedural                                                           | 51    |
+
+`NAMED_CHEMICAL_COUNT: 21 → 45`. Procedural pool: 75 → 51. Total
+chem cap unchanged at 96.
+
+**Activation pass.** Once per cell per tick, after reactions. ~15
+multiply-adds per cell:
+
+```ts
+function runActivation(c, world, dt) {
+  const cols = c.store.chemCols, i = c.idx;
+  const k = 1 - ACT_DECAY * dt;  // shared decay factor
+
+  // PHOTO: 3 bands, each receptor × local light at that band's depth.
+  for (const band of [VISIBLE, LONG, SURFACE]) {
+    const light = lightAtBand(world, c.x, c.y, band);
+    cols[CHEM_ACT_PHOTO[band]][i] =
+      cols[CHEM_ACT_PHOTO[band]][i] * k
+      + cols[CHEM_PHOTORECEPTOR[band]][i] * light * dt;
+  }
+
+  // CHEMO: per target, gradient × receptor.
+  for (const target of CHEMO_TARGETS) {
+    const recR = cols[CHEM_CHEMORECEPTOR[target]][i];
+    if (recR > 0) {
+      const [gx, gy] = chemGradient(world, c.x, c.y, c.senseRange, target);
+      cols[CHEM_ACT_CHEMO[target].x][i] = cols[CHEM_ACT_CHEMO[target].x][i] * k + recR * gx * dt;
+      cols[CHEM_ACT_CHEMO[target].y][i] = cols[CHEM_ACT_CHEMO[target].y][i] * k + recR * gy * dt;
+    }
+  }
+
+  // MECH: net force + velocity contribution.
+  const mechR = cols[CHEM_MECHANORECEPTOR][i];
+  const fx = c.store.ax[i] + c.vx * VEL_TO_FORCE_GAIN;
+  const fy = c.store.ay[i] + c.vy * VEL_TO_FORCE_GAIN;
+  cols[CHEM_ACT_MECH_X][i] = cols[CHEM_ACT_MECH_X][i] * k + mechR * fx * dt;
+  cols[CHEM_ACT_MECH_Y][i] = cols[CHEM_ACT_MECH_Y][i] * k + mechR * fy * dt;
+
+  // THERMO: receptor × (temp - baseline).
+  cols[CHEM_ACT_THERMO][i] = cols[CHEM_ACT_THERMO][i] * k
+    + cols[CHEM_THERMORECEPTOR][i] * (temperatureAt(world, c.x, c.y) - TEMP_BASELINE) * dt;
+
+  // MAGNETO: fixed compass; activated proportional to receptor.
+  cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k
+    + cols[CHEM_MAGNETORECEPTOR][i] * MAG_FIELD_X * dt;
+  cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k
+    + cols[CHEM_MAGNETORECEPTOR][i] * MAG_FIELD_Y * dt;
+}
+```
+
+`ACT_DECAY = 2.0` per second → ~0.35s half-life. Tunable per modality
+later if some senses want longer memory.
+
+Activated chems are explicitly **excluded from the mass conservation
+invariant** — they're computed signals, not transported substances.
+Add an `isSignal: boolean` field to `ChemicalDef`; the world-mass
+test sums chems where `isSignal === false`.
+
+**Retired SENSE_* ops (all redundant with SENSE_CHEMICAL of an
+activated chem):** SENSE_GRAD_X/Y, SENSE_DENSITY, SENSE_LIGHT,
+SENSE_EM, SENSE_TEMP, SENSE_PHEROMONE, SENSE_VX/VY,
+SENSE_PRESSURE_X/Y, SENSE_WALL_X/Y, SENSE_HEAD_X/Y, SENSE_KIN,
+SENSE_NEIGHBOR_HASH, SENSE_CRE_DX/DY/DIST/MASS, EMIT. ADHERE,
+REPAIR retire too (chemistry-mediated now).
+
+Net op-table change: −14 retired senses − 2 retired actions (ADHERE,
+REPAIR) − 7 retired SYNTH_* + 1 new SYNTH = **−22 ops**.
+
+**Pheromone field retires entirely** (finishes Tier 2). Cells
+broadcast via EXCRETE (chems become particles); receivers tune
+chemoreceptor to the target chem.
+
+**Implementation phases.** Each phase is a single commit; tests
+pass before pushing.
+
+- **K-1 — Chem table foundation.** Extend `NAMED_CHEMICAL_COUNT 21
+  → 45`. Add the 24 new chem slots and constants. Add
+  `isSignal: boolean` to `ChemicalDef`; mark activated chems as
+  signal. Update `CHEM_IDS` export. Storage columns wired into
+  `CreatureStore`. Tests reference the new fields; mass-conservation
+  test learns to skip signal chems.
+
+- **K-2 — Widen sensor bins.** From 6 → CHEMICAL_COUNT. Drop the
+  `SENSOR_CHEMS` / `SENSOR_BIN_BY_CHEM` mapping. Add `chemGradient`
+  helper that queries the bins by chem id. Keeps existing
+  SENSE_GRAD_X/Y ops functional until K-5 retires them.
+
+- **K-3 — Activation pass.** Implement `runActivation` per cell per
+  tick. Wire into `updateCreatures` after reactions. Add constants
+  (ACT_DECAY, VEL_TO_FORCE_GAIN, TEMP_BASELINE, MAG_FIELD_X/Y).
+
+- **K-4 — Unified SYNTH op.** Retire OP.SYNTH_BIO/AA/FA/ENZ/CHL/MRNA/CAT.
+  Add OP.SYNTH with 2-byte operand. Add the 14-kind dispatch in
+  `runTick`. Add `synthMask` bits 0..13. Update reaction gating
+  (existing reactions move to new bit indices). Substrate
+  stoichiometries updated to match the table above (receptor synth
+  becomes `aa` only; enz becomes `aa` only; etc.). Add 4 new
+  chemoreceptor synth reactions (one per CHEMO_TARGET). Add 3 new
+  photoreceptor band synth reactions. Add mechano/thermo/magneto
+  synth reactions. Add bond/repair synth reactions. Total new
+  named-reaction slots needed: see K-5 reaction count.
+
+- **K-5 — Retire SENSE_* + ADHERE/REPAIR + EMIT.** Remove ops from
+  enum, runTick switch, `OPERANDS`, `MATERIAL_OPERAND`,
+  `SENSE_OPS`. Trim `VMSensors` fields (`gradX/Y/density`, `wallX/Y`,
+  `headX/Y`, `temp`, `pheromone`, `light`, `emBands`, `pressureX/Y`,
+  `creatureDx/Dy/Dist/Mass`, `kinOverlap`, `neighborHash`, `velX/Y`).
+  Remove the receptor-gating block in `populateSensors`. Implement
+  passive bond formation (any pair of cells with bond_chem > THRESH
+  in adhesion range auto-bonds). Implement repair-chem-driven
+  somatic mutation scaling. Remove `world.pheromone` field and the
+  pheromone-decay loop.
+
+- **K-6 — Default genome + viability.** Rewrite `makeDefaultGenome`
+  to use SYNTH/SENSE_CHEMICAL pattern. `viableGenome` updates: the
+  required SYNTH ops become parameterized — replace `hasBio` with
+  "has SYNTH with kind=BIO" patterns. Adjust SENSE_OPS to just
+  `{ SELF_*, SENSE_CHEMICAL }`.
+
+- **K-7 — Tests + HUD.** Update tests using retired ops. Add Tier
+  3 tests: photoreceptor + light → activated_photo populates;
+  SYNTH CHEMO band 2 + biopolymer particles in range → activated
+  chemo populates correctly; repair_chem reduces mutation rate.
+  HUD displays current chemoreceptor target inventory.
+
+- **K-8 — Optional polish.** Per-modality decay rates, frequency-
+  band stoichiometry tuning, magnetism integration (if there are
+  magnetic targets to chase).
 
 ### Phase J — Cleanup
 
