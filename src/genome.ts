@@ -996,26 +996,33 @@ const SENSE_OPS: ReadonlySet<number> = new Set([
 //                    SYNTH_CHL (photoautotroph; chl is the mandatory
 //                    multiplier on photosynth).
 //    - hasReproduce: REPRODUCE.
-//    - hasBio:       SYNTH_BIO -- builds biomass; without it the cell
+//    - hasBio:       SYNTH_BIO -- builds membrane (the structural
+//                    reserve) and receptors; without it the cell
 //                    autolyzes from maintenance decay.
+//    - hasFA:        SYNTH_FA -- universal route to fatty acid;
+//                    membrane-synth reactions consume fa, so
+//                    without an internal supply membrane bleeds.
 //    - hasMrna:      SYNTH_MRNA -- mRNA are mandatory on every
 //                    biosynth reaction.
 //    - hasSense:     any SENSE_* / SELF_* op -- a cell that can't
 //                    read state can only emit constant behavior.
 //  Heterotroph (INGEST/PREDATE/ENGULF present):
-//    - hasEnz:       SYNTH_ENZ -- enzymes are mandatory on catabolize;
-//                    without them the cell stomachs food but can't
-//                    actually digest it into molecules.
+//    - hasEnz:       SYNTH_ENZ -- enzymes gate biopolymer digestion.
+//    - hasThrust:    THRUST -- founders' scoop only fills the first
+//                    few seconds; without movement the cell can't
+//                    refill its pool from elsewhere. Photoautotrophs
+//                    are exempt (sun reaches them where they sit).
 //  Photoautotroph-only (SYNTH_CHL, no INGEST/PREDATE/ENGULF):
-//    - hasAA + hasFA: cell makes its own building blocks from
-//                    photosynth glucose; without these SYNTH_BIO
-//                    starves once the yolk runs out.
+//    - hasAA:        SYNTH_AA -- cell makes its own amino acid from
+//                    photosynth glucose. SYNTH_FA is already
+//                    required universally above.
 export function viableGenome(genome: Uint8Array): boolean {
   let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
   let hasReproduce = false;
   let hasBio = false, hasMrna = false;
   let hasAA = false, hasFA = false, hasEnz = false;
   let hasSense = false;
+  let hasThrust = false;
   walkGenome(genome, (op) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
@@ -1027,21 +1034,29 @@ export function viableGenome(genome: Uint8Array): boolean {
     else if (op === OP.SYNTH_AA) hasAA = true;
     else if (op === OP.SYNTH_FA) hasFA = true;
     else if (op === OP.SYNTH_ENZ) hasEnz = true;
+    else if (op === OP.THRUST) hasThrust = true;
     if (!hasSense && SENSE_OPS.has(op)) hasSense = true;
   });
   const isHeterotroph = hasIngest || hasPredate || hasEngulf;
   const hasMass = isHeterotroph || hasChl;
   if (!hasMass || !hasReproduce || !hasBio || !hasMrna || !hasSense) return false;
-  // Heterotrophs need digestive enzymes to convert reserves -> molecules.
+  // SYNTH_FA is universally required now. Both membrane-synth
+  // reactions consume fatty acid; without an internal route to fa
+  // the cell's structural reserve (membrane) starves whenever
+  // biopolymer flow stops. Heterotrophs can dribble fa in via
+  // biopolymer digestion, but that's not enough on its own.
+  if (!hasFA) return false;
+  // Heterotrophs need digestive enzymes to convert biopolymer into glu/aa/fa.
   if (isHeterotroph && !hasEnz) return false;
+  // Heterotrophs also need THRUST -- without movement they can't
+  // chase a new food patch after exhausting their founder scoop and
+  // local ambient. Photoautotrophs can sit still and photosynthesize
+  // so movement isn't strictly required for them.
+  if (isHeterotroph && !hasThrust) return false;
   // Pure photoautotrophs need their own building-block factory.
-  // Note: this branch is bypassed for chlorophyll carriers that ALSO
-  // have any heterotroph op (PREDATE / ENGULF / INGEST), since those
-  // ops can supply fa/aa from prey or seeded particles without an
-  // internal synthesis pathway. The condition is `!isHeterotroph`
-  // exactly so the hybrid case (chl + predate) skips the autotroph
-  // synth requirement -- audit suggestion #4.
-  if (hasChl && !isHeterotroph && (!hasAA || !hasFA)) return false;
+  // (SYNTH_FA is already required universally above; SYNTH_AA stays
+  // a pure-autotroph requirement.)
+  if (hasChl && !isHeterotroph && !hasAA) return false;
   // Amino-acid acquisition path. Required so that any growth op that
   // costs amino acid (planned: per-op aa cost on SYNTH_*/REPRODUCE/
   // splice) has a viable supply. Sources:
@@ -1060,16 +1075,18 @@ export function viableGenome(genome: Uint8Array): boolean {
   return true;
 }
 
-// Sample a random genome size in [12, 100] with a gradual bias toward
-// smaller. Floor raised to 12 to match the new viability floor:
-// 5 universal required ops + 2 trophic-branch ops (e.g. SYNTH_ENZ for
-// heterotrophs; SYNTH_AA + SYNTH_FA for autotrophs) + operand bytes.
-// Smaller genomes always fail and waste reroll budget.
+// Sample a random genome size in [16, 100] with a gradual bias toward
+// smaller. Floor raised to 16 to match the new viability floor:
+// 6 universal required ops (REPRODUCE, SYNTH_BIO, SYNTH_MRNA,
+// SYNTH_FA, one SENSE_*, plus either THRUST or SYNTH_CHL for mass
+// acquisition) + 2 trophic-branch ops (SYNTH_ENZ + INGEST or
+// SYNTH_AA + SYNTH_CHL) + operand bytes. Smaller genomes always
+// fail and waste reroll budget.
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // Triangular falloff on [12, 100]; clamping handles the math.
+  // Triangular falloff on [16, 100]; clamping handles the math.
   const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(12, Math.min(100, k));
+  return Math.max(16, Math.min(100, k));
 }
 
 // Generate a random viable genome. Size is sampled from the triangular
@@ -1108,6 +1125,7 @@ export function makeDefaultGenome(): Uint8Array {
     // enzyme; build membrane (the structural reserve) via SYNTH_BIO.
     // mRNA gates every biosynth reaction.
     OP.SYNTH_ENZ,
+    OP.SYNTH_FA,
     OP.SYNTH_BIO,
     OP.SYNTH_MRNA,
     OP.SYNTH_CAT, 0,
