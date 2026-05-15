@@ -4893,7 +4893,12 @@ function updateCreatures(world: World, dt: number): void {
   // and creature-sediment collisions. Replaces O(N) scans over world
   // particles/creatures inside per-cell loops with O(neighborhood) scans.
   buildCreatureGrid(world);
-  rebuildSensorBins(world);
+  // SENSOR_BIN_* is only read by chemGradient() inside runActivation
+  // (per-cell). With zero living cells, all that bookkeeping is
+  // wasted -- CHEMICAL_COUNT * 3 typed-array fills + a binning pass
+  // over every particle. Skip the rebuild when no cells are alive
+  // to keep the empty-world steady state cheap.
+  if (n > 0) rebuildSensorBins(world);
   // Snapshot each cell's surface fingerprint up front so ADHERE /
   // ENGULF in the per-cell loop below see consistent values for
   // both self and neighbor (rather than mid-update mixes).
@@ -5849,6 +5854,10 @@ const COLLISION_CELL_ITEMS = new Int32Array(COLLISION_LAYOUT.buffer, COLLISION_L
 // Per-cell counter scratch used during cellItems build. Not shared
 // across workers; only the sim worker touches it.
 let COLLISION_CELL_COUNTER = new Int32Array(0);
+// Cell-placement cursor, hoisted out of resolveCollisions to avoid a
+// per-tick alloc (cellCount typically 3-4k, so this is ~13KB of GC
+// pressure on every tick under non-trivial particle counts).
+let COLLISION_CELL_CURSOR = new Int32Array(0);
 export function getCollisionSharedLayout(): CollisionSharedLayout {
   return COLLISION_LAYOUT;
 }
@@ -6184,7 +6193,12 @@ function resolveCollisions(
     // Place particles. cellOfPart is reused here but we no longer
     // need its previous values once we've consumed pi; safe to
     // overwrite as a placement cursor seeded from cellStart.
-    const cursor = new Int32Array(cellCount); // small alloc; cellCount typically <4k
+    if (COLLISION_CELL_CURSOR.length < cellCount) {
+      COLLISION_CELL_CURSOR = new Int32Array(cellCount * 2);
+    } else {
+      COLLISION_CELL_CURSOR.fill(0, 0, cellCount);
+    }
+    const cursor = COLLISION_CELL_CURSOR;
     for (let pi = 0; pi < n; pi++) {
       const ci = cellOfPart[pi];
       const slot = COLLISION_CELL_START[ci] + cursor[ci]++;
