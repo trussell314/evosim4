@@ -66,6 +66,9 @@ import {
   temperatureAt,
   solarLight,
   takeSnapshot,
+  chemName,
+  reactionName,
+  genomeTag,
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
@@ -2157,11 +2160,11 @@ function maybeAnalyzeGenomes(): void {
     const headLine =
       `${dot}<b>#${i + 1}</b>  ` +
       `${trophicChip}` +
-      `<b style="font-size:13px;letter-spacing:0.5px;">${sp.key.slice(0, 6)}</b>` +
+      `<b style="font-size:13px;letter-spacing:0.5px;">${genomeTag(sp.genome)}</b>` +
       `<span style="opacity:.7"> (${sp.genome.length}b)</span>  ${status}`;
     const statsLine =
       `duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}`;
-    const prose = describeGenomeProse(sp.genome, SENSOR_CHEM_LABELS);
+    const prose = describeGenomeProse(sp.genome);
     const proseDiv = document.createElement("div");
     proseDiv.style.cssText = "padding-top:3px;";
     proseDiv.textContent = prose;
@@ -2202,22 +2205,30 @@ function trophicMode(genome: Uint8Array): TrophicMode {
   return TROPHIC_HET;
 }
 
-// Walk a genome and describe it in plain prose. Same fact extraction
-// the disasm uses, but emitted as a 1-2 sentence English summary that
-// a human can read at a glance.
-function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<string>): string {
+// Walk a genome and describe it as a structured list aligned with the
+// post-K-5 chemistry: ingests, metabolism (biosynth + catalysis),
+// excretes, senses (the specific chem ids the genome reads), and the
+// division gate. Bootstrap chems (0..44) are named; procedural chems
+// (45..95) and procedural reaction slots fall back to numeric form.
+function describeGenomeProse(genome: Uint8Array): string {
   let thrust = false, turn = false, reproduce = false;
   let predate = false, engulf = false;
   let selfModifies = false;
   let hasJump = false, hasCmp = false;
-  let synthBio = false, synthAA = false, synthFA = false, synthEnz = false, synthChl = false, synthRibo = false;
+  // SYNTH kinds observed. PHOTO / CHEMO get per-param bits since one
+  // SYNTH op picks a specific band / target.
+  const synthSimple = new Set<number>();           // BIO/AA/FA/ENZ/CHL/MRNA/MECH/THERMO/MAGNETO/BOND/REPAIR
+  const synthPhotoBands = new Set<number>();       // 0=V, 1=L, 2=S
+  const synthChemoTargets = new Set<number>();     // 0=B, 1=M, 2=F, 3=marker0
+  const catalystSlots = new Set<number>();
+  // INGEST is the 6-slot sensor-chem id (min/biop/fa/o2/co2/glu);
+  // EXCRETE is operand mod CHEMICAL_COUNT (any chem in the table).
   const ingest = new Set<number>();
   const excrete = new Set<number>();
-  const sensors = new Set<string>();
-  const catalystSlots = new Set<number>();
-  // Uses the canonical walker from genome.ts so this stays in lockstep
-  // with the VM. Any future op added to genome.ts's OPERANDS table is
-  // automatically picked up here.
+  // Chem ids the genome reads via SENSE_CHEMICAL. Distinct from the
+  // SYNTH side: SYNTH builds the receptor; SENSE_CHEMICAL reads the
+  // activated chem (or any other internal pool).
+  const sensedChems = new Set<number>();
   walkGenome(genome, (op, _pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
@@ -2228,103 +2239,111 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL: selfModifies = true; break;
       case OP.SYNTH: {
         const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
-        switch (kind) {
-          case SYNTH_KIND.BIO: synthBio = true; break;
-          case SYNTH_KIND.AA: synthAA = true; break;
-          case SYNTH_KIND.FA: synthFA = true; break;
-          case SYNTH_KIND.ENZ: synthEnz = true; break;
-          case SYNTH_KIND.CHL: synthChl = true; break;
-          case SYNTH_KIND.MRNA: synthRibo = true; break;
-          // CAT param byte is genome[pc+2]; pull it directly.
-          case SYNTH_KIND.CAT: catalystSlots.add((genome[(_pc + 2) % genome.length] ?? 0) % CATALYST_COUNT); break;
-        }
+        const param = genome[(_pc + 2) % genome.length] ?? 0;
+        if (kind === SYNTH_KIND.PHOTO) synthPhotoBands.add(param % 3);
+        else if (kind === SYNTH_KIND.CHEMO) synthChemoTargets.add(param % 4);
+        else if (kind === SYNTH_KIND.CAT) catalystSlots.add(param % CATALYST_COUNT);
+        else synthSimple.add(kind);
         break;
       }
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
-      case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
+      case OP.EXCRETE: excrete.add((operand ?? 0) % 96); break;
+      case OP.SENSE_CHEMICAL: sensedChems.add((operand ?? 0) % 96); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
       case OP.LT: case OP.GT: case OP.EQ: case OP.NOT: case OP.AND: case OP.OR: hasCmp = true; break;
-      case OP.SENSE_CHEMICAL: sensors.add("chemicals"); break;
     }
   });
   const gated = hasJump && hasCmp;
-  const mat = (k: number) => materialNames[k] ?? String(k);
+  const synthChl = synthSimple.has(SYNTH_KIND.CHL);
+  const synthEnz = synthSimple.has(SYNTH_KIND.ENZ);
+  const lines: string[] = [];
 
-  const parts: string[] = [];
-
-  // 1. Ingests -- materials the cell will swallow. INGEST always
-  // picks up the particle's molecule + genericChem payloads alongside
-  // the material mass, so generic-chem flow is part of trophic input
-  // even when not explicitly genome-selected.
-  if (predate || engulf) parts.push("Ingests: other cells (absorbs all molecules + generic chem).");
-  else if (ingest.size > 0) parts.push(`Ingests: ${Array.from(ingest).map(mat).join(", ")} (with molecules + generic chem on each particle).`);
-  else if (synthChl) parts.push("Ingests: nothing (photoautotroph, fixes CO2; no generic-chem inflow).");
-  else parts.push("Ingests: nothing.");
-
-  // 2. Metabolism -- biosynth pathways AND the generic-reaction gates
-  // they open. Aerobic / fermentation / beta-oxidation run on every
-  // cell with substrates regardless of genome, so they aren't listed.
-  // Photosynthesis only runs if chlorophyll exists (SYNTH_CHL).
-  // Each SYNTH bit also unlocks the gated generic reactions whose
-  // gateMask matches it -- those reactions consume + produce the
-  // generic-chem slots, which is how a cell actually uses its chem
-  // pool day-to-day.
-  const synth: string[] = [];
-  if (synthBio) synth.push("biomass");
-  if (synthAA) synth.push("aa");
-  if (synthFA) synth.push("fa");
-  if (synthEnz) synth.push("enzymes");
-  if (synthRibo) synth.push("mRNA");
-  if (synthChl) synth.push("chlorophyll (photosynth)");
-  parts.push(synth.length > 0
-    ? `Metabolism: synthesizes ${synth.join(", ")}; unlocks generic reactions gated on those bits (each consumes / produces specific generic-chem slots).`
-    : "Metabolism: catabolism only (no synth ops -- runs only ungated generic reactions).");
-
-  // 3. Catalysis (non-metabolic specialty) -- SYNTH_CAT targeting
-  // generic reaction slots (>= 10, past the named pathway slots).
-  // Catalyst slots < 10 boost named metabolism instead; surface those
-  // separately so the user can tell which axis the cell specializes in.
-  const NAMED_SLOTS: Record<number, string> = {
-    0: "aerobic respiration", 1: "fermentation", 2: "beta-oxidation",
-    3: "photosynthesis", 4: "aa synth", 5: "fa synth",
-    6: "chl synth", 7: "enz synth", 8: "mrna synth", 9: "biomass synth",
-  };
-  const namedCats: string[] = [];
-  const specialtyCats: number[] = [];
-  for (const slot of catalystSlots) {
-    if (slot < 10) namedCats.push(NAMED_SLOTS[slot] ?? `slot ${slot}`);
-    else specialtyCats.push(slot);
+  // Ingests: trophic input. INGEST operand maps to the 6-slot sensor
+  // chem table (SENSOR_CHEM_LABELS); PREDATE/ENGULF eat other cells.
+  const ingestParts: string[] = [];
+  if (predate) ingestParts.push("predates cells");
+  if (engulf) ingestParts.push("engulfs cells");
+  if (ingest.size > 0) {
+    const names = Array.from(ingest).sort((a, b) => a - b).map((k) => SENSOR_CHEM_LABELS[k] ?? String(k));
+    ingestParts.push(`particles {${names.join(", ")}}`);
   }
-  if (specialtyCats.length > 0) {
-    const sorted = specialtyCats.sort((a, b) => a - b);
-    const shown = sorted.slice(0, 6).join(", ");
-    const more = sorted.length > 6 ? `, +${sorted.length - 6} more` : "";
-    parts.push(`Catalyzes (specialty): boosts generic reactions on slot${sorted.length === 1 ? "" : "s"} ${shown}${more} (each ties to specific generic-chem substrates/products).`);
+  lines.push(`Ingests: ${ingestParts.length > 0 ? ingestParts.join("; ") : "nothing"}.`);
+
+  // Metabolism: catabolism (always-on given substrate), photosynth
+  // (chlorophyll-gated), biopolymer digestion (enzyme-gated), and
+  // every biosynth pathway the genome's SYNTH ops open up. The
+  // engine runs aerobic / ferment / beta-ox on every cell with the
+  // right substrate regardless of genome -- they're the "free"
+  // tier and worth surfacing so the reader sees the full picture.
+  const metab: string[] = ["aerobic+ferment+betaOx (built-in)"];
+  if (synthChl) metab.push("photosynth");
+  if (synthEnz) metab.push("digestBiop (enzyme-gated)");
+  const synthLabels: string[] = [];
+  if (synthSimple.has(SYNTH_KIND.AA)) synthLabels.push("aa");
+  if (synthSimple.has(SYNTH_KIND.FA)) synthLabels.push("fa");
+  if (synthSimple.has(SYNTH_KIND.ENZ)) synthLabels.push("enz");
+  if (synthSimple.has(SYNTH_KIND.CHL)) synthLabels.push("chl");
+  if (synthSimple.has(SYNTH_KIND.MRNA)) synthLabels.push("mrna");
+  if (synthSimple.has(SYNTH_KIND.BIO)) synthLabels.push("memb");
+  if (synthPhotoBands.size > 0) {
+    const bands = Array.from(synthPhotoBands).sort().map((b) => "VLS"[b]);
+    synthLabels.push(`photoR-{${bands.join(",")}}`);
   }
-  if (namedCats.length > 0) {
-    parts.push(`Catalyzes (metabolic boost): ${namedCats.join(", ")}.`);
+  if (synthChemoTargets.size > 0) {
+    const tgts = Array.from(synthChemoTargets).sort().map((t) => "BMF0"[t]);
+    synthLabels.push(`chemoR-{${tgts.join(",")}}`);
+  }
+  if (synthSimple.has(SYNTH_KIND.MECH)) synthLabels.push("mechR");
+  if (synthSimple.has(SYNTH_KIND.THERMO)) synthLabels.push("thermoR");
+  if (synthSimple.has(SYNTH_KIND.MAGNETO)) synthLabels.push("magR");
+  if (synthSimple.has(SYNTH_KIND.BOND)) synthLabels.push("bond");
+  if (synthSimple.has(SYNTH_KIND.REPAIR)) synthLabels.push("repair");
+  if (synthLabels.length > 0) metab.push(`synths {${synthLabels.join(", ")}}`);
+  lines.push(`Metabolism: ${metab.join(", ")}.`);
+
+  // Catalysts: each SYNTH CAT <slot> boosts reaction slot N. First
+  // NAMED_REACTION_NAMES.length slots map to named pathways; the
+  // rest are procedural and shown as "rxnN".
+  if (catalystSlots.size > 0) {
+    const slots = Array.from(catalystSlots).sort((a, b) => a - b).map(reactionName);
+    lines.push(`Catalysts boost: ${slots.join(", ")}.`);
+  } else {
+    lines.push(`Catalysts boost: none.`);
   }
 
-  // 4. Excretes -- material reserves vented by EXCRETE. Each ejection
-  // also carries a proportional slice of the cell's molecule pool AND
-  // generic-chem pool (engine change), so excretion is a real
-  // environmental output -- the cell can deliberately seed neighbors
-  // with named molecules and generic-chem substrates / products.
-  parts.push(excrete.size > 0
-    ? `Excretes: ${Array.from(excrete).map(mat).join(", ")} (each particle carries a proportional slice of molecules + generic chem).`
-    : "Excretes: nothing (chemistry only leaves via death).");
+  // Excretes: EXCRETE operand mod CHEMICAL_COUNT picks any chem id.
+  // Bootstrap chems get named; procedural chems show as "chemN".
+  if (excrete.size > 0) {
+    const names = Array.from(excrete).sort((a, b) => a - b).map(chemName);
+    lines.push(`Excretes: ${names.join(", ")}.`);
+  } else {
+    lines.push(`Excretes: nothing (plus passive CO2/waste auto-vent).`);
+  }
 
-  // Reproduction, extras, sensors (sterile lineages get nothing
-  // since the phylogeny strip's lifespan already conveys that).
-  if (reproduce) parts.push(gated ? "Divides conditionally." : "Divides reflexively (no gate).");
+  // Senses: SENSE_CHEMICAL <id> reads. Lists every chem id the genome
+  // explicitly samples. Same name-vs-number rule as excretion.
+  if (sensedChems.size > 0) {
+    const names = Array.from(sensedChems).sort((a, b) => a - b).map(chemName);
+    lines.push(`Senses: ${names.join(", ")}${gated ? "" : " (ungated -- no JZ+cmp)"}.`);
+  } else {
+    lines.push(`Senses: nothing (no SENSE_CHEMICAL ops).`);
+  }
+
+  // Division: REPRODUCE op + whether gated by JZ/JNZ + comparison.
+  if (reproduce) {
+    lines.push(`Divides: ${gated ? "conditionally (JZ+cmp gates the REPRODUCE op)" : "reflexively (REPRODUCE fires every tick)"}.`);
+  } else {
+    lines.push(`Divides: never (no REPRODUCE op).`);
+  }
+
+  // Motion + self-mod hints (small bullet, optional).
   const extras: string[] = [];
-  if (selfModifies) extras.push("self-modifies");
-  if (turn && !thrust) extras.push("turns in place");
-  if (extras.length > 0) parts.push(extras.join(", ").replace(/^./, (c) => c.toUpperCase()) + ".");
-  if (sensors.size > 0) {
-    parts.push(`Senses ${Array.from(sensors).join(", ")}${gated ? " (gated)" : " (ungated)"}.`);
-  }
+  if (thrust && turn) extras.push("thrusts + turns");
+  else if (thrust) extras.push("thrusts");
+  else if (turn) extras.push("turns in place");
+  if (selfModifies) extras.push("self-modifies genome");
+  if (extras.length > 0) lines.push(`Other: ${extras.join(", ")}.`);
 
-  return parts.join(" ");
+  return lines.join("\n");
 }
 

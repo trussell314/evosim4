@@ -977,6 +977,64 @@ export const SENSOR_CHEM_LABELS: ReadonlyArray<string> = [
   "min", "biop", "fa", "o2", "co2", "glu",
 ];
 
+// Short HUD-friendly labels for every named chem id 0..44. Distinct
+// from CHEM_NAMES (which mirrors the verbose Molecules-key names);
+// these are the abbreviations the genome describer + inspector use
+// to keep prose lines tight.
+export const CHEM_SHORT_LABELS: ReadonlyArray<string> = [
+  "o2", "co2", "glu", "aa", "fa", "min", "adp", "waste",
+  "chl", "enz", "mrna", "biop", "memb",
+  "photoR-V", "photoR-L", "photoR-S",
+  "actPhoto-V", "actPhoto-L", "actPhoto-S",
+  "chemoR-B", "chemoR-M", "chemoR-F", "chemoR-0",
+  "actChemo-Bx", "actChemo-By",
+  "actChemo-Mx", "actChemo-My",
+  "actChemo-Fx", "actChemo-Fy",
+  "actChemo-0x", "actChemo-0y",
+  "mechR", "actMech-x", "actMech-y",
+  "thermoR", "actThermo",
+  "magR", "actMag-x", "actMag-y",
+  "bond", "repair",
+  "marker0", "marker1", "marker2", "marker3",
+];
+export function chemName(id: number): string {
+  if (id < 0 || id >= CHEMICAL_COUNT) return `chem${id}`;
+  return id < CHEM_SHORT_LABELS.length ? CHEM_SHORT_LABELS[id] : `chem${id}`;
+}
+
+// Short labels for the first NAMED_REACTION_COUNT reaction slots
+// installed by installNamedReactions(). Index matches the slot.
+// Anything beyond is a procedural / generic reaction and the
+// describer falls back to "rxnN".
+export const NAMED_REACTION_NAMES: ReadonlyArray<string> = [
+  "aerobic", "ferment", "betaOx", "photosynth",
+  "synthAA", "synthFA", "synthCHL", "synthENZ", "synthMRNA",
+  "synthMEMB(aa+fa)", "digestBiop", "synthMEMB(fa)",
+  "synthPhoto-V", "synthPhoto-L", "synthPhoto-S",
+  "synthChemo-B", "synthChemo-M", "synthChemo-F", "synthChemo-0",
+  "synthMech", "synthThermo", "synthMag",
+  "synthBond", "synthRepair",
+];
+export function reactionName(slot: number): string {
+  return slot < NAMED_REACTION_NAMES.length ? NAMED_REACTION_NAMES[slot] : `rxn${slot}`;
+}
+
+// 32-bit FNV-1a hash of a genome, rendered as a 6-char base36 tag
+// for use as a stable, content-derived species label. Replaces the
+// previous `sp.key.slice(0, 6)` (first 3 bytes of the genome) which
+// post-K-4/K-5 collides for every cell -- founders all start with
+// the same SENSE_AMP + SENSE_CHEMICAL prefix from makeDefaultGenome.
+export function genomeTag(genome: Uint8Array): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < genome.length; i++) {
+    h ^= genome[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  // Force unsigned, base36, pad to 6 chars by trimming or zero-padding.
+  const s = (h >>> 0).toString(36);
+  return (s.length >= 6 ? s.slice(0, 6) : s.padStart(6, "0")).toUpperCase();
+}
+
 // Per-cell molecular pool. ATP itself lives on the Creature as `energy`
 // (so existing code that talks about energy is talking about ATP); every
 // other named species in the chemistry lives here. All quantities are in
