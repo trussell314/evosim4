@@ -412,7 +412,7 @@ const CREATURE_F32_COLS = [
   "ax", "ay",
   "m_glucose", "m_fattyAcid", "m_aminoAcid", "m_minerals",
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
-  "m_biomass", "m_waste", "m_adp", "m_ribosome",
+  "m_waste", "m_adp", "m_mrna",
   "m_biopolymer", "m_membrane",
   "m_photoreceptor", "m_chemoreceptor", "m_mechanoreceptor", "m_thermoreceptor",
   "m_marker0", "m_marker1", "m_marker2", "m_marker3",
@@ -477,10 +477,9 @@ export class CreatureStore {
   m_enzyme!: Float32Array;
   m_o2!: Float32Array;
   m_co2!: Float32Array;
-  m_biomass!: Float32Array;
   m_waste!: Float32Array;
   m_adp!: Float32Array;
-  m_ribosome!: Float32Array;
+  m_mrna!: Float32Array;
   m_biopolymer!: Float32Array;
   m_membrane!: Float32Array;
   m_photoreceptor!: Float32Array;
@@ -561,10 +560,9 @@ export class CreatureStore {
     this.m_enzyme = new Float32Array(b, o.base.m_enzyme, cap);
     this.m_o2 = new Float32Array(b, o.base.m_o2, cap);
     this.m_co2 = new Float32Array(b, o.base.m_co2, cap);
-    this.m_biomass = new Float32Array(b, o.base.m_biomass, cap);
     this.m_waste = new Float32Array(b, o.base.m_waste, cap);
     this.m_adp = new Float32Array(b, o.base.m_adp, cap);
-    this.m_ribosome = new Float32Array(b, o.base.m_ribosome, cap);
+    this.m_mrna = new Float32Array(b, o.base.m_mrna, cap);
     this.m_biopolymer = new Float32Array(b, o.base.m_biopolymer, cap);
     this.m_membrane = new Float32Array(b, o.base.m_membrane, cap);
     this.m_photoreceptor = new Float32Array(b, o.base.m_photoreceptor, cap);
@@ -589,11 +587,11 @@ export class CreatureStore {
       this.genericChemCols[k] = new Float32Array(b, o.generic[k], cap);
     }
     // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll,
-    // enzyme, o2, co2, minerals, biomass, waste, ribosome, biopolymer, membrane
+    // enzyme, o2, co2, minerals, waste, mrna, biopolymer, membrane
     this.molCols = [
       this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
-      this.m_minerals, this.m_biomass, this.m_waste, this.m_ribosome,
+      this.m_minerals, this.m_waste, this.m_mrna,
       this.m_biopolymer, this.m_membrane,
       this.m_photoreceptor, this.m_chemoreceptor, this.m_mechanoreceptor, this.m_thermoreceptor,
       this.m_marker0, this.m_marker1, this.m_marker2, this.m_marker3,
@@ -642,8 +640,8 @@ export class CreatureStore {
     this.ax[i] = 0; this.ay[i] = 0;
     this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
     this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
-    this.m_o2[i] = 0; this.m_co2[i] = 0; this.m_biomass[i] = 0;
-    this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_ribosome[i] = 0;
+    this.m_o2[i] = 0; this.m_co2[i] = 0;
+    this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_mrna[i] = 0;
     this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
     this.m_photoreceptor[i] = 0; this.m_chemoreceptor[i] = 0;
     this.m_mechanoreceptor[i] = 0; this.m_thermoreceptor[i] = 0;
@@ -675,14 +673,12 @@ export class MoleculesView {
   set o2(v: number) { this.c.store.m_o2[this.c.idx] = v; }
   get co2(): number { return this.c.store.m_co2[this.c.idx]; }
   set co2(v: number) { this.c.store.m_co2[this.c.idx] = v; }
-  get biomass(): number { return this.c.store.m_biomass[this.c.idx]; }
-  set biomass(v: number) { this.c.store.m_biomass[this.c.idx] = v; }
   get waste(): number { return this.c.store.m_waste[this.c.idx]; }
   set waste(v: number) { this.c.store.m_waste[this.c.idx] = v; }
   get adp(): number { return this.c.store.m_adp[this.c.idx]; }
   set adp(v: number) { this.c.store.m_adp[this.c.idx] = v; }
-  get ribosome(): number { return this.c.store.m_ribosome[this.c.idx]; }
-  set ribosome(v: number) { this.c.store.m_ribosome[this.c.idx] = v; }
+  get mrna(): number { return this.c.store.m_mrna[this.c.idx]; }
+  set mrna(v: number) { this.c.store.m_mrna[this.c.idx] = v; }
   get biopolymer(): number { return this.c.store.m_biopolymer[this.c.idx]; }
   set biopolymer(v: number) { this.c.store.m_biopolymer[this.c.idx] = v; }
   get membrane(): number { return this.c.store.m_membrane[this.c.idx]; }
@@ -761,7 +757,7 @@ export class Creature {
   // Setter: copy field-by-field from any Molecules-shaped object into
   // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
   // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; biomass?: number; waste?: number; adp?: number; ribosome?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number; marker0?: number; marker1?: number; marker2?: number; marker3?: number }) {
+  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; waste?: number; adp?: number; mrna?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number; marker0?: number; marker1?: number; marker2?: number; marker3?: number }) {
     const s = this.store; const i = this.idx;
     s.m_glucose[i] = m.glucose ?? 0;
     s.m_fattyAcid[i] = m.fattyAcid ?? 0;
@@ -771,10 +767,9 @@ export class Creature {
     s.m_enzyme[i] = m.enzyme ?? 0;
     s.m_o2[i] = m.o2 ?? 0;
     s.m_co2[i] = m.co2 ?? 0;
-    s.m_biomass[i] = m.biomass ?? 0;
     s.m_waste[i] = m.waste ?? 0;
     s.m_adp[i] = m.adp ?? 0;
-    s.m_ribosome[i] = m.ribosome ?? 0;
+    s.m_mrna[i] = m.mrna ?? 0;
     s.m_biopolymer[i] = m.biopolymer ?? 0;
     s.m_membrane[i] = m.membrane ?? 0;
     s.m_photoreceptor[i] = m.photoreceptor ?? 0;
@@ -866,10 +861,9 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
     if (m.enzyme !== undefined) store.m_enzyme[idx] = m.enzyme;
     if (m.o2 !== undefined) store.m_o2[idx] = m.o2;
     if (m.co2 !== undefined) store.m_co2[idx] = m.co2;
-    if (m.biomass !== undefined) store.m_biomass[idx] = m.biomass;
     if (m.waste !== undefined) store.m_waste[idx] = m.waste;
     if (m.adp !== undefined) store.m_adp[idx] = m.adp;
-    if (m.ribosome !== undefined) store.m_ribosome[idx] = m.ribosome;
+    if (m.mrna !== undefined) store.m_mrna[idx] = m.mrna;
     if (m.biopolymer !== undefined) store.m_biopolymer[idx] = m.biopolymer;
     if (m.membrane !== undefined) store.m_membrane[idx] = m.membrane;
     if (m.photoreceptor !== undefined) store.m_photoreceptor[idx] = m.photoreceptor;
@@ -912,11 +906,10 @@ export interface Molecules {
   o2: number;           // respiration substrate / photosynth product
   co2: number;          // respiration product / photosynth substrate
   minerals: number;     // mineral cofactor / structural input
-  biomass: number;      // structural; part of cell volume
   waste: number;        // toxic byproduct of fermentation
-  ribosome: number;     // protein-synthesis machinery; multiplies biosynth rate
+  mrna: number;         // catalyst proxy for biosynth machinery
   biopolymer: number;   // bulk food substrate; broken to glu/aa/fa by enzyme
-  membrane: number;     // structural lipid bilayer; required for fission
+  membrane: number;     // structural lipid bilayer; required for fission and viability
   photoreceptor: number;   // gates SENSE_LIGHT / EM / pheromone
   chemoreceptor: number;   // gates SENSE_GRAD / DENSITY / KIN
   mechanoreceptor: number; // gates SENSE_PRESSURE / WALL
@@ -929,7 +922,7 @@ export interface Molecules {
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
-  "o2", "co2", "minerals", "biomass", "waste", "ribosome",
+  "o2", "co2", "minerals", "waste", "mrna",
   "biopolymer", "membrane",
   "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
   "marker0", "marker1", "marker2", "marker3",
@@ -944,7 +937,7 @@ export function emptyMolecules(): Molecules {
   return {
     adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
     chlorophyll: 0, enzyme: 0,
-    o2: 0, co2: 0, minerals: 0, biomass: 0, waste: 0, ribosome: 0,
+    o2: 0, co2: 0, minerals: 0, waste: 0, mrna: 0,
     biopolymer: 0, membrane: 0,
     photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0,
     marker0: 0, marker1: 0, marker2: 0, marker3: 0,
@@ -1387,8 +1380,8 @@ for (let i = 0; i < MOLECULE_IDS.length; i++) MOLECULE_INDEX[MOLECULE_IDS[i]] = 
 // slot in the REACTIONS table. KM_DEFAULT is still used by the engine.
 const KM_DEFAULT = 1;
 
-// Phase 2: riboMult retired. Biosynth rates are uniform across cells;
-// ribosome accumulation no longer multiplies them. Cells that want to
+// Phase 2: mrnaMult retired. Biosynth rates are uniform across cells;
+// mrna accumulation no longer multiplies them. Cells that want to
 // out-build their peers do it via catalyst pools on the specific
 // biosynth slots (REACTIONS[4..9]). Ribosomes still exist as a
 // tracked molecule and can be synthesized via the synth_ribo
@@ -1410,7 +1403,7 @@ const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
 const CHEMICAL_COUNT = 96;
-const NAMED_CHEMICAL_COUNT = 22;
+const NAMED_CHEMICAL_COUNT = 21;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
 // Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
@@ -1418,8 +1411,8 @@ const NAMED_CHEMICAL_COUNT = 22;
 // replaces the old "organic" material, and membrane is the structural
 // lipid bilayer required for fission.
 const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
-  "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "biomass", "adp",
-  "waste", "chlorophyll", "enzyme", "ribosome",
+  "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "adp",
+  "waste", "chlorophyll", "enzyme", "mrna",
   "biopolymer", "membrane",
   "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
   "marker0", "marker1", "marker2", "marker3",
@@ -1432,25 +1425,24 @@ const CHEM_GLU = 2;
 const CHEM_AA = 3;
 const CHEM_FA = 4;
 const CHEM_MIN = 5;
-const CHEM_BIOMASS = 6;
-const CHEM_ADP = 7;
-const CHEM_WASTE = 8;
-// chlorophyll, enzyme, ribosome have specific roles as rate multipliers:
+const CHEM_ADP = 6;
+const CHEM_WASTE = 7;
+// chlorophyll, enzyme, mrna have specific roles as rate multipliers:
 //   chl   -> photosynth (mandatory: no chl -> no photosynth)
 //   ribo  -> all biosynth reactions (mandatory: no ribo -> no biosynth)
 //   enz   -> catabolize (mandatory: no enz -> no digestion of biopolymer)
 // Real biology has matching analogs: pigment for carbon fixation, the
 // ribosomal machinery for protein synthesis, digestive enzymes for
 // breaking down ingested food.
-const CHEM_CHL = 9;
-const CHEM_ENZ = 10;
-const CHEM_RIBO = 11;
-const CHEM_BIOPOLYMER = 12;
-const CHEM_MEMBRANE = 13;
-const CHEM_PHOTORECEPTOR = 14;
-const CHEM_CHEMORECEPTOR = 15;
-const CHEM_MECHANORECEPTOR = 16;
-const CHEM_THERMORECEPTOR = 17;
+const CHEM_CHL = 8;
+const CHEM_ENZ = 9;
+const CHEM_MRNA = 10;
+const CHEM_BIOPOLYMER = 11;
+const CHEM_MEMBRANE = 12;
+const CHEM_PHOTORECEPTOR = 13;
+const CHEM_CHEMORECEPTOR = 14;
+const CHEM_MECHANORECEPTOR = 15;
+const CHEM_THERMORECEPTOR = 16;
 // Marker chems live at slots 18..21. Identity-only -- produced as
 // random side-products of procedural reactions whose product list
 // happens to include them. Fingerprint top-N includes markers
@@ -1458,10 +1450,12 @@ const CHEM_THERMORECEPTOR = 17;
 // Constants aren't separately exported; the fingerprint code iterates
 // over all chems and the chem table's role tag does the gating.
 void 0;
-// Receptor saturation reference. Above this pool size sense signals
-// run at full strength; below it they scale linearly toward zero.
-const RECEPTOR_REF = 1.0;
-const RIBO_REF = 5;
+// Receptor saturation reference. Sat curve = pool / (pool + REF) so
+// pool at REF gives sat=0.5; pool at 9*REF gives sat=0.9. Set low so
+// even modest receptor investment yields most of the signal -- a
+// cell hitting pool ~0.5 already reads at sat 0.83.
+const RECEPTOR_REF = 0.1;
+const MRNA_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
 const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
@@ -1478,7 +1472,7 @@ export type ChemRole =
   | "energyCarrier"   // ATP-like: stores energy in chemical form
   | "energyEmpty"     // ADP-like: the discharged counterpart
   | "membrane"        // structural lipid bilayer
-  | "mrna"            // catalyst proxy for biosynth (formerly "ribosome")
+  | "mrna"            // catalyst proxy for biosynth (formerly "mrna")
   | "pigment"         // catalyst proxy for photosynthesis
   | "digester"        // catalyst proxy for catabolism
   | "marker";         // identity-only; no reactions consume it
@@ -1534,7 +1528,7 @@ interface NamedChemSpec {
 // reasonable real-chemistry analogs: O2/CO2 are volatile gases, glucose
 // is a high-bond-energy soluble sugar, fatty acid is hydrophobic and
 // energy-dense, biomass is structural-insoluble, chlorophyll/enzyme/
-// ribosome are aqueous machinery that doesn't cross membranes.
+// mrna are aqueous machinery that doesn't cross membranes.
 const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#cfe2ff" },
   /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6" },
@@ -1542,7 +1536,6 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075" },
   /* fa     */ { molarMass: 1.0, density: 0.9,  defaultPhase: "liquid",  solubility: 0.1,  vaporPressure: 0,  meltingPoint: 40,   permeability: 0.3, bondEnergy: 80,   role: "none",      color: "#f0d264" },
   /* min    */ { molarMass: 1.0, density: 2.4,  defaultPhase: "solid",   solubility: 0.02, vaporPressure: 0,  meltingPoint: 1200, permeability: 0.1, bondEnergy: 0,    role: "none",      color: "#8c8175" },
-  /* biomass*/ { molarMass: 1.0, density: 1.1,  defaultPhase: "solid",   solubility: 0,    vaporPressure: 0,  meltingPoint: 300,  permeability: 0,   bondEnergy: 15,   role: "none",      color: "#7fb069" },
   /* adp    */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 0,    role: "energyEmpty", color: "#a8d8ea" },
   /* waste  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.6, bondEnergy: 2,    role: "none",      color: "#a89878" },
   /* chl    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 5,    role: "pigment",   color: "#5fa850" },
@@ -1574,8 +1567,10 @@ export const CHEM_NAMES: ReadonlyArray<string> = CHEMICALS.map((c) => c.name);
 // renumbers them; tests pin to the export rather than to literals).
 export const CHEM_IDS = {
   o2: 0, co2: 1, glucose: 2, aminoAcid: 3, fattyAcid: 4, minerals: 5,
-  biomass: 6, adp: 7, waste: 8, chlorophyll: 9, enzyme: 10, ribosome: 11,
-  biopolymer: 12, membrane: 13,
+  adp: 6, waste: 7, chlorophyll: 8, enzyme: 9, mrna: 10,
+  biopolymer: 11, membrane: 12,
+  photoreceptor: 13, chemoreceptor: 14, mechanoreceptor: 15, thermoreceptor: 16,
+  marker0: 17, marker1: 18, marker2: 19, marker3: 20,
 } as const;
 
 // World-spawn weighting for free-floating particles. Replaces the
@@ -1737,10 +1732,10 @@ interface Reaction {
   // Apply BIOSYNTH_ATP_FLOOR when this reaction consumes ATP. True for
   // biosynth slots so newborns don't burn their starting ATP on growth.
   atpFloor: boolean;
-  // Rate multiplied by chemCols[CHEM_RIBO][i] / RIBO_REF. Set on
-  // every biosynth reaction (real ribosomes drive protein synthesis).
-  // Mandatory -- zero ribosomes means zero biosynth.
-  riboScale: boolean;
+  // Rate multiplied by chemCols[CHEM_MRNA][i] / MRNA_REF. Set on
+  // every biosynth reaction (real mRNA drive protein synthesis).
+  // Mandatory -- zero mRNA means zero biosynth.
+  mrnaScale: boolean;
   // Rate multiplied by chemCols[CHEM_CHL][i] / CHL_REF. Set only on
   // photosynth (real chlorophyll absorbs the photon). Mandatory --
   // zero chlorophyll means no carbon fixation.
@@ -1818,7 +1813,7 @@ function buildReactionTable(): Reaction[] {
     out.push({
       sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax,
       uncatRate: 0, gateMask: 0, surfaceScale: false, atpFloor: false,
-      riboScale: false, chlScale: false, enzScale: false,
+      mrnaScale: false, chlScale: false, enzScale: false,
     });
   }
   // Overwrite the first NAMED_REACTION_COUNT generated entries with the
@@ -1849,7 +1844,7 @@ function installNamedReactions(out: Reaction[]): void {
     opts: {
       lightIn?: number; gateMask?: number;
       surfaceScale?: boolean; atpFloor?: boolean;
-      riboScale?: boolean; chlScale?: boolean; enzScale?: boolean;
+      mrnaScale?: boolean; chlScale?: boolean; enzScale?: boolean;
     } = {},
   ): Reaction => ({
     sChem: new Uint8Array(sChem),
@@ -1863,27 +1858,30 @@ function installNamedReactions(out: Reaction[]): void {
     gateMask: opts.gateMask ?? 0,
     surfaceScale: opts.surfaceScale ?? false,
     atpFloor: opts.atpFloor ?? false,
-    riboScale: opts.riboScale ?? false,
+    mrnaScale: opts.mrnaScale ?? false,
     chlScale: opts.chlScale ?? false,
     enzScale: opts.enzScale ?? false,
   });
   // Slot index in NAMED_CHEMICALS: o2=0 co2=1 glu=2 aa=3 fa=4 min=5
   // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11 biop=12 memb=13.
-  // Energy reactions: no riboScale (these aren't protein synthesis).
+  // Energy reactions: no mrnaScale (these aren't protein synthesis).
   out[0] = mk([CHEM_GLU, CHEM_O2], [1, 1], [CHEM_CO2], [2], +10, 16);                          // aerobic: glu+o2 -> 2 co2 + 10 atp
   out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
   out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
   // Photosynth: requires chlorophyll molecule (mandatory multiplier).
   out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
-  // with ribosome / mRNA count (mandatory) -- this is the cell's
+  // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.
-  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, riboScale: true }); // synth_aa
-  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, riboScale: true }); // synth_fa
-  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, riboScale: true }); // synth_chl
-  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, riboScale: true }); // synth_enz
-  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_RIBO], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, riboScale: true }); // synth_ribo
-  out[9] = mk([CHEM_AA, CHEM_FA], [0.9, 0.1], [CHEM_BIOMASS], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_biomass
+  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << 1, atpFloor: true, mrnaScale: true }); // synth_aa
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << 2, atpFloor: true, mrnaScale: true }); // synth_fa
+  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << 4, atpFloor: true, mrnaScale: true }); // synth_chl
+  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << 3, atpFloor: true, mrnaScale: true }); // synth_enz
+  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << 5, atpFloor: true, mrnaScale: true }); // synth_ribo
+  // synth_membrane via the SYNTH_BIO bit: aa + fa -> membrane lipid.
+  // Replaces the retired synth_biomass; SYNTH_BIO now triggers
+  // membrane growth instead of generic structural biomass.
+  out[9] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_MEMBRANE], [1], -1, 0.8, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
   // Biopolymer digestion. Mass-balanced split mirroring the old
   // CATAB_FRACTIONS for "organic": 0.5 glu + 0.3 aa + 0.2 fa per
   // biopolymer unit. Slightly exergonic (+1 ATP) to model the small
@@ -1894,16 +1892,16 @@ function installNamedReactions(out: Reaction[]): void {
   // Driven by the same SYNTH bits as synth_biomass (gate 1 << 0) so
   // a cell that biosynths a body also lays down membrane. Cheaper
   // than chl/ribo so a growing cell can afford it.
-  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << 0, atpFloor: true, riboScale: true }); // synth_memb
+  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true }); // synth_memb
   // Receptor biosynth (phase H2). Same shape as synth_chl / synth_enz:
   // amino acid + minerals consumed, mRNA-gated, ATP cost. Lumped under
   // the SYNTH_BIO bit so cells that maintain biomass also maintain
   // sensing capacity -- an emergent property: starving cells lose
   // both growth and their senses.
-  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
-  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
-  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
-  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, riboScale: true });
+  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -2037,17 +2035,17 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
       satProduct *= adpAvail / (adpAvail + KM);
     }
     const surface = rxn.surfaceScale ? (s.r[i] / MIN_CREATURE_R) : 1;
-    // Named-molecule multipliers: ribosomes are the cell's protein-
+    // Named-molecule multipliers: mRNA are the cell's protein-
     // synthesis machinery (mandatory on every biosynth reaction);
     // chlorophyll is the photosynth pigment (mandatory on slot 3).
     // Both gate hard at zero -- no pigment, no photosynth; no
-    // ribosomes, no biosynthesis. cells must build these molecules
-    // via SYNTH_RIBO / SYNTH_CHL to actually grow / fix carbon.
+    // mRNA, no biosynthesis. cells must build these molecules
+    // via SYNTH_MRNA / SYNTH_CHL to actually grow / fix carbon.
     let machineryMult = 1;
-    if (rxn.riboScale) {
-      const r = s.chemCols[CHEM_RIBO][i];
+    if (rxn.mrnaScale) {
+      const r = s.chemCols[CHEM_MRNA][i];
       if (r <= 0) continue;
-      machineryMult *= r / RIBO_REF;
+      machineryMult *= r / MRNA_REF;
     }
     if (rxn.chlScale) {
       const ch = s.chemCols[CHEM_CHL][i];
@@ -2096,24 +2094,27 @@ function mulberry32(seed: number): () => number {
 
 // Maintenance: structural molecules turn over even when the cell isn't
 // reproducing. Each tick a small fraction of biomass / enzyme / chloro
-// / ribosome degrades back into the substrates it was synthesized
+// / mrna degrades back into the substrates it was synthesized
 // from -- no ATP recovered, but mass-conserving. A cell that stops
 // biosynthesizing (because it has no ATP) bleeds structure and
-// eventually drops below MIN_VIABLE_BIOMASS, at which point it
+// eventually drops below MIN_VIABLE_MEMBRANE, at which point it
 // autolyzes.
-const BIOMASS_DECAY_PER_SEC = 0.005;
+const MEMBRANE_DECAY_PER_SEC = 0.005;
 // The three mandatory-machinery molecules (chl/enz/ribo) gate hard at
 // zero now, so their decay is what eventually kills a starving cell.
 // Lowered to ~0.001 so cells survive temporary substrate shortages
 // (~10 min half-life) instead of collapsing within seconds of stalling.
 const ENZYME_DECAY_PER_SEC = 0.001;
 const CHLORO_DECAY_PER_SEC = 0.001;
-const RIBO_DECAY_PER_SEC = 0.001;
-const MIN_VIABLE_BIOMASS = 0.5;
-// A cell with no ribosome can't turn over biomass or rebuild lost
+const MRNA_DECAY_PER_SEC = 0.001;
+// Membrane is the structural reserve that gates viability now that
+// the biomass chemical is retired. Same threshold the old MIN_VIABLE_MEMBRANE
+// gate used; cells below this autolyze.
+const MIN_VIABLE_MEMBRANE = 0.5;
+// A cell with no mrna can't turn over biomass or rebuild lost
 // enzymes. Ribosome decays slowly (~0.1%/sec) so a 0.01 threshold
 // gives healthy cells thousands of sim-sec of headroom before falling
-// below it without active SYNTH_RIBO.
+// below it without active SYNTH_MRNA.
 const MIN_VIABLE_RIBOSOME = 0.01;
 // Amino acid is much more fluid -- biosynth + reactions consume it
 // in bursts and maintenance decay refills it. A 0.001 threshold
@@ -3160,10 +3161,10 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     if (b === OP.SYNTH_CHL) hasChl = true;
     else if (b === OP.SYNTH_ENZ) hasEnz = true;
   }
-  // Minimal cell body: biomass just above MIN_VIABLE_BIOMASS (the
+  // Minimal cell body: biomass just above MIN_VIABLE_MEMBRANE (the
   // membrane), a trickle of ADP and ATP to enable tick-1 chemistry,
   // and the mandatory-multiplier molecules whose genome op the cell
-  // carries. SYNTH_RIBO is universal-required so ribosome is too;
+  // carries. SYNTH_MRNA is universal-required so mrna is too;
   // chl/enz only seeded if their op is present. Nothing else --
   // glucose, aa, fa, reserves all come from the scoop below.
   const c = newCreature(world.creatureStore, {
@@ -3178,9 +3179,11 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     color: genomeColor(genome),
     speciesKey: genomeKey(genome),
     molecules: {
-      biomass: 1,
+      // Membrane is the structural reserve now (biomass retired); MVG
+      // requires the cell to maintain it via SYNTH_BIO.
+      membrane: 1,
       adp: 5,
-      ribosome: 1,
+      mrna: 1,
       // Seed a small amino acid pool so the new viability threshold
       // (MIN_VIABLE_AMINOACID) doesn't kill founders before they have
       // a chance to run SYNTH_AA / PREDATE / ENGULF. Maintenance
@@ -3189,16 +3192,11 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
       aminoAcid: 0.5,
       chlorophyll: hasChl ? 0.5 : 0,
       enzyme: hasEnz ? 0.5 : 0,
-      // Phase H2: founders start with a starter dose of each receptor
-      // chemical so they can sense from tick 1. Receptors decay via
-      // maintenanceDecay and are replenished by biosynth slots 12..15
-      // (gated by SYNTH_BIO, same bit as biomass). Cells that fail to
-      // keep biosynth going go blind over a couple of minutes -- a
-      // selective pressure to maintain growth + sensing together.
-      photoreceptor: 1.0,
-      chemoreceptor: 1.0,
-      mechanoreceptor: 1.0,
-      thermoreceptor: 1.0,
+      // Founders start with ZERO receptors -- sensing is earned. A
+      // lineage that runs biosynth (SYNTH_BIO bit) replenishes its
+      // receptor pool via reaction slots 12..15. A cell that doesn't
+      // ramp up biosynth in time stays blind and likely starves;
+      // that's the selection pressure.
     },
   });
   // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
@@ -3539,7 +3537,7 @@ function runSyntheticReaction(
 // than in chemCols, so this can't be a REACTIONS-table entry; but
 // the substrate / ATP / saturation math is the same as every biosynth
 // reaction, so we delegate to runSyntheticReaction. Substrate fixed
-// at 0.5 aa + 0.5 min (same as enzymes / chlorophyll / ribosomes).
+// at 0.5 aa + 0.5 min (same as enzymes / chlorophyll / mRNA).
 const CAT_SUBSTRATE_CHEM = new Uint8Array([3, 5]); // aa, min in chemCols
 const CAT_SUBSTRATE_COUNT = new Float32Array([0.5, 0.5]);
 function biosynthCatalyst(
@@ -3605,12 +3603,14 @@ function autoExcrete(c: Creature, world: World): void {
 function maintenanceDecay(c: Creature, dt: number): void {
   const s = c.store; const i = c.idx;
   const stressMult = 1 + 4 * Math.max(0, 1 - s.energy[i] / 8);
-  const bio = s.m_biomass[i];
-  if (bio > 0) {
-    const lost = bio * BIOMASS_DECAY_PER_SEC * stressMult * dt;
-    s.m_biomass[i] = bio - lost;
-    s.m_aminoAcid[i] += 0.9 * lost;
-    s.m_fattyAcid[i] += 0.1 * lost;
+  // Membrane is the bulk structural reserve; decays into aa + fa
+  // (replaces the old biomass decay path).
+  const memb = s.m_membrane[i];
+  if (memb > 0) {
+    const lost = memb * MEMBRANE_DECAY_PER_SEC * stressMult * dt;
+    s.m_membrane[i] = memb - lost;
+    s.m_aminoAcid[i] += 0.5 * lost;
+    s.m_fattyAcid[i] += 0.5 * lost;
   }
   const enz = s.m_enzyme[i];
   if (enz > 0) {
@@ -3626,10 +3626,10 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
   }
-  const rib = s.m_ribosome[i];
+  const rib = s.m_mrna[i];
   if (rib > 0) {
-    const lost = rib * RIBO_DECAY_PER_SEC * stressMult * dt;
-    s.m_ribosome[i] = rib - lost;
+    const lost = rib * MRNA_DECAY_PER_SEC * stressMult * dt;
+    s.m_mrna[i] = rib - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
   }
@@ -3711,19 +3711,20 @@ function runOrganelleChemistry(
 }
 
 // Oxidative damage from accumulated waste / CO2. Above the excretion
-// thresholds, biomass is converted directly to waste at a rate scaling
-// with the excess. Net effect: a cell that can pay the excretion ATP
-// cost stays clean; one that can't suffers proportional damage.
+// thresholds, membrane is converted directly to waste at a rate
+// scaling with the excess. Net effect: a cell that can pay the
+// excretion ATP cost stays clean; one that can't suffers
+// proportional damage to its structural reserve.
 function toxify(c: Creature, dt: number): void {
   const s = c.store; const i = c.idx;
-  const co2 = s.m_co2[i], waste = s.m_waste[i], bio = s.m_biomass[i];
+  const co2 = s.m_co2[i], waste = s.m_waste[i], memb = s.m_membrane[i];
   let excess = 0;
   if (co2 > CO2_EXCRETE_THRESHOLD) excess += co2 - CO2_EXCRETE_THRESHOLD;
   if (waste > WASTE_EXCRETE_THRESHOLD) excess += waste - WASTE_EXCRETE_THRESHOLD;
-  if (excess <= 0 || bio <= 0) return;
+  if (excess <= 0 || memb <= 0) return;
   const want = excess * TOX_DAMAGE_PER_EXCESS_PER_SEC * dt;
-  const damage = want < bio ? want : bio;
-  s.m_biomass[i] = bio - damage;
+  const damage = want < memb ? want : memb;
+  s.m_membrane[i] = memb - damage;
   s.m_waste[i] = waste + damage;
 }
 
@@ -4644,7 +4645,9 @@ function updateCreatures(world: World, dt: number): void {
       selfMass += v;
     }
     VM_SELF.mass = selfMass;
-    VM_SELF.biomass = c.molecules.biomass;
+    // SELF_BIOMASS now reads the membrane pool (the structural reserve
+    // that replaced the retired biomass chemical).
+    VM_SELF.biomass = c.molecules.membrane;
     VM_SELF.age = world.t - c.bornAt;
     VM_SELF.glucose = c.molecules.glucose;
     VM_SELF.o2 = c.molecules.o2;
@@ -4907,7 +4910,7 @@ function updateCreatures(world: World, dt: number): void {
     //  1. Starvation: no ATP and no fuel anywhere to rebuild it.
     //  2. Autolysis: biomass has decayed below the viable minimum (the
     //     cell can no longer hold itself together as a cell).
-    //  3. No ribosome: without protein-synthesis machinery the cell
+    //  3. No mrna: without protein-synthesis machinery the cell
     //     can't turn over biomass or replenish enzymes -- biologically
     //     dead even if structurally intact.
     //  4. No amino acid: with the per-op aa cost on growth ops, an
@@ -4921,8 +4924,8 @@ function updateCreatures(world: World, dt: number): void {
       && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC;
     if (
       (c.energy <= 0 && noFuel(c))
-      || m.biomass < MIN_VIABLE_BIOMASS
-      || m.ribosome < MIN_VIABLE_RIBOSOME
+      || m.membrane < MIN_VIABLE_MEMBRANE
+      || m.mrna < MIN_VIABLE_RIBOSOME
       || m.aminoAcid < MIN_VIABLE_AMINOACID
       || founderTooOld
     ) {
@@ -5125,7 +5128,7 @@ function tryReproduce(parent: Creature, world: World): void {
   const childShare = 1 - parentShare;
   // Build-block sufficiency check is also gone -- the parent commits
   // whatever proportional share its current pool gives the child,
-  // and if either daughter ends up below MIN_VIABLE_BIOMASS the
+  // and if either daughter ends up below MIN_VIABLE_MEMBRANE the
   // standard autolyze handles cleanup with mass returned to the
   // environment. Bad timing has real consequences now.
   const childMolecules = emptyMolecules();
@@ -5164,7 +5167,7 @@ function tryReproduce(parent: Creature, world: World): void {
   parent.energy -= energyGift;
   // No additive yolk. The child receives exactly its proportional
   // share of the parent's molecules / reserves / energy. If the
-  // parent didn't stockpile enough ribosomes / chlorophyll / glucose
+  // parent didn't stockpile enough mRNA / chlorophyll / glucose
   // before fission, the child inherits that deficit. This puts the
   // genome in charge of bootstrap -- cells that evolve "save before
   // dividing" behavior produce viable children; profligate ones
@@ -5247,8 +5250,8 @@ function tryReproduce(parent: Creature, world: World): void {
 // to the host's child cell. Returns null if there isn't enough mass
 // to make a viable split (the original inner keeps everything).
 function fissionInner(inner: Creature, world: World): Creature | null {
-  const bio = inner.molecules.biomass;
-  if (bio < 2 * MIN_VIABLE_BIOMASS) return null;
+  const bio = inner.molecules.membrane;
+  if (bio < 2 * MIN_VIABLE_MEMBRANE) return null;
   // Mutate the genome -- endosymbionts drift; no viability gate
   // because they don't need autonomous viability inside a host.
   const daughterGenome = mutateGenome(inner.genome);
@@ -5305,7 +5308,7 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   const ang = c.division.axis;
   c.division = null;
   // No commit-time stillbirth abort either. A daughter that opens
-  // below MIN_VIABLE_BIOMASS gets pushed to world.creatures anyway
+  // below MIN_VIABLE_MEMBRANE gets pushed to world.creatures anyway
   // and is caught by the normal autolyze pass on the next tick,
   // which releases its mass as particles. Brief +1/-1 churn in the
   // species table is the cost of dumb fission timing.
@@ -6792,9 +6795,8 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       o2: m.o2,
       co2: m.co2,
       minerals: m.minerals,
-      biomass: m.biomass,
       waste: m.waste,
-      ribosome: m.ribosome,
+      mrna: m.mrna,
       biopolymer: m.biopolymer,
       membrane: m.membrane,
       photoreceptor: m.photoreceptor,

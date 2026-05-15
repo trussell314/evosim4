@@ -85,7 +85,7 @@ export const OP = {
   SYNTH_FA:      0x6B,
   SYNTH_ENZ:     0x6C,
   SYNTH_CHL:     0x6D,
-  SYNTH_RIBO:    0x6E,   // build ribosomes; their count multiplies biosynth rate
+  SYNTH_MRNA:    0x6E,   // build mRNA; their count multiplies biosynth rate
 
   // Generalized primitive sensors. The operand selects which "receptor
   // type" / which band to read -- analogous to how real chemoreceptors
@@ -486,7 +486,7 @@ export function runTick(
       case OP.SYNTH_FA:       out.synthMask |= 1 << 2; break;
       case OP.SYNTH_ENZ:      out.synthMask |= 1 << 3; break;
       case OP.SYNTH_CHL:      out.synthMask |= 1 << 4; break;
-      case OP.SYNTH_RIBO:     out.synthMask |= 1 << 5; break;
+      case OP.SYNTH_MRNA:     out.synthMask |= 1 << 5; break;
       case OP.SYNTH_CAT: {
         // Operand picks which catalyst slot to build. Mod to the
         // catalyst count keeps every operand byte targeting a real
@@ -667,7 +667,7 @@ export function summarizeGenome(
       case OP.SYNTH_FA:   synthFA = true; break;
       case OP.SYNTH_ENZ:  synthEnz = true; break;
       case OP.SYNTH_CHL:  synthChl = true; break;
-      case OP.SYNTH_RIBO: synthRibo = true; break;
+      case OP.SYNTH_MRNA: synthRibo = true; break;
       case OP.SYNTH_CAT: {
         const slot = operand % CATALYST_COUNT;
         if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
@@ -804,7 +804,7 @@ export function summarizeGenome(
   if (synthFA) builds.push("fatty acid");
   if (synthEnz) builds.push("enzyme");
   if (synthChl) builds.push("chlorophyll");
-  if (synthRibo) builds.push("ribosomes");
+  if (synthRibo) builds.push("mRNA");
   bullets.push("- Builds: " + (builds.length > 0 ? builds.join(", ") : "nothing (no SYNTH_* ops present)") + ".");
 
   bullets.push("- Catalysts: " + (catalystSlots.length > 0
@@ -816,7 +816,7 @@ export function summarizeGenome(
   // checks out.
   const warnings: string[] = [];
   if (synthBio && !synthRibo) {
-    warnings.push("SYNTH_BIO without SYNTH_RIBO -- ribosomes decay and biosynth stalls.");
+    warnings.push("SYNTH_BIO without SYNTH_MRNA -- mRNA decay and biosynth stalls.");
   }
   if (synthChl && !isHetero && !synthAA) {
     warnings.push("pure autotroph without SYNTH_AA -- aa supply will run out.");
@@ -976,7 +976,7 @@ export function genomeSynthMask(genome: Uint8Array): number {
     else if (op === OP.SYNTH_FA) mask |= 1 << 2;
     else if (op === OP.SYNTH_ENZ) mask |= 1 << 3;
     else if (op === OP.SYNTH_CHL) mask |= 1 << 4;
-    else if (op === OP.SYNTH_RIBO) mask |= 1 << 5;
+    else if (op === OP.SYNTH_MRNA) mask |= 1 << 5;
   });
   return mask;
 }
@@ -1010,7 +1010,7 @@ const SENSE_OPS: ReadonlySet<number> = new Set([
 //    - hasReproduce: REPRODUCE.
 //    - hasBio:       SYNTH_BIO -- builds biomass; without it the cell
 //                    autolyzes from maintenance decay.
-//    - hasRibo:      SYNTH_RIBO -- ribosomes are mandatory on every
+//    - hasMrna:      SYNTH_MRNA -- mRNA are mandatory on every
 //                    biosynth reaction.
 //    - hasSense:     any SENSE_* / SELF_* op -- a cell that can't
 //                    read state can only emit constant behavior.
@@ -1025,7 +1025,7 @@ const SENSE_OPS: ReadonlySet<number> = new Set([
 export function viableGenome(genome: Uint8Array): boolean {
   let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
   let hasReproduce = false;
-  let hasBio = false, hasRibo = false;
+  let hasBio = false, hasMrna = false;
   let hasAA = false, hasFA = false, hasEnz = false;
   let hasSense = false;
   walkGenome(genome, (op) => {
@@ -1035,7 +1035,7 @@ export function viableGenome(genome: Uint8Array): boolean {
     else if (op === OP.SYNTH_CHL) hasChl = true;
     else if (op === OP.REPRODUCE) hasReproduce = true;
     else if (op === OP.SYNTH_BIO) hasBio = true;
-    else if (op === OP.SYNTH_RIBO) hasRibo = true;
+    else if (op === OP.SYNTH_MRNA) hasMrna = true;
     else if (op === OP.SYNTH_AA) hasAA = true;
     else if (op === OP.SYNTH_FA) hasFA = true;
     else if (op === OP.SYNTH_ENZ) hasEnz = true;
@@ -1043,7 +1043,7 @@ export function viableGenome(genome: Uint8Array): boolean {
   });
   const isHeterotroph = hasIngest || hasPredate || hasEngulf;
   const hasMass = isHeterotroph || hasChl;
-  if (!hasMass || !hasReproduce || !hasBio || !hasRibo || !hasSense) return false;
+  if (!hasMass || !hasReproduce || !hasBio || !hasMrna || !hasSense) return false;
   // Heterotrophs need digestive enzymes to convert reserves -> molecules.
   if (isHeterotroph && !hasEnz) return false;
   // Pure photoautotrophs need their own building-block factory.
@@ -1064,7 +1064,7 @@ export function viableGenome(genome: Uint8Array): boolean {
   // chemistry, not named molecules like aminoAcid. A pure-INGEST
   // lineage that doesn't also synth or predate has no path to aa
   // and would starve under the per-op cost rule.
-  // None of these sources go through the ribosome (which itself
+  // None of these sources go through the mrna (which itself
   // requires aa to synth under the cost rule), so there's no
   // chicken-and-egg lock -- audit suggestion #2.
   const hasAaSource = hasAA || hasPredate || hasEngulf;
@@ -1125,7 +1125,7 @@ export function makeDefaultGenome(): Uint8Array {
     OP.SYNTH_ENZ,      // mandatory for catabolize to fire (gates digestion)
     OP.SYNTH_BIO,
     // Ribosomes mandatory on every biosynth reaction's rate.
-    OP.SYNTH_RIBO,
+    OP.SYNTH_MRNA,
     // Generic catalyst synthesis. Optional now -- evolution can tune
     // which reaction slot benefits. Operand picks one of 256.
     OP.SYNTH_CAT, 0,
@@ -1209,7 +1209,7 @@ const SEED_OP_WEIGHT: Record<number, number> = {
   [OP.INGEST]:        3,
   [OP.REPRODUCE]:     3,
   [OP.SYNTH_BIO]:     3,
-  [OP.SYNTH_RIBO]:    3, // mandatory for biosynthesis under strict ribosome model
+  [OP.SYNTH_MRNA]:    3, // mandatory for biosynthesis under strict mrna model
   [OP.SYNTH_ENZ]:     3, // mandatory for heterotroph digestion (catabolize gates on enz)
   [OP.SYNTH_AA]:      3, // mandatory for photoautotrophs (no INGEST -> no aa from food)
   [OP.SYNTH_FA]:      3, // mandatory for photoautotrophs

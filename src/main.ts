@@ -772,7 +772,7 @@ function flushTooltip(): void {
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${c.speciesKey.slice(0, 6)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
-    `ATP=${c.energy.toFixed(0)}  bio=${c.molecules.biomass.toFixed(0)}  mass=${mass.toFixed(0)}` +
+    `ATP=${c.energy.toFixed(0)}  memb=${c.molecules.membrane.toFixed(0)}  mass=${mass.toFixed(0)}` +
     assocLine;
   tooltip.style.display = "block";
   // Anchor at the cell's projected screen position with edge-flipping
@@ -1156,7 +1156,7 @@ function render(): void {
       let total = 0;
       const m = p.molecules;
       total += m.glucose + m.fattyAcid + m.aminoAcid + m.minerals
-        + m.o2 + m.co2 + m.waste + m.adp + m.chlorophyll + m.enzyme + m.biomass;
+        + m.o2 + m.co2 + m.waste + m.adp + m.chlorophyll + m.enzyme + m.membrane;
       if (total > 0 && m.waste / total >= TOXIC_WASTE_FRAC) {
         TOXIC_BUCKETS[bucket].push(p);
         continue;
@@ -1562,7 +1562,9 @@ function drawPhylogeny(): void {
   // cell to a different species, so the birth key is the right bucket.
   bioByKey.clear();
   for (const c of snapshot.creatures) {
-    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.biomass);
+    // Membrane is the structural reserve in the chemistry-overhaul
+    // model (replaces the retired biomass chemical).
+    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
   }
   // Update the main-side peak map from this sample. The phylogeny
   // render runs every frame, so the peak tracks tightly without
@@ -1956,7 +1958,7 @@ function updateInspector(): void {
     `ingestCD=${c.ingestCooldown.toFixed(2)}s\n` +
     `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
-    `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} rib=${fmt(m.ribosome)} bio=${fmt(m.biomass)}\n` +
+    `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} mRNA=${fmt(m.mrna)} memb=${fmt(m.membrane)}\n` +
     `bulk: biop=${fmt(m.biopolymer)} memb=${fmt(m.membrane)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
@@ -2235,7 +2237,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
       case OP.SYNTH_FA: synthFA = true; break;
       case OP.SYNTH_ENZ: synthEnz = true; break;
       case OP.SYNTH_CHL: synthChl = true; break;
-      case OP.SYNTH_RIBO: synthRibo = true; break;
+      case OP.SYNTH_MRNA: synthRibo = true; break;
       case OP.SYNTH_CAT: catalystSlots.add((operand ?? 0) % CATALYST_COUNT); break;
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
       case OP.EXCRETE: excrete.add((operand ?? 0) % 6); break;
@@ -2282,7 +2284,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   if (synthAA) synth.push("aa");
   if (synthFA) synth.push("fa");
   if (synthEnz) synth.push("enzymes");
-  if (synthRibo) synth.push("ribosomes");
+  if (synthRibo) synth.push("mRNA");
   if (synthChl) synth.push("chlorophyll (photosynth)");
   parts.push(synth.length > 0
     ? `Metabolism: synthesizes ${synth.join(", ")}; unlocks generic reactions gated on those bits (each consumes / produces specific generic-chem slots).`
@@ -2295,7 +2297,7 @@ function describeGenomeProse(genome: Uint8Array, materialNames: ReadonlyArray<st
   const NAMED_SLOTS: Record<number, string> = {
     0: "aerobic respiration", 1: "fermentation", 2: "beta-oxidation",
     3: "photosynthesis", 4: "aa synth", 5: "fa synth",
-    6: "chl synth", 7: "enz synth", 8: "ribosome synth", 9: "biomass synth",
+    6: "chl synth", 7: "enz synth", 8: "mrna synth", 9: "biomass synth",
   };
   const namedCats: string[] = [];
   const specialtyCats: number[] = [];

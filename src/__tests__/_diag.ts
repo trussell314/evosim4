@@ -29,7 +29,7 @@ for (let i = 0; i < totalSec * 60; i++) {
       `  extinct=${w.extinctionCount}` +
       `  species=${w.species.size}` +
       `  births=${births}  deaths=${deaths}` +
-      (c ? `  | sample: ATP=${c.energy.toFixed(0)} reserves=${reserves.toFixed(0)} aa=${m!.aminoAcid.toFixed(0)} fa=${m!.fattyAcid.toFixed(0)} min=${m!.minerals.toFixed(0)} bio=${m!.biomass.toFixed(0)}` : "  | dead")
+      (c ? `  | sample: ATP=${c.energy.toFixed(0)} reserves=${reserves.toFixed(0)} aa=${m!.aminoAcid.toFixed(0)} fa=${m!.fattyAcid.toFixed(0)} min=${m!.minerals.toFixed(0)} bio=${m!.membrane.toFixed(0)}` : "  | dead")
     );
     nextSample += sampleEverySec;
   }

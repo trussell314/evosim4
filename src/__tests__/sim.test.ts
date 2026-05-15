@@ -84,7 +84,7 @@ function quietWorld(): World {
     currentAmp: 0,
     vmInstrBudget: 8,
     obstacles: [],
-    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0, biomass: 0, waste: 0, ribosome: 0, biopolymer: 0, membrane: 0, photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0, marker0: 0, marker1: 0, marker2: 0, marker3: 0 },
+    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0,  waste: 0, mrna: 0, biopolymer: 0, membrane: 0, photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0, marker0: 0, marker1: 0, marker2: 0, marker3: 0 },
     ambient: (() => { const a = new Float32Array(96); a[CHEM_IDS.o2] = 12; a[CHEM_IDS.co2] = 1; return a; })(),
   };
 }
@@ -110,13 +110,13 @@ function makeCreature(overrides: Partial<{
   speciesKey: string;
 }> = {}): Creature {
   const store = new CreatureStore(1);
-  // Defaults: biomass above the reproduction gate; ribosome + aa
+  // Defaults: biomass above the reproduction gate; mrna + aa
   // generous enough that the viability thresholds don't autolyze
   // a test creature mid-scenario. enzyme=1 unlocks biopolymer
   // digestion under the new model. Tests probing starvation
   // override in their molecules patch.
   const molecules: Partial<Molecules> = {
-    biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
+    membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
     // Phase H2: receptors start saturated so existing tests of
     // sensing behavior don't have to invest in them. Tests probing
     // receptor-gating override these to zero in their molecules patch.
@@ -163,7 +163,7 @@ function readyToFission(c: Creature): void {
   c.molecules.aminoAcid = 200;
   c.molecules.fattyAcid = 200;
   c.molecules.minerals = 200;
-  c.molecules.biomass = 200;
+  c.molecules.membrane = 200;
   c.molecules.glucose = 50;
   c.molecules.o2 = 20;
   c.molecules.adp = 50;
@@ -1265,7 +1265,7 @@ describe("creature: death by starvation", () => {
     // Load up the non-fuel chems that should survive death as chem
     // particles. In the phase-D release path, each named chem above
     // a small threshold gets its own particle of that chemId.
-    c.molecules.biomass = 50;
+    c.molecules.membrane = 50;
     c.molecules.enzyme = 20;
     c.molecules.minerals = 30;
     const before = new Set(w.particles);
@@ -1278,7 +1278,7 @@ describe("creature: death by starvation", () => {
       // per-particle override (releaseChemsAsParticles doesn't set
       // density; the chem table default applies).
       const defaultDensity: Record<number, number> = {
-        [CHEM_IDS.biomass]: 1.1,
+        [CHEM_IDS.membrane]: 0.8,
         [CHEM_IDS.enzyme]: 1.1,
         [CHEM_IDS.minerals]: 2.4,
       };
@@ -1292,8 +1292,8 @@ describe("creature: death by starvation", () => {
     };
     // Maintenance decay nibbles structural chems during the death
     // tick; allow a 10% loss before particle release.
-    expect(massByChem(CHEM_IDS.biomass)).toBeGreaterThan(45);
-    expect(massByChem(CHEM_IDS.biomass)).toBeLessThan(52);
+    expect(massByChem(CHEM_IDS.membrane)).toBeGreaterThan(45);
+    expect(massByChem(CHEM_IDS.membrane)).toBeLessThan(52);
     expect(massByChem(CHEM_IDS.enzyme)).toBeGreaterThan(17);
     expect(massByChem(CHEM_IDS.enzyme)).toBeLessThan(22);
     expect(massByChem(CHEM_IDS.minerals)).toBeGreaterThan(28);
@@ -1353,7 +1353,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     c.molecules.aminoAcid = 2000;
     c.molecules.fattyAcid = 2000;
     c.molecules.minerals = 2000;
-    c.molecules.biomass = 2000;
+    c.molecules.membrane = 2000;
     w.creatures.push(c);
     stepFullCycle(w);
     flushDivisions(w);
@@ -1362,7 +1362,7 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     parent.molecules.aminoAcid = 2000;
     parent.molecules.fattyAcid = 2000;
     parent.molecules.minerals = 2000;
-    parent.molecules.biomass = 2000;
+    parent.molecules.membrane = 2000;
     parent.energy = 200;
     stepFullCycle(w);
     flushDivisions(w);
@@ -1379,12 +1379,12 @@ describe("creature: reproduction pacing (no cooldown)", () => {
     for (const cell of w.creatures) {
       // Keep aa just above MIN_VIABLE_AMINOACID -- enough to stay
       // alive, far below what fission needs as build-blocks. Same
-      // for biomass (above MIN_VIABLE_BIOMASS). Fission has to fail
+      // for biomass (above MIN_VIABLE_MEMBRANE). Fission has to fail
       // on build-block exhaustion, not on the viability checks.
       cell.molecules.aminoAcid = 0.01;
       cell.molecules.fattyAcid = 0;
       cell.molecules.minerals = 0;
-      cell.molecules.biomass = 1;
+      cell.molecules.membrane = 1;
       fillCellChems(cell, 0 * 6);
     }
     stepFullCycle(w);
@@ -1539,7 +1539,7 @@ describe("adhesion (multicell bonds)", () => {
   // fingerprint overlap >= 4 bits). Test cells need matching
   // chemistry profiles to count as kin.
   const kinChem = {
-    biomass: 50, glucose: 30, o2: 10, aminoAcid: 20,
+    membrane: 50, glucose: 30, o2: 10, aminoAcid: 20,
     fattyAcid: 15, minerals: 25, adp: 12, co2: 8,
   };
   it("ADHERE bonds with the nearest other cell in range", () => {
@@ -1569,7 +1569,7 @@ describe("adhesion (multicell bonds)", () => {
     const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([OP.HALT]) });
     a.bonds.push(b); b.bonds.push(a);
     // Force b to die: zero biomass + zero fuel.
-    b.molecules.biomass = 0;
+    b.molecules.membrane = 0;
     b.molecules.glucose = 0;
     b.molecules.fattyAcid = 0;
     fillCellChems(b, 0 * 6);
@@ -1669,7 +1669,7 @@ describe("mass conservation", () => {
     const blind = makeCreature({
       x: 450, y: 300, energy: 50, senseRange: 300,
       genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, OP.HALT]),
-      molecules: { biomass: 50, ribosome: 5, aminoAcid: 2, enzyme: 1,
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
         photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0 },
     });
     w.creatures.push(blind);

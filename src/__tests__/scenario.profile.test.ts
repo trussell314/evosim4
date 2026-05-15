@@ -80,7 +80,7 @@ test.skip("lineage establishment", () => {
   const traces: TraceState[] = [];
   const snap = (c: Creature) => ({
     atp: c.energy,
-    bio: c.molecules.biomass,
+    bio: c.molecules.membrane,
     glu: c.molecules.glucose,
     fa:  c.molecules.fattyAcid,
     aa:  c.molecules.aminoAcid,
@@ -141,13 +141,13 @@ test.skip("lineage establishment", () => {
         const r = records.get(c);
         if (r && r.diedAt === null) {
           r.diedAt = w.t;
-          r.deathBiomass = c.molecules.biomass;
+          r.deathBiomass = c.molecules.membrane;
           r.deathATP = c.energy;
           r.deathGlucose = c.molecules.glucose;
         }
         // Mark traced cell as dead so we stop logging.
         for (const tr of traces) {
-          if (tr.cell === c) tr.logBuf.push(`  ** died at age ${(w.t - tr.bornAt).toFixed(1)}s: atp=${c.energy.toFixed(2)} bio=${c.molecules.biomass.toFixed(2)} glu=${c.molecules.glucose.toFixed(2)} **`);
+          if (tr.cell === c) tr.logBuf.push(`  ** died at age ${(w.t - tr.bornAt).toFixed(1)}s: atp=${c.energy.toFixed(2)} bio=${c.molecules.membrane.toFixed(2)} glu=${c.molecules.glucose.toFixed(2)} **`);
         }
       }
     }
@@ -162,7 +162,7 @@ test.skip("lineage establishment", () => {
     // Per-cell trace lines.
     if (i % TRACE_EVERY === 0) {
       for (const tr of traces) {
-        if (tr.cell.molecules.biomass <= 0 && tr.cell.energy <= 0) continue; // dead
+        if (tr.cell.molecules.membrane <= 0 && tr.cell.energy <= 0) continue; // dead
         const s = snap(tr.cell);
         const dt = TRACE_EVERY * FIXED_DT;
         const dAtp = (s.atp - tr.prev.atp) / dt;
