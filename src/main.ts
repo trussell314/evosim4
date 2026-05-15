@@ -1943,6 +1943,14 @@ function updateInspector(): void {
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} mRNA=${fmt(m.mrna)} memb=${fmt(m.membrane)}\n` +
     `bulk: biop=${fmt(m.biopolymer)}\n` +
+    // K-7: receptor inventory. Each cell shows photoreceptor band
+    // pools (V/L/S), per-target chemoreceptor pools (B/M/F/0), and
+    // the scalar mech/thermo/magneto pools. Bond + repair chems
+    // show alongside since they're chemistry-mediated actions now.
+    `photo: V=${fmt(m.photoreceptorVisible)} L=${fmt(m.photoreceptorLong)} S=${fmt(m.photoreceptorSurface)}\n` +
+    `chemo: B=${fmt(m.chemoreceptorBiopolymer)} M=${fmt(m.chemoreceptorMinerals)} F=${fmt(m.chemoreceptorFa)} 0=${fmt(m.chemoreceptorMarker0)}\n` +
+    `sense: mech=${fmt(m.mechanoreceptor)} thermo=${fmt(m.thermoreceptor)} mag=${fmt(m.magnetoreceptor)}\n` +
+    `bond=${fmt(m.bondChem)} repair=${fmt(m.repairChem)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
   disasmBody.textContent = activeDisasm;

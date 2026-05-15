@@ -676,13 +676,13 @@ pass before pushing.
   somatic mutation scaling. Remove `world.pheromone` field and the
   pheromone-decay loop.
 
-- **K-6 — Default genome + viability.** Rewrite `makeDefaultGenome`
+- **K-6 — Default genome + viability.** ✅ Rewrite `makeDefaultGenome`
   to use SYNTH/SENSE_CHEMICAL pattern. `viableGenome` updates: the
   required SYNTH ops become parameterized — replace `hasBio` with
   "has SYNTH with kind=BIO" patterns. Adjust SENSE_OPS to just
   `{ SELF_*, SENSE_CHEMICAL }`.
 
-- **K-7 — Tests + HUD.** Update tests using retired ops. Add Tier
+- **K-7 — Tests + HUD.** ✅ Update tests using retired ops. Add Tier
   3 tests: photoreceptor + light → activated_photo populates;
   SYNTH CHEMO band 2 + biopolymer particles in range → activated
   chemo populates correctly; repair_chem reduces mutation rate.

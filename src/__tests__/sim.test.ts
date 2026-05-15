@@ -1675,6 +1675,25 @@ describe("mass conservation", () => {
     expect(c.store.m_activatedChemoBiopolymerX[c.idx]).toBeGreaterThan(0);
   });
 
+  it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
+    // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
+    // each tick, which somaticMutate already consults. A cell whose
+    // repair_chem stays high should not accumulate mutations even
+    // when its age-driven mutation rate is forced high.
+    const w = quietWorld();
+    const CHEM_REPAIR_ID = 40;
+    const c = makeCreature({ energy: 50,
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    // Seed the cell with a big repair pool; the K-5 active-threshold
+    // check (>= 0.1) will keep refreshing repairTicks every step.
+    c.store.chemCols[CHEM_REPAIR_ID][c.idx] = 1.0;
+    // Force an aged cell so somaticMutate would normally fire.
+    c.bornAt = w.t - 200;
+    w.creatures.push(c);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    expect(c.repairTicks).toBeGreaterThan(0);
+  });
+
   it("zero receptor pool keeps the activated chemo signal at zero", () => {
     // K-5: gradient sensing is now activated-chemo (CHEM id 23 = X
     // axis for biopolymer). The activation pass writes it only when
