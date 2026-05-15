@@ -1155,7 +1155,16 @@ export interface World {
   founderTarget: number;
   // Set of creature IDs that were spawned as founders (vs. born from
   // fission). Used by the age-based founder-cull -- see FOUNDER_LIFESPAN_SEC.
+  // Stays populated for the founder's entire life so the HUD's
+  // livingFounderLineages count reflects "lineages whose original
+  // founder cell is still alive".
   founderIds: Set<number>;
+  // Subset of founderIds whose owner has already committed at least
+  // one fission. These are exempt from the lifespan cull -- the
+  // cull's job is to retire founders that never reproduced, not to
+  // wall off a successful lineage's original cell. Removed alongside
+  // founderIds when the cell finally dies.
+  founderReproduced: Set<number>;
   gravity: number;
   drag: number;
   surfaceAmp: number;
@@ -2911,6 +2920,7 @@ export function createWorld(
     // fresh lineage. NOT persisted across save/load; reloaded saves
     // lose tracking and existing founders live full lives.
     founderIds: new Set<number>(),
+    founderReproduced: new Set<number>(),
     gravity: 60,
     drag: 0.6,
     surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
@@ -5153,7 +5163,12 @@ function updateCreatures(world: World, dt: number): void {
     //     they can't sit forever -- descendants have to carry the
     //     lineage forward or the top-up reseeds with fresh genomes.
     const m = c.molecules;
+    // Cull only founders that never managed to fission. Founders that
+    // produced a viable child graduated into founderReproduced and
+    // live a normal life (so a successful colony's anchor cell can
+    // age out naturally instead of hitting the wall artificially).
     const founderTooOld = world.founderIds.has(c.id)
+      && !world.founderReproduced.has(c.id)
       && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC;
     if (
       (c.energy <= 0 && noFuel(c))
@@ -5208,6 +5223,7 @@ function updateCreatures(world: World, dt: number): void {
         // world.creatures (spilled or absorbed), so the set doesn't
         // accumulate stale ids across the run.
         world.founderIds.delete(c.id);
+        world.founderReproduced.delete(c.id);
         if (spillSet.has(c)) {
           releaseChemsAsParticles(c, world);
           c.store.release(c.idx);
@@ -5557,13 +5573,12 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   world.creatures.push(child);
   noteCreatureBirth(world, child, c.speciesKey);
   // A founder that successfully spawns a viable child has carried its
-  // lineage forward -- graduate it out of the founder-cull. The cull
-  // only exists to retire founders that never manage to reproduce.
-  // Lineage turnover is preserved: descendants are never founders, so
-  // a colony of children + grandchildren still has a normal lifespan
-  // distribution, just without the artificial 300s wall on the founder.
+  // lineage forward -- graduate it out of the lifespan cull (but
+  // keep it in founderIds so livingFounderLineages still reflects
+  // "lineages with a living founder cell"). The cull only exists to
+  // retire founders that never manage to reproduce.
   if (world.founderIds.has(c.id)) {
-    world.founderIds.delete(c.id);
+    world.founderReproduced.add(c.id);
   }
 }
 

@@ -56,7 +56,7 @@ function quietWorld(): World {
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, founderIds: new Set<number>(),
+    particleTarget: 550, particleSpawnRate: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, founderIds: new Set<number>(), founderReproduced: new Set<number>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
