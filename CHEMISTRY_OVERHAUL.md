@@ -428,39 +428,65 @@ deferred to phase I planning.
 
 User-confirmed direction; sketch only, not yet implemented.
 
-**Activated-receptor model.** Sensing is a two-part chemical pipeline:
+**Activated-receptor model.** A sense requires two parts:
 
 1. The cell synthesizes (or steals) a receptor chemical.
-2. Environmental conditions react with the receptor to produce an
-   **activated-receptor** chemical the genome can read via the
-   normal `SENSE_CHEMICAL <id>` op.
+2. The signals from the receptor are linked to some behavior(s).
 
-External SENSE_* ops (LIGHT, TEMP, PRESSURE_X/Y, GRAD_X/Y, DENSITY,
-PHEROMONE, KIN, NEIGHBOR_HASH, EM, WALL_X/Y) all retire. Genome
-reads sensory information solely by reading chem pools.
+**Part 1: synthesis as a unified SYNTH family.** Receptor synthesis
+is another variant of SYNTH_*. Open question: combine all SYNTH ops
+into one parameterized op family. All variants consume input
+material + ATP. None yields net energy (hand-wave: all synthesis is
+endergonic; convenient but acceptable for now).
 
-**Unified SYNTH family.** Receptors, catalysts, and bootstrap chems
-are all variants of the same operation. Possible op shape:
-`SYNTH <kind> [<param>...]` where kind = bootstrap chem |
-catalyst | receptor. Some variants take 0 parameters (named
-bootstrap chem), some take 1 (catalyst slot id), some take 2+
-("which chem to bind / read against, what concentration"). All
-variants consume input substrate + ATP. None yields net energy
-(hand-wave for now: all synth is endergonic).
+SYNTH outputs categorize by function:
+- **Bootstrap chemicals** — predetermined function (membrane, mRNA,
+  enzyme, chlorophyll, etc).
+- **Catalysts** — facilitate ongoing chemical reactions in the cell.
+- **Receptors** — capable of conveying information.
 
-**Sense → behavior link.** The receptor's activation pool is a
-chemical the genome reads like any other. Cells that evolve
-useful gene-circuits around those reads survive; cells that build
-receptors but ignore the reads waste ATP.
+Parameter shapes vary:
+- 0 params: bootstrap chemicals.
+- 1 param: which catalyst slot.
+- 2+ params: receptors that bind a specific target ("which chemical
+  to bind?", "what concentration / sensitivity?"), depending on
+  the direction we take.
 
-**Per-modality notes.**
+**Substrate inputs.** Open: amino acids likely make sense as the
+input for catalysts and receptors. Bootstrap substrate inputs TBD.
+
+**Part 2: reading the signal.** The genome reads the receptor's
+activation pool like any chemical. SENSE_CHEMICAL <id> already does
+this; receptor outputs are just chems in the cell pool.
+
+**Receptor output shape (open question).** Different receptor types
+naturally produce different shapes of signal:
+- **scalar** (boolean / number): single activated chem; e.g.
+  thermoreceptor → `activated_thermo` concentration.
+- **vector**: paired chems (X + Y); e.g. mechanoreceptor →
+  `activated_mech_x` + `activated_mech_y`.
+- **array** (multi-dimensional): one chem per band; e.g.
+  photoreceptor with frequency selectivity → one activated chem per
+  band. Reserve chem-table headroom now.
+- **time-series / "GIF"**: the playful but real case where signals
+  evolve over time. Could fall out naturally if activated-receptor
+  decays slowly enough to retain history; cells read recent vs older
+  pools to derive rate-of-change. Open to better ideas.
+
+**Per-modality starting positions.**
 - **Light**: intensity-only is fine for now. Reserve chem-table
-  space (or the receptor's parameter set) for frequency-band
-  selectivity later.
+  space (or the receptor's parameter set) for frequency bands later.
+- **Pressure / motion**: 2D vector — `activated_mech_x/y` (signed,
+  populated from net force or velocity).
+- **Temperature**: scalar.
+- **Chemical gradient**: per target chem, 2D vector. Per-target
+  receptors (synthesized with target chem id as a parameter) keep
+  the chem count tractable.
+- **Magnetism** (optional): 2D vector.
 
 **Implementation sketch (informational).**
-- New named chems: `activated_photoreceptor`, `activated_chemoreceptor_x`,
-  `activated_chemoreceptor_y`, `activated_mechanoreceptor_x/y`,
+- New named chems: `activated_photoreceptor`,
+  `activated_chemoreceptor_x/y`, `activated_mechanoreceptor_x/y`,
   `activated_thermoreceptor`, `activated_magnetoreceptor_x/y` (if
   magnetism). Bootstrap reservation grows accordingly; chem cap
   has headroom.
@@ -474,12 +500,6 @@ receptors but ignore the reads waste ATP.
   pools). Magnitude derives from sqrt(x² + y²) via genome math.
 - For chemical gradients: per-target chemoreceptor variants
   (cell picks the target chem at synth time via SYNTH parameter).
-  Two paths under consideration:
-  - A. Pre-built per-target receptors (cell synthesizes a
-    receptor for one target chem at a time; binds + activates
-    only that chem's gradient).
-  - B. Single generic gradient receptor whose tuning is set by
-    the SYNTH parameter and stays stable.
 
 ### Phase J — Cleanup
 
