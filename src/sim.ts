@@ -2628,10 +2628,14 @@ export function generateObstacles(world: World): void {
   const mouthTopY = mouthCenterY - mouthHeight / 2;
   const mouthBottomY = mouthCenterY + mouthHeight / 2;
   // Mark heightmap columns inside the cave footprint so the seafloor
-  // doesn't double-cover them. We'll lay the chamber's top (ceiling)
-  // surface in place of the heightmap value for those columns.
-  const caveX0 = Math.min(caveOuterX, caveInnerX);
-  const caveX1 = Math.max(caveOuterX, caveInnerX);
+  // doesn't double-cover them. The mouth lip extends past caveInnerX
+  // by mouthDepth (lipInnerX), so the excluded span must cover the
+  // lip as well -- otherwise the seafloor chunks paint over the mouth
+  // and the cave reads as a sealed pocket. Compute lipInnerX inline
+  // here so the exclusion is right; the value gets re-used below.
+  const lipInnerXEarly = caveOnLeft ? caveInnerX + mouthDepth : caveInnerX - mouthDepth;
+  const caveX0 = Math.min(caveOuterX, caveInnerX, lipInnerXEarly);
+  const caveX1 = Math.max(caveOuterX, caveInnerX, lipInnerXEarly);
 
   // ---- 3. Cave polygons ----
   // Floor slab: under the chamber, from outer wall to inner mouth.
@@ -2643,7 +2647,7 @@ export function generateObstacles(world: World): void {
   //   leaving only mouthHeight clear in between. We attach these as
   //   extensions of the ceiling and floor polygons rather than separate
   //   obstacles, so the polygons stay convex-ish for lobe packing.
-  const lipInnerX = caveOnLeft ? caveInnerX + mouthDepth : caveInnerX - mouthDepth;
+  const lipInnerX = lipInnerXEarly;
 
   // Ceiling polygon: from outer wall to lip-inner-x at top, dropping
   // down to caveTopY along the chamber span and stepping down again to
@@ -2764,7 +2768,11 @@ export function generateObstacles(world: World): void {
     const protrusion = 80 + Math.random() * 70; // 80..150
     const thickness = 30 + Math.random() * 30;  // 30..60 at wall
     const yCenter = H * (0.35 + Math.random() * 0.3); // 35-65% of height
-    const baseX = onLeft ? 4 : W - 4;
+    // Anchor flush against the world wall (x=0 or x=W). Previous
+    // version started at +/-4 to feel "embedded", but that left a
+    // visible gap between the wedge and the side -- the rock has to
+    // actually touch the wall for the overhang to read right.
+    const baseX = onLeft ? 0 : W;
     const tipX = onLeft ? baseX + protrusion : baseX - protrusion;
     // Wedge polygon. Top edge sweeps gently down from base to tip;
     // bottom edge sweeps up sharper so the wedge tapers toward the
