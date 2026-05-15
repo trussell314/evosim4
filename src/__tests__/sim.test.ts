@@ -88,7 +88,7 @@ function quietWorld(): World {
     currentAmp: 0,
     vmInstrBudget: 8,
     obstacles: [],
-    atmosphere: { adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0, chlorophyll: 0, enzyme: 0, o2: 8000, co2: 200, minerals: 0,  waste: 0, mrna: 0, biopolymer: 0, membrane: 0, photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0, marker0: 0, marker1: 0, marker2: 0, marker3: 0 },
+    atmosphere: { ...emptyMolecules(), o2: 8000, co2: 200 },
     ambient: (() => { const a = new Float32Array(96); a[CHEM_IDS.o2] = 12; a[CHEM_IDS.co2] = 1; return a; })(),
   };
 }
@@ -121,10 +121,12 @@ function makeCreature(overrides: Partial<{
   // override in their molecules patch.
   const molecules: Partial<Molecules> = {
     membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-    // Phase H2: receptors start saturated so existing tests of
-    // sensing behavior don't have to invest in them. Tests probing
-    // receptor-gating override these to zero in their molecules patch.
-    photoreceptor: 1, chemoreceptor: 1, mechanoreceptor: 1, thermoreceptor: 1,
+    // Phase K-1: receptors split into band/target variants. Tests
+    // pre-fill the legacy single-receptor equivalents (visible band
+    // for photo, biopolymer target for chemo) so existing sensing
+    // tests still pass. Tests probing receptor-gating override these.
+    photoreceptorVisible: 1, chemoreceptorBiopolymer: 1,
+    mechanoreceptor: 1, thermoreceptor: 1,
     ...(overrides.molecules ?? {}),
   };
   return newCreature(store, {
@@ -1674,7 +1676,10 @@ describe("mass conservation", () => {
       x: 450, y: 300, energy: 50, senseRange: 300,
       genome: new Uint8Array([OP.SENSE_GRAD_X, 1, OP.PUSH8, 1, OP.MUL, OP.STORE, 0, HALT_MARK]),
       molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-        photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0 },
+        photoreceptorVisible: 0, photoreceptorLong: 0, photoreceptorSurface: 0,
+        chemoreceptorBiopolymer: 0, chemoreceptorMinerals: 0,
+        chemoreceptorFa: 0, chemoreceptorMarker0: 0,
+        mechanoreceptor: 0, thermoreceptor: 0 },
     });
     w.creatures.push(blind);
     step(w, 1 / 60);

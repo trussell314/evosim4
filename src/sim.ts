@@ -414,7 +414,17 @@ const CREATURE_F32_COLS = [
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
   "m_waste", "m_adp", "m_mrna",
   "m_biopolymer", "m_membrane",
-  "m_photoreceptor", "m_chemoreceptor", "m_mechanoreceptor", "m_thermoreceptor",
+  "m_photoreceptorVisible", "m_photoreceptorLong", "m_photoreceptorSurface",
+  "m_activatedPhotoVisible", "m_activatedPhotoLong", "m_activatedPhotoSurface",
+  "m_chemoreceptorBiopolymer", "m_chemoreceptorMinerals", "m_chemoreceptorFa", "m_chemoreceptorMarker0",
+  "m_activatedChemoBiopolymerX", "m_activatedChemoBiopolymerY",
+  "m_activatedChemoMineralsX", "m_activatedChemoMineralsY",
+  "m_activatedChemoFaX", "m_activatedChemoFaY",
+  "m_activatedChemoMarker0X", "m_activatedChemoMarker0Y",
+  "m_mechanoreceptor", "m_activatedMechX", "m_activatedMechY",
+  "m_thermoreceptor", "m_activatedThermo",
+  "m_magnetoreceptor", "m_activatedMagX", "m_activatedMagY",
+  "m_bondChem", "m_repairChem",
   "m_marker0", "m_marker1", "m_marker2", "m_marker3",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
@@ -482,10 +492,34 @@ export class CreatureStore {
   m_mrna!: Float32Array;
   m_biopolymer!: Float32Array;
   m_membrane!: Float32Array;
-  m_photoreceptor!: Float32Array;
-  m_chemoreceptor!: Float32Array;
+  m_photoreceptorVisible!: Float32Array;
+  m_photoreceptorLong!: Float32Array;
+  m_photoreceptorSurface!: Float32Array;
+  m_activatedPhotoVisible!: Float32Array;
+  m_activatedPhotoLong!: Float32Array;
+  m_activatedPhotoSurface!: Float32Array;
+  m_chemoreceptorBiopolymer!: Float32Array;
+  m_chemoreceptorMinerals!: Float32Array;
+  m_chemoreceptorFa!: Float32Array;
+  m_chemoreceptorMarker0!: Float32Array;
+  m_activatedChemoBiopolymerX!: Float32Array;
+  m_activatedChemoBiopolymerY!: Float32Array;
+  m_activatedChemoMineralsX!: Float32Array;
+  m_activatedChemoMineralsY!: Float32Array;
+  m_activatedChemoFaX!: Float32Array;
+  m_activatedChemoFaY!: Float32Array;
+  m_activatedChemoMarker0X!: Float32Array;
+  m_activatedChemoMarker0Y!: Float32Array;
   m_mechanoreceptor!: Float32Array;
+  m_activatedMechX!: Float32Array;
+  m_activatedMechY!: Float32Array;
   m_thermoreceptor!: Float32Array;
+  m_activatedThermo!: Float32Array;
+  m_magnetoreceptor!: Float32Array;
+  m_activatedMagX!: Float32Array;
+  m_activatedMagY!: Float32Array;
+  m_bondChem!: Float32Array;
+  m_repairChem!: Float32Array;
   m_marker0!: Float32Array;
   m_marker1!: Float32Array;
   m_marker2!: Float32Array;
@@ -565,10 +599,34 @@ export class CreatureStore {
     this.m_mrna = new Float32Array(b, o.base.m_mrna, cap);
     this.m_biopolymer = new Float32Array(b, o.base.m_biopolymer, cap);
     this.m_membrane = new Float32Array(b, o.base.m_membrane, cap);
-    this.m_photoreceptor = new Float32Array(b, o.base.m_photoreceptor, cap);
-    this.m_chemoreceptor = new Float32Array(b, o.base.m_chemoreceptor, cap);
+    this.m_photoreceptorVisible = new Float32Array(b, o.base.m_photoreceptorVisible, cap);
+    this.m_photoreceptorLong = new Float32Array(b, o.base.m_photoreceptorLong, cap);
+    this.m_photoreceptorSurface = new Float32Array(b, o.base.m_photoreceptorSurface, cap);
+    this.m_activatedPhotoVisible = new Float32Array(b, o.base.m_activatedPhotoVisible, cap);
+    this.m_activatedPhotoLong = new Float32Array(b, o.base.m_activatedPhotoLong, cap);
+    this.m_activatedPhotoSurface = new Float32Array(b, o.base.m_activatedPhotoSurface, cap);
+    this.m_chemoreceptorBiopolymer = new Float32Array(b, o.base.m_chemoreceptorBiopolymer, cap);
+    this.m_chemoreceptorMinerals = new Float32Array(b, o.base.m_chemoreceptorMinerals, cap);
+    this.m_chemoreceptorFa = new Float32Array(b, o.base.m_chemoreceptorFa, cap);
+    this.m_chemoreceptorMarker0 = new Float32Array(b, o.base.m_chemoreceptorMarker0, cap);
+    this.m_activatedChemoBiopolymerX = new Float32Array(b, o.base.m_activatedChemoBiopolymerX, cap);
+    this.m_activatedChemoBiopolymerY = new Float32Array(b, o.base.m_activatedChemoBiopolymerY, cap);
+    this.m_activatedChemoMineralsX = new Float32Array(b, o.base.m_activatedChemoMineralsX, cap);
+    this.m_activatedChemoMineralsY = new Float32Array(b, o.base.m_activatedChemoMineralsY, cap);
+    this.m_activatedChemoFaX = new Float32Array(b, o.base.m_activatedChemoFaX, cap);
+    this.m_activatedChemoFaY = new Float32Array(b, o.base.m_activatedChemoFaY, cap);
+    this.m_activatedChemoMarker0X = new Float32Array(b, o.base.m_activatedChemoMarker0X, cap);
+    this.m_activatedChemoMarker0Y = new Float32Array(b, o.base.m_activatedChemoMarker0Y, cap);
     this.m_mechanoreceptor = new Float32Array(b, o.base.m_mechanoreceptor, cap);
+    this.m_activatedMechX = new Float32Array(b, o.base.m_activatedMechX, cap);
+    this.m_activatedMechY = new Float32Array(b, o.base.m_activatedMechY, cap);
     this.m_thermoreceptor = new Float32Array(b, o.base.m_thermoreceptor, cap);
+    this.m_activatedThermo = new Float32Array(b, o.base.m_activatedThermo, cap);
+    this.m_magnetoreceptor = new Float32Array(b, o.base.m_magnetoreceptor, cap);
+    this.m_activatedMagX = new Float32Array(b, o.base.m_activatedMagX, cap);
+    this.m_activatedMagY = new Float32Array(b, o.base.m_activatedMagY, cap);
+    this.m_bondChem = new Float32Array(b, o.base.m_bondChem, cap);
+    this.m_repairChem = new Float32Array(b, o.base.m_repairChem, cap);
     this.m_marker0 = new Float32Array(b, o.base.m_marker0, cap);
     this.m_marker1 = new Float32Array(b, o.base.m_marker1, cap);
     this.m_marker2 = new Float32Array(b, o.base.m_marker2, cap);
@@ -586,14 +644,24 @@ export class CreatureStore {
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       this.genericChemCols[k] = new Float32Array(b, o.generic[k], cap);
     }
-    // MOLECULE_IDS order: adp, glucose, fattyAcid, aminoAcid, chlorophyll,
-    // enzyme, o2, co2, minerals, waste, mrna, biopolymer, membrane
+    // molCols MUST match MOLECULE_IDS order exactly.
     this.molCols = [
       this.m_adp, this.m_glucose, this.m_fattyAcid, this.m_aminoAcid,
       this.m_chlorophyll, this.m_enzyme, this.m_o2, this.m_co2,
       this.m_minerals, this.m_waste, this.m_mrna,
       this.m_biopolymer, this.m_membrane,
-      this.m_photoreceptor, this.m_chemoreceptor, this.m_mechanoreceptor, this.m_thermoreceptor,
+      this.m_photoreceptorVisible, this.m_photoreceptorLong, this.m_photoreceptorSurface,
+      this.m_activatedPhotoVisible, this.m_activatedPhotoLong, this.m_activatedPhotoSurface,
+      this.m_chemoreceptorBiopolymer, this.m_chemoreceptorMinerals,
+      this.m_chemoreceptorFa, this.m_chemoreceptorMarker0,
+      this.m_activatedChemoBiopolymerX, this.m_activatedChemoBiopolymerY,
+      this.m_activatedChemoMineralsX, this.m_activatedChemoMineralsY,
+      this.m_activatedChemoFaX, this.m_activatedChemoFaY,
+      this.m_activatedChemoMarker0X, this.m_activatedChemoMarker0Y,
+      this.m_mechanoreceptor, this.m_activatedMechX, this.m_activatedMechY,
+      this.m_thermoreceptor, this.m_activatedThermo,
+      this.m_magnetoreceptor, this.m_activatedMagX, this.m_activatedMagY,
+      this.m_bondChem, this.m_repairChem,
       this.m_marker0, this.m_marker1, this.m_marker2, this.m_marker3,
     ];
     this.chemCols = new Array(CHEMICAL_COUNT);
@@ -638,19 +706,12 @@ export class CreatureStore {
     this.repairTicks[i] = 0;
     this.fpW0[i] = 0; this.fpW1[i] = 0; this.fpW2[i] = 0; this.fpW3[i] = 0;
     this.ax[i] = 0; this.ay[i] = 0;
-    this.m_glucose[i] = 0; this.m_fattyAcid[i] = 0; this.m_aminoAcid[i] = 0;
-    this.m_minerals[i] = 0; this.m_chlorophyll[i] = 0; this.m_enzyme[i] = 0;
-    this.m_o2[i] = 0; this.m_co2[i] = 0;
-    this.m_waste[i] = 0; this.m_adp[i] = 0; this.m_mrna[i] = 0;
-    this.m_biopolymer[i] = 0; this.m_membrane[i] = 0;
-    this.m_photoreceptor[i] = 0; this.m_chemoreceptor[i] = 0;
-    this.m_mechanoreceptor[i] = 0; this.m_thermoreceptor[i] = 0;
-    this.m_marker0[i] = 0; this.m_marker1[i] = 0;
-    this.m_marker2[i] = 0; this.m_marker3[i] = 0;
+    // Zero every molecule column via molCols. Cheaper than listing
+    // 40+ field names and stays correct as Tier 3 grows the table.
+    for (let k = 0; k < this.molCols.length; k++) this.molCols[k][i] = 0;
     for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
-    // Named chemCols slots 0..7 are aliases of molCols and already
-    // cleared above; only the generic slice (8..63) needs its own
-    // zeroing here.
+    // Named chemCols 0..NAMED_CHEMICAL_COUNT-1 alias molCols and are
+    // already cleared above; only the generic slice needs its own pass.
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) this.genericChemCols[k][i] = 0;
   }
 }
@@ -683,14 +744,62 @@ export class MoleculesView {
   set biopolymer(v: number) { this.c.store.m_biopolymer[this.c.idx] = v; }
   get membrane(): number { return this.c.store.m_membrane[this.c.idx]; }
   set membrane(v: number) { this.c.store.m_membrane[this.c.idx] = v; }
-  get photoreceptor(): number { return this.c.store.m_photoreceptor[this.c.idx]; }
-  set photoreceptor(v: number) { this.c.store.m_photoreceptor[this.c.idx] = v; }
-  get chemoreceptor(): number { return this.c.store.m_chemoreceptor[this.c.idx]; }
-  set chemoreceptor(v: number) { this.c.store.m_chemoreceptor[this.c.idx] = v; }
+  get photoreceptorVisible(): number { return this.c.store.m_photoreceptorVisible[this.c.idx]; }
+  set photoreceptorVisible(v: number) { this.c.store.m_photoreceptorVisible[this.c.idx] = v; }
+  get photoreceptorLong(): number { return this.c.store.m_photoreceptorLong[this.c.idx]; }
+  set photoreceptorLong(v: number) { this.c.store.m_photoreceptorLong[this.c.idx] = v; }
+  get photoreceptorSurface(): number { return this.c.store.m_photoreceptorSurface[this.c.idx]; }
+  set photoreceptorSurface(v: number) { this.c.store.m_photoreceptorSurface[this.c.idx] = v; }
+  get activatedPhotoVisible(): number { return this.c.store.m_activatedPhotoVisible[this.c.idx]; }
+  set activatedPhotoVisible(v: number) { this.c.store.m_activatedPhotoVisible[this.c.idx] = v; }
+  get activatedPhotoLong(): number { return this.c.store.m_activatedPhotoLong[this.c.idx]; }
+  set activatedPhotoLong(v: number) { this.c.store.m_activatedPhotoLong[this.c.idx] = v; }
+  get activatedPhotoSurface(): number { return this.c.store.m_activatedPhotoSurface[this.c.idx]; }
+  set activatedPhotoSurface(v: number) { this.c.store.m_activatedPhotoSurface[this.c.idx] = v; }
+  get chemoreceptorBiopolymer(): number { return this.c.store.m_chemoreceptorBiopolymer[this.c.idx]; }
+  set chemoreceptorBiopolymer(v: number) { this.c.store.m_chemoreceptorBiopolymer[this.c.idx] = v; }
+  get chemoreceptorMinerals(): number { return this.c.store.m_chemoreceptorMinerals[this.c.idx]; }
+  set chemoreceptorMinerals(v: number) { this.c.store.m_chemoreceptorMinerals[this.c.idx] = v; }
+  get chemoreceptorFa(): number { return this.c.store.m_chemoreceptorFa[this.c.idx]; }
+  set chemoreceptorFa(v: number) { this.c.store.m_chemoreceptorFa[this.c.idx] = v; }
+  get chemoreceptorMarker0(): number { return this.c.store.m_chemoreceptorMarker0[this.c.idx]; }
+  set chemoreceptorMarker0(v: number) { this.c.store.m_chemoreceptorMarker0[this.c.idx] = v; }
+  get activatedChemoBiopolymerX(): number { return this.c.store.m_activatedChemoBiopolymerX[this.c.idx]; }
+  set activatedChemoBiopolymerX(v: number) { this.c.store.m_activatedChemoBiopolymerX[this.c.idx] = v; }
+  get activatedChemoBiopolymerY(): number { return this.c.store.m_activatedChemoBiopolymerY[this.c.idx]; }
+  set activatedChemoBiopolymerY(v: number) { this.c.store.m_activatedChemoBiopolymerY[this.c.idx] = v; }
+  get activatedChemoMineralsX(): number { return this.c.store.m_activatedChemoMineralsX[this.c.idx]; }
+  set activatedChemoMineralsX(v: number) { this.c.store.m_activatedChemoMineralsX[this.c.idx] = v; }
+  get activatedChemoMineralsY(): number { return this.c.store.m_activatedChemoMineralsY[this.c.idx]; }
+  set activatedChemoMineralsY(v: number) { this.c.store.m_activatedChemoMineralsY[this.c.idx] = v; }
+  get activatedChemoFaX(): number { return this.c.store.m_activatedChemoFaX[this.c.idx]; }
+  set activatedChemoFaX(v: number) { this.c.store.m_activatedChemoFaX[this.c.idx] = v; }
+  get activatedChemoFaY(): number { return this.c.store.m_activatedChemoFaY[this.c.idx]; }
+  set activatedChemoFaY(v: number) { this.c.store.m_activatedChemoFaY[this.c.idx] = v; }
+  get activatedChemoMarker0X(): number { return this.c.store.m_activatedChemoMarker0X[this.c.idx]; }
+  set activatedChemoMarker0X(v: number) { this.c.store.m_activatedChemoMarker0X[this.c.idx] = v; }
+  get activatedChemoMarker0Y(): number { return this.c.store.m_activatedChemoMarker0Y[this.c.idx]; }
+  set activatedChemoMarker0Y(v: number) { this.c.store.m_activatedChemoMarker0Y[this.c.idx] = v; }
   get mechanoreceptor(): number { return this.c.store.m_mechanoreceptor[this.c.idx]; }
   set mechanoreceptor(v: number) { this.c.store.m_mechanoreceptor[this.c.idx] = v; }
+  get activatedMechX(): number { return this.c.store.m_activatedMechX[this.c.idx]; }
+  set activatedMechX(v: number) { this.c.store.m_activatedMechX[this.c.idx] = v; }
+  get activatedMechY(): number { return this.c.store.m_activatedMechY[this.c.idx]; }
+  set activatedMechY(v: number) { this.c.store.m_activatedMechY[this.c.idx] = v; }
   get thermoreceptor(): number { return this.c.store.m_thermoreceptor[this.c.idx]; }
   set thermoreceptor(v: number) { this.c.store.m_thermoreceptor[this.c.idx] = v; }
+  get activatedThermo(): number { return this.c.store.m_activatedThermo[this.c.idx]; }
+  set activatedThermo(v: number) { this.c.store.m_activatedThermo[this.c.idx] = v; }
+  get magnetoreceptor(): number { return this.c.store.m_magnetoreceptor[this.c.idx]; }
+  set magnetoreceptor(v: number) { this.c.store.m_magnetoreceptor[this.c.idx] = v; }
+  get activatedMagX(): number { return this.c.store.m_activatedMagX[this.c.idx]; }
+  set activatedMagX(v: number) { this.c.store.m_activatedMagX[this.c.idx] = v; }
+  get activatedMagY(): number { return this.c.store.m_activatedMagY[this.c.idx]; }
+  set activatedMagY(v: number) { this.c.store.m_activatedMagY[this.c.idx] = v; }
+  get bondChem(): number { return this.c.store.m_bondChem[this.c.idx]; }
+  set bondChem(v: number) { this.c.store.m_bondChem[this.c.idx] = v; }
+  get repairChem(): number { return this.c.store.m_repairChem[this.c.idx]; }
+  set repairChem(v: number) { this.c.store.m_repairChem[this.c.idx] = v; }
   get marker0(): number { return this.c.store.m_marker0[this.c.idx]; }
   set marker0(v: number) { this.c.store.m_marker0[this.c.idx] = v; }
   get marker1(): number { return this.c.store.m_marker1[this.c.idx]; }
@@ -754,32 +863,16 @@ export class Creature {
   private _m?: MoleculesView;
   constructor(store: CreatureStore, idx: number) { this.store = store; this.idx = idx; }
   get molecules(): MoleculesView { return this._m ??= new MoleculesView(this); }
-  // Setter: copy field-by-field from any Molecules-shaped object into
-  // the typed-array slot. Lets `c.molecules = emptyMolecules()`-style
-  // existing code keep working while the underlying data is SoA.
-  set molecules(m: { glucose?: number; fattyAcid?: number; aminoAcid?: number; minerals?: number; chlorophyll?: number; enzyme?: number; o2?: number; co2?: number; waste?: number; adp?: number; mrna?: number; biopolymer?: number; membrane?: number; photoreceptor?: number; chemoreceptor?: number; mechanoreceptor?: number; thermoreceptor?: number; marker0?: number; marker1?: number; marker2?: number; marker3?: number }) {
-    const s = this.store; const i = this.idx;
-    s.m_glucose[i] = m.glucose ?? 0;
-    s.m_fattyAcid[i] = m.fattyAcid ?? 0;
-    s.m_aminoAcid[i] = m.aminoAcid ?? 0;
-    s.m_minerals[i] = m.minerals ?? 0;
-    s.m_chlorophyll[i] = m.chlorophyll ?? 0;
-    s.m_enzyme[i] = m.enzyme ?? 0;
-    s.m_o2[i] = m.o2 ?? 0;
-    s.m_co2[i] = m.co2 ?? 0;
-    s.m_waste[i] = m.waste ?? 0;
-    s.m_adp[i] = m.adp ?? 0;
-    s.m_mrna[i] = m.mrna ?? 0;
-    s.m_biopolymer[i] = m.biopolymer ?? 0;
-    s.m_membrane[i] = m.membrane ?? 0;
-    s.m_photoreceptor[i] = m.photoreceptor ?? 0;
-    s.m_chemoreceptor[i] = m.chemoreceptor ?? 0;
-    s.m_mechanoreceptor[i] = m.mechanoreceptor ?? 0;
-    s.m_thermoreceptor[i] = m.thermoreceptor ?? 0;
-    s.m_marker0[i] = m.marker0 ?? 0;
-    s.m_marker1[i] = m.marker1 ?? 0;
-    s.m_marker2[i] = m.marker2 ?? 0;
-    s.m_marker3[i] = m.marker3 ?? 0;
+  // Setter: copy field-by-field from any Molecules-shaped object
+  // into the typed-array slot. Iterates molCols so adding chems
+  // doesn't require updating this method.
+  set molecules(m: Partial<Molecules>) {
+    const cols = this.store.molCols;
+    const i = this.idx;
+    const mm = m as Record<string, number | undefined>;
+    for (let k = 0; k < MOLECULE_IDS.length; k++) {
+      cols[k][i] = mm[MOLECULE_IDS[k]] ?? 0;
+    }
   }
   get x(): number { return this.store.x[this.idx]; }
   set x(v: number) { this.store.x[this.idx] = v; }
@@ -853,27 +946,11 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
   c.speciesKey = init.speciesKey;
   if (init.molecules) {
     const m = init.molecules;
-    if (m.glucose !== undefined) store.m_glucose[idx] = m.glucose;
-    if (m.fattyAcid !== undefined) store.m_fattyAcid[idx] = m.fattyAcid;
-    if (m.aminoAcid !== undefined) store.m_aminoAcid[idx] = m.aminoAcid;
-    if (m.minerals !== undefined) store.m_minerals[idx] = m.minerals;
-    if (m.chlorophyll !== undefined) store.m_chlorophyll[idx] = m.chlorophyll;
-    if (m.enzyme !== undefined) store.m_enzyme[idx] = m.enzyme;
-    if (m.o2 !== undefined) store.m_o2[idx] = m.o2;
-    if (m.co2 !== undefined) store.m_co2[idx] = m.co2;
-    if (m.waste !== undefined) store.m_waste[idx] = m.waste;
-    if (m.adp !== undefined) store.m_adp[idx] = m.adp;
-    if (m.mrna !== undefined) store.m_mrna[idx] = m.mrna;
-    if (m.biopolymer !== undefined) store.m_biopolymer[idx] = m.biopolymer;
-    if (m.membrane !== undefined) store.m_membrane[idx] = m.membrane;
-    if (m.photoreceptor !== undefined) store.m_photoreceptor[idx] = m.photoreceptor;
-    if (m.chemoreceptor !== undefined) store.m_chemoreceptor[idx] = m.chemoreceptor;
-    if (m.mechanoreceptor !== undefined) store.m_mechanoreceptor[idx] = m.mechanoreceptor;
-    if (m.thermoreceptor !== undefined) store.m_thermoreceptor[idx] = m.thermoreceptor;
-    if (m.marker0 !== undefined) store.m_marker0[idx] = m.marker0;
-    if (m.marker1 !== undefined) store.m_marker1[idx] = m.marker1;
-    if (m.marker2 !== undefined) store.m_marker2[idx] = m.marker2;
-    if (m.marker3 !== undefined) store.m_marker3[idx] = m.marker3;
+    const mm = m as Record<string, number | undefined>;
+    for (let k = 0; k < MOLECULE_IDS.length; k++) {
+      const v = mm[MOLECULE_IDS[k]];
+      if (v !== undefined) store.molCols[k][idx] = v;
+    }
   }
   return c;
 }
@@ -897,24 +974,57 @@ export const SENSOR_CHEM_LABELS: ReadonlyArray<string> = [
 // rather than cut off when reactants run low. Waste / CO2 build-up that
 // the cell can't process get auto-excreted as world particles.
 export interface Molecules {
-  adp: number;          // ATP's discharged form; energy spend goes here
-  glucose: number;      // primary fuel
-  fattyAcid: number;    // energy-dense secondary fuel
-  aminoAcid: number;    // building block
-  chlorophyll: number;  // cell-built catalyst, enables photosynthesis
-  enzyme: number;       // cell-built generic catalyst
-  o2: number;           // respiration substrate / photosynth product
-  co2: number;          // respiration product / photosynth substrate
-  minerals: number;     // mineral cofactor / structural input
-  waste: number;        // toxic byproduct of fermentation
-  mrna: number;         // catalyst proxy for biosynth machinery
-  biopolymer: number;   // bulk food substrate; broken to glu/aa/fa by enzyme
-  membrane: number;     // structural lipid bilayer; required for fission and viability
-  photoreceptor: number;   // gates SENSE_LIGHT / EM / pheromone
-  chemoreceptor: number;   // gates SENSE_GRAD / DENSITY / KIN
-  mechanoreceptor: number; // gates SENSE_PRESSURE / WALL
-  thermoreceptor: number;  // gates SENSE_TEMP
-  marker0: number;     // identity-only; produced by procedural reactions, used in fingerprint
+  adp: number;          // ATP's discharged form
+  glucose: number;
+  fattyAcid: number;
+  aminoAcid: number;
+  chlorophyll: number;
+  enzyme: number;
+  o2: number;
+  co2: number;
+  minerals: number;
+  waste: number;
+  mrna: number;
+  biopolymer: number;
+  membrane: number;
+  // Photoreceptor band variants (visible / long-penetrating / depth-
+  // invariant surface). Cells choose bands to invest in via the
+  // unified SYNTH op; each band has its own activated chem.
+  photoreceptorVisible: number;
+  photoreceptorLong: number;
+  photoreceptorSurface: number;
+  activatedPhotoVisible: number;
+  activatedPhotoLong: number;
+  activatedPhotoSurface: number;
+  // Per-target chemoreceptor variants. Each target chem the cell
+  // invests in gets its own receptor + activated x/y pair.
+  chemoreceptorBiopolymer: number;
+  chemoreceptorMinerals: number;
+  chemoreceptorFa: number;
+  chemoreceptorMarker0: number;
+  activatedChemoBiopolymerX: number;
+  activatedChemoBiopolymerY: number;
+  activatedChemoMineralsX: number;
+  activatedChemoMineralsY: number;
+  activatedChemoFaX: number;
+  activatedChemoFaY: number;
+  activatedChemoMarker0X: number;
+  activatedChemoMarker0Y: number;
+  // Mechano / thermo / magneto.
+  mechanoreceptor: number;
+  activatedMechX: number;
+  activatedMechY: number;
+  thermoreceptor: number;
+  activatedThermo: number;
+  magnetoreceptor: number;
+  activatedMagX: number;
+  activatedMagY: number;
+  // Phase K ADHERE / REPAIR rework: chemistry-mediated bonding and
+  // somatic-mutation suppression.
+  bondChem: number;
+  repairChem: number;
+  // Identity markers (last so additions above don't shift their ids).
+  marker0: number;
   marker1: number;
   marker2: number;
   marker3: number;
@@ -924,7 +1034,17 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
   "o2", "co2", "minerals", "waste", "mrna",
   "biopolymer", "membrane",
-  "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
+  "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
+  "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
+  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
+  "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
+  "activatedChemoMineralsX", "activatedChemoMineralsY",
+  "activatedChemoFaX", "activatedChemoFaY",
+  "activatedChemoMarker0X", "activatedChemoMarker0Y",
+  "mechanoreceptor", "activatedMechX", "activatedMechY",
+  "thermoreceptor", "activatedThermo",
+  "magnetoreceptor", "activatedMagX", "activatedMagY",
+  "bondChem", "repairChem",
   "marker0", "marker1", "marker2", "marker3",
 ];
 
@@ -934,14 +1054,12 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
 // the daughter can't survive she autolyzes via the normal death pass.
 
 export function emptyMolecules(): Molecules {
-  return {
-    adp: 0, glucose: 0, fattyAcid: 0, aminoAcid: 0,
-    chlorophyll: 0, enzyme: 0,
-    o2: 0, co2: 0, minerals: 0, waste: 0, mrna: 0,
-    biopolymer: 0, membrane: 0,
-    photoreceptor: 0, chemoreceptor: 0, mechanoreceptor: 0, thermoreceptor: 0,
-    marker0: 0, marker1: 0, marker2: 0, marker3: 0,
-  };
+  // Build from MOLECULE_IDS so adding a new entry above auto-zero-
+  // initializes here. Cheap (one allocation per call); used mostly
+  // by snapshots / death release / test scaffolds.
+  const m = {} as Molecules;
+  for (const k of MOLECULE_IDS) (m as unknown as Record<string, number>)[k] = 0;
+  return m;
 }
 
 // Phylogeny: a "species" is a unique exact genome. We track when each first
@@ -1403,18 +1521,32 @@ const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
 const CHEMICAL_COUNT = 96;
-const NAMED_CHEMICAL_COUNT = 21;
+const NAMED_CHEMICAL_COUNT = 45;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
 // Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
 // chemistry overhaul; biopolymer is the bulk-food substrate that
 // replaces the old "organic" material, and membrane is the structural
 // lipid bilayer required for fission.
+// Order maps to chemCols[0..NAMED_CHEMICAL_COUNT-1]. Constants below
+// (CHEM_*) MUST match this order; see the table in CHEMISTRY_OVERHAUL.md
+// phase K for the locked layout.
 const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "adp",
   "waste", "chlorophyll", "enzyme", "mrna",
   "biopolymer", "membrane",
-  "photoreceptor", "chemoreceptor", "mechanoreceptor", "thermoreceptor",
+  // Phase K sense rework starts at slot 13:
+  "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
+  "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
+  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
+  "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
+  "activatedChemoMineralsX", "activatedChemoMineralsY",
+  "activatedChemoFaX", "activatedChemoFaY",
+  "activatedChemoMarker0X", "activatedChemoMarker0Y",
+  "mechanoreceptor", "activatedMechX", "activatedMechY",
+  "thermoreceptor", "activatedThermo",
+  "magnetoreceptor", "activatedMagX", "activatedMagY",
+  "bondChem", "repairChem",
   "marker0", "marker1", "marker2", "marker3",
 ];
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
@@ -1439,17 +1571,52 @@ const CHEM_ENZ = 9;
 const CHEM_MRNA = 10;
 const CHEM_BIOPOLYMER = 11;
 const CHEM_MEMBRANE = 12;
-const CHEM_PHOTORECEPTOR = 13;
-const CHEM_CHEMORECEPTOR = 14;
-const CHEM_MECHANORECEPTOR = 15;
-const CHEM_THERMORECEPTOR = 16;
-// Marker chems live at slots 18..21. Identity-only -- produced as
-// random side-products of procedural reactions whose product list
-// happens to include them. Fingerprint top-N includes markers
-// naturally because cells that accumulate one will rank it high.
-// Constants aren't separately exported; the fingerprint code iterates
-// over all chems and the chem table's role tag does the gating.
-void 0;
+// Phase K-1 layout: receptors split into band / per-target variants,
+// each with paired activated chems. Constants laid out to match
+// NAMED_CHEMICALS order exactly; see CHEMISTRY_OVERHAUL.md phase K
+// for the locked table.
+const CHEM_PHOTORECEPTOR_VISIBLE = 13;
+const CHEM_PHOTORECEPTOR_LONG = 14;
+const CHEM_PHOTORECEPTOR_SURFACE = 15;
+const CHEM_ACT_PHOTO_VISIBLE = 16;
+const CHEM_ACT_PHOTO_LONG = 17;
+const CHEM_ACT_PHOTO_SURFACE = 18;
+const CHEM_CHEMORECEPTOR_BIOPOLYMER = 19;
+const CHEM_CHEMORECEPTOR_MINERALS = 20;
+const CHEM_CHEMORECEPTOR_FA = 21;
+const CHEM_CHEMORECEPTOR_MARKER0 = 22;
+const CHEM_ACT_CHEMO_BIOPOLYMER_X = 23;
+const CHEM_ACT_CHEMO_BIOPOLYMER_Y = 24;
+const CHEM_ACT_CHEMO_MINERALS_X = 25;
+const CHEM_ACT_CHEMO_MINERALS_Y = 26;
+const CHEM_ACT_CHEMO_FA_X = 27;
+const CHEM_ACT_CHEMO_FA_Y = 28;
+const CHEM_ACT_CHEMO_MARKER0_X = 29;
+const CHEM_ACT_CHEMO_MARKER0_Y = 30;
+const CHEM_MECHANORECEPTOR = 31;
+const CHEM_ACT_MECH_X = 32;
+const CHEM_ACT_MECH_Y = 33;
+const CHEM_THERMORECEPTOR = 34;
+const CHEM_ACT_THERMO = 35;
+const CHEM_MAGNETORECEPTOR = 36;
+const CHEM_ACT_MAG_X = 37;
+const CHEM_ACT_MAG_Y = 38;
+const CHEM_BOND = 39;
+const CHEM_REPAIR = 40;
+// Markers occupy 41..44. Constants not exported; iterated.
+// Reference the not-yet-used constants so noUnusedLocals doesn't
+// flag them; K-3 (activation pass) starts reading them.
+void [
+  CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
+  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_BIOPOLYMER_Y,
+  CHEM_ACT_CHEMO_MINERALS_X, CHEM_ACT_CHEMO_MINERALS_Y,
+  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_FA_Y,
+  CHEM_ACT_CHEMO_MARKER0_X, CHEM_ACT_CHEMO_MARKER0_Y,
+  CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
+  CHEM_ACT_THERMO,
+  CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
+  CHEM_BOND, CHEM_REPAIR,
+];
 // Receptor saturation reference. Sat curve = pool / (pool + REF) so
 // pool at REF gives sat=0.5; pool at 9*REF gives sat=0.9. Set low so
 // even modest receptor investment yields most of the signal -- a
@@ -1510,6 +1677,11 @@ interface ChemicalDef {
   // Dominant-component color for rendering. Used by phase C when
   // particles switch from material-keyed colors to chem-keyed.
   color: string;
+  // Phase K activated-chem flag. Signal chems are populated each
+  // tick by the engine (activation pass) rather than transported
+  // through reactions. They're excluded from the mass-conservation
+  // invariant (computed, not conserved).
+  isSignal: boolean;
 }
 
 interface NamedChemSpec {
@@ -1523,34 +1695,73 @@ interface NamedChemSpec {
   bondEnergy: number;
   role: ChemRole;
   color: string;
+  isSignal: boolean;
 }
+// Helper templates for the bulk of the receptor / activated chems --
+// they share most properties; only color varies meaningfully.
+const RECEPTOR_BASE: Omit<NamedChemSpec, "color"> = {
+  molarMass: 1.0, density: 1.1, defaultPhase: "aqueous", solubility: 0.2,
+  vaporPressure: 0, meltingPoint: 60, permeability: 0, bondEnergy: 5,
+  role: "none", isSignal: false,
+};
+const SIGNAL_BASE: Omit<NamedChemSpec, "color"> = {
+  molarMass: 1.0, density: 1.0, defaultPhase: "aqueous", solubility: 0,
+  vaporPressure: 0, meltingPoint: 100, permeability: 0, bondEnergy: 0,
+  role: "none", isSignal: true,
+};
 // Order MUST match NAMED_CHEMICALS exactly. Properties are tuned to
 // reasonable real-chemistry analogs: O2/CO2 are volatile gases, glucose
 // is a high-bond-energy soluble sugar, fatty acid is hydrophobic and
 // energy-dense, biomass is structural-insoluble, chlorophyll/enzyme/
 // mrna are aqueous machinery that doesn't cross membranes.
 const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
-  /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#cfe2ff" },
-  /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6" },
-  /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0.6, bondEnergy: 30,   role: "none",      color: "#dbe09c" },
-  /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075" },
-  /* fa     */ { molarMass: 1.0, density: 0.9,  defaultPhase: "liquid",  solubility: 0.1,  vaporPressure: 0,  meltingPoint: 40,   permeability: 0.3, bondEnergy: 80,   role: "none",      color: "#f0d264" },
-  /* min    */ { molarMass: 1.0, density: 2.4,  defaultPhase: "solid",   solubility: 0.02, vaporPressure: 0,  meltingPoint: 1200, permeability: 0.1, bondEnergy: 0,    role: "none",      color: "#8c8175" },
-  /* adp    */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 0,    role: "energyEmpty", color: "#a8d8ea" },
-  /* waste  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.6, bondEnergy: 2,    role: "none",      color: "#a89878" },
-  /* chl    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 5,    role: "pigment",   color: "#5fa850" },
-  /* enz    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.5,  vaporPressure: 0,  meltingPoint: 90,   permeability: 0,   bondEnergy: 5,    role: "digester",  color: "#e0a070" },
-  /* ribo   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3,  vaporPressure: 0,  meltingPoint: 70,   permeability: 0,   bondEnergy: 5,    role: "mrna",      color: "#c8a4dc" },
-  /* biop   */ { molarMass: 1.0, density: 1.05, defaultPhase: "solid",   solubility: 0.05, vaporPressure: 0,  meltingPoint: 250,  permeability: 0,   bondEnergy: 25,   role: "none",      color: "#7fb069" },
-  /* memb   */ { molarMass: 1.0, density: 0.8,  defaultPhase: "liquid",  solubility: 0.01, vaporPressure: 0,  meltingPoint: 50,   permeability: 0,   bondEnergy: 40,   role: "membrane",  color: "#f0d264" },
-  /* photo  */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#d864c8" },
-  /* chemo  */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#64c8d8" },
-  /* mech   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#c8d864" },
-  /* thermo */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 60,   permeability: 0,   bondEnergy: 5,    role: "none",      color: "#d8a064" },
-  /* mark0  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e84a4a" },
-  /* mark1  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4ae84a" },
-  /* mark2  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4a4ae8" },
-  /* mark3  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e8e84a" },
+  /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#cfe2ff", isSignal: false },
+  /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6", isSignal: false },
+  /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0.6, bondEnergy: 30,   role: "none",      color: "#dbe09c", isSignal: false },
+  /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075", isSignal: false },
+  /* fa     */ { molarMass: 1.0, density: 0.9,  defaultPhase: "liquid",  solubility: 0.1,  vaporPressure: 0,  meltingPoint: 40,   permeability: 0.3, bondEnergy: 80,   role: "none",      color: "#f0d264", isSignal: false },
+  /* min    */ { molarMass: 1.0, density: 2.4,  defaultPhase: "solid",   solubility: 0.02, vaporPressure: 0,  meltingPoint: 1200, permeability: 0.1, bondEnergy: 0,    role: "none",      color: "#8c8175", isSignal: false },
+  /* adp    */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 0,    role: "energyEmpty", color: "#a8d8ea", isSignal: false },
+  /* waste  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.6, bondEnergy: 2,    role: "none",      color: "#a89878", isSignal: false },
+  /* chl    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.2,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 5,    role: "pigment",   color: "#5fa850", isSignal: false },
+  /* enz    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.5,  vaporPressure: 0,  meltingPoint: 90,   permeability: 0,   bondEnergy: 5,    role: "digester",  color: "#e0a070", isSignal: false },
+  /* mrna   */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3,  vaporPressure: 0,  meltingPoint: 70,   permeability: 0,   bondEnergy: 5,    role: "mrna",      color: "#c8a4dc", isSignal: false },
+  /* biop   */ { molarMass: 1.0, density: 1.05, defaultPhase: "solid",   solubility: 0.05, vaporPressure: 0,  meltingPoint: 250,  permeability: 0,   bondEnergy: 25,   role: "none",      color: "#7fb069", isSignal: false },
+  /* memb   */ { molarMass: 1.0, density: 0.8,  defaultPhase: "liquid",  solubility: 0.01, vaporPressure: 0,  meltingPoint: 50,   permeability: 0,   bondEnergy: 40,   role: "membrane",  color: "#f0d264", isSignal: false },
+  // Phase K sense rework. Receptors share RECEPTOR_BASE; activated
+  // chems share SIGNAL_BASE; only color varies meaningfully.
+  /* photoVisible  */ { ...RECEPTOR_BASE, color: "#d864c8" },
+  /* photoLong     */ { ...RECEPTOR_BASE, color: "#b04ca0" },
+  /* photoSurface  */ { ...RECEPTOR_BASE, color: "#e890d0" },
+  /* actPhotoVis   */ { ...SIGNAL_BASE,   color: "#f0c0e8" },
+  /* actPhotoLong  */ { ...SIGNAL_BASE,   color: "#c890c0" },
+  /* actPhotoSurf  */ { ...SIGNAL_BASE,   color: "#ffe0f0" },
+  /* chemoBiop     */ { ...RECEPTOR_BASE, color: "#64c8d8" },
+  /* chemoMin      */ { ...RECEPTOR_BASE, color: "#4ca0b0" },
+  /* chemoFa       */ { ...RECEPTOR_BASE, color: "#8ee0e8" },
+  /* chemoMark0    */ { ...RECEPTOR_BASE, color: "#a8ecf0" },
+  /* actChemoBiopX */ { ...SIGNAL_BASE,   color: "#c0e8f0" },
+  /* actChemoBiopY */ { ...SIGNAL_BASE,   color: "#c0e8f0" },
+  /* actChemoMinX  */ { ...SIGNAL_BASE,   color: "#a0c0c8" },
+  /* actChemoMinY  */ { ...SIGNAL_BASE,   color: "#a0c0c8" },
+  /* actChemoFaX   */ { ...SIGNAL_BASE,   color: "#d0f0f8" },
+  /* actChemoFaY   */ { ...SIGNAL_BASE,   color: "#d0f0f8" },
+  /* actChemoMrkX  */ { ...SIGNAL_BASE,   color: "#e0f8fc" },
+  /* actChemoMrkY  */ { ...SIGNAL_BASE,   color: "#e0f8fc" },
+  /* mech          */ { ...RECEPTOR_BASE, color: "#c8d864" },
+  /* actMechX      */ { ...SIGNAL_BASE,   color: "#e0e8a0" },
+  /* actMechY      */ { ...SIGNAL_BASE,   color: "#e0e8a0" },
+  /* thermo        */ { ...RECEPTOR_BASE, color: "#d8a064" },
+  /* actThermo     */ { ...SIGNAL_BASE,   color: "#f0c890" },
+  /* magneto       */ { ...RECEPTOR_BASE, color: "#9090d8" },
+  /* actMagX       */ { ...SIGNAL_BASE,   color: "#b0b0e8" },
+  /* actMagY       */ { ...SIGNAL_BASE,   color: "#b0b0e8" },
+  /* bondChem      */ { molarMass: 1.0, density: 1.05, defaultPhase: "aqueous", solubility: 0.5, vaporPressure: 0, meltingPoint: 80, permeability: 0, bondEnergy: 8, role: "none", color: "#d8c0a0", isSignal: false },
+  /* repairChem    */ { molarMass: 1.0, density: 1.1,  defaultPhase: "aqueous", solubility: 0.3, vaporPressure: 0, meltingPoint: 70, permeability: 0, bondEnergy: 8, role: "none", color: "#b0c0d8", isSignal: false },
+  /* mark0  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e84a4a", isSignal: false },
+  /* mark1  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4ae84a", isSignal: false },
+  /* mark2  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4a4ae8", isSignal: false },
+  /* mark3  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e8e84a", isSignal: false },
 ];
 const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // Initialize the exported per-chem density LUT. Hot loops reuse this
@@ -1569,8 +1780,19 @@ export const CHEM_IDS = {
   o2: 0, co2: 1, glucose: 2, aminoAcid: 3, fattyAcid: 4, minerals: 5,
   adp: 6, waste: 7, chlorophyll: 8, enzyme: 9, mrna: 10,
   biopolymer: 11, membrane: 12,
-  photoreceptor: 13, chemoreceptor: 14, mechanoreceptor: 15, thermoreceptor: 16,
-  marker0: 17, marker1: 18, marker2: 19, marker3: 20,
+  photoreceptorVisible: 13, photoreceptorLong: 14, photoreceptorSurface: 15,
+  activatedPhotoVisible: 16, activatedPhotoLong: 17, activatedPhotoSurface: 18,
+  chemoreceptorBiopolymer: 19, chemoreceptorMinerals: 20,
+  chemoreceptorFa: 21, chemoreceptorMarker0: 22,
+  activatedChemoBiopolymerX: 23, activatedChemoBiopolymerY: 24,
+  activatedChemoMineralsX: 25, activatedChemoMineralsY: 26,
+  activatedChemoFaX: 27, activatedChemoFaY: 28,
+  activatedChemoMarker0X: 29, activatedChemoMarker0Y: 30,
+  mechanoreceptor: 31, activatedMechX: 32, activatedMechY: 33,
+  thermoreceptor: 34, activatedThermo: 35,
+  magnetoreceptor: 36, activatedMagX: 37, activatedMagY: 38,
+  bondChem: 39, repairChem: 40,
+  marker0: 41, marker1: 42, marker2: 43, marker3: 44,
 } as const;
 
 // World-spawn weighting for free-floating particles. Replaces the
@@ -1699,6 +1921,7 @@ function buildChemicalTable(): ChemicalDef[] {
       bondEnergy,
       role: "none",
       color: procColor(rng, defaultPhase),
+      isSignal: false,
     });
   }
   return out;
@@ -1898,8 +2121,11 @@ function installNamedReactions(out: Reaction[]): void {
   // the SYNTH_BIO bit so cells that maintain biomass also maintain
   // sensing capacity -- an emergent property: starving cells lose
   // both growth and their senses.
-  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
-  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  // K-1 transitional: slot 12 builds the visible-band photoreceptor;
+  // slot 13 builds the biopolymer-chemoreceptor. K-4 (unified SYNTH)
+  // replaces these with per-kind reactions selected by op param.
+  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_VISIBLE], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
+  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
   out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
   out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << 0, atpFloor: true, mrnaScale: true });
 }
@@ -3662,7 +3888,11 @@ function maintenanceDecay(c: Creature, dt: number): void {
   // Receptor chems decay at the same rate as other machinery. Cells
   // that don't run biosynth lose their sensing capacity over minutes.
   const RECEPTOR_DECAY_PER_SEC = 0.005;
-  const recCols = [s.m_photoreceptor, s.m_chemoreceptor, s.m_mechanoreceptor, s.m_thermoreceptor];
+  const recCols = [
+    s.m_photoreceptorVisible, s.m_photoreceptorLong, s.m_photoreceptorSurface,
+    s.m_chemoreceptorBiopolymer, s.m_chemoreceptorMinerals, s.m_chemoreceptorFa, s.m_chemoreceptorMarker0,
+    s.m_mechanoreceptor, s.m_thermoreceptor, s.m_magnetoreceptor,
+  ];
   for (let r = 0; r < recCols.length; r++) {
     const col = recCols[r];
     const v = col[i];
@@ -5483,8 +5713,21 @@ function populateSensors(c: Creature, world: World): void {
   // cell hasn't invested in receptors.
   const sCols = c.store.chemCols; const sI = c.idx;
   const sat = (v: number) => v / (v + RECEPTOR_REF);
-  const photoSat = sat(sCols[CHEM_PHOTORECEPTOR][sI]);
-  const chemoSat = sat(sCols[CHEM_CHEMORECEPTOR][sI]);
+  // K-1: photoreceptor pool sums the 3 band variants; chemoreceptor
+  // pool sums the 4 per-target variants. Phase K-3's activation pass
+  // will refine this, but the current gating block stays usable for
+  // the legacy SENSE_LIGHT / SENSE_GRAD ops until K-5 retires them.
+  const photoSat = sat(
+    sCols[CHEM_PHOTORECEPTOR_VISIBLE][sI]
+    + sCols[CHEM_PHOTORECEPTOR_LONG][sI]
+    + sCols[CHEM_PHOTORECEPTOR_SURFACE][sI]
+  );
+  const chemoSat = sat(
+    sCols[CHEM_CHEMORECEPTOR_BIOPOLYMER][sI]
+    + sCols[CHEM_CHEMORECEPTOR_MINERALS][sI]
+    + sCols[CHEM_CHEMORECEPTOR_FA][sI]
+    + sCols[CHEM_CHEMORECEPTOR_MARKER0][sI]
+  );
   const mechSat = sat(sCols[CHEM_MECHANORECEPTOR][sI]);
   const thermoSat = sat(sCols[CHEM_THERMORECEPTOR][sI]);
   // Photo gates light + EM bands + pheromone trail-following.
@@ -6784,7 +7027,6 @@ function snapshotInner(c: Creature): InnerCreatureSnapshot {
 }
 
 function snapshotCreatureLive(c: Creature): CreatureSnapshot {
-  const m = c.molecules;
   return {
     id: c.id,
     x: c.x,
@@ -6800,29 +7042,16 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
     lineageRoot: c.lineageRoot,
     speciesKey: c.speciesKey,
     genome: c.genome,
-    molecules: {
-      adp: m.adp,
-      glucose: m.glucose,
-      fattyAcid: m.fattyAcid,
-      aminoAcid: m.aminoAcid,
-      chlorophyll: m.chlorophyll,
-      enzyme: m.enzyme,
-      o2: m.o2,
-      co2: m.co2,
-      minerals: m.minerals,
-      waste: m.waste,
-      mrna: m.mrna,
-      biopolymer: m.biopolymer,
-      membrane: m.membrane,
-      photoreceptor: m.photoreceptor,
-      chemoreceptor: m.chemoreceptor,
-      mechanoreceptor: m.mechanoreceptor,
-      thermoreceptor: m.thermoreceptor,
-      marker0: m.marker0,
-      marker1: m.marker1,
-      marker2: m.marker2,
-      marker3: m.marker3,
-    },
+    molecules: (() => {
+      // Snapshot every named molecule via molCols so the structure
+      // grows automatically as new chems are added to the table.
+      const out = {} as Molecules;
+      const cols = c.store.molCols;
+      const i = c.idx;
+      const o = out as unknown as Record<string, number>;
+      for (let k = 0; k < MOLECULE_IDS.length; k++) o[MOLECULE_IDS[k]] = cols[k][i];
+      return out;
+    })(),
     vmPc: c.vm.pc,
     // The renderer reads the stack length and a short preview; a slice
     // is enough and keeps the per-tick clone small.
