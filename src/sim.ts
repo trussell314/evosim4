@@ -5592,10 +5592,13 @@ function populateSensors(c: Creature, world: World): void {
   const x1 = Math.min(SENSOR_BIN_COLS - 1, cbx + span);
   const y0 = Math.max(0, cby - span);
   const y1 = Math.min(SENSOR_BIN_ROWS - 1, cby + span);
+  // K-2: bins are now keyed by chem id; map the legacy 6-slot operand
+  // (m) through SENSOR_CHEMS first.
   for (let m = 0; m < 6; m++) {
-    const cnt = SENSOR_BIN_COUNT[m];
-    const sxArr = SENSOR_BIN_SUMX[m];
-    const syArr = SENSOR_BIN_SUMY[m];
+    const chemId = SENSOR_CHEMS[m];
+    const cnt = SENSOR_BIN_COUNT[chemId];
+    const sxArr = SENSOR_BIN_SUMX[chemId];
+    const syArr = SENSOR_BIN_SUMY[chemId];
     let gx = 0, gy = 0, dens = 0;
     for (let by = y0; by <= y1; by++) {
       const row = by * SENSOR_BIN_COLS;
@@ -5936,7 +5939,12 @@ let CREATURE_GRID_ROWS = 0;
 const SENSOR_BIN = 40;
 let SENSOR_BIN_COLS = 0;
 let SENSOR_BIN_ROWS = 0;
-const SENSOR_BIN_COUNT: Int32Array[] = [];   // [material][bin]
+// K-2: sensor bins widen from 6 slots (per-sensor-chem) to one slot
+// per chem id (CHEMICAL_COUNT). Lets the chemo activation pass query
+// gradients for any chem id, not just the legacy 6 SENSOR_CHEMS.
+// Memory: ~CHEMICAL_COUNT * 3 arrays * SENSOR_BIN_ALLOC * 4 bytes.
+// At 96 chems * 300 bins * 12 bytes that's ~350KB, allocated once.
+const SENSOR_BIN_COUNT: Int32Array[] = [];   // [chemId][bin]
 const SENSOR_BIN_SUMX: Float32Array[] = [];
 const SENSOR_BIN_SUMY: Float32Array[] = [];
 let SENSOR_BIN_ALLOC = 0;
@@ -5950,14 +5958,14 @@ function rebuildSensorBins(world: World): void {
     SENSOR_BIN_SUMX.length = 0;
     SENSOR_BIN_SUMY.length = 0;
     const alloc = n * 2;
-    for (let m = 0; m < 6; m++) {
+    for (let m = 0; m < CHEMICAL_COUNT; m++) {
       SENSOR_BIN_COUNT.push(new Int32Array(alloc));
       SENSOR_BIN_SUMX.push(new Float32Array(alloc));
       SENSOR_BIN_SUMY.push(new Float32Array(alloc));
     }
     SENSOR_BIN_ALLOC = alloc;
   } else {
-    for (let m = 0; m < 6; m++) {
+    for (let m = 0; m < CHEMICAL_COUNT; m++) {
       SENSOR_BIN_COUNT[m].fill(0, 0, n);
       SENSOR_BIN_SUMX[m].fill(0, 0, n);
       SENSOR_BIN_SUMY[m].fill(0, 0, n);
@@ -5967,23 +5975,63 @@ function rebuildSensorBins(world: World): void {
   const PX = store.x, PY = store.y, PCHEM = store.chemId;
   const np = world.particles.length;
   for (let i = 0; i < np; i++) {
+    const chem = PCHEM[i];
+    // Bin every particle by its raw chemId. K-5 retires the legacy
+    // 6-slot SENSE_GRAD ops; chemoGradient() queries by any chemId.
     const xi = PX[i], yi = PY[i];
-    // Map chemId to sensor bin slot via SENSOR_BIN_BY_CHEM. Chems
-    // outside the 6 sensor slots are invisible to gradient/density
-    // ops (cells use SENSE_CHEMICAL to read internal chem pools for
-    // anything else). Skipping invisible chems also keeps the bin
-    // table hot/small even after CHEMICAL_COUNT grows.
-    const slot = SENSOR_BIN_BY_CHEM[PCHEM[i]];
-    if (slot < 0) continue;
     let bx = Math.floor(xi / SENSOR_BIN);
     let by = Math.floor(yi / SENSOR_BIN);
     if (bx < 0) bx = 0; else if (bx >= SENSOR_BIN_COLS) bx = SENSOR_BIN_COLS - 1;
     if (by < 0) by = 0; else if (by >= SENSOR_BIN_ROWS) by = SENSOR_BIN_ROWS - 1;
     const bin = by * SENSOR_BIN_COLS + bx;
-    SENSOR_BIN_COUNT[slot][bin]++;
-    SENSOR_BIN_SUMX[slot][bin] += xi;
-    SENSOR_BIN_SUMY[slot][bin] += yi;
+    SENSOR_BIN_COUNT[chem][bin]++;
+    SENSOR_BIN_SUMX[chem][bin] += xi;
+    SENSOR_BIN_SUMY[chem][bin] += yi;
   }
+}
+
+// Gradient pull vector toward particles of a given chem within
+// sense range, using the same inverse-square weighting as the
+// legacy populateSensors GRAD loop. Out is written into the provided
+// length-2 array to avoid allocations in the per-cell hot path.
+// K-3's activation pass calls this; not yet wired (silences
+// noUnusedLocals via export below).
+export function chemGradient(cx: number, cy: number, range: number, chemId: number, out: Float32Array): void {
+  out[0] = 0; out[1] = 0;
+  if (chemId < 0 || chemId >= CHEMICAL_COUNT) return;
+  const rangeSq = range * range;
+  const span = Math.ceil(range / SENSOR_BIN);
+  let cbx = Math.floor(cx / SENSOR_BIN);
+  let cby = Math.floor(cy / SENSOR_BIN);
+  if (cbx < 0) cbx = 0; else if (cbx >= SENSOR_BIN_COLS) cbx = SENSOR_BIN_COLS - 1;
+  if (cby < 0) cby = 0; else if (cby >= SENSOR_BIN_ROWS) cby = SENSOR_BIN_ROWS - 1;
+  const x0 = Math.max(0, cbx - span);
+  const x1 = Math.min(SENSOR_BIN_COLS - 1, cbx + span);
+  const y0 = Math.max(0, cby - span);
+  const y1 = Math.min(SENSOR_BIN_ROWS - 1, cby + span);
+  const cnt = SENSOR_BIN_COUNT[chemId];
+  const sxArr = SENSOR_BIN_SUMX[chemId];
+  const syArr = SENSOR_BIN_SUMY[chemId];
+  let gx = 0, gy = 0;
+  for (let by = y0; by <= y1; by++) {
+    const row = by * SENSOR_BIN_COLS;
+    for (let bx = x0; bx <= x1; bx++) {
+      const bin = row + bx;
+      const n = cnt[bin];
+      if (n === 0) continue;
+      const cxBin = sxArr[bin] / n;
+      const cyBin = syArr[bin] / n;
+      const dx = cxBin - cx;
+      const dy = cyBin - cy;
+      const dsq = dx * dx + dy * dy;
+      if (dsq >= rangeSq || dsq < 1) continue;
+      const w = range / dsq;
+      gx += dx * w * n;
+      gy += dy * w * n;
+    }
+  }
+  out[0] = gx;
+  out[1] = gy;
 }
 
 
