@@ -1959,7 +1959,7 @@ function updateInspector(): void {
     `food: glu=${fmt(m.glucose)} fa=${fmt(m.fattyAcid)} aa=${fmt(m.aminoAcid)} min=${fmt(m.minerals)}\n` +
     `gas:  O2=${fmt(m.o2)} CO2=${fmt(m.co2)} waste=${fmt(m.waste)}\n` +
     `cell: chl=${fmt(m.chlorophyll)} enz=${fmt(m.enzyme)} mRNA=${fmt(m.mrna)} memb=${fmt(m.membrane)}\n` +
-    `bulk: biop=${fmt(m.biopolymer)} memb=${fmt(m.membrane)}\n` +
+    `bulk: biop=${fmt(m.biopolymer)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
   disasmBody.textContent = activeDisasm;
