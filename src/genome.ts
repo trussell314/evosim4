@@ -1108,7 +1108,19 @@ export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Ar
     for (let i = 0; i < size; i++) bytes[i] = randSeedByte(rng, opBias);
     if (viableGenome(bytes)) return bytes;
   }
-  return makeDefaultGenome();
+  // Fallback: every reroll missed the viability gate. Take the
+  // default genome and append a short randomized tail so distinct
+  // fallback founders don't all hash to the same speciesKey (which
+  // would make the HUD's lineage / species counts look wrong --
+  // many lineages collapsing to one species). The default is
+  // already viable; appended bytes are extra payload the VM may or
+  // may not execute.
+  const base = makeDefaultGenome();
+  const tailLen = 4 + Math.floor(rng() * 8);
+  const out = new Uint8Array(base.length + tailLen);
+  out.set(base);
+  for (let i = 0; i < tailLen; i++) out[base.length + i] = Math.floor(rng() * 256);
+  return out;
 }
 
 export function makeDefaultGenome(): Uint8Array {

@@ -2019,7 +2019,13 @@ function updatePerfStats(simAdvanced: number, renderMs: number, simMs: number): 
 }
 
 function statsLine(): string {
-  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${snapshot.t.toFixed(0)}s  species=${snapshot.species.length}`;
+  // Count only species with currently-living cells (matches the
+  // top-row pop= number). snapshot.species includes the
+  // SPECIES_GRACE_SEC window of dead species, which inflates the
+  // count if used directly.
+  const liveSpeciesKeys = new Set<string>();
+  for (const c of snapshot.creatures) liveSpeciesKeys.add(c.speciesKey);
+  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${snapshot.t.toFixed(0)}s  species=${liveSpeciesKeys.size}`;
   const p = snapshot.profile;
   if (p && p.ticks > 0) {
     const total =
