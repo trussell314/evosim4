@@ -89,9 +89,16 @@ const ctx = canvas.getContext("2d")!;
 // UA default size when only the shorthand was present. Explicit
 // properties + a top-level reset on the wrapping HUD makes the size
 // stick everywhere, every time.
+// Single source of truth for ALL UI text size. One number, used by
+// every HUD / panel / tooltip / canvas-label site so the whole UI
+// scales together from here. Bump this to resize everything.
+const UI_FONT_PX = 14;
+const UI_FONT_FAMILY = "ui-monospace,SFMono-Regular,Menlo,monospace";
+// Canvas ctx.font string (phylogeny / heatmap labels).
+const UI_CANVAS_FONT = `${UI_FONT_PX}px ${UI_FONT_FAMILY}`;
 const HUD_FONT =
-  "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" +
-  "font-size:9px;line-height:1.3;font-weight:normal;font-style:normal;";
+  `font-family:${UI_FONT_FAMILY};` +
+  `font-size:${UI_FONT_PX}px;line-height:1.3;font-weight:normal;font-style:normal;`;
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
@@ -586,7 +593,7 @@ const analysisPanel = document.createElement("div");
 analysisPanel.style.cssText =
   "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-left:1px solid #1a3340;" +
-  "font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
   "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
 const analysisHeader = document.createElement("div");
 analysisHeader.style.cssText =
@@ -597,7 +604,7 @@ analysisHeader.style.cssText =
 // tab there's only the toggle, and centered looks right.
 const analysisTitle = document.createElement("span");
 analysisTitle.textContent = "genome analysis";
-analysisTitle.style.cssText = "font-weight:bold;font-size:11px;";
+analysisTitle.style.cssText = `font-weight:bold;font-size:${UI_FONT_PX}px;`;
 const analysisToggle = document.createElement("span");
 analysisToggle.textContent = "+";
 // Bracketed forms ([+]/[–]) didn't fit inside the 26px minimized tab
@@ -626,7 +633,7 @@ const tabButtons = new Map<AnalysisTab, HTMLSpanElement>();
 function styleTab(btn: HTMLSpanElement, active: boolean): void {
   btn.style.cssText =
     "display:inline-block;padding:5px 10px;cursor:pointer;user-select:none;" +
-    "font-size:11px;" +
+    `font-size:${UI_FONT_PX}px;` +
     (active
       ? "color:#cff;border-bottom:2px solid #4cc;font-weight:bold;"
       : "color:#7aa;border-bottom:2px solid transparent;");
@@ -861,7 +868,7 @@ const tooltip = document.createElement("div");
 tooltip.style.cssText =
   "position:fixed;pointer-events:none;display:none;z-index:9;" +
   "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #356;" +
-  "padding:4px 6px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;" +
+  `padding:4px 6px;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};` +
   "border-radius:3px;white-space:pre;";
 document.body.appendChild(tooltip);
 // Mousemove sets the lock; the per-frame flusher just re-renders.
@@ -1424,7 +1431,7 @@ function drawHeatmap(): void {
     }
     ctx.globalAlpha = 1;
     ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+    ctx.font = UI_CANVAS_FONT;
     ctx.fillText("heatmap: temperature (cold blue → warm red, H toggles)", 8, surfaceY + 14);
     return;
   }
@@ -1449,7 +1456,7 @@ function drawHeatmap(): void {
   }
   ctx.globalAlpha = 1;
   ctx.fillStyle = "rgba(255,255,255,0.65)";
-  ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  ctx.font = UI_CANVAS_FONT;
   ctx.fillText(`heatmap: particle density (max ${maxC}/cell, H toggles)`, 8, surfaceY + 14);
     return;
   }
@@ -1542,7 +1549,7 @@ function drawGenomeStats(): void {
   ctx.strokeStyle = "#9ee";
   ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
   ctx.fillStyle = "#9ee";
-  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.font = UI_CANVAS_FONT;
   ctx.textBaseline = "top";
   ctx.textAlign = "center";
   ctx.fillText(gsMinimized ? "+" : "–", tx + tw / 2, ty + 2);
@@ -1779,7 +1786,7 @@ function drawPhylogeny(): void {
   ctx.globalAlpha = 1;
 
   ctx.fillStyle = "#7fb8c8";
-  ctx.font = "10px ui-monospace,SFMono-Regular,Menlo,monospace";
+  ctx.font = UI_CANVAS_FONT;
   const filterTag = phyloFilterTop5 ? "  [TOP 5 alive, F toggles]" : "  (F: top 5 filter)";
   ctx.fillText(
     `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)${filterTag}`,
@@ -2171,7 +2178,7 @@ function updateInspector(): void {
     pinSpeciesBtn.style.display = "flex";
     const col = isPinned ? "#ffd24c" : "#9ee";
     pinSpeciesBtn.innerHTML =
-      `<span style="font-size:30px;line-height:1;color:${col};">` +
+      `<span style="font-weight:bold;line-height:1;color:${col};">` +
       `${isPinned ? "★" : "☆"}</span>` +
       `<span style="color:${col};">${isPinned ? "unpin" : "pin"} species ` +
       `<b>${genomeTag(c.genome)}</b></span>`;
@@ -2428,7 +2435,7 @@ function buildSpeciesCard(
   const tm = trophicMode(genome);
   const trophicChip =
     `<span style="display:inline-block;padding:1px 5px;border-radius:3px;` +
-    `background:${tm.bg};color:${tm.fg};font-size:9px;font-weight:bold;` +
+    `background:${tm.bg};color:${tm.fg};font-weight:bold;` +
     `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
   // Pinning lives in the HUD inspector (select a cell -> pin its
   // species), not here -- a card only exists for species already in
@@ -2437,7 +2444,7 @@ function buildSpeciesCard(
   headDiv.innerHTML =
     (rankLabel ? `<b>${rankLabel}</b>  ` : "") +
     `${dot}${trophicChip}` +
-    `<b style="font-size:13px;letter-spacing:0.5px;">${genomeTag(genome)}</b>` +
+    `<b style="letter-spacing:0.5px;">${genomeTag(genome)}</b>` +
     `<span style="opacity:.7"> (${genome.length}b)</span>  ${status}`;
   const statsDiv = document.createElement("div");
   statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
@@ -2449,7 +2456,7 @@ function buildSpeciesCard(
   spawnBtn.textContent = "Spawn";
   spawnBtn.style.cssText =
     "margin-top:4px;padding:2px 8px;border:1px solid #356;border-radius:3px;" +
-    "background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;font-size:10px;";
+    `background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;font-size:${UI_FONT_PX}px;`;
   spawnBtn.addEventListener("click", () => {
     simWorker.postMessage({ type: "spawnSpecies", genome: Array.from(genome) });
     spawnBtn.textContent = "Spawned ✓";
