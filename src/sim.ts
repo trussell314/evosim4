@@ -1696,7 +1696,7 @@ const SIGNAL_BASE: Omit<NamedChemSpec, "color"> = {
 // energy-dense, biomass is structural-insoluble, chlorophyll/enzyme/
 // mrna are aqueous machinery that doesn't cross membranes.
 const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
-  /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#cfe2ff", isSignal: false },
+  /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#3fa9f5", isSignal: false },
   /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6", isSignal: false },
   /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0.6, bondEnergy: 30,   role: "none",      color: "#dbe09c", isSignal: false },
   /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075", isSignal: false },
