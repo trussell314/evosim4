@@ -1,6 +1,6 @@
-// Reserve / waste diagnostic. 150 sim-sec, production-like world.
-// Appends one line per sample to /tmp/probe_diag.txt so partial
-// progress is readable even if killed.
+// Mass-conservation diagnostic. Short run; tracks TOTAL system mass to
+// tell a reserve "trap" (bounded, plateaus) from a "leak" (reactions
+// minting mass -> grows forever). Appends to /tmp/probe_diag.txt.
 // Run: npx tsx scripts/probe_diag.ts
 
 import { createWorld, step, CHEM_BASE_DENSITY, CHEM_IDS } from "../src/sim";
@@ -9,46 +9,54 @@ import { appendFileSync, writeFileSync } from "node:fs";
 const OUT = "/tmp/probe_diag.txt";
 writeFileSync(OUT, "");
 const DT = 1 / 60;
-const STEPS = Math.round(150 / DT);
+const STEPS = Math.round(75 / DT);
 const STRIDE = 96;
 const W = CHEM_IDS.waste as number;
-const volPer = (4 / 3) * Math.PI * 2 * 2 * 2;
+const volPer = (4 / 3) * Math.PI * 8;
 const world = createWorld(800, 600, { delayedSpawn: true });
 
+const fieldSumAll = (a: Float32Array): number => {
+  let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s;
+};
 const fieldSum = (a: Float32Array, k: number): number => {
   let s = 0; for (let b = 0; b + k < a.length; b += STRIDE) s += a[b + k]; return s;
 };
-function reserveCount(k: number): number {
-  const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
-  return fieldSum(world.reserve, k) / (d * volPer);
+function totalMass(): { tot: number; cell: number; part: number; amb: number; res: number; atm: number } {
+  let cell = 0;
+  for (const c of world.creatures) {
+    cell += c.store.energy[c.idx];
+    for (let k = 0; k < STRIDE; k++) cell += c.store.chemCols[k][c.idx];
+  }
+  let part = 0;
+  const ps = world.particleStore;
+  for (let i = 0; i < world.particles.length; i++) {
+    const r = ps.r[i];
+    const d = ps.density[i] || (CHEM_BASE_DENSITY[ps.chemId[i]] || 1);
+    part += d * (4 / 3) * Math.PI * r * r * r;
+  }
+  const amb = fieldSumAll(world.ambient);
+  const res = fieldSumAll(world.reserve);
+  let atm = 0;
+  const A = world.atmosphere as Record<string, number>;
+  for (const key in A) if (typeof A[key] === "number") atm += A[key];
+  return { tot: cell + part + amb + res + atm, cell, part, amb, res, atm };
+}
+function genResSum(): number {
+  let s = 0;
+  for (let k = 45; k < 96; k++) {
+    const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+    s += fieldSum(world.reserve, k) / (d * volPer);
+  }
+  return s;
 }
 function line(): string {
-  // generic reserve spread (chem 45..95)
-  const gc: number[] = [];
-  for (let k = 45; k < 96; k++) gc.push(reserveCount(k));
-  gc.sort((a, b) => a - b);
-  const med = gc[gc.length >> 1];
-  const sum = gc.reduce((a, b) => a + b, 0);
-  // total system waste mass
-  let cellWaste = 0, cellMass = 0;
-  for (const c of world.creatures) {
-    cellWaste += c.store.chemCols[W][c.idx];
-    cellWaste += 0;
-  }
-  let pWaste = 0, pCount = world.particles.length;
-  for (let i = 0; i < pCount; i++) {
-    if (world.particleStore.chemId[i] === W) {
-      const r = world.particleStore.r[i];
-      const d = world.particleStore.density[i] || (CHEM_BASE_DENSITY[W] || 1);
-      pWaste += d * (4 / 3) * Math.PI * r * r * r;
-    }
-  }
-  return `t=${world.t.toFixed(0).padStart(3)} parts=${String(pCount).padStart(5)} ghosts=${String(world.fadingGhosts.length).padStart(5)} cells=${String(world.creatures.length).padStart(4)} | genReserveCnt min=${gc[0].toFixed(0)} med=${med.toFixed(0)} max=${gc[gc.length - 1].toFixed(0)} sum=${sum.toFixed(0)} | wasteMass cell=${cellWaste.toFixed(0)} part=${pWaste.toFixed(0)} diss=${fieldSum(world.ambient, W).toFixed(0)} res=${fieldSum(world.reserve, W).toFixed(0)}`;
+  const m = totalMass();
+  return `t=${world.t.toFixed(0).padStart(3)} TOTAL=${m.tot.toFixed(0).padStart(8)} | cell=${m.cell.toFixed(0)} part=${m.part.toFixed(0)} amb=${m.amb.toFixed(0)} res=${m.res.toFixed(0)} atm=${m.atm.toFixed(0)} | genResCnt=${genResSum().toFixed(0)} dissW=${fieldSum(world.ambient, W).toFixed(0)} cells=${world.creatures.length}`;
 }
 
 for (let s = 0; s < STEPS; s++) {
   step(world, DT);
-  if (s % (60 * 15) === 0) appendFileSync(OUT, line() + "\n");
+  if (s % (60 * 10) === 0) appendFileSync(OUT, line() + "\n");
 }
 appendFileSync(OUT, line() + "\nDONE\n");
 console.log("done");
