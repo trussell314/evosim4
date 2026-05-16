@@ -24,14 +24,17 @@ mass-conservation invariant test, the reproducibility test, and the
   diffusing field, no thermodiffusion). Local T only scales
   solubility (`f_T`) + the diffusion coefficient. 10 m vertical
   scale calibrates rate only — zero rendering/dynamics impact.
-- **Diffusion**: Jacobi (double-buffered), cross-region, for
-  dissolved *and* reserve. Coefficient set so a sharp gradient has a
-  ~10-minute half-life across the world.
+- **Diffusion**: Jacobi (double-buffered), cross-region, for the
+  **dissolved** field only (a true aqueous solute). Coefficient set
+  so a sharp gradient has a ~10-minute half-life across the world.
+  **Reserve does NOT diffuse** -- it's demoted settled sediment;
+  letting it flow would invisibly creep bottom sediment upward. It
+  stays put and resuspends in place via mass-local promotion.
 - **Particles**: all render 2px (cells excepted). Render size
   decoupled from physics — buoyancy = density vs local density;
   drag uses density + logical mass, not render radius. Legacy
   varied-size spawn retired (the field carries mass now).
-- **Per-tick precedence**: (1) diffuse dissolved+reserve →
+- **Per-tick precedence**: (1) diffuse dissolved →
   (2) dissolve as much as possible into capacity → (3) render the
   remainder if under the global particle cap → (4) reserve = last
   pass. Hysteresis deadband (precipitate >100%, re-dissolve <90%)
@@ -69,7 +72,7 @@ particles under the global cap. Exit: no dissolve/precip oscillation
 in a saturated-region stress test.
 
 ### Phase 4 — Reserve bucket + cap enforcement + promotion
-`reserve[region·chem]` + shared Jacobi diffusion. Over-cap rendered
+`reserve[region·chem]` (does NOT diffuse). Over-cap rendered
 → local reserve; reserve→rendered promotion by global-prevalence
 chem pick, mass-local spawn. Sparse save encoding. Exit: 60-min
 scenario — particle count bounded at cap, `meanX` stays ~centred

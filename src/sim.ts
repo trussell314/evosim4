@@ -4065,23 +4065,21 @@ function ambientBaseAt(world: { width: number; height: number }, x: number, y: n
 // stability limit (sum of 4 edge coeffs < 0.5).
 const REGION_DIFFUSION_HALFLIFE_S = 600;
 let REGION_DIFF_SCRATCH = new Float32Array(0);
-let REGION_DIFF_SCRATCH2 = new Float32Array(0);
 function diffuseRegions(world: World, dt: number): void {
-  // Same Jacobi machinery for both regional fields.
-  jacobiDiffuseField(world, world.ambient, false, dt);
-  jacobiDiffuseField(world, world.reserve, true, dt);
+  // Only the DISSOLVED field diffuses -- it's a true aqueous solute.
+  // The reserve pool is demoted settled sediment (only quiet/at-rest
+  // particles are demoted); letting it diffuse would invisibly creep
+  // bottom sediment upward/sideways. Reserve stays put and resuspends
+  // in place via mass-local promotion.
+  jacobiDiffuseField(world, world.ambient, dt);
 }
-function jacobiDiffuseField(world: World, amb: Float32Array, useScratch2: boolean, dt: number): void {
+function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
   const n = cols * rows;
   if (n < 2) return;
-  if (useScratch2) {
-    if (REGION_DIFF_SCRATCH2.length < amb.length) REGION_DIFF_SCRATCH2 = new Float32Array(amb.length);
-  } else {
-    if (REGION_DIFF_SCRATCH.length < amb.length) REGION_DIFF_SCRATCH = new Float32Array(amb.length);
-  }
-  const old = useScratch2 ? REGION_DIFF_SCRATCH2 : REGION_DIFF_SCRATCH;
+  if (REGION_DIFF_SCRATCH.length < amb.length) REGION_DIFF_SCRATCH = new Float32Array(amb.length);
+  const old = REGION_DIFF_SCRATCH;
   old.set(amb.subarray(0, n * AMBIENT_STRIDE));
   const N = Math.max(cols, rows);
   const ticks = REGION_DIFFUSION_HALFLIFE_S / dt;
