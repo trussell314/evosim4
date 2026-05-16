@@ -6478,6 +6478,7 @@ function updateCreatures(world: World, dt: number): void {
   }
 
   // Combined removal pass. dead = spilled, eaten = absorbed (no spill).
+  massMark(world, "uc_loop");
   // Build a survivors array in one O(N) pass instead of repeatedly
   // splicing (which is O(N) each).
   if (dead.length > 0 || eaten.size > 0) {
@@ -6546,6 +6547,7 @@ function updateCreatures(world: World, dt: number): void {
     for (const s of survivors) world.creatures.push(s);
     for (const r of released) world.creatures.push(r);
   }
+  massMark(world, "uc_death");
 }
 
 // On death, return the cell's chem pool to the world as free-floating
