@@ -47,6 +47,7 @@ const CTRL_C_COLS = 5;
 const CTRL_C_ROWS = 6;
 const CTRL_C_PARITY = 7;
 const CTRL_C_E = 8;
+const CTRL_C_DIR = 9; // 1 = forward inner-x sweep, 0 = reversed
 
 const CMD_FORCES = 0;
 const CMD_COLLISIONS = 1;
@@ -203,6 +204,7 @@ function loop(): void {
       const rows = Atomics.load(ctrl!, CTRL_C_ROWS);
       const parity = Atomics.load(ctrl!, CTRL_C_PARITY);
       const e = Atomics.load(ctrl!, CTRL_C_E) / 1e6;
+      const fwd = Atomics.load(ctrl!, CTRL_C_DIR) !== 0;
       if (cols > 0 && rows > 0 && pviews && cviews) {
         const rowStart = parity + 2 * workerIndex;
         const rowStep = 2 * nWorkers;
@@ -213,7 +215,7 @@ function loop(): void {
           cviews.mass, cviews.asleep,
           cviews.cellStart, cviews.cellItems,
           rowStart, rowStep,
-          cols, rows, e,
+          cols, rows, e, fwd,
         );
       }
     }

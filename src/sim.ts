@@ -6360,8 +6360,18 @@ function forCreaturesNear(
 // Fire-only: kicks workers for the given parity, returns a wait fn.
 // Callers can run unrelated work (creature collisions, sediment, etc)
 // between firing and waiting to hide the barrier latency.
-export type CollisionPhaseDispatcher = (cols: number, rows: number, rowParity: 0 | 1, e: number) => () => void;
+export type CollisionPhaseDispatcher = (cols: number, rows: number, rowParity: 0 | 1, e: number, fwd: boolean) => () => void;
 let collisionPhaseDispatcher: CollisionPhaseDispatcher | null = null;
+// Collision relaxation is single-iteration Gauss-Seidel: positions are
+// written in place, so a fixed left->right cell sweep transports
+// residual overlap in the sweep direction once the packing is
+// over-dense (the source of the observed rightward particle drift).
+// Flip the inner-x sweep direction every tick so the directional
+// residual cancels over consecutive ticks. Only the SAME-ROW
+// neighbour flips with it (cx+1 <-> cx-1); the three downward stencil
+// neighbours are already x-symmetric ({cx-1,cx,cx+1} x {cy+1}) so
+// pair coverage stays exactly-once either way.
+let COLLISION_SWEEP_PARITY = 0;
 export function setCollisionPhaseDispatcher(d: CollisionPhaseDispatcher | null): void {
   collisionPhaseDispatcher = d;
 }
@@ -6386,9 +6396,16 @@ export function applyCollisionsRowRange(
   rowStart: number, rowStep: number,
   cols: number, rows: number,
   e: number,
+  fwd: boolean = true,
 ): void {
+  // fwd: inner sweep left->right with the same-row neighbour to the
+  // right (cx+1). !fwd: sweep right->left with the same-row neighbour
+  // to the left (cx-1). The down-row stencil is x-symmetric so it's
+  // unchanged either way -- pair coverage stays exactly-once. See
+  // COLLISION_SWEEP_PARITY note.
+  const sameRowDx = fwd ? 1 : -1;
   for (let cy = rowStart; cy < rows; cy += rowStep) {
-    for (let cx = 0; cx < cols; cx++) {
+    for (let cx = fwd ? 0 : cols - 1; fwd ? cx < cols : cx >= 0; cx += sameRowDx) {
       const ci = cy * cols + cx;
       const s0 = cellStart[ci];
       const s1 = cellStart[ci + 1];
@@ -6400,11 +6417,12 @@ export function applyCollisionsRowRange(
           resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, ai, cellItems[j], e);
         }
       }
-      // Downstream neighbors: E, SW, S, SE. Pairs with each are
-      // resolved exactly once because every cell only iterates its
-      // four downstream-of-(cx,cy) neighbors.
+      // Downstream neighbours: same-row (direction-dependent) + the
+      // three down-row cells (x-symmetric, direction-independent).
+      // Resolved exactly once because every cell only iterates its
+      // downstream-of-(cx,cy) neighbours for the active sweep order.
       checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
-        ci, cx + 1, cy,     cols, rows, e);
+        ci, cx + sameRowDx, cy, cols, rows, e);
       checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
         ci, cx - 1, cy + 1, cols, rows, e);
       checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
@@ -6474,6 +6492,12 @@ function resolveCollisions(
     }
   }
 
+  // Alternate the Gauss-Seidel inner-x sweep direction every tick so
+  // the over-density directional residual cancels across consecutive
+  // ticks (same fwd used for the serial path and both parallel
+  // row-parity phases this tick).
+  COLLISION_SWEEP_PARITY++;
+  const sweepFwd = (COLLISION_SWEEP_PARITY & 1) === 0;
   for (let pass = 0; pass < world.collisionIters; pass++) {
     // Build cellStart + cellItems. Two-pass: (1) count per cell into
     // cellStart, (2) prefix sum, (3) place each particle using a per-
@@ -6514,19 +6538,22 @@ function resolveCollisions(
     // so we still get through the rest of this iteration cleanly.
     const dispatch = collisionPhaseDispatcher;
     if (dispatch && n >= PARALLEL_PARTICLE_MIN) {
-      const wait0 = dispatch(cols, rows, 0, e);
+      const wait0 = dispatch(cols, rows, 0, e, sweepFwd);
       // Run hooks on the first iter only; subsequent iters have no
       // useful work to hide and we want hook side-effects to happen
       // exactly once per step.
       if (pendingP0) { pendingP0(); pendingP0 = undefined; }
       wait0();
-      const wait1 = dispatch(cols, rows, 1, e);
+      const wait1 = dispatch(cols, rows, 1, e, sweepFwd);
       if (pendingP1) { pendingP1(); pendingP1 = undefined; }
       wait1();
     } else {
-      // Serial fallback: iterate every row.
+      // Serial fallback: iterate every row. Inner-x sweep direction +
+      // same-row neighbour flip with sweepFwd; down-row stencil is
+      // x-symmetric so it's unchanged (coverage stays exactly-once).
+      const sameRowDx = sweepFwd ? 1 : -1;
       for (let cy = 0; cy < rows; cy++) {
-        for (let cx = 0; cx < cols; cx++) {
+        for (let cx = sweepFwd ? 0 : cols - 1; sweepFwd ? cx < cols : cx >= 0; cx += sameRowDx) {
           const ci = cy * cols + cx;
           const s0 = COLLISION_CELL_START[ci];
           const s1 = COLLISION_CELL_START[ci + 1];
@@ -6539,7 +6566,7 @@ function resolveCollisions(
           }
           checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
-            ci, cx + 1, cy,     cols, rows, e);
+            ci, cx + sameRowDx, cy, cols, rows, e);
           checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx - 1, cy + 1, cols, rows, e);

@@ -331,7 +331,8 @@ const CTRL_C_COLS = 5;
 const CTRL_C_ROWS = 6;
 const CTRL_C_PARITY = 7;
 const CTRL_C_E = 8;
-const CTRL_SLOTS = 9;
+const CTRL_C_DIR = 9; // 1 = forward inner-x sweep, 0 = reversed (see COLLISION_SWEEP_PARITY)
+const CTRL_SLOTS = 10;
 const CMD_FORCES = 0;
 const CMD_COLLISIONS = 1;
 // Params block: 22 Float64 slots.
@@ -497,7 +498,7 @@ function dispatchParticleForces(np: number, p: ParticleForceParams): () => void 
   };
 }
 
-function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number): () => void {
+function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: number, fwd: boolean): () => void {
   if (!pool) return () => {};
   const tStart = performance.now();
   const { ctrl, nWorkers } = pool;
@@ -505,6 +506,7 @@ function dispatchCollisionPhase(cols: number, rows: number, parity: 0 | 1, e: nu
   Atomics.store(ctrl, CTRL_C_COLS, cols);
   Atomics.store(ctrl, CTRL_C_ROWS, rows);
   Atomics.store(ctrl, CTRL_C_PARITY, parity);
+  Atomics.store(ctrl, CTRL_C_DIR, fwd ? 1 : 0);
   // Restitution is a small float (0..1); pack into Int32 at 1e6 scale.
   Atomics.store(ctrl, CTRL_C_E, Math.round(e * 1e6));
   Atomics.store(ctrl, CTRL_DONE, 0);
