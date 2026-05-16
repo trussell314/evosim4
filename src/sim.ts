@@ -6583,11 +6583,22 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   // removed). Placed in-place with only a small scatter ((5) toned
   // down). Generic chem ids deposit straight back into the matching
   // generic column on re-ingest (chemCols[NAMED+k] aliases it).
+  const relBase = ambientBaseAt(world, c.x, c.y);
   const emit = (chemId: number, total: number, density: number): void => {
     if (total <= 0) return;
     // total is chemical AMOUNT; the particle carries PHYSICAL MASS.
     const physMass = total * CHEM_MM[chemId];
-    const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(physMass, density));
+    const rTrue = radiusForMass(physMass, density);
+    // Too little to make a non-inflated particle: flooring r to
+    // DEATH_RELEASE_R_MIN would give the particle far more physical
+    // mass than the chem it represents (the dominant death-pass mass
+    // leak, x dozens of tiny generic pools per corpse). Dissolve the
+    // trace amount into the local field instead -- mass-conserving.
+    if (rTrue < DEATH_RELEASE_R_MIN) {
+      world.ambient[relBase + chemId] += total;
+      return;
+    }
+    const r = rTrue;
     const jit = (): number => (Math.random() - 0.5) * DEATH_RELEASE_SCATTER;
     const z = world.depth > 2 * r
       ? Math.min(world.depth - r, Math.max(r, c.z + jit()))
