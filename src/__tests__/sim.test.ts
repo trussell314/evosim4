@@ -15,6 +15,8 @@ import {
   regionCols,
   regionRows,
   createWorld,
+  resizeWorld,
+  setParticleTarget,
   seedParticles,
   step,
   genomeColor,
@@ -222,10 +224,28 @@ describe("createWorld", () => {
     expect(w.particleSpawnRate).toBeGreaterThan(0);
   });
 
-  it("particle target scales with world area", () => {
+  it("initial particle target is a fixed cap, independent of world area", () => {
     const small = createWorld(800, 600);
     const big = createWorld(1600, 1200);
-    expect(big.particleTarget).toBeGreaterThan(small.particleTarget * 3);
+    expect(small.particleTarget).toBe(5000);
+    expect(big.particleTarget).toBe(5000);
+  });
+
+  it("resizeWorld does not rescale the particle target", () => {
+    const w = createWorld(800, 600);
+    resizeWorld(w, 1600, 1200);
+    expect(w.particleTarget).toBe(5000);
+  });
+
+  it("setParticleTarget changes the cap, clamps, and resyncs spawn rate", () => {
+    const w = createWorld(800, 600);
+    setParticleTarget(w, 5500);
+    expect(w.particleTarget).toBe(5500);
+    expect(w.particleSpawnRate).toBeGreaterThan(0);
+    setParticleTarget(w, 0); // below min -> clamps up
+    expect(w.particleTarget).toBe(500);
+    setParticleTarget(w, 1e9); // above max -> clamps down
+    expect(w.particleTarget).toBe(50000);
   });
 
   it("seedParticles produces requested count within bounds", () => {

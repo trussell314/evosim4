@@ -1373,7 +1373,17 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // see the whole default-genome program execute in one step.
 const DEFAULT_VM_INSTR_BUDGET = 8;
 
-const PARTICLE_DENSITY_PER_AREA = (6188 * 0.75 * 0.5 * 0.6 * 1.5 * 2) / (800 * 600);
+// Initial particle cap for a fresh world. Fixed (not area-scaled) so the
+// steady-state particle budget is predictable and user-adjustable at
+// runtime via setParticleTarget(). Resizing the window no longer
+// recomputes it.
+const INITIAL_PARTICLE_TARGET = 5000;
+// Bounds + step for runtime cap adjustment. Max stays well under
+// PARTICLE_STORE_PREALLOC_CAP so the over-cap headroom never overflows
+// the preallocated store.
+const PARTICLE_TARGET_MIN = 500;
+const PARTICLE_TARGET_MAX = 50000;
+export const PARTICLE_TARGET_STEP = 500;
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
 // Hard cap on the per-second spawn rate. Without this the world tries
 // to fill thousands of particles per second from the top of the water,
@@ -1390,8 +1400,26 @@ export function resizeWorld(world: World, width: number, height: number): void {
   world.height = Math.max(100, height);
   world.surfaceY = world.height * SURFACE_Y_FRAC;
   world.aerationRate = world.width * AERATION_PER_PX;
-  world.particleTarget = Math.max(100, Math.round(world.width * world.height * PARTICLE_DENSITY_PER_AREA));
+  // particleTarget is a fixed/user-controlled budget now -- a window
+  // resize must not silently rescale it. Spawn rate still follows the
+  // current target.
   world.particleSpawnRate = Math.min(MAX_SPAWN_PER_SEC, Math.max(5, world.particleTarget * PARTICLE_SPAWN_RATIO));
+}
+
+// Runtime particle-cap setter. Clamps to [MIN, MAX] and resyncs the
+// spawn rate. Excess/shortage is reconciled by the normal per-tick
+// reserve passes (demote to reserve / promote from reserve), so no
+// special migration is needed here.
+export function setParticleTarget(world: World, cap: number): void {
+  const c = Math.max(
+    PARTICLE_TARGET_MIN,
+    Math.min(PARTICLE_TARGET_MAX, Math.round(cap)),
+  );
+  world.particleTarget = c;
+  world.particleSpawnRate = Math.min(
+    MAX_SPAWN_PER_SEC,
+    Math.max(5, c * PARTICLE_SPAWN_RATIO),
+  );
 }
 const MAX_CREATURES = 400;
 
@@ -3335,7 +3363,7 @@ export function createWorld(
   height: number,
   opts?: { delayedSpawn?: boolean },
 ): World {
-  const particleTarget = Math.max(100, Math.round(width * height * PARTICLE_DENSITY_PER_AREA));
+  const particleTarget = INITIAL_PARTICLE_TARGET;
   const world: World = {
     width, height,
     depth: 24,

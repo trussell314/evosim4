@@ -70,6 +70,7 @@ import {
   chemName,
   reactionName,
   genomeTag,
+  PARTICLE_TARGET_STEP,
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
@@ -437,6 +438,10 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
   if (msg.type === "snapshot") {
     const tIntake = performance.now();
     snapshot = msg.snapshot;
+    if (snapshot.particleTarget !== particleCap) {
+      particleCap = snapshot.particleTarget;
+      renderCapLabel();
+    }
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
@@ -777,6 +782,45 @@ const renderGridBtn = (): void => {
 gridBtn.addEventListener("click", () => { gridLinesOn = !gridLinesOn; renderGridBtn(); });
 root.appendChild(gridBtn);
 
+// Particle-cap readout + adjuster, sitting just above the bottom-left
+// button row. Buttons nudge the cap by PARTICLE_TARGET_STEP; the sim
+// reconciles the excess/shortage through the normal reserve passes.
+// particleCap mirrors the live snapshot.particleTarget so it stays
+// truthful across a loaded save.
+let particleCap = 5000;
+const capWrap = document.createElement("div");
+capWrap.style.cssText =
+  "position:fixed;z-index:10;display:flex;align-items:center;gap:6px;" +
+  "padding:4px 8px;border:1px solid #356;border-radius:4px;" +
+  "background:rgba(0,0,0,.55);color:#9ee;" + HUD_FONT;
+const capLabel = document.createElement("span");
+const capMinus = document.createElement("button");
+const capPlus = document.createElement("button");
+const CAP_BTN_STYLE =
+  "padding:1px 8px;border:1px solid #356;border-radius:3px;" +
+  "background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;" + HUD_FONT;
+capMinus.textContent = "-";
+capPlus.textContent = "+";
+capMinus.style.cssText = CAP_BTN_STYLE;
+capPlus.style.cssText = CAP_BTN_STYLE;
+capMinus.title = `Lower the particle cap by ${PARTICLE_TARGET_STEP}`;
+capPlus.title = `Raise the particle cap by ${PARTICLE_TARGET_STEP}`;
+const renderCapLabel = (): void => {
+  capLabel.textContent = `Particle cap: ${particleCap}`;
+};
+const nudgeCap = (delta: number): void => {
+  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
+  renderCapLabel();
+  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
+};
+capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
+capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
+renderCapLabel();
+capWrap.appendChild(capLabel);
+capWrap.appendChild(capMinus);
+capWrap.appendChild(capPlus);
+root.appendChild(capWrap);
+
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
   const bottom = PHYLO_STRIP_H + 8;
@@ -789,6 +833,9 @@ function positionWorldButtons(): void {
   turboBtn.style.left = `${8 + resetBtn.offsetWidth + 8}px`;
   gridBtn.style.bottom = `${bottom}px`;
   gridBtn.style.left = `${8 + resetBtn.offsetWidth + 8 + turboBtn.offsetWidth + 8}px`;
+  // One row up from the buttons.
+  capWrap.style.left = "8px";
+  capWrap.style.bottom = `${bottom + resetBtn.offsetHeight + 6}px`;
 }
 renderTurboBtn();
 renderGridBtn();
