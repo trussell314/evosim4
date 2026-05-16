@@ -6625,13 +6625,14 @@ function applyWalls(world: World): void {
   }
   const wallEach = (
     o: { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number },
+    xRest: number,
   ): void => {
     if (o.r * 2 >= world.width) {
       o.x = world.width * 0.5; o.vx = 0;
     } else if (o.x < o.r) {
-      o.x = o.r; if (o.vx < 0) o.vx = -o.vx * world.xWallRestitution;
+      o.x = o.r; if (o.vx < 0) o.vx = -o.vx * xRest;
     } else if (o.x > world.width - o.r) {
-      o.x = world.width - o.r; if (o.vx > 0) o.vx = -o.vx * world.xWallRestitution;
+      o.x = world.width - o.r; if (o.vx > 0) o.vx = -o.vx * xRest;
     }
     if (o.r * 2 >= world.height) {
       o.y = world.height * 0.5; o.vy = 0;
@@ -6651,8 +6652,18 @@ function applyWalls(world: World): void {
       o.z = world.depth - o.r; if (o.vz > 0) o.vz = -o.vz * world.zWallRestitution;
     }
   };
-  for (const p of world.particles) wallEach(p);
-  for (const c of world.creatures) wallEach(c);
+  // Particles get a springy side-wall bounce (0.6) so wave-induced
+  // horizontal drift can't pack them into a dead band against a wall.
+  // Without the old wall-repulsion force sweeping the margin, the soft
+  // 0.05 restitution let any particle that reached a wall stick there
+  // permanently -- over a long run the slow Stokes drift from the
+  // asymmetric two-component wave field migrated most light particles
+  // onto one side. A real bounce kicks them back into the water to
+  // redistribute. Creatures keep the soft world.xWallRestitution so
+  // they don't trampoline off the edges.
+  const PARTICLE_X_WALL_RESTITUTION = 0.6;
+  for (const p of world.particles) wallEach(p, PARTICLE_X_WALL_RESTITUTION);
+  for (const c of world.creatures) wallEach(c, world.xWallRestitution);
 }
 
 // ---------------------------------------------------------------------
