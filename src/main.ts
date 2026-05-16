@@ -901,7 +901,7 @@ function flushTooltip(): void {
       : "";
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
-    `<b>${c.speciesKey.slice(0, 6)}</b> (${c.genome.length}b)\n` +
+    `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
     `ATP=${c.energy.toFixed(0)}  memb=${c.molecules.membrane.toFixed(0)}  mass=${mass.toFixed(0)}` +
     assocLine;
@@ -2170,7 +2170,7 @@ function updateInspector(): void {
       `<span style="font-size:30px;line-height:1;color:${col};">` +
       `${isPinned ? "★" : "☆"}</span>` +
       `<span style="color:${col};">${isPinned ? "unpin" : "pin"} species ` +
-      `<b>${c.speciesKey.slice(0, 6)}</b></span>`;
+      `<b>${genomeTag(c.genome)}</b></span>`;
   }
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
