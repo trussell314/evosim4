@@ -4869,10 +4869,10 @@ function runOrganelleChemistry(
 }
 
 // An engulfed cell that decays to a husk (lost structural membrane, or
-// starved with no fuel) dies *inside* the host and is digested: its
-// pools fold into the host's instead of spilling to the world. Mirrors
-// the free-cell autolyze conventions (catalysts denature to 0.5 aa +
-// 0.5 min; ATP loses its phosphate back to ADP). The dead inner's own
+// starved with no fuel) dies *inside* the host. Every pool it holds is
+// yielded to the host verbatim -- ATP, catalysts, named chems
+// (including the membrane raw material), and generic chems all
+// transfer 1:1 with no denaturing or conversion. The dead inner's own
 // engulfed cells are handled by the caller (promoted to the host).
 function innerIsDead(inner: Creature): boolean {
   return inner.molecules.membrane < MIN_VIABLE_MEMBRANE
@@ -4882,20 +4882,14 @@ function digestInnerIntoHost(inner: Creature, host: Creature): void {
   const store = host.store; // inner shares world.creatureStore
   const hi = host.idx;
   const ii = inner.idx;
-  const cols = store.chemCols;
+  host.energy += inner.energy;
+  inner.energy = 0;
   const cc = store.catalystCols;
   for (let k = 0; k < CATALYST_COUNT; k++) {
     const v = cc[k][ii];
-    if (v > 0) {
-      cols[CHEM_AA][hi] += 0.5 * v;
-      cols[CHEM_MIN][hi] += 0.5 * v;
-      cc[k][ii] = 0;
-    }
+    if (v !== 0) { cc[k][hi] += v; cc[k][ii] = 0; }
   }
-  if (inner.energy > 0) {
-    cols[CHEM_ADP][hi] += inner.energy;
-    inner.energy = 0;
-  }
+  const cols = store.chemCols;
   for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
     const v = cols[k][ii];
     if (v !== 0) { cols[k][hi] += v; cols[k][ii] = 0; }
