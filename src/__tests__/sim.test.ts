@@ -243,7 +243,7 @@ describe("createWorld", () => {
       // Big-sand variant lets sand grains spawn up to ~r=8.
       expect(p.r).toBeLessThanOrEqual(8);
       expect(p.chemId).toBeGreaterThanOrEqual(0);
-      expect(p.chemId).toBeLessThan(64);
+      expect(p.chemId).toBeLessThan(96); // CHEMICAL_COUNT (generics now spawn too)
     }
   });
 
@@ -2018,7 +2018,12 @@ describe("particle replenishment", () => {
     seedParticles(w, 540);
     pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     for (let i = 0; i < 120; i++) step(w, 1 / 60);
-    expect(w.particles.length).toBeGreaterThan(540);
+    // Replenish keeps a healthy population near the cap rather than
+    // draining out. (Exact count is no longer ~seed: soluble chems
+    // -- incl. many generics now spawned -- dissolve into the
+    // regional field, so steady state sits a bit below target.)
+    expect(w.particles.length).toBeGreaterThan(w.particleTarget * 0.6);
+    expect(w.particles.length).toBeLessThanOrEqual(w.particleTarget + 5);
   });
 });
 

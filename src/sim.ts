@@ -1790,29 +1790,45 @@ export const CHEM_IDS = {
 // as gravelly. Biopolymer jitters around 1.0 because partially-
 // decomposed biomatter ranges from oily to dense protein.
 //
-// `seedGenericSlots` carries the per-chem "loose generic-chem
-// signature" the world seeds onto particles at start-of-sim. Matches
-// the old SEED_SPEC genericSlots logic so reaction substrates exist
-// in the world without being free molecules.
+// Every particle is exactly one unit of one chemical -- no riders.
 interface SpawnChemSpec {
   chemId: number;
   weight: number;
   initialCount: number;
   densityJitter?: { lo: number; hi: number };
-  seedGenericSlots?: number;
-  seedGenericAmount?: number;
 }
-const SPAWN_CHEM_SPECS: SpawnChemSpec[] = [
-  { chemId: CHEM_BIOPOLYMER, weight: 4.5, initialCount: 200, densityJitter: { lo: 0.7, hi: 1.3 }, seedGenericSlots: 3, seedGenericAmount: 0.2 },
-  // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6 so
-  // some look like clay (lighter, slow sinkers), some like rock
-  // (heavy seabed pieces).
-  { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 }, seedGenericSlots: 1, seedGenericAmount: 0.12 },
-  { chemId: CHEM_FA,  weight: 1.5, initialCount: 90, seedGenericSlots: 2, seedGenericAmount: 0.15 },
-  // Gas split: O2 60%, CO2 40% (matches the old material catab table).
-  { chemId: CHEM_O2,  weight: 0.3, initialCount: 12 },
-  { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
-];
+// Tuning for the generic-chem tail: weight = GEN_TOP * GEN_DECAY^rank
+// over a deterministically-shuffled ranking of all generic chems, so
+// a few are common and the long tail is rare. Stable across runs and
+// the worker boundary (fixed PRNG seed). GEN_INITIAL_SCALE turns the
+// weight into a t=0 seed count.
+const GEN_SPAWN_TOP = 0.8;
+const GEN_SPAWN_DECAY = 0.82;
+const GEN_SPAWN_INITIAL_SCALE = 40;
+const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
+  const specs: SpawnChemSpec[] = [
+    { chemId: CHEM_BIOPOLYMER, weight: 4.5, initialCount: 200, densityJitter: { lo: 0.7, hi: 1.3 } },
+    // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6.
+    { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 } },
+    { chemId: CHEM_FA, weight: 1.5, initialCount: 90 },
+    // Gas split: O2 60%, CO2 40% (matches the old catab table).
+    { chemId: CHEM_O2, weight: 0.3, initialCount: 12 },
+    { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
+  ];
+  // All generic chems also spawn as single-chem particles, lopsided.
+  const gens: number[] = [];
+  for (let k = NAMED_CHEMICAL_COUNT; k < CHEMICAL_COUNT; k++) gens.push(k);
+  const rng = mulberry32(0x5EED9A1C);
+  for (let i = gens.length - 1; i > 0; i--) {
+    const j = (rng() * (i + 1)) | 0;
+    const t = gens[i]; gens[i] = gens[j]; gens[j] = t;
+  }
+  for (let rank = 0; rank < gens.length; rank++) {
+    const w = GEN_SPAWN_TOP * Math.pow(GEN_SPAWN_DECAY, rank);
+    specs.push({ chemId: gens[rank], weight: w, initialCount: Math.round(w * GEN_SPAWN_INITIAL_SCALE) });
+  }
+  return specs;
+})();
 
 // SENSE_GRAD_X/Y/DENSITY ops index into per-chem sensor bins. The bin
 // arrays remain at 6 wide for backward op compatibility; this table
@@ -3593,16 +3609,6 @@ function spawnFounder(world: World): Creature {
 // floating in the environment) so cells have varied chemistry to
 // react with at world start.
 
-function buildSeedGenericChem(slots: number, amount: number): Float32Array | undefined {
-  if (slots <= 0) return undefined;
-  const chem = new Float32Array(GENERIC_CHEMICAL_COUNT);
-  for (let i = 0; i < slots; i++) {
-    const slot = Math.floor(Math.random() * GENERIC_CHEMICAL_COUNT);
-    // += so a re-rolled slot accumulates instead of overwriting.
-    chem[slot] += Math.random() * amount;
-  }
-  return chem;
-}
 
 function seedInitialParticles(world: World): void {
   const W = world.width;
@@ -3612,7 +3618,6 @@ function seedInitialParticles(world: World): void {
   for (const spec of SPAWN_CHEM_SPECS) {
     for (let i = 0; i < spec.initialCount; i++) {
       const r = 1 + Math.random() * 1.5;
-      const genericChem = buildSeedGenericChem(spec.seedGenericSlots ?? 0, spec.seedGenericAmount ?? 0);
       pushParticle(world, {
         x: Math.random() * W,
         y: surfaceY + Math.random() * yRange,
@@ -3621,7 +3626,6 @@ function seedInitialParticles(world: World): void {
         r,
         chemId: spec.chemId,
         density: rollChemDensity(spec),
-        genericChem,
       });
     }
   }
