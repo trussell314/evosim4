@@ -4911,7 +4911,13 @@ function biosynthCatalyst(
 
 function autoExcrete(c: Creature, world: World): void {
   const s = c.store; const i = c.idx;
-  const overFlow = world.particles.length >= world.particleTarget;
+  // Metabolic CO2 / waste are dissolved solutes -- excrete them into
+  // the local dissolved field, NOT as rendered particles. (Spawning
+  // them as particles saturated the cap: ~90% waste within a minute.)
+  // denatureWaste turns dissolved waste -> CO2; diffusion spreads it;
+  // photosynthesis consumes the CO2. Detritus that cells can eat now
+  // comes only from corpse/death waste particles.
+  const base = ambientBaseAt(world, c.x, c.y);
   const co2 = s.m_co2[i];
   if (co2 > CO2_EXCRETE_THRESHOLD) {
     const want = co2 - EXCRETE_FLOOR;
@@ -4919,11 +4925,7 @@ function autoExcrete(c: Creature, world: World): void {
     if (affordable > 0) {
       spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
       s.m_co2[i] -= affordable;
-      if (!overFlow) {
-        const mol = emptyMolecules();
-        mol.co2 = affordable;
-        spawnExcretedParticle(c, world, CHEM_CO2, affordable, mol);
-      }
+      world.ambient[base + CHEM_CO2] += affordable;
     }
   }
   const waste = s.m_waste[i];
@@ -4933,11 +4935,7 @@ function autoExcrete(c: Creature, world: World): void {
     if (affordable > 0) {
       spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
       s.m_waste[i] -= affordable;
-      if (!overFlow) {
-        const mol = emptyMolecules();
-        mol.waste = affordable;
-        spawnExcretedParticle(c, world, CHEM_WASTE, affordable, mol);
-      }
+      world.ambient[base + CHEM_WASTE] += affordable;
     }
   }
 }
