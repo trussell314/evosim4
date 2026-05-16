@@ -4868,6 +4868,45 @@ function runOrganelleChemistry(
   }
 }
 
+// An engulfed cell that decays to a husk (lost structural membrane, or
+// starved with no fuel) dies *inside* the host and is digested: its
+// pools fold into the host's instead of spilling to the world. Mirrors
+// the free-cell autolyze conventions (catalysts denature to 0.5 aa +
+// 0.5 min; ATP loses its phosphate back to ADP). The dead inner's own
+// engulfed cells are handled by the caller (promoted to the host).
+function innerIsDead(inner: Creature): boolean {
+  return inner.molecules.membrane < MIN_VIABLE_MEMBRANE
+    || (inner.energy <= 0 && noFuel(inner));
+}
+function digestInnerIntoHost(inner: Creature, host: Creature): void {
+  const store = host.store; // inner shares world.creatureStore
+  const hi = host.idx;
+  const ii = inner.idx;
+  const cols = store.chemCols;
+  const cc = store.catalystCols;
+  for (let k = 0; k < CATALYST_COUNT; k++) {
+    const v = cc[k][ii];
+    if (v > 0) {
+      cols[CHEM_AA][hi] += 0.5 * v;
+      cols[CHEM_MIN][hi] += 0.5 * v;
+      cc[k][ii] = 0;
+    }
+  }
+  if (inner.energy > 0) {
+    cols[CHEM_ADP][hi] += inner.energy;
+    inner.energy = 0;
+  }
+  for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+    const v = cols[k][ii];
+    if (v !== 0) { cols[k][hi] += v; cols[k][ii] = 0; }
+  }
+  const g = store.genericChemCols;
+  for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+    const v = g[k][ii];
+    if (v !== 0) { g[k][hi] += v; g[k][ii] = 0; }
+  }
+}
+
 // Oxidative damage from accumulated waste / CO2. Above the excretion
 // thresholds, membrane is converted directly to waste at a rate
 // scaling with the excess. Net effect: a cell that can pay the
@@ -5766,6 +5805,31 @@ function updateCreatures(world: World, dt: number): void {
     if (c.contents.length > 0) {
       for (let ic = 0; ic < c.contents.length; ic++) {
         runOrganelleChemistry(c.contents[ic], c, dt, dtT, ambientLight);
+      }
+      // An endosymbiont can now die in place: digested into the host,
+      // its own engulfed cells exposed (promoted) to the host.
+      let anyDead = false;
+      for (let ic = 0; ic < c.contents.length; ic++) {
+        if (innerIsDead(c.contents[ic])) { anyDead = true; break; }
+      }
+      if (anyDead) {
+        const survivors: Creature[] = [];
+        const promoted: Creature[] = [];
+        for (let ic = 0; ic < c.contents.length; ic++) {
+          const inner = c.contents[ic];
+          if (innerIsDead(inner)) {
+            digestInnerIntoHost(inner, c);
+            for (const sub of inner.contents) promoted.push(sub);
+            inner.contents.length = 0;
+            inner.store.release(inner.idx);
+          } else {
+            survivors.push(inner);
+          }
+        }
+        c.contents.length = 0;
+        for (const s of survivors) c.contents.push(s);
+        for (const p of promoted) c.contents.push(p);
+        updateCreatureRadius(c);
       }
     }
 
