@@ -6356,21 +6356,10 @@ function tryReproduce(parent: Creature, world: World): void {
   }
   updateCreatureRadius(child);
 
-  // Endosymbiont propagation: each engulfed cell binary-fissions
-  // alongside the host. One half stays in the parent's contents,
-  // the other goes to the child. Mutation runs on each daughter
-  // (organelle DNA drifts faster than host DNA in real biology --
-  // we don't enforce a viability filter on inner cells since they
-  // don't need their own REPRODUCE / metabolism to perpetuate).
-  if (parent.contents.length > 0) {
-    const innerOriginals = parent.contents.slice();
-    parent.contents.length = 0;
-    for (const inner of innerOriginals) {
-      const sibling = fissionInner(inner, world);
-      parent.contents.push(inner);
-      if (sibling) child.contents.push(sibling);
-    }
-  }
+  // Engulfed cells do NOT auto-propagate to the daughter. They stay in
+  // the parent's contents; the child starts empty. Spreading an
+  // endosymbiont to offspring is a capability cells must evolve (e.g.
+  // re-engulfing), not a free inheritance.
 
   // Don't commit the child to the world yet -- stash it in the parent's
   // division state and animate the separation. advanceDivision() will
@@ -6380,57 +6369,6 @@ function tryReproduce(parent: Creature, world: World): void {
     axis: angle,
     child,
   };
-}
-
-// Binary fission of an engulfed (endosymbiont) cell. Halves its mass
-// and molecule pools, mutates the daughter's genome, recomputes its
-// static synthMask. Returns the new sibling, which the caller hands
-// to the host's child cell. Returns null if there isn't enough mass
-// to make a viable split (the original inner keeps everything).
-function fissionInner(inner: Creature, world: World): Creature | null {
-  const bio = inner.molecules.membrane;
-  if (bio < 2 * MIN_VIABLE_MEMBRANE) return null;
-  // Mutate the genome -- endosymbionts drift; no viability gate
-  // because they don't need autonomous viability inside a host.
-  const daughterGenome = mutateGenome(inner.genome);
-  const daughter = newCreature(world.creatureStore, {
-    x: inner.x, y: inner.y, z: inner.z,
-    vx: 0, vy: 0, vz: 0,
-    r: inner.r,
-    density: inner.density,
-    energy: 0,
-    senseRange: 0,
-    thrustAccel: 0,
-    genome: daughterGenome,
-    vm: newVMState(),
-    color: inner.color,
-    ingestCooldown: 0,
-    repairTicks: 0,
-    bornAt: world.t,
-    speciesKey: genomeKey(daughterGenome),
-    molecules: emptyMolecules(),
-  });
-  daughter.organelleSynthMask = genomeSynthMask(daughterGenome);
-  // Endosymbiont daughters share the inner's lineageRoot. They live
-  // in host vacuoles and aren't counted toward FOUNDER_TARGET, but
-  // tagging them keeps the bookkeeping consistent if one is ever
-  // released back to the world.
-  daughter.lineageRoot = inner.lineageRoot;
-  // Split molecules + ATP half / half. (Generic chem half-split is
-  // skipped here for the endosymbiont path -- the daughter inherits an
-  // empty generic pool, matching the previous behavior. Catalyst pools
-  // are also not split: the parent retains them.)
-  for (const k of MOLECULE_IDS) {
-    const half = inner.molecules[k] * 0.5;
-    inner.molecules[k] -= half;
-    daughter.molecules[k] = half;
-  }
-  const eHalf = inner.energy * 0.5;
-  inner.energy -= eHalf;
-  daughter.energy = eHalf;
-  updateCreatureRadius(inner);
-  updateCreatureRadius(daughter);
-  return daughter;
 }
 
 // Mitosis takes about a second to play out visually. The child has already
