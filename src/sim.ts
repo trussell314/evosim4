@@ -4828,6 +4828,17 @@ export function applyParticleForcesRange(
     vxi += (ax - dscaleDrag * vxi) * dt;
     vyi += (ayTot - dscaleDrag * vyi) * dt;
     vzi += (az - dscaleDrag * vzi) * dt;
+    // Cap horizontal speed to ~1.3x the faster wave's phase speed.
+    // The wave force is an acceleration (~55 px/s^2 at the surface)
+    // and small particles barely damp (c ~= 0.22/s), so without this
+    // they accelerate to hundreds of px/s -- far faster than the
+    // waves themselves -- and rocket sideways into a wall. Water in
+    // a real wave orbits at well under the phase speed; this clamp
+    // enforces that ceiling. Vertical settling + brownian are on
+    // their own axes and unaffected.
+    const cS = wS / kS, cL = wL / kL;
+    const vxCap = 1.3 * (cS > cL ? cS : cL);
+    if (vxi > vxCap) vxi = vxCap; else if (vxi < -vxCap) vxi = -vxCap;
     PVX[i] = vxi; PVY[i] = vyi; PVZ[i] = vzi;
     PX[i] = xi + vxi * dt;
     PY[i] = yi + vyi * dt;
