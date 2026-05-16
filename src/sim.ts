@@ -7851,6 +7851,13 @@ export interface RenderSnapshot extends WorldEnv {
   creatures: CreatureSnapshot[];
   species: SpeciesSnapshot[];
   phylogenyEvents: PhylogenyEvent[];
+  // Per-chemical global aggregates for the chemistry panel. Indexed by
+  // chem id, length CHEMICAL_COUNT. chemDissolved = total dissolved
+  // mass summed over every region; chemReserveCount = reserve mass
+  // expressed in 2px-particle equivalents (same conversion reservePass
+  // uses), summed over every region.
+  chemDissolved: Float32Array;
+  chemReserveCount: Float32Array;
   // Optional per-phase timing. Mirrors world.profile when present.
   profile?: WorldProfile;
 }
@@ -7962,6 +7969,27 @@ export function takeSnapshot(world: World): RenderSnapshot {
   }
   const species: SpeciesSnapshot[] = [];
   for (const sp of world.species.values()) species.push(snapshotSpecies(sp));
+  // Per-chem global aggregates: sum dissolved + reserve across regions.
+  const chemDissolved = new Float32Array(CHEMICAL_COUNT);
+  const chemReserveCount = new Float32Array(CHEMICAL_COUNT);
+  {
+    const amb = world.ambient;
+    const res = world.reserve;
+    const nReg = amb.length / AMBIENT_STRIDE;
+    const volPer = (4 / 3) * Math.PI * PRECIP_R * PRECIP_R * PRECIP_R;
+    for (let ri = 0; ri < nReg; ri++) {
+      const base = ri * AMBIENT_STRIDE;
+      for (let k = 0; k < CHEMICAL_COUNT; k++) {
+        chemDissolved[k] += amb[base + k];
+        chemReserveCount[k] += res[base + k];
+      }
+    }
+    for (let k = 0; k < CHEMICAL_COUNT; k++) {
+      const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+      const massPer = density * volPer;
+      chemReserveCount[k] = massPer > 0 ? chemReserveCount[k] / massPer : 0;
+    }
+  }
   return {
     width: world.width,
     height: world.height,
@@ -8003,6 +8031,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     creatures,
     species,
     phylogenyEvents: world.phylogenyEvents.slice(),
+    chemDissolved,
+    chemReserveCount,
     profile: world.profile,
   };
 }

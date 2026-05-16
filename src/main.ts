@@ -678,6 +678,122 @@ analysisHeader.addEventListener("click", () => {
   if (!analysisMinimized) renderAnalysisPanel();
 });
 
+// ---------------------------------------------------------------------
+// Left slide-out: per-chemical global ledger (dissolved mass / rendered
+// particle count / reserve particle-equivalents). Mirrors the right
+// panel's minimize behavior; the canvas + bottom-left controls shift
+// right to make room when it's expanded.
+// ---------------------------------------------------------------------
+const LEFT_PANEL_W = 300;
+const LEFT_PANEL_W_MIN = 26;
+let leftMinimized = true;
+function leftPanelWidth(): number {
+  return leftMinimized ? LEFT_PANEL_W_MIN : LEFT_PANEL_W;
+}
+const leftPanel = document.createElement("div");
+leftPanel.style.cssText =
+  "position:fixed;top:0;left:0;bottom:0;width:" + LEFT_PANEL_W_MIN + "px;" +
+  "background:rgba(4,16,24,0.92);color:#9ee;border-right:1px solid #1a3340;" +
+  `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
+const leftHeader = document.createElement("div");
+leftHeader.style.cssText =
+  "display:flex;align-items:center;justify-content:center;gap:6px;" +
+  "padding:6px 4px;cursor:pointer;user-select:none;border-bottom:1px solid #1a3340;";
+const leftToggle = document.createElement("span");
+leftToggle.textContent = "+";
+leftToggle.style.cssText = "padding:0 4px;";
+const leftTitle = document.createElement("span");
+leftTitle.textContent = "chemistry";
+leftTitle.style.cssText = `font-weight:bold;font-size:${UI_FONT_PX}px;display:none;`;
+// Toggle on the left, title on the right (panel opens leftward).
+leftHeader.appendChild(leftToggle);
+leftHeader.appendChild(leftTitle);
+const leftBody = document.createElement("div");
+leftBody.style.cssText =
+  "padding:8px 10px;overflow-y:auto;display:none;max-height:calc(100vh - 36px);";
+const chemTable = document.createElement("table");
+chemTable.style.cssText =
+  "border-collapse:collapse;width:100%;font-size:" + UI_FONT_PX + "px;";
+leftBody.appendChild(chemTable);
+leftPanel.appendChild(leftHeader);
+leftPanel.appendChild(leftBody);
+root.appendChild(leftPanel);
+
+// Lazily-built fixed row set: one <tr> per chem id, cells updated in
+// place so the per-frame refresh never thrashes layout.
+type ChemRow = { name: HTMLTableCellElement; diss: HTMLTableCellElement; rend: HTMLTableCellElement; res: HTMLTableCellElement };
+let chemRows: ChemRow[] | null = null;
+function buildChemTable(n: number): void {
+  chemTable.textContent = "";
+  const thead = document.createElement("tr");
+  for (const [label, alignRight] of [["chem", false], ["diss", true], ["rend", true], ["resv", true]] as [string, boolean][]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    th.style.cssText =
+      "text-align:" + (alignRight ? "right" : "left") +
+      ";padding:2px 4px;border-bottom:1px solid #1a3340;color:#7fb8c8;" +
+      "position:sticky;top:0;background:rgba(4,16,24,0.98);";
+    thead.appendChild(th);
+  }
+  chemTable.appendChild(thead);
+  const rows: ChemRow[] = [];
+  for (let k = 0; k < n; k++) {
+    const tr = document.createElement("tr");
+    const mk = (alignRight: boolean): HTMLTableCellElement => {
+      const td = document.createElement("td");
+      td.style.cssText =
+        "padding:1px 4px;text-align:" + (alignRight ? "right" : "left") +
+        ";border-bottom:1px solid rgba(26,51,64,0.5);white-space:nowrap;";
+      tr.appendChild(td);
+      return td;
+    };
+    const name = mk(false), diss = mk(true), rend = mk(true), res = mk(true);
+    name.textContent = chemName(k);
+    chemTable.appendChild(tr);
+    rows.push({ name, diss, rend, res });
+  }
+  chemRows = rows;
+}
+let lastChemPanelMs = 0;
+function updateChemPanel(): void {
+  if (leftMinimized) return;
+  const now = performance.now();
+  if (now - lastChemPanelMs < 400) return;
+  lastChemPanelMs = now;
+  const diss = snapshot.chemDissolved;
+  const resv = snapshot.chemReserveCount;
+  if (!diss || !resv) return;
+  const n = diss.length;
+  if (!chemRows || chemRows.length !== n) buildChemTable(n);
+  const rows = chemRows!;
+  // Rendered particle count per chem id, from the live snapshot.
+  const rendered = new Float64Array(n);
+  for (const p of snapshot.particles) {
+    const c = p.chemId;
+    if (c >= 0 && c < n) rendered[c]++;
+  }
+  const fmt = (v: number): string =>
+    v === 0 ? "0" : v >= 1000 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(0) : v.toFixed(2);
+  for (let k = 0; k < n; k++) {
+    rows[k].diss.textContent = fmt(diss[k]);
+    rows[k].rend.textContent = fmt(rendered[k]);
+    rows[k].res.textContent = fmt(resv[k]);
+  }
+}
+leftHeader.addEventListener("click", () => {
+  leftMinimized = !leftMinimized;
+  leftPanel.style.width = leftPanelWidth() + "px";
+  leftBody.style.display = leftMinimized ? "none" : "";
+  leftToggle.textContent = leftMinimized ? "+" : "–";
+  leftTitle.style.display = leftMinimized ? "none" : "";
+  leftHeader.style.justifyContent = leftMinimized ? "center" : "space-between";
+  leftHeader.style.padding = leftMinimized ? "6px 4px" : "6px 8px";
+  resize();
+  positionWorldButtons();
+  if (!leftMinimized) { lastChemPanelMs = 0; updateChemPanel(); }
+});
+
 // Reset (bottom-left) + export (bottom-right) sit inside the world
 // area, just above the phylogeny strip. The right button tracks the
 // analysis-panel width so it never disappears behind it.
@@ -824,17 +940,19 @@ root.appendChild(capWrap);
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
   const bottom = PHYLO_STRIP_H + 8;
+  // Bottom-left controls clear the left chemistry panel.
+  const lx = leftPanelWidth() + 8;
   resetBtn.style.bottom = `${bottom}px`;
-  resetBtn.style.left = "8px";
+  resetBtn.style.left = `${lx}px`;
   exportBtn.style.bottom = `${bottom}px`;
   exportBtn.style.right = `${panelW + 8}px`;
   // Turbo sits to the right of reset; grid to the right of turbo.
   turboBtn.style.bottom = `${bottom}px`;
-  turboBtn.style.left = `${8 + resetBtn.offsetWidth + 8}px`;
+  turboBtn.style.left = `${lx + resetBtn.offsetWidth + 8}px`;
   gridBtn.style.bottom = `${bottom}px`;
-  gridBtn.style.left = `${8 + resetBtn.offsetWidth + 8 + turboBtn.offsetWidth + 8}px`;
+  gridBtn.style.left = `${lx + resetBtn.offsetWidth + 8 + turboBtn.offsetWidth + 8}px`;
   // One row up from the buttons.
-  capWrap.style.left = "8px";
+  capWrap.style.left = `${lx}px`;
   capWrap.style.bottom = `${bottom + resetBtn.offsetHeight + 6}px`;
 }
 renderTurboBtn();
@@ -847,11 +965,14 @@ function resize(): void {
   const dpr = getDpr();
   const fullW = vv ? vv.width : window.innerWidth;
   const h = vv ? vv.height : window.innerHeight;
-  // Reserve right-side strip for the analysis console (current width
-  // depends on whether it's expanded or just a tab) so the canvas
-  // doesn't render under it.
+  // Reserve a strip on each side for the slide-out consoles (left =
+  // chemistry, right = genome analysis) so the canvas doesn't render
+  // under either. Each width depends on whether that panel is expanded.
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
-  const w = fullW > panelW * 2 ? fullW - panelW : fullW;
+  const leftW = leftPanelWidth();
+  const reserve = panelW + leftW;
+  const w = fullW > reserve * 2 ? fullW - reserve : Math.max(1, fullW - leftW);
+  canvas.style.marginLeft = `${leftW}px`;
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
   canvas.width = Math.floor(w * dpr);
@@ -2428,6 +2549,7 @@ function frame(): void {
   const tAfterTooltip = performance.now();
   mpFlushTooltipMs += tAfterTooltip - tAfterInspector;
   maybeAnalyzeGenomes();
+  updateChemPanel();
   const tAfterAnalyze = performance.now();
   mpAnalyzeMs += tAfterAnalyze - tAfterTooltip;
   const renderMs = tAfterRender - tBeforeRender;
