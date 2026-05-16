@@ -31,6 +31,7 @@ function sample(): void {
   const pct = n > 0 ? ((100 * waste) / n).toFixed(1) : "0";
   console.log(
     `t=${world.t.toFixed(0).padStart(3)}s parts=${String(n).padStart(5)} ` +
+    `ghosts=${String(world.fadingGhosts.length).padStart(5)} ` +
     `waste=${String(waste).padStart(5)}(${pct}%) cells=${String(world.creatures.length).padStart(3)} ` +
     `| dissWaste=${sumField(world.ambient, W).toFixed(0)} resWaste=${sumField(world.reserve, W).toFixed(0)} ` +
     `dissCO2=${sumField(world.ambient, C).toFixed(0)} | top: ${top}`,

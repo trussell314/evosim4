@@ -4390,6 +4390,13 @@ function precipitateRegions(world: World): void {
 // its store age); a demoted particle lingers as a render-only ghost,
 // fading out over the same window.
 const RESERVE_FADE_SEC = 1.5;
+// Hard ceiling on simultaneously-fading demote ghosts. They're
+// render-only (mass-free) but still ride the snapshot particle array,
+// so under heavy demotion churn (big death/seed bursts) an uncapped
+// list balloons the reported/rendered count into the tens of
+// thousands. Past this budget we just skip the fade visual; the
+// demotion itself (the mass-conserving part) still happens.
+const FADING_GHOST_MAX = 2000;
 
 // Age the demote ghosts and retire the expired ones. Cheap: the list
 // is empty unless reservePass demoted something in the last
@@ -4490,10 +4497,12 @@ function reservePass(world: World): void {
       const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
       res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
         += density * FOUR_THIRDS_PI * r * r * r;
-      world.fadingGhosts.push({
-        x: store.x[i], y: store.y[i], z: store.z[i],
-        r, chemId: k, age: 0,
-      });
+      if (world.fadingGhosts.length < FADING_GHOST_MAX) {
+        world.fadingGhosts.push({
+          x: store.x[i], y: store.y[i], z: store.z[i],
+          r, chemId: k, age: 0,
+        });
+      }
       removeParticleAt(world, i);
       surplus[k]--;
     }
