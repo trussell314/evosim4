@@ -5315,6 +5315,11 @@ function auditMolar(world: World): number {
     s += c.store.energy[c.idx];
     const cols = c.store.chemCols;
     for (let k = 0; k < CHEMICAL_COUNT; k++) s += cols[k][c.idx] * CHEMICALS[k].molarMass;
+    // Catalyst pools are matter too (denature to 0.5 aa + 0.5 min on
+    // death). Omitting them shows biosynth as mass loss and death as
+    // mass creation -- a false leak in updateCreatures.
+    const ccats = c.store.catalystCols;
+    for (let k = 0; k < CATALYST_COUNT; k++) s += ccats[k][c.idx];
   }
   const ps = world.particleStore;
   for (let i = 0; i < world.particles.length; i++) {
