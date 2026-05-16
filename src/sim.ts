@@ -1829,6 +1829,7 @@ export const CHEM_COLORS: ReadonlyArray<string> = CHEMICALS.map((c) => c.color);
 // Exported name LUT, indexed by chem id. HUD and disassembler use it
 // to label operands referencing chemicals.
 export const CHEM_NAMES: ReadonlyArray<string> = CHEMICALS.map((c) => c.name);
+export const CHEM_MOLAR_MASS: ReadonlyArray<number> = CHEMICALS.map((c) => c.molarMass);
 // Bootstrap chem id exports. Stable across the migration (phase E
 // renumbers them; tests pin to the export rather than to literals).
 export const CHEM_IDS = {
