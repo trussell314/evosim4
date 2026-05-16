@@ -1184,6 +1184,11 @@ export interface World {
   t: number;
   particles: Particle[];
   particleStore: ParticleStore;
+  // Render-only transients: particles that were just demoted into
+  // reserve. They carry no mass and no physics (their mass is already
+  // in world.reserve); they exist purely so the renderer can fade the
+  // vanishing particle out instead of popping it. Not persisted.
+  fadingGhosts: FadingGhost[];
   creatures: Creature[];
   creatureStore: CreatureStore;
   particleTarget: number;
@@ -3370,6 +3375,7 @@ export function createWorld(
     t: 0,
     particles: [],
     particleStore: new ParticleStore(Math.max(256, particleTarget)),
+    fadingGhosts: [],
     creatures: [],
     creatureStore: new CreatureStore(512),
     particleTarget,
@@ -4226,6 +4232,29 @@ function precipitateRegions(world: World): void {
 // re-spawn 2px particles, drawing mass LOCALLY from a region that
 // holds it. This is what finally bounds particle count (and thus
 // kills the over-density rightward-drift bug) without losing mass.
+// Reserve <-> visible transition fade duration (sim seconds). A
+// promoted particle ramps its opacity up over this window (driven by
+// its store age); a demoted particle lingers as a render-only ghost,
+// fading out over the same window.
+const RESERVE_FADE_SEC = 1.5;
+
+// Age the demote ghosts and retire the expired ones. Cheap: the list
+// is empty unless reservePass demoted something in the last
+// RESERVE_FADE_SEC of sim time.
+function advanceFadingGhosts(world: World, dt: number): void {
+  const g = world.fadingGhosts;
+  if (g.length === 0) return;
+  let w = 0;
+  for (let i = 0; i < g.length; i++) {
+    g[i].age += dt;
+    if (g[i].age < RESERVE_FADE_SEC) {
+      if (w !== i) g[w] = g[i];
+      w++;
+    }
+  }
+  g.length = w;
+}
+
 // Per-tick scratch for reservePass's proportional balancing.
 const RESERVE_CHEMCOUNT = new Uint32Array(CHEMICAL_COUNT); // visible count / chem
 const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve equiv / chem
@@ -4308,6 +4337,10 @@ function reservePass(world: World): void {
       const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
       res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
         += density * FOUR_THIRDS_PI * r * r * r;
+      world.fadingGhosts.push({
+        x: store.x[i], y: store.y[i], z: store.z[i],
+        r, chemId: k, age: 0,
+      });
       removeParticleAt(world, i);
       surplus[k]--;
     }
@@ -5061,6 +5094,7 @@ export function step(world: World, dt: number): void {
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
     decayParticles(world, dt);
+    advanceFadingGhosts(world, dt);
     // Decay is currently disabled by const, so the bucket isn't
     // separately tracked. The original code added decay's time to
     // `replenish` again (copy-paste -- same field as the line above),
@@ -5097,6 +5131,7 @@ export function step(world: World, dt: number): void {
     reservePass(world);
     replenishParticles(world, dt);
     decayParticles(world, dt);
+    advanceFadingGhosts(world, dt);
     pruneSpecies(world);
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
@@ -7529,6 +7564,7 @@ export function applySavedWorld(world: World, json: string): boolean {
   }
   world.creatures.length = 0;
   while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
+  world.fadingGhosts.length = 0;
   world.species.clear();
   world.phylogenyEvents.length = 0;
   world.t = saved.t;
@@ -7635,12 +7671,29 @@ export function applySavedWorld(world: World, json: string): boolean {
 // transferable so it can cross a worker boundary later.
 // ---------------------------------------------------------------------
 
+// A vanishing (reserve-demoted) particle, kept render-side only while
+// it fades out. age counts up from 0; the ghost is dropped once it
+// reaches RESERVE_FADE_SEC.
+export interface FadingGhost {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  chemId: number;
+  age: number;
+}
+
 export interface ParticleSnapshot {
   x: number;
   y: number;
   z: number;
   r: number;
   chemId: number;
+  // 0..1 opacity multiplier while a particle fades in (just promoted
+  // from reserve) or out (just demoted to reserve). Absent / undefined
+  // means fully opaque -- the common case, kept off the wire so the
+  // hot render path can skip the per-particle alpha branch.
+  fade?: number;
   // Only present when the particle carries a molecule payload (corpse /
   // excretion). The renderer checks the waste fraction to switch to the
   // toxic-tint palette.
@@ -7799,8 +7852,24 @@ export function takeSnapshot(world: World): RenderSnapshot {
     creatures[i] = snapshotCreatureLive(world.creatures[i]);
   }
   const particles: ParticleSnapshot[] = new Array(world.particles.length);
+  const pAge = world.particleStore.age;
   for (let i = 0; i < world.particles.length; i++) {
-    particles[i] = snapshotParticleLive(world.particles[i]);
+    const ps = snapshotParticleLive(world.particles[i]);
+    // Fade a freshly spawned/promoted particle in over its first
+    // RESERVE_FADE_SEC of life. Older particles stay off the wire's
+    // fade field so the renderer keeps them on the fast batched path.
+    const age = pAge[i];
+    if (age < RESERVE_FADE_SEC) ps.fade = age / RESERVE_FADE_SEC;
+    particles[i] = ps;
+  }
+  // Demote ghosts: render-only, fading out. Appended so the renderer
+  // draws them through the same particle path.
+  for (const g of world.fadingGhosts) {
+    particles.push({
+      x: g.x, y: g.y, z: g.z, r: g.r, chemId: g.chemId,
+      molecules: null,
+      fade: Math.max(0, 1 - g.age / RESERVE_FADE_SEC),
+    });
   }
   const species: SpeciesSnapshot[] = [];
   for (const sp of world.species.values()) species.push(snapshotSpecies(sp));

@@ -1236,6 +1236,9 @@ const TINTED_COLORS: string[][] = CHEM_COLORS.map((base) => DEPTH_TINTS.map((t) 
 // rather than their underlying material color, so the player can see
 // where pollution accumulates. Routed by waste molecule fraction.
 const TOXIC_BUCKETS: ParticleSnapshot[][] = Array.from({ length: N_BUCKETS }, () => []);
+// Particles mid-fade (reserve <-> visible). Pulled out of the batched
+// path so each can carry its own alpha; expected to be a small set.
+const FADING_PARTICLES: ParticleSnapshot[] = [];
 const TOXIC_BASE = "#a04a2a";
 const TOXIC_TINTED = DEPTH_TINTS.map((t) => blendToward(TOXIC_BASE, t));
 const TOXIC_WASTE_FRAC = 0.5;
@@ -1365,9 +1368,16 @@ function render(): void {
 
   for (const b of SUB_BUCKETS) b.length = 0;
   for (const b of TOXIC_BUCKETS) b.length = 0;
+  FADING_PARTICLES.length = 0;
   for (const p of snapshot.particles) {
     const t = Math.min(0.999, Math.max(0, p.z / depth));
     const bucket = Math.floor(t * N_BUCKETS);
+    // Fading particles take a per-particle alpha pass so the rest can
+    // stay on the fast batched path.
+    if (p.fade !== undefined && p.fade < 1) {
+      if (bucket < N_RENDER_BUCKETS) FADING_PARTICLES.push(p);
+      continue;
+    }
     // Tag-toxic check: a molecule-tagged particle whose waste fraction
     // is high enough renders in the toxic palette, regardless of its
     // underlying chem id.
@@ -1416,6 +1426,29 @@ function render(): void {
       }
       ctx.fill();
     }
+  }
+  // Per-particle fade pass (reserve <-> visible transitions). Small
+  // set; each gets its own alpha so it eases in/out smoothly.
+  for (let k = 0; k < FADING_PARTICLES.length; k++) {
+    const p = FADING_PARTICLES[k];
+    const t = Math.min(0.999, Math.max(0, p.z / depth));
+    const bucket = Math.floor(t * N_BUCKETS);
+    let isToxic = false;
+    if (p.molecules && p.molecules.waste > 0) {
+      const m = p.molecules;
+      const total = m.glucose + m.fattyAcid + m.aminoAcid + m.minerals
+        + m.o2 + m.co2 + m.waste + m.adp + m.chlorophyll + m.enzyme + m.membrane;
+      isToxic = total > 0 && m.waste / total >= TOXIC_WASTE_FRAC;
+    }
+    const ci = p.chemId;
+    if (!isToxic && (ci < 0 || ci >= N_RENDER_CHEMS)) continue;
+    ctx.filter = BLURS[bucket] === 0 ? "none" : `blur(${BLURS[bucket]}px)`;
+    ctx.globalAlpha = ALPHAS[bucket] * (p.fade ?? 1);
+    ctx.fillStyle = isToxic ? TOXIC_TINTED[bucket] : TINTED_COLORS[ci][bucket];
+    ctx.beginPath();
+    ctx.moveTo(p.x + PARTICLE_RENDER_R, p.y);
+    ctx.arc(p.x, p.y, PARTICLE_RENDER_R, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.filter = "none";
   ctx.globalAlpha = 1;
