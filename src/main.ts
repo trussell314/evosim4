@@ -1885,17 +1885,23 @@ function drawPhylogeny(): void {
   );
 }
 
-// Every cell wears a thin white outline on its wobbly body. Selected
-// cells get a thicker version of the same line so selection reads as
-// "the same cell, just emphasized."
+// Selection highlight color: a hue that sweeps the full wheel on a
+// fixed wall-clock period, so the selected cell + its kin pulse through
+// a smooth rainbow regardless of sim speed.
+const SELECTION_CYCLE_MS = 3000;
+function selectionCycleColor(): string {
+  const h = ((performance.now() % SELECTION_CYCLE_MS) / SELECTION_CYCLE_MS) * 360;
+  return `hsl(${h.toFixed(1)},100%,65%)`;
+}
+
+// Every cell wears a thin black outline on its wobbly body. The
+// selected cell + its species/lineage kin get a color-cycling outline
+// instead so the family stands out; the selected cell's is thicker.
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
   kin = false,
 ): void {
-  // selected: thick white. kin (same species/lineage as the selected
-  // cell): thin white selection border so the family stands out
-  // against everyone else's default thin black outline.
-  ctx.strokeStyle = selected || kin ? "#ffffff" : "#000000";
+  ctx.strokeStyle = selected || kin ? selectionCycleColor() : "#000000";
   ctx.lineWidth = selected ? 3 : 1;
   tracedWobblyBody(cx, cy, r, t, phase);
   ctx.stroke();
