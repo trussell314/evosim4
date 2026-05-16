@@ -1822,41 +1822,41 @@ export const CHEM_IDS = {
 // decomposed biomatter ranges from oily to dense protein.
 //
 // Every particle is exactly one unit of one chemical -- no riders.
+// `weight` is the SINGLE distribution: it drives both the initial
+// seed and the ongoing replenish (one ratio, no separate
+// initialCount). seedInitialParticles guarantees >=1 of every spec
+// then weighted-fills to particleTarget, so t=0 == steady-state mix.
 interface SpawnChemSpec {
   chemId: number;
   weight: number;
-  initialCount: number;
   densityJitter?: { lo: number; hi: number };
 }
-// Tuning for the generic-chem tail: weight = GEN_TOP * GEN_DECAY^rank
-// over a deterministically-shuffled ranking of all generic chems, so
-// a few are common and the long tail is rare. Stable across runs and
-// the worker boundary (fixed PRNG seed). GEN_INITIAL_SCALE turns the
-// weight into a t=0 seed count.
+// Generic-chem tail: weight = max(GEN_TOP*GEN_DECAY^rank, GEN_FLOOR)
+// over the deterministically-shuffled GENERIC_SPAWN_ORDER -- a few
+// common, a long rare tail, but FLOORED so even the rarest generic
+// keeps a meaningful spawn share (see the representation analysis:
+// at a ~5k cap the floor yields ~6 expected of each, and the >=1
+// guarantee in seedInitialParticles makes t=0 presence certain).
 const GEN_SPAWN_TOP = 0.8;
 const GEN_SPAWN_DECAY = 0.82;
-const GEN_SPAWN_INITIAL_SCALE = 40;
+const GEN_SPAWN_FLOOR = 0.025;
 const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
   const specs: SpawnChemSpec[] = [
-    { chemId: CHEM_BIOPOLYMER, weight: 4.5, initialCount: 200, densityJitter: { lo: 0.7, hi: 1.3 } },
+    { chemId: CHEM_BIOPOLYMER, weight: 4.5, densityJitter: { lo: 0.7, hi: 1.3 } },
     // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6.
-    { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 } },
-    { chemId: CHEM_FA, weight: 1.5, initialCount: 90 },
-    // ADP spawns as a normal single-chem particle now (was a
-    // special "primordial adenosine" molecule-rider seed). Cells
-    // get it by ingesting adp particles like any other chem; the
-    // ATP economy is fed by ongoing spawn, not a one-time dump.
-    { chemId: CHEM_ADP, weight: 2.0, initialCount: 250 },
+    { chemId: CHEM_MIN, weight: 7.5, densityJitter: { lo: 1.4, hi: 2.6 } },
+    { chemId: CHEM_FA, weight: 1.5 },
+    // ADP is a normal single-chem spawn (was a "primordial
+    // adenosine" molecule-rider seed); ATP economy fed by ongoing
+    // spawn, not a one-time dump.
+    { chemId: CHEM_ADP, weight: 2.0 },
     // Gas split: O2 60%, CO2 40% (matches the old catab table).
-    { chemId: CHEM_O2, weight: 0.3, initialCount: 12 },
-    { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
+    { chemId: CHEM_O2, weight: 0.3 },
+    { chemId: CHEM_CO2, weight: 0.2 },
   ];
-  // All generic chems also spawn as single-chem particles, lopsided.
-  // Uses the shared GENERIC_SPAWN_ORDER so the spawn weight and the
-  // gray->orange color agree on which chems are common vs rare.
   for (let rank = 0; rank < GENERIC_SPAWN_ORDER.length; rank++) {
-    const w = GEN_SPAWN_TOP * Math.pow(GEN_SPAWN_DECAY, rank);
-    specs.push({ chemId: GENERIC_SPAWN_ORDER[rank], weight: w, initialCount: Math.round(w * GEN_SPAWN_INITIAL_SCALE) });
+    const w = Math.max(GEN_SPAWN_TOP * Math.pow(GEN_SPAWN_DECAY, rank), GEN_SPAWN_FLOOR);
+    specs.push({ chemId: GENERIC_SPAWN_ORDER[rank], weight: w });
   }
   return specs;
 })();
@@ -3623,20 +3623,29 @@ function seedInitialParticles(world: World): void {
   const H = world.height;
   const surfaceY = world.surfaceY;
   const yRange = (H - surfaceY) * 0.85;
+  const spawnOne = (spec: SpawnChemSpec): void => {
+    const r = 1 + Math.random() * 1.5;
+    pushParticle(world, {
+      x: Math.random() * W,
+      y: surfaceY + Math.random() * yRange,
+      z: r + Math.random() * (world.depth - 2 * r),
+      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+      r,
+      chemId: spec.chemId,
+      density: rollChemDensity(spec),
+    });
+  };
+  // Unified seed: the spawn `weight` IS the distribution. Guarantee
+  // >=1 of every chemical (deterministic representation, independent
+  // of cap/Poisson), then weighted-fill the rest up to
+  // particleTarget so the initial state already matches the
+  // steady-state replenish mix.
+  const target = world.particleTarget;
   for (const spec of SPAWN_CHEM_SPECS) {
-    for (let i = 0; i < spec.initialCount; i++) {
-      const r = 1 + Math.random() * 1.5;
-      pushParticle(world, {
-        x: Math.random() * W,
-        y: surfaceY + Math.random() * yRange,
-        z: r + Math.random() * (world.depth - 2 * r),
-        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
-        r,
-        chemId: spec.chemId,
-        density: rollChemDensity(spec),
-      });
-    }
+    if (world.particles.length >= target) break;
+    spawnOne(spec);
   }
+  while (world.particles.length < target) spawnOne(pickSpawnSpec());
 }
 
 
