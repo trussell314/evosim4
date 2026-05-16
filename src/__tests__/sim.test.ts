@@ -53,6 +53,19 @@ function stepFullCycle(w: World, dt: number = 1 / 60): void {
   step(w, dt);
 }
 
+// Regional-ambient test helpers. world.ambient is a flat
+// [region*96 + chem] grid; these sum / zero a chem across all
+// regions so conservation assertions stay layout-agnostic.
+const AMB_STRIDE = 96;
+function ambTotal(w: World, chem: number): number {
+  let s = 0;
+  for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) s += w.ambient[b + chem];
+  return s;
+}
+function zeroAmb(w: World, chem: number): void {
+  for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) w.ambient[b + chem] = 0;
+}
+
 function quietWorld(): World {
   return {
     // t starts past the warmup delays so tests using step()
@@ -90,7 +103,14 @@ function quietWorld(): World {
     vmInstrBudget: 8,
     obstacles: [],
     atmosphere: { ...emptyMolecules(), o2: 8000, co2: 200 },
-    ambient: (() => { const a = new Float32Array(96); a[CHEM_IDS.o2] = 12; a[CHEM_IDS.co2] = 1; return a; })(),
+    // Regional dissolved field: 800x600 / 50px = 16x12 = 192 regions
+    // x 96 chems. Seed O2/CO2 per region (matches initialAmbient).
+    ambient: (() => {
+      const STRIDE = 96, N = 16 * 12;
+      const a = new Float32Array(N * STRIDE);
+      for (let r = 0; r < N; r++) { a[r * STRIDE + CHEM_IDS.o2] = 12; a[r * STRIDE + CHEM_IDS.co2] = 1; }
+      return a;
+    })(),
   };
 }
 
@@ -421,7 +441,7 @@ describe("creature: chemistry - catabolism + respiration", () => {
     // Phase F ambient pool would pump O2 into the cell within 1 sec
     // via passive diffusion; zero it out to keep the test focused
     // on the no-O2 ferment path.
-    w.ambient[CHEM_IDS.o2] = 0;
+    zeroAmb(w, CHEM_IDS.o2);
     const c = makeCreature({ energy: 0, genome: new Uint8Array([HALT_MARK]) });
     c.molecules.glucose = 20;
     c.molecules.adp = 50;
@@ -1670,7 +1690,7 @@ describe("mass conservation", () => {
     const w = quietWorld();
     w.aerationRate = 0;
     w.particleSpawnRate = 0;
-    w.ambient[CHEM_IDS.glucose] = 0;
+    zeroAmb(w, CHEM_IDS.glucose);
     const p = pushParticle(w, {
       x: 100, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 4,
       chemId: CHEM_IDS.glucose, density: 1.5,
@@ -1680,12 +1700,12 @@ describe("mass conservation", () => {
     for (let i = 0; i < 120; i++) step(w, 1 / 60);
     // Either the particle is still present but smaller, or it
     // fully dissolved and is gone. Either way, ambient gained mass.
-    expect(w.ambient[CHEM_IDS.glucose]).toBeGreaterThan(0);
+    expect(ambTotal(w, CHEM_IDS.glucose)).toBeGreaterThan(0);
     if (w.particles.includes(p)) {
       expect(p.r).toBeLessThan(r0);
     }
     // Conservation: ambient gain bounded by initial particle mass.
-    expect(w.ambient[CHEM_IDS.glucose]).toBeLessThan(massBefore * 1.01);
+    expect(ambTotal(w, CHEM_IDS.glucose)).toBeLessThan(massBefore * 1.01);
   });
 
   it("K-3 activation pass: photoreceptor visible -> activated_photo_visible scales with light", () => {
@@ -1784,13 +1804,13 @@ describe("mass conservation", () => {
     w.particleSpawnRate = 0;
     // Force one chem (O2) to a known cell+ambient split, then run a
     // bunch of ticks and assert the per-chem total is preserved.
-    w.ambient[CHEM_IDS.o2] = 10;
+    for (let b = 0; b + CHEM_IDS.o2 < w.ambient.length; b += AMB_STRIDE) w.ambient[b + CHEM_IDS.o2] = 10;
     const c = makeCreature({ energy: 50 });
     c.molecules.o2 = 0;
     w.creatures.push(c);
-    const o2Before = w.ambient[CHEM_IDS.o2] + c.molecules.o2;
+    const o2Before = ambTotal(w, CHEM_IDS.o2) + c.molecules.o2;
     for (let i = 0; i < 60; i++) step(w, 1 / 60);
-    const o2After = w.ambient[CHEM_IDS.o2] + c.molecules.o2;
+    const o2After = ambTotal(w, CHEM_IDS.o2) + c.molecules.o2;
     // Tolerance: respiration may have consumed some O2 into CO2 (mass
     // still conserved overall but redistributed). Just bound the
     // total drift to confirm no leak in the diffusion path itself.

@@ -2414,10 +2414,18 @@ AMBIENT_TARGET[CHEM_AA] = 0.3;
 // than aa (0.15) since min permeability is only 0.1 anyway.
 AMBIENT_TARGET[CHEM_MIN] = 0.15;
 
-function initialAmbient(): Float32Array {
-  // Start the water column at its equilibrium target so the first
-  // ticks aren't dominated by ambient transients.
-  return new Float32Array(AMBIENT_TARGET);
+function initialAmbient(width: number, height: number): Float32Array {
+  // Regional dissolved field: every region's block starts at the
+  // equilibrium target (per-region seed of the aa/min/O2/CO2 floors)
+  // so the first ticks aren't dominated by ambient transients.
+  const cols = Math.max(1, Math.ceil(width / REGION_PX));
+  const rows = Math.max(1, Math.ceil(height / REGION_PX));
+  const a = new Float32Array(cols * rows * CHEMICAL_COUNT);
+  for (let r = 0; r < cols * rows; r++) {
+    const b = r * CHEMICAL_COUNT;
+    for (let k = 0; k < CHEMICAL_COUNT; k++) a[b + k] = AMBIENT_TARGET[k];
+  }
+  return a;
 }
 
 // Adhesion: how many partners a single cell can be bonded to and the
@@ -3334,7 +3342,7 @@ export function createWorld(
     surfaceWaveAmp: 14,
     aerationRate: width * AERATION_PER_PX,
     atmosphere: initialAtmosphere(),
-    ambient: initialAmbient(),
+    ambient: initialAmbient(width, height),
     tempSurface: 28,
     tempBottom: 12,
     tempPatchAmp: 3,
@@ -4010,13 +4018,11 @@ export function regionDissolvedCapacity(
 // tick (deterministic, cheap). Reused buffer. Filled by
 // sampleRegionTemps; consumed from Phase 1 onward.
 let REGION_TEMP = new Float32Array(0);
-let REGION_TEMP_COLS = 0;
 function sampleRegionTemps(world: World): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
   const n = cols * rows;
   if (REGION_TEMP.length < n) REGION_TEMP = new Float32Array(n);
-  REGION_TEMP_COLS = cols;
   for (let ry = 0; ry < rows; ry++) {
     const cy = Math.min(world.height - 1, ry * REGION_PX + REGION_PX / 2);
     for (let rx = 0; rx < cols; rx++) {
@@ -4032,7 +4038,70 @@ function regionIndexAt(world: { width: number; height: number }, x: number, y: n
   let ry = (y / REGION_PX) | 0; if (ry < 0) ry = 0; else if (ry >= rows) ry = rows - 1;
   return ry * cols + rx;
 }
-void sampleRegionTemps; void regionIndexAt; void REGION_TEMP_COLS;
+
+// ---- Phase 1: regional dissolved field -------------------------
+// world.ambient is now a flat [region * CHEMICAL_COUNT + chem] grid
+// instead of a single global scalar vector. Every dissolve / cell-
+// diffusion / aeration event acts on the LOCAL region's block, and a
+// slow Jacobi pass diffuses dissolved mass between regions.
+const AMBIENT_STRIDE = CHEMICAL_COUNT;
+function ambientBaseAt(world: { width: number; height: number }, x: number, y: number): number {
+  return regionIndexAt(world, x, y) * AMBIENT_STRIDE;
+}
+// Per-neighbour Jacobi exchange fraction giving a ~10-minute
+// half-life for the longest-wavelength (domain-spanning) gradient,
+// derived from the region-grid extent. Recomputed per call (cheap)
+// so it adapts to world size; clamped well under the 2-D explicit
+// stability limit (sum of 4 edge coeffs < 0.5).
+const REGION_DIFFUSION_HALFLIFE_S = 600;
+let REGION_DIFF_SCRATCH = new Float32Array(0);
+function diffuseRegions(world: World, dt: number): void {
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const n = cols * rows;
+  if (n < 2) return;
+  const amb = world.ambient;
+  if (REGION_DIFF_SCRATCH.length < amb.length) REGION_DIFF_SCRATCH = new Float32Array(amb.length);
+  const old = REGION_DIFF_SCRATCH;
+  old.set(amb.subarray(0, n * AMBIENT_STRIDE));
+  const N = Math.max(cols, rows);
+  const ticks = REGION_DIFFUSION_HALFLIFE_S / dt;
+  const wmode = Math.PI / N;
+  // lambda = ln2/ticks ; alpha solves lambda = alpha*(pi/N)^2 (small-mode).
+  let alpha = Math.LN2 / (ticks * wmode * wmode);
+  if (alpha > 0.1) alpha = 0.1; // hard stability clamp
+  for (let ry = 0; ry < rows; ry++) {
+    for (let rx = 0; rx < cols; rx++) {
+      const ri = ry * cols + rx;
+      const base = ri * AMBIENT_STRIDE;
+      // Edge-symmetric, temperature-scaled coefficient per neighbour
+      // (avg T of the two regions) so the Jacobi pass stays exactly
+      // mass-conserving even with a temperature gradient.
+      const tI = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
+      // up/down/left/right neighbour region indices (-1 = none)
+      const nb0 = rx > 0 ? ri - 1 : -1;
+      const nb1 = rx < cols - 1 ? ri + 1 : -1;
+      const nb2 = ry > 0 ? ri - cols : -1;
+      const nb3 = ry < rows - 1 ? ri + cols : -1;
+      for (let pass = 0; pass < 4; pass++) {
+        const nj = pass === 0 ? nb0 : pass === 1 ? nb1 : pass === 2 ? nb2 : nb3;
+        if (nj < 0) continue;
+        const tJ = REGION_TEMP.length > nj ? REGION_TEMP[nj] : TEMP_BASELINE;
+        // warmer water mixes a bit faster; mild, clamped, symmetric.
+        let tf = 1 + 0.5 * (((tI + tJ) * 0.5 - TEMP_BASELINE) / TEMP_BASELINE);
+        if (tf < 0.3) tf = 0.3; else if (tf > 2) tf = 2;
+        const a = alpha * tf;
+        const jb = nj * AMBIENT_STRIDE;
+        for (let k = 0; k < AMBIENT_STRIDE; k++) {
+          const oi = old[base + k];
+          const oj = old[jb + k];
+          if (oi === oj) continue;
+          amb[base + k] += a * (oj - oi);
+        }
+      }
+    }
+  }
+}
 // ===================================================================
 
 
@@ -4138,19 +4207,22 @@ function diffuseAmbient(c: Creature, world: World, dt: number): void {
   const surface = s.r[i] / MIN_CREATURE_R;
   const ambient = world.ambient;
   const cols = s.chemCols;
+  // Cell exchanges with the dissolved field of the region it's in.
+  const ab = ambientBaseAt(world, s.x[i], s.y[i]);
   for (let j = 0; j < DIFFUSABLE_CHEM_IDS.length; j++) {
     const k = DIFFUSABLE_CHEM_IDS[j];
     const perm = CHEM_PERMEABILITY[k];
     if (perm <= 0) continue;
-    const gap = ambient[k] - cols[k][i];
+    const ak = ab + k;
+    const gap = ambient[ak] - cols[k][i];
     if (gap === 0) continue;
     const flow = perm * surface * gap * AMBIENT_FLOW_RATE * dt;
     cols[k][i] += flow;
-    // Mass conservation: every unit gained by the cell came from
-    // ambient (or vice versa for outflow). Clamp ambient at 0 -- a
-    // depleted pool stays depleted until something refills it.
-    const next = ambient[k] - flow;
-    ambient[k] = next < 0 ? 0 : next;
+    // Mass conservation: every unit gained by the cell came from the
+    // local region (or vice versa for outflow). Clamp at 0 -- a
+    // depleted region stays depleted until something refills it.
+    const next = ambient[ak] - flow;
+    ambient[ak] = next < 0 ? 0 : next;
   }
 }
 
@@ -4174,31 +4246,35 @@ function dissolveParticles(world: World, dt: number): void {
   const surfaceY = world.surfaceY;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
   // Iterate in reverse so removeParticleAt's swap-pop doesn't skip entries.
+  const PX = store.x;
   for (let i = world.particles.length - 1; i >= 0; i--) {
     if (PY[i] < surfaceY) continue; // particle above water -- can't dissolve
     const chemId = PC[i];
-    const sol = CHEM_SOLUBILITY[chemId];
-    if (sol <= 0) continue;
-    const gap = sol - ambient[chemId];
-    if (gap <= 0) continue; // ambient saturated; no dissolution
-    const r = PR[i];
-    if (r <= 0) continue;
     // Multi-chem corpse particles (genericChem payload) keep their
     // chem identity through the corpse path; don't dissolve them.
     if (store.genericChem[i]) continue;
     if (store.molecules[i]) continue;
+    const r = PR[i];
+    if (r <= 0) continue;
+    // Dissolve into the LOCAL region's block, capped by that
+    // region's molar-solubility capacity at its temperature.
+    const ri = regionIndexAt(world, PX[i], PY[i]);
+    const cap = regionDissolvedCapacity(chemId, world, REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE);
+    if (cap <= 0) continue;
+    const ak = ri * AMBIENT_STRIDE + chemId;
+    const gap = cap - ambient[ak];
+    if (gap <= 0) continue; // region saturated; no dissolution
     const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
     const mass = density * FOUR_THIRDS_PI * r * r * r;
-    // Rate proportional to surface area (4*pi*r^2) and concentration gap.
+    // Rate proportional to surface area (4*pi*r^2) and capacity gap.
     const dissolveMass = DISSOLVE_RATE_PER_AREA * gap * (r * r) * dt;
     if (dissolveMass >= mass || r * Math.cbrt(1 - dissolveMass / mass) < MIN_DISSOLVE_R) {
-      // Fully dissolve.
-      ambient[chemId] += mass;
+      ambient[ak] += mass;
       removeParticleAt(world, i);
     } else {
       const newMass = mass - dissolveMass;
       PR[i] = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
-      ambient[chemId] += dissolveMass;
+      ambient[ak] += dissolveMass;
     }
   }
 }
@@ -4215,10 +4291,12 @@ function aerateAmbient(world: World, dt: number): void {
   // Surface activity 0..1; even calm water has 0.3 of the rate.
   const act = 0.3 + 0.7 * surfaceActivity(world);
   const rate = ATM_AMBIENT_RATE * act * dt;
-  // O2 + CO2 are the gases that exchange with atmosphere today;
-  // other chems' atmospheric components are zero so they don't
-  // exchange. The loop is bounded by DIFFUSABLE_CHEM_IDS so adding
-  // a new gas to AMBIENT_TARGET picks it up automatically.
+  const nRegions = regionCols(world) * regionRows(world);
+  // O2 + CO2 are the gases that exchange with atmosphere today.
+  // Every region equilibrates its dissolved gas toward the target
+  // against the SHARED atmosphere; atm is decremented as regions
+  // pull from it (deterministic iteration order), so the global
+  // atmosphere reservoir still bounds total inflow exactly.
   const pairs: Array<[number, keyof Molecules]> = [
     [CHEM_O2, "o2"],
     [CHEM_CO2, "co2"],
@@ -4226,19 +4304,19 @@ function aerateAmbient(world: World, dt: number): void {
   for (const [k, molKey] of pairs) {
     const target = AMBIENT_TARGET[k];
     if (target <= 0) continue;
-    const gap = target - ambient[k];
-    // Pull from atm if ambient is below target, push back to atm if
-    // above. Magnitude bounded by available atmospheric mass.
-    let flow = gap * rate;
-    if (flow > 0) {
-      if (flow > atm[molKey]) flow = atm[molKey];
-    } else {
-      // Outflow from ambient back to atmosphere is unbounded by atm.
-      const limit = ambient[k];
-      if (-flow > limit) flow = -limit;
+    for (let r = 0; r < nRegions; r++) {
+      const ak = r * AMBIENT_STRIDE + k;
+      const gap = target - ambient[ak];
+      let flow = gap * rate;
+      if (flow > 0) {
+        if (flow > atm[molKey]) flow = atm[molKey];
+      } else {
+        const limit = ambient[ak];
+        if (-flow > limit) flow = -limit;
+      }
+      ambient[ak] += flow;
+      atm[molKey] -= flow;
     }
-    ambient[k] += flow;
-    atm[molKey] -= flow;
   }
 }
 
@@ -4534,7 +4612,7 @@ function spawnExcretedParticle(
   // ingested whole, and a particle that never spawned can't be
   // ingested anyway.
   if (world.particles.length >= world.particleTarget) {
-    world.ambient[chemId] += m;
+    world.ambient[ambientBaseAt(world, c.x, c.y) + chemId] += m;
     return;
   }
   const density = CHEM_BASE_DENSITY[chemId];
@@ -4708,9 +4786,11 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
+    sampleRegionTemps(world);
     aerate(world, dt);
     aerateAmbient(world, dt);
     dissolveParticles(world, dt);
+    diffuseRegions(world, dt);
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
@@ -4742,9 +4822,11 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
     applyWalls(world);
+    sampleRegionTemps(world);
     aerate(world, dt);
     aerateAmbient(world, dt);
     dissolveParticles(world, dt);
+    diffuseRegions(world, dt);
     replenishParticles(world, dt);
     decayParticles(world, dt);
     pruneSpecies(world);
