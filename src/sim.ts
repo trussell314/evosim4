@@ -4729,6 +4729,52 @@ function dissolveParticles(world: World, dt: number): void {
   }
 }
 
+// Waste mineralization. Real detritus doesn't pile up forever -- it
+// breaks down. Waste slowly denatures into CO2 (mass-conserving),
+// which re-enters the food web via photosynthesis. Applies to every
+// waste store: the dissolved field, the reserve field, molecule-tagged
+// excreted-waste particles (payload waste -> co2, so the particle
+// becomes an ordinary CO2 bubble that can dissolve/be eaten), and
+// plain waste-chem death-debris particles (shrink, depositing the
+// converted mass into the local dissolved CO2). ~5-min half-life:
+// fast enough to bound accumulation, slow enough that waste still
+// matters as a short-term toxin.
+const WASTE_DENATURE_HALFLIFE_S = 300;
+export function denatureWaste(world: World, dt: number): void {
+  const frac = 1 - Math.pow(0.5, dt / WASTE_DENATURE_HALFLIFE_S);
+  if (frac <= 0) return;
+  const amb = world.ambient;
+  const res = world.reserve;
+  const nReg = amb.length / AMBIENT_STRIDE;
+  for (let ri = 0; ri < nReg; ri++) {
+    const base = ri * AMBIENT_STRIDE;
+    const aw = amb[base + CHEM_WASTE];
+    if (aw > 0) { const d = aw * frac; amb[base + CHEM_WASTE] = aw - d; amb[base + CHEM_CO2] += d; }
+    const rw = res[base + CHEM_WASTE];
+    if (rw > 0) { const d = rw * frac; res[base + CHEM_WASTE] = rw - d; res[base + CHEM_CO2] += d; }
+  }
+  const store = world.particleStore;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    const mol = store.molecules[i];
+    if (mol) {
+      if (mol.waste > 0) { const d = mol.waste * frac; mol.waste -= d; mol.co2 += d; }
+      continue;
+    }
+    if (store.chemId[i] !== CHEM_WASTE) continue;
+    const r = store.r[i];
+    const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[CHEM_WASTE];
+    const mass = density * FOUR_THIRDS_PI * r * r * r;
+    const dm = mass * frac;
+    const base = regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE;
+    amb[base + CHEM_CO2] += dm;
+    const newMass = mass - dm;
+    const newR = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
+    if (newR < MIN_DISSOLVE_R) removeParticleAt(world, i);
+    else store.r[i] = newR;
+  }
+}
+
 // Ambient ↔ atmosphere equilibration. Once per tick, gases in the
 // atmosphere dissolve into ambient (and vice versa) toward
 // AMBIENT_TARGET. Mass conserved: every unit added to ambient is
@@ -5276,6 +5322,7 @@ export function step(world: World, dt: number): void {
     diffuseRegions(world, dt);
     diffuseReserve(world, dt);
     dissolveParticles(world, dt);
+    denatureWaste(world, dt);
     precipitateRegions(world);
     reservePass(world);
     n = performance.now(); p.aerate += n - m; m = n;
@@ -5317,6 +5364,7 @@ export function step(world: World, dt: number): void {
     diffuseRegions(world, dt);
     diffuseReserve(world, dt);
     dissolveParticles(world, dt);
+    denatureWaste(world, dt);
     precipitateRegions(world);
     reservePass(world);
     replenishParticles(world, dt);
@@ -6268,12 +6316,14 @@ function updateCreatures(world: World, dt: number): void {
           const chemId = p.chemId;
           // The legacy 6-slot INGEST gating still applies: cells opt
           // into eating each "sensor chem" (o2/co2/glu/biop/fa/min).
-          // Generic-chem particles (e.g. per-chem death debris) have no
-          // sensor slot of their own, so they're eaten under the
-          // biopolymer gate -- preserving the food-web path the old
-          // aggregated generic corpse particle had.
+          // Generic-chem particles (per-chem death debris) and waste
+          // particles have no sensor slot of their own, so they're
+          // eaten under the biopolymer ("bulk organic") gate -- this
+          // is the evolvable detritivore niche (waste is low-value
+          // fuel; bondEnergy 2).
           let sensorSlot = SENSOR_BIN_BY_CHEM[chemId];
-          if (sensorSlot < 0 && chemId >= NAMED_CHEMICAL_COUNT) {
+          if (sensorSlot < 0
+            && (chemId >= NAMED_CHEMICAL_COUNT || chemId === CHEM_WASTE)) {
             sensorSlot = BIOPOLYMER_SENSOR_SLOT;
           }
           if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;

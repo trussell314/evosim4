@@ -18,6 +18,7 @@ import {
   resizeWorld,
   setParticleTarget,
   diffuseReserve,
+  denatureWaste,
   seedParticles,
   step,
   genomeColor,
@@ -338,6 +339,36 @@ describe("createWorld", () => {
     // Mass conserved per chem.
     expect(Math.abs(reserveTotal(DENSE) - 1000)).toBeLessThan(1e-2);
     expect(Math.abs(reserveTotal(LIGHT) - 1000)).toBeLessThan(1e-2);
+  });
+
+  it("waste denatures into CO2 (dissolved + reserve + particle), mass conserved", () => {
+    const w = quietWorld();
+    w.ambient.fill(0);
+    w.reserve.fill(0);
+    const W = CHEM_IDS.waste;
+    const C = CHEM_IDS.co2;
+    w.ambient[W] = 500;            // dissolved waste in region 0
+    w.reserve[W] = 300;            // reserve waste in region 0
+    pushParticle(w, { x: 100, y: 200, z: 12, vx: 0, vy: 0, vz: 0, r: 3, chemId: W, density: 1.0 });
+    const pMass0 = (4 / 3) * Math.PI * 27 * 1.0;
+    const sum = (chem: number): number => {
+      let s = 0;
+      for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) s += w.ambient[b + chem] + w.reserve[b + chem];
+      return s;
+    };
+    const wasteParticleMass = (): number => {
+      let s = 0;
+      for (const p of w.particles) if (p.chemId === W) s += (4 / 3) * Math.PI * p.r ** 3 * (p.density ?? 1);
+      return s;
+    };
+    const total0 = sum(W) + sum(C) + wasteParticleMass();
+    for (let i = 0; i < 60; i++) denatureWaste(w, 1 / 60);
+    // Waste shrinks, CO2 grows, total (waste+co2+wasteparticles) conserved.
+    expect(sum(W)).toBeLessThan(800);
+    expect(sum(C)).toBeGreaterThan(0);
+    expect(wasteParticleMass()).toBeLessThan(pMass0);
+    const total1 = sum(W) + sum(C) + wasteParticleMass();
+    expect(Math.abs(total1 - total0)).toBeLessThan(total0 * 1e-3 + 1e-3);
   });
 
   it("registers each initial founder as its own species (no parents)", () => {
@@ -749,6 +780,17 @@ describe("creature: ingestion cost and cooldown", () => {
     step(w, 0.001);
     expect(w.particles.length).toBe(0); // eaten, not skipped
     expect(c.store.chemCols[GEN][c.idx]).toBeGreaterThan(before);
+  });
+  it("ingests a plain waste particle under the biopolymer gate", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
+    w.creatures.push(c);
+    const before = c.store.chemCols[CHEM_IDS.waste][c.idx];
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.waste, density: 1.0 });
+    step(w, 0.001);
+    expect(w.particles.length).toBe(0); // eaten, not skipped
+    expect(c.store.chemCols[CHEM_IDS.waste][c.idx]).toBeGreaterThan(before);
   });
   it("absorbs only one particle per cooldown window", () => {
     const w = quietWorld();
