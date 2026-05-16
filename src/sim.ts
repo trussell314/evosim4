@@ -3288,9 +3288,7 @@ export function createWorld(
     // Soft side walls: bounces lose most of their energy so a
     // particle smacking the wall under wave forcing comes to rest
     // there for one frame instead of pinging back into a tight
-    // wall-margin column. Combined with the density-scaled wall
-    // repulsion in applyParticleForcesRange, the steady state has
-    // very few particles within WALL_REPEL_DIST of either side.
+    // wall-margin column.
     restitution: 0.15, xWallRestitution: 0.05, zWallRestitution: 0.6,
     collisionIters: 1,
     species: new Map(),
@@ -4776,19 +4774,6 @@ export function applyParticleForcesRange(
   const colDepth = p.colDepth;
   const currentDrift = p.currentDrift;
   const floorY = p.worldFloorY;
-  const worldW = p.worldWidth;
-  // Wall-repulsion for floating / suspended particles. Strength
-  // peaks at the wall and falls off linearly over WALL_REPEL_DIST,
-  // and scales as (1.5 - density)/1.5 -- gases (0.14) get full
-  // strength, aqueous chems (~1.0) get a third, sand-grade solids
-  // (>= 1.5) get nothing. Keeps the wall-margin column free of the
-  // build-up that otherwise forms when cells excrete near a wall
-  // (excretion spawns at cell-radius offset from cell.x; cells
-  // hugging the wall spawn particles right against it) or when
-  // wave forcing slams aqueous particles into the wall faster than
-  // the soft bounce can re-clear them.
-  const WALL_REPEL_DIST = 48;
-  const WALL_REPEL_A = 60;
   for (let i = from; i < to; i++) {
     const xi = PX[i], yi = PY[i], ri = PR[i];
     // Freeze asleep particles ONLY when they're resting at the
@@ -4827,18 +4812,7 @@ export function applyParticleForcesRange(
     const noiseEnv = Math.exp(-depth / 200);
     const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
     const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
-    let ax = surface + swell + current + noiseX;
-    // Wall-repulsion, density-scaled. Gases get full push; aqueous
-    // chems get a third; solids (sand, mineral grains) fall to the
-    // floor on their own and don't need pushing.
-    const densityFactor = density >= 1.5 ? 0 : (1.5 - density) / 1.5;
-    if (densityFactor > 0) {
-      if (xi < WALL_REPEL_DIST) {
-        ax += WALL_REPEL_A * densityFactor * (1 - xi / WALL_REPEL_DIST);
-      } else if (xi > worldW - WALL_REPEL_DIST) {
-        ax -= WALL_REPEL_A * densityFactor * (1 - (worldW - xi) / WALL_REPEL_DIST);
-      }
-    }
+    const ax = surface + swell + current + noiseX;
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
     const dscaleDrag = drag * dragScale;
