@@ -5,7 +5,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 const OUT = "/tmp/probe_diag.txt";
 writeFileSync(OUT, "");
 const DT = 1 / 60;
-const STEPS = Math.round(60 / DT);
+const STEPS = Math.round(28 / DT);
 const world = createWorld(800, 600, { delayedSpawn: true });
 MASS_AUDIT.on = true;
 // snapshot total molar via the audit fn by marking a no-op label
