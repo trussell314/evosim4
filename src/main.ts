@@ -242,6 +242,16 @@ function rebuildSnapshotIndexes(): void {
   for (const sp of snapshot.species) snapshotSpeciesByKey.set(sp.key, sp);
   snapshotCreatureById.clear();
   for (const c of snapshot.creatures) snapshotCreatureById.set(c.id, c);
+  // Keep selection alive across reproduction. The parent keeps its id
+  // through fission so selection normally just stays put; but if the
+  // selected cell dies (e.g. spent itself dividing), hand selection
+  // down to a child it spawned so the user keeps following the line
+  // instead of the tooltip blinking out.
+  if (selectedCellId != null && !snapshotCreatureById.has(selectedCellId)) {
+    for (const c of snapshot.creatures) {
+      if (c.parentId === selectedCellId) { selectedCellId = c.id; break; }
+    }
+  }
 }
 rebuildSnapshotIndexes();
 
@@ -1210,8 +1220,19 @@ function render(): void {
   ctx.globalAlpha = 1;
 
   const selId = selectedCellId;
+  // When a cell is selected (its follow-tooltip is up), ring every
+  // other cell in the same species OR the same founding lineage
+  // (covers mutated descendants that speciated away) with a 1px
+  // selection border so the family is visible at a glance.
+  const sel = selectedCell();
+  const kinSpecies = sel ? sel.speciesKey : null;
+  const kinLineage = sel ? sel.lineageRoot : -1;
   for (let i = 0; i < snapshot.creatures.length; i++) {
-    drawCreature(snapshot.creatures[i], snapshot.creatures[i].id === selId);
+    const c = snapshot.creatures[i];
+    const isSel = c.id === selId;
+    const isKin = !isSel && sel != null
+      && (c.speciesKey === kinSpecies || c.lineageRoot === kinLineage);
+    drawCreature(c, isSel, isKin);
   }
 
   drawHeatmap();
@@ -1662,8 +1683,12 @@ function drawPhylogeny(): void {
 // "the same cell, just emphasized."
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
+  kin = false,
 ): void {
-  ctx.strokeStyle = selected ? "#ffffff" : "#000000";
+  // selected: thick white. kin (same species/lineage as the selected
+  // cell): thin white selection border so the family stands out
+  // against everyone else's default thin black outline.
+  ctx.strokeStyle = selected || kin ? "#ffffff" : "#000000";
   ctx.lineWidth = selected ? 3 : 1;
   tracedWobblyBody(cx, cy, r, t, phase);
   ctx.stroke();
@@ -1900,13 +1925,13 @@ function drawCellLOD(cx: number, cy: number, r: number, color: string): void {
   ctx.fill();
 }
 
-function drawCreature(c: CreatureSnapshot, selected: boolean): void {
+function drawCreature(c: CreatureSnapshot, selected: boolean, kin = false): void {
   // Each cell has a stable random phase derived from its bornAt + position,
   // so its wobble pattern is its own instead of every cell pulsing in sync.
   const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
   const t = snapshot.t;
   const screenR = c.r * viewScale;
-  const lod = !selected && screenR < LOD_MIN_SCREEN_R;
+  const lod = !selected && !kin && screenR < LOD_MIN_SCREEN_R;
   if (c.division) {
     // Mitosis: render two overlapping wobbly bodies whose centers split
     // along the division axis as `progress` advances 0 -> 1.
@@ -1919,15 +1944,15 @@ function drawCreature(c: CreatureSnapshot, selected: boolean): void {
       drawCellLOD(c.x + dx, c.y + dy, child.childR, child.childColor);
     } else {
       drawCellBody(c.x - dx, c.y - dy, c.r, c.color, t, phase);
-      strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase);
+      strokeCellOutline(c.x - dx, c.y - dy, c.r, selected, t, phase, kin);
       drawCellBody(c.x + dx, c.y + dy, child.childR, child.childColor, t, phase + 1.7);
-      strokeCellOutline(c.x + dx, c.y + dy, child.childR, selected, t, phase + 1.7);
+      strokeCellOutline(c.x + dx, c.y + dy, child.childR, selected, t, phase + 1.7, kin);
     }
   } else if (lod) {
     drawCellLOD(c.x, c.y, c.r, c.color);
   } else {
     drawCellBody(c.x, c.y, c.r, c.color, t, phase);
-    strokeCellOutline(c.x, c.y, c.r, selected, t, phase);
+    strokeCellOutline(c.x, c.y, c.r, selected, t, phase, kin);
   }
 
   // Engulfed prey: render each inside the predator, clustered around the

@@ -856,6 +856,10 @@ export class Creature {
   // retain their original lineageRoot (they're alive, just confined
   // to a vacuole) but only world.creatures contribute to the count.
   lineageRoot: number = -1;
+  // id of the cell this one fissioned from (-1 for founders). Purely
+  // for the UI: lets selection "descend" to a child if the selected
+  // cell divides and the parent later dies.
+  parentId: number = -1;
   division: { progress: number; axis: number; child: Creature } | null = null;
   contents: Creature[] = [];
   bonds: Creature[] = [];
@@ -5797,6 +5801,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // Inherit the parent's founding lineage. Mutated descendants stay
   // part of the same lineageRoot for top-up counting purposes.
   child.lineageRoot = parent.lineageRoot;
+  child.parentId = parent.id;
   {
     const cols = child.store.catalystCols;
     const ci = child.idx;
@@ -7155,6 +7160,7 @@ export interface CreatureSnapshot {
   ingestCooldown: number;
   bornAt: number;
   lineageRoot: number;
+  parentId: number;
   speciesKey: string;
   genome: Uint8Array;
   molecules: Molecules;
@@ -7216,6 +7222,7 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
     ingestCooldown: c.ingestCooldown,
     bornAt: c.bornAt,
     lineageRoot: c.lineageRoot,
+    parentId: c.parentId,
     speciesKey: c.speciesKey,
     genome: c.genome,
     molecules: (() => {
