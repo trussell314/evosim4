@@ -5190,14 +5190,18 @@ const PARTICLE_DECAY_START_AGE = 300; // sim-seconds before decay begins
 const PARTICLE_DECAY_HALF_LIFE = 60;  // sim-seconds; r halves every 60s once decaying
 const PARTICLE_MIN_R = 0.4;
 function decayParticles(world: World, dt: number): void {
-  if (!PARTICLE_DECAY_ENABLED) return;
   const ps = world.particleStore;
   const age = ps.age;
+  // Age every particle every tick regardless of the decay toggle --
+  // the reserve<->visible fade-in reads age, so it must keep advancing
+  // even while decay itself is disabled.
+  const n = world.particles.length;
+  for (let i = 0; i < n; i++) age[i] += dt;
+  if (!PARTICLE_DECAY_ENABLED) return;
   const r = ps.r;
   // Same exponential factor for every decaying particle this tick.
   const decayFactor = Math.pow(0.5, dt / PARTICLE_DECAY_HALF_LIFE);
   for (let i = world.particles.length - 1; i >= 0; i--) {
-    age[i] += dt;
     if (age[i] <= PARTICLE_DECAY_START_AGE) continue;
     r[i] *= decayFactor;
     if (r[i] < PARTICLE_MIN_R) removeParticleAt(world, i);
