@@ -4686,13 +4686,17 @@ function diffuseAmbient(c: Creature, world: World, dt: number): void {
     const ak = ab + k;
     const gap = ambient[ak] - cols[k][i];
     if (gap === 0) continue;
-    const flow = perm * surface * gap * AMBIENT_FLOW_RATE * dt;
+    let flow = perm * surface * gap * AMBIENT_FLOW_RATE * dt;
+    // Strict mass conservation: a transfer can't move more than the
+    // SOURCE side actually holds. Inflow (flow > 0) is capped by the
+    // region's stock; outflow by the cell's pool. (The old code
+    // credited the cell the full flow and just clamped ambient at 0,
+    // minting the shortfall every tick a cell sat in a depleted
+    // region -- the dominant mass leak.)
+    if (flow > 0) { if (flow > ambient[ak]) flow = ambient[ak]; }
+    else { const avail = cols[k][i]; if (-flow > avail) flow = -avail; }
     cols[k][i] += flow;
-    // Mass conservation: every unit gained by the cell came from the
-    // local region (or vice versa for outflow). Clamp at 0 -- a
-    // depleted region stays depleted until something refills it.
-    const next = ambient[ak] - flow;
-    ambient[ak] = next < 0 ? 0 : next;
+    ambient[ak] -= flow;
   }
 }
 
