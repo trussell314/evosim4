@@ -493,6 +493,27 @@ naturally produce different shapes of signal:
   so cells get a navigation reference even before any magnetic
   gameplay lands.
 
+**Future sense modalities (backlog — not scoped for Tier 3).**
+Captured here so the receptor-chem / activated-chem table reserves
+conceptual headroom; no implementation committed.
+- **pH / acidity**: scalar — `phreceptor` + `activated_ph`,
+  populated from local acidity (e.g. CO₂ / weak-acid concentration
+  in the ambient pool, or a future pH field). NOTE: tension with
+  "Out of scope" below, which currently folds pH into generic
+  chemical behavior rather than a separate axis — adding a pH
+  *sense* implies at least a derived/proxy pH signal even if pH
+  isn't a first-class state axis. Decide proxy-vs-field when scoped.
+- **Electrical activity**: scalar or 2D vector —
+  `electroreceptor` + `activated_electro[_x/y]`. Senses nearby
+  cells' membrane/ion activity (analog to electroreception in real
+  organisms: passive detection of bioelectric fields). Cheapest
+  proxy: sum of neighbouring cells' recent metabolic/VM activity or
+  membrane-flux magnitude within a radius, attenuated by distance —
+  reuses the existing creature spatial grid; no new field needed.
+  Vector form gives a bearing toward the strongest source (prey /
+  conspecific detector). Open: whether it reads particles too
+  (e.g. charged mineral grains) or cells only.
+
 **Unified SYNTH op (locked).** All synthesis goes through a single
 parameterized op:
 
