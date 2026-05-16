@@ -1215,6 +1215,11 @@ export interface World {
   // wall off a successful lineage's original cell. Removed alongside
   // founderIds when the cell finally dies.
   founderReproduced: Set<number>;
+  // Per-founder snapshot taken at spawn (post-scoop). Lets the
+  // lifespan cull grant a founder extra runway if it has measurably
+  // progressed from what it started with -- see founderLifespanBonus.
+  // Entry removed when the founder leaves world.creatures.
+  founderBirthScore: Map<number, { mass: number; mrna: number; machinery: number }>;
   gravity: number;
   drag: number;
   surfaceAmp: number;
@@ -2390,6 +2395,15 @@ AMBIENT_TARGET[CHEM_CO2] = 1;   // matches CO2_AMBIENT
 // free meal. Mass-conserving: cells return aa to ambient on
 // excretion / decay.
 AMBIENT_TARGET[CHEM_AA] = 0.3;
+// Trace dissolved mineral. min is insoluble (solubility 0.02) and
+// dense (2.4), so free particles sink and precipitate out fast --
+// there's effectively no mineral reservoir in the water column for a
+// founder to diffuse against, and min is on every machinery-synth
+// path (aa/chl/enz/mrna all consume it). A small ambient floor gives
+// a founder that scooped a mineral-poor patch a slow recovery
+// trickle instead of being permanently mineral-locked. Kept lower
+// than aa (0.15) since min permeability is only 0.1 anyway.
+AMBIENT_TARGET[CHEM_MIN] = 0.15;
 
 function initialAmbient(): Float32Array {
   // Start the water column at its equilibrium target so the first
@@ -3269,6 +3283,7 @@ export function createWorld(
     // lose tracking and existing founders live full lives.
     founderIds: new Set<number>(),
     founderReproduced: new Set<number>(),
+    founderBirthScore: new Map(),
     gravity: 60,
     drag: 0.6,
     surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
@@ -3386,6 +3401,40 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 // so the "no immortal founders" property is preserved -- the cull
 // only takes founders that never managed to spawn a descendant.
 const FOUNDER_LIFESPAN_SEC = 300;
+// A founder that hasn't fissioned yet but has measurably advanced
+// from its spawn state earns extra runway before the age cull --
+// "did something interesting" without the binary all-or-nothing of
+// the reproduction graduation. Each met condition adds a fixed
+// bonus, capped so a stuck-but-busy founder still can't live
+// forever (max effective life = FOUNDER_LIFESPAN_SEC + the cap).
+// Conditions are deliberately coarse: they reward genuine growth /
+// machinery buildup, which a paralyzed (aa- or atp-starved) cell
+// cannot fake. Returns seconds to add to the base lifespan.
+const FOUNDER_BONUS_PER_COND = 120;
+const FOUNDER_BONUS_CAP = 480;
+function founderLifespanBonus(world: World, c: Creature): number {
+  const s = world.founderBirthScore.get(c.id);
+  if (s === undefined) return 0;
+  const mol = c.molecules;
+  let bonus = 0;
+  // Grew substantially: total mass at least doubled since spawn
+  // (net anabolism -- ingested/synthesized more than it spent).
+  if (creatureTotalMass(c) >= 2 * s.mass) bonus += FOUNDER_BONUS_PER_COND;
+  // Built up translation capacity: mRNA at least doubled. mRNA gates
+  // every biosynth reaction, so this is hard to reach without a
+  // working metabolism.
+  if (mol.mrna >= 2 * s.mrna) bonus += FOUNDER_BONUS_PER_COND;
+  // Expanded its machinery pool (mRNA + chlorophyll + enzyme)
+  // ~3x -- the cell is investing in its own catalytic apparatus,
+  // not just coasting on the seed.
+  if (mol.mrna + mol.chlorophyll + mol.enzyme >= 3 * s.machinery) {
+    bonus += FOUNDER_BONUS_PER_COND;
+  }
+  // Healthy energy reserve (above the stress-decay threshold) --
+  // it's running a net-positive ATP budget, not slowly dying.
+  if (c.energy >= 8) bonus += FOUNDER_BONUS_PER_COND;
+  return bonus > FOUNDER_BONUS_CAP ? FOUNDER_BONUS_CAP : bonus;
+}
 // Defer normal per-material replenish + aeration for the early game.
 // Holds until WATER_FILL_DELAY_SEC so the seed mix dominates the
 // initial chemistry and the column fills gradually instead of all at
@@ -3436,6 +3485,14 @@ function spawnFounder(world: World): Creature {
   c.lineageRoot = world.nextLineageRoot++;
   world.creatures.push(c);
   world.founderIds.add(c.id);
+  {
+    const bm = c.molecules;
+    world.founderBirthScore.set(c.id, {
+      mass: creatureTotalMass(c),
+      mrna: bm.mrna,
+      machinery: bm.mrna + bm.chlorophyll + bm.enzyme,
+    });
+  }
   noteCreatureBirth(world, c, undefined);
   return c;
 }
@@ -5453,7 +5510,7 @@ function updateCreatures(world: World, dt: number): void {
     // age out naturally instead of hitting the wall artificially).
     const founderTooOld = world.founderIds.has(c.id)
       && !world.founderReproduced.has(c.id)
-      && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC;
+      && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC + founderLifespanBonus(world, c);
     if (
       (c.energy <= 0 && noFuel(c))
       || m.membrane < MIN_VIABLE_MEMBRANE
@@ -5508,6 +5565,7 @@ function updateCreatures(world: World, dt: number): void {
         // accumulate stale ids across the run.
         world.founderIds.delete(c.id);
         world.founderReproduced.delete(c.id);
+        world.founderBirthScore.delete(c.id);
         if (spillSet.has(c)) {
           releaseChemsAsParticles(c, world);
           c.store.release(c.idx);
