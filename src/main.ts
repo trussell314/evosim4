@@ -307,10 +307,16 @@ function rebuildSnapshotIndexes(): void {
 // rebuildSnapshotIndexes: that runs once at module-bootstrap (before
 // the selectedCellId binding initializes), and touching it there
 // would throw a TDZ ReferenceError and abort the whole module.
-function descendSelectionIfOrphaned(): void {
-  if (selectedCellId == null || snapshotCreatureById.has(selectedCellId)) return;
-  for (const c of snapshot.creatures) {
-    if (c.parentId === selectedCellId) { selectedCellId = c.id; return; }
+// If the selected cell is gone from the latest snapshot (died or
+// eaten), drop the selection entirely. We deliberately do NOT hop to
+// a child / nearest / first cell -- a selection silently jumping to
+// some unrelated cell is more confusing than just clearing. Kept OUT
+// of rebuildSnapshotIndexes: that runs once at module-bootstrap
+// before the selectedCellId binding initializes, and touching it
+// there would throw a TDZ ReferenceError and abort the whole module.
+function clearSelectionIfDead(): void {
+  if (selectedCellId != null && !snapshotCreatureById.has(selectedCellId)) {
+    selectedCellId = null;
   }
 }
 rebuildSnapshotIndexes();
@@ -424,7 +430,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     const tIntake = performance.now();
     snapshot = msg.snapshot;
     rebuildSnapshotIndexes();
-    descendSelectionIfOrphaned();
+    clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
     workerAdvancedThisFrame += msg.advanced;
     if (msg.err) {
@@ -2147,12 +2153,10 @@ function updateInspector(): void {
     `extinct=${snapshot.extinctionCount}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
-  // If the selected cell has died or been eaten, fall back to the first
-  // live creature so the inspector shows something useful instead of
-  // silently going blank.
-  if (selectedCellId == null || !snapshotCreatureById.has(selectedCellId)) {
-    selectedCellId = snapshot.creatures[0]?.id ?? null;
-  }
+  // No auto-fallback: if nothing is selected the inspector shows the
+  // population summary and the pin control hides. Selection only
+  // changes when the user clicks a cell (or it's cleared on death by
+  // clearSelectionIfDead).
   // Always re-disassemble: the selected cell's genome can change between
   // frames from somatic mutation, so a cached string would go stale.
   refreshActiveDisasm();
