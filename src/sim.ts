@@ -6130,6 +6130,18 @@ function updateCreatures(world: World, dt: number): void {
               otherCols[k][oi] = 0;
             }
           }
+          // Catalysts transfer verbatim too -- prey enzymes are NOT
+          // denatured; the predator inherits them intact, exactly like
+          // an engulfed cell digested in place (digestInnerIntoHost).
+          {
+            const myCats = c.store.catalystCols;
+            const otherCats = other.store.catalystCols;
+            const ci = c.idx; const oi = other.idx;
+            for (let k = 0; k < CATALYST_COUNT; k++) {
+              const v = otherCats[k][oi];
+              if (v !== 0) { myCats[k][ci] += v; otherCats[k][oi] = 0; }
+            }
+          }
           c.energy += other.energy;
           for (const inner of other.contents) c.contents.push(inner);
           other.contents.length = 0;
@@ -6303,19 +6315,19 @@ function updateCreatures(world: World, dt: number): void {
 }
 
 // On death, return the cell's chem pool to the world as free-floating
-// particles. One particle per named chem with significant mass, each
-// carrying its identity (no more bucketing into "organic" / "lipid"
-// material categories). Catalysts denature back into amino acid +
-// minerals first. Generic chemicals aggregate into a single multi-chem
-// corpse particle whose chemId tag is biopolymer (visual / buoyancy
-// classifier; the per-chem payload is what gets re-absorbed on ingest).
+// particles -- one faithful, full-mass particle per chem (named AND
+// generic) carrying its own identity. Catalysts denature back into
+// 0.5 aa + 0.5 min first (the one intentional transformation kept).
+// No ATP->ADP fold, no sub-threshold mass discard, no biopolymer
+// corpse aggregation: death is now mass-faithful for matter.
+const DEATH_RELEASE_SCATTER = 1.5; // small in-place jitter (was 6 / 4)
 function releaseChemsAsParticles(c: Creature, world: World): void {
   const ci = c.idx;
   const cols = c.store.chemCols;
 
-  // Catalysts denature on death back to their substrates (0.5 aa +
-  // 0.5 min). Folded into the chem pool so the loop below releases
-  // them naturally as those chems.
+  // (1, kept) Catalysts denature back to their substrates (0.5 aa +
+  // 0.5 min). Folded into the chem pool so the release loop below
+  // emits them naturally as those chems.
   {
     const ccats = c.store.catalystCols;
     for (let k = 0; k < CATALYST_COUNT; k++) {
@@ -6327,74 +6339,45 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
       }
     }
   }
-  // ATP loses its phosphate on death, returning to the ADP pool.
-  if (c.energy > 0) {
-    cols[CHEM_ADP][ci] += c.energy;
-    c.energy = 0;
-  }
+  // (2, removed) ATP is energy, not matter -- it's simply gone on
+  // death. No ADP is conjured.
+  c.energy = 0;
 
-  // Named chems: one particle per chem id above MIN_RELEASE. Each
-  // particle carries chemId so the eater absorbs the same chemical
-  // back into its pool slot. Below-threshold remnants are dropped
-  // silently (they round-off to environment). Threshold tuned so a
-  // typical cell death produces ~3-5 particles, not one per chem
-  // slot -- keeps long-run particle counts stable.
-  const MIN_RELEASE = 2;
+  // Emit one full-mass particle for a chem (no thresholding -- (3)
+  // removed). Placed in-place with only a small scatter ((5) toned
+  // down). Generic chem ids deposit straight back into the matching
+  // generic column on re-ingest (chemCols[NAMED+k] aliases it).
+  const emit = (chemId: number, total: number, density: number): void => {
+    if (total <= 0) return;
+    const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(total, density));
+    const jit = (): number => (Math.random() - 0.5) * DEATH_RELEASE_SCATTER;
+    const z = world.depth > 2 * r
+      ? Math.min(world.depth - r, Math.max(r, c.z + jit()))
+      : world.depth / 2;
+    pushParticle(world, {
+      x: c.x + jit(),
+      y: c.y + jit(),
+      z,
+      vx: 0, vy: 0, vz: 0, // released in place -- no death momentum
+      r,
+      chemId,
+      density,
+    });
+  };
+
+  // Named chems: one faithful, full-mass particle each.
   for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
-    const total = cols[k][ci];
-    if (total < MIN_RELEASE) { cols[k][ci] = 0; continue; }
+    emit(k, cols[k][ci], CHEM_BASE_DENSITY[k]);
     cols[k][ci] = 0;
-    const density = CHEM_BASE_DENSITY[k];
-    let remaining = total;
-    while (remaining > MIN_RELEASE) {
-      let r = 2 + Math.random() * 2;
-      let mp = density * (4 / 3) * Math.PI * r * r * r;
-      if (mp > remaining) {
-        r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(remaining, density));
-        mp = density * (4 / 3) * Math.PI * r * r * r;
-      }
-      pushParticle(world, {
-        x: c.x + (Math.random() - 0.5) * 6,
-        y: c.y + (Math.random() - 0.5) * 6,
-        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
-        vx: 0, vy: 0, vz: 0, // released in place -- no death momentum
-        r,
-        chemId: k,
-      });
-      remaining -= mp;
-    }
   }
-
-  // Generic chemicals: aggregate into one corpse particle so each
-  // chem's identity survives without spamming hundreds of tiny
-  // particles. ChemId tag is biopolymer (low-density bulk visual);
-  // the multi-chem payload is what really matters on re-ingest.
+  // (4, removed) Generic chems released per-chem as first-class
+  // single-chem particles -- no biopolymer-tagged corpse blob.
   {
     const gcols = c.store.genericChemCols;
-    const payload = new Float32Array(GENERIC_CHEMICAL_COUNT);
-    let totalMass = 0;
-    let any = false;
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
-      const v = gcols[k][ci];
-      if (v > 0) {
-        payload[k] = v;
-        totalMass += v * CHEMICALS[NAMED_CHEMICAL_COUNT + k].molarMass;
-        gcols[k][ci] = 0;
-        any = true;
-      }
-    }
-    if (any && totalMass >= MIN_RELEASE) {
-      const density = CHEM_BASE_DENSITY[CHEM_BIOPOLYMER];
-      const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(totalMass, density));
-      pushParticle(world, {
-        x: c.x + (Math.random() - 0.5) * 6,
-        y: c.y + (Math.random() - 0.5) * 6,
-        z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
-        vx: 0, vy: 0, vz: 0, // released in place -- no death momentum
-        r,
-        chemId: CHEM_BIOPOLYMER,
-        genericChem: payload,
-      });
+      const chemId = NAMED_CHEMICAL_COUNT + k;
+      emit(chemId, gcols[k][ci], CHEM_BASE_DENSITY[chemId]);
+      gcols[k][ci] = 0;
     }
   }
 }

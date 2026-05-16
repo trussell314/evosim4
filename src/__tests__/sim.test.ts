@@ -1312,20 +1312,21 @@ describe("creature: death by starvation", () => {
   it("released particles spawn near the dead cell", () => {
     const w = quietWorld();
     const c = makeCreature({ x: 400, y: 300, z: 12, energy: 0 });
-    c.molecules.biopolymer = 0;
-    c.molecules.minerals = 50;
-    // Strip molecules so the only mass to release is the rock reserve;
-    // biomass would otherwise spawn organic-tagged corpse particles too.
+    // Empty the pool first, then give it a single deterministic mass
+    // to release (minerals). Death is now mass-faithful: any trace
+    // chem from this tick's reactions is also released, so we assert
+    // spawn POSITION for every new particle and that the minerals
+    // mass came back, rather than "minerals only".
     c.molecules = emptyMolecules();
-    // Prefill kept well under particleTarget (550); over-cap excretion
-    // now routes to ambient instead of spawning, so the test world
-    // needs headroom for the spawn assertion to hold.
+    c.molecules.minerals = 50;
     for (let i = 0; i < 100; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
     const before = new Set(w.particles);
     w.creatures.push(c);
     step(w, 1 / 60);
-    for (const p of w.particles.filter((p) => !before.has(p))) {
-      expect(p.chemId).toBe(CHEM_IDS.minerals);
+    const fresh = w.particles.filter((p) => !before.has(p));
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(fresh.some((p) => p.chemId === CHEM_IDS.minerals)).toBe(true);
+    for (const p of fresh) {
       expect(Math.abs(p.x - 400)).toBeLessThan(20);
       expect(Math.abs(p.y - 300)).toBeLessThan(20);
     }
