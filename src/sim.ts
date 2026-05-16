@@ -6395,10 +6395,37 @@ function tryReproduce(parent: Creature, world: World): void {
   }
   updateCreatureRadius(child);
 
-  // Engulfed cells do NOT auto-propagate to the daughter. They stay in
-  // the parent's contents; the child starts empty. Spreading an
-  // endosymbiont to offspring is a capability cells must evolve (e.g.
-  // re-engulfing), not a free inheritance.
+  // Partition the engulfed cells between the two daughters in
+  // proportion to mass (childShare to the child). No fission /
+  // duplication -- each existing inner cell moves wholesale to one
+  // side; only the *allocation* is mass-weighted. Largest-first greedy
+  // assigning each to whichever daughter is furthest below its target
+  // share keeps the realized split close to childShare and is
+  // deterministic (mass desc, id asc tiebreak).
+  if (parent.contents.length > 0) {
+    const inners = parent.contents.slice();
+    parent.contents.length = 0;
+    let totalInnerMass = 0;
+    for (const inner of inners) totalInnerMass += creatureTotalMass(inner);
+    const targetChild = totalInnerMass * childShare;
+    const targetParent = totalInnerMass - targetChild;
+    inners.sort((a, b) => {
+      const dm = creatureTotalMass(b) - creatureTotalMass(a);
+      return dm !== 0 ? dm : a.id - b.id;
+    });
+    let childMass = 0;
+    let parentMass = 0;
+    for (const inner of inners) {
+      const m = creatureTotalMass(inner);
+      if (targetChild - childMass >= targetParent - parentMass) {
+        child.contents.push(inner);
+        childMass += m;
+      } else {
+        parent.contents.push(inner);
+        parentMass += m;
+      }
+    }
+  }
 
   // Don't commit the child to the world yet -- stash it in the parent's
   // division state and animate the separation. advanceDivision() will
