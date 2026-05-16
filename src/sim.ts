@@ -4171,12 +4171,95 @@ function ambientBaseAt(world: { width: number; height: number }, x: number, y: n
 const REGION_DIFFUSION_HALFLIFE_S = 600;
 let REGION_DIFF_SCRATCH = new Float32Array(0);
 function diffuseRegions(world: World, dt: number): void {
-  // Only the DISSOLVED field diffuses -- it's a true aqueous solute.
-  // The reserve pool is demoted settled sediment (only quiet/at-rest
-  // particles are demoted); letting it diffuse would invisibly creep
-  // bottom sediment upward/sideways. Reserve stays put and resuspends
-  // in place via mass-local promotion.
+  // The DISSOLVED field is a true aqueous solute -> isotropic Jacobi
+  // diffusion. The reserve pool diffuses too now, but anisotropically:
+  // horizontally both ways for everything, and vertically only in the
+  // gravity-consistent direction per chem (dense sinks, buoyant rises)
+  // -- see diffuseReserve().
   jacobiDiffuseField(world, world.ambient, dt);
+}
+
+// Buoyancy-neutral density. applyForces uses ay = g*(1 - 1/density),
+// so density 1.0 neither sinks nor rises; >1 sinks, <1 floats. Reserve
+// vertical transport keys off the same threshold.
+const RESERVE_WATER_DENSITY = 1.0;
+let RESERVE_DIFF_SCRATCH = new Float32Array(0);
+// Reserve diffusion (Phase 4 revision -- reserve was previously inert):
+//  1. left <-> right: symmetric Jacobi exchange for every chem.
+//  2. density >= water: also drifts DOWN (settling) one-directionally.
+//  3. density <= water: drifts UP (buoyant) one-directionally.
+//  4. rate scaled by the mean temperature of the two regions.
+// Vertical transfers are applied source-side only (every unit removed
+// from a region is added to exactly one neighbour) so the pass is
+// exactly mass-conserving. Uses a double buffer so it's order- and
+// direction-independent (determinism).
+export function diffuseReserve(world: World, dt: number): void {
+  const res = world.reserve;
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const n = cols * rows;
+  if (n < 2) return;
+  if (RESERVE_DIFF_SCRATCH.length < res.length) {
+    RESERVE_DIFF_SCRATCH = new Float32Array(res.length);
+  }
+  const old = RESERVE_DIFF_SCRATCH;
+  old.set(res.subarray(0, n * AMBIENT_STRIDE));
+  const N = Math.max(cols, rows);
+  const ticks = REGION_DIFFUSION_HALFLIFE_S / dt;
+  const wmode = Math.PI / N;
+  let alpha = Math.LN2 / (ticks * wmode * wmode);
+  if (alpha > 0.1) alpha = 0.1; // shared stability clamp
+  const tempFactor = (ri: number, rj: number): number => {
+    const tI = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
+    const tJ = REGION_TEMP.length > rj ? REGION_TEMP[rj] : TEMP_BASELINE;
+    let tf = 1 + 0.5 * (((tI + tJ) * 0.5 - TEMP_BASELINE) / TEMP_BASELINE);
+    if (tf < 0.3) tf = 0.3; else if (tf > 2) tf = 2;
+    return tf;
+  };
+  for (let ry = 0; ry < rows; ry++) {
+    for (let rx = 0; rx < cols; rx++) {
+      const ri = ry * cols + rx;
+      const base = ri * AMBIENT_STRIDE;
+      const left = rx > 0 ? ri - 1 : -1;
+      const right = rx < cols - 1 ? ri + 1 : -1;
+      const up = ry > 0 ? ri - cols : -1;            // toward surface
+      const down = ry < rows - 1 ? ri + cols : -1;   // toward floor
+      // (1) Horizontal: symmetric Jacobi, every chem, both edges.
+      for (let h = 0; h < 2; h++) {
+        const nj = h === 0 ? left : right;
+        if (nj < 0) continue;
+        const a = alpha * tempFactor(ri, nj);
+        const jb = nj * AMBIENT_STRIDE;
+        for (let k = 0; k < AMBIENT_STRIDE; k++) {
+          const oi = old[base + k];
+          const oj = old[jb + k];
+          if (oi !== oj) res[base + k] += a * (oj - oi);
+        }
+      }
+      // (2) Dense chems settle one region DOWN.
+      if (down >= 0) {
+        const a = alpha * tempFactor(ri, down);
+        const db = down * AMBIENT_STRIDE;
+        for (let k = 0; k < AMBIENT_STRIDE; k++) {
+          const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+          if (d < RESERVE_WATER_DENSITY) continue;
+          const amt = a * old[base + k];
+          if (amt > 0) { res[base + k] -= amt; res[db + k] += amt; }
+        }
+      }
+      // (3) Buoyant chems rise one region UP.
+      if (up >= 0) {
+        const a = alpha * tempFactor(ri, up);
+        const ub = up * AMBIENT_STRIDE;
+        for (let k = 0; k < AMBIENT_STRIDE; k++) {
+          const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+          if (d > RESERVE_WATER_DENSITY) continue;
+          const amt = a * old[base + k];
+          if (amt > 0) { res[base + k] -= amt; res[ub + k] += amt; }
+        }
+      }
+    }
+  }
 }
 function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
   const cols = regionCols(world);
@@ -5176,6 +5259,7 @@ export function step(world: World, dt: number): void {
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
+    diffuseReserve(world, dt);
     dissolveParticles(world, dt);
     precipitateRegions(world);
     reservePass(world);
@@ -5216,6 +5300,7 @@ export function step(world: World, dt: number): void {
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
+    diffuseReserve(world, dt);
     dissolveParticles(world, dt);
     precipitateRegions(world);
     reservePass(world);

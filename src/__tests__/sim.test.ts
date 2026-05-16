@@ -17,6 +17,7 @@ import {
   createWorld,
   resizeWorld,
   setParticleTarget,
+  diffuseReserve,
   seedParticles,
   step,
   genomeColor,
@@ -271,6 +272,43 @@ describe("createWorld", () => {
     seedParticles(w, 10);
     seedParticles(w, 5);
     expect(w.particles.length).toBe(5);
+  });
+
+  it("reserve diffuses horizontally; dense sinks, buoyant rises; mass conserved", () => {
+    const w = quietWorld();
+    const cols = regionCols(w);
+    const rows = regionRows(w);
+    const rx = (cols / 2) | 0;
+    const ry = (rows / 2) | 0;
+    const mid = ry * cols + rx;
+    const up = mid - cols;     // toward surface
+    const down = mid + cols;   // toward floor
+    const DENSE = CHEM_IDS.minerals; // density 2.4 > water
+    const LIGHT = CHEM_IDS.o2;       // density 0.14 < water
+    const cell = (ri: number, chem: number): number => w.reserve[ri * AMB_STRIDE + chem];
+    const reserveTotal = (chem: number): number => {
+      let s = 0;
+      for (let b = 0; b + chem < w.reserve.length; b += AMB_STRIDE) s += w.reserve[b + chem];
+      return s;
+    };
+    w.reserve.fill(0);
+    w.reserve[mid * AMB_STRIDE + DENSE] = 1000;
+    w.reserve[mid * AMB_STRIDE + LIGHT] = 1000;
+    for (let i = 0; i < 50; i++) diffuseReserve(w, 1 / 60);
+    // Horizontal both ways for every chem.
+    expect(cell(mid - 1, DENSE)).toBeGreaterThan(0);
+    expect(cell(mid + 1, DENSE)).toBeGreaterThan(0);
+    expect(cell(mid - 1, LIGHT)).toBeGreaterThan(0);
+    expect(cell(mid + 1, LIGHT)).toBeGreaterThan(0);
+    // Dense settles DOWN only (never up).
+    expect(cell(down, DENSE)).toBeGreaterThan(0);
+    expect(cell(up, DENSE)).toBe(0);
+    // Buoyant rises UP only (never down).
+    expect(cell(up, LIGHT)).toBeGreaterThan(0);
+    expect(cell(down, LIGHT)).toBe(0);
+    // Mass conserved per chem.
+    expect(Math.abs(reserveTotal(DENSE) - 1000)).toBeLessThan(1e-2);
+    expect(Math.abs(reserveTotal(LIGHT) - 1000)).toBeLessThan(1e-2);
   });
 
   it("registers each initial founder as its own species (no parents)", () => {
