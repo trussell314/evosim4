@@ -59,6 +59,7 @@ if (typeof navigator !== "undefined" && "serviceWorker" in navigator && !window.
 
 import {
   createWorld,
+  REGION_PX,
   CHEM_COLORS,
   SENSOR_CHEM_LABELS,
   MOLECULE_IDS,
@@ -760,6 +761,22 @@ turboBtn.addEventListener("click", () => {
 });
 root.appendChild(turboBtn);
 
+// Region-grid overlay toggle (lower-left, right of turbo). Draws a
+// light grid matching REGION_PX so the dissolved/reserve regions are
+// visible. Off by default.
+let gridLinesOn = false;
+const gridBtn = document.createElement("button");
+gridBtn.title = "Toggle the region grid overlay";
+const renderGridBtn = (): void => {
+  gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
+  gridBtn.style.cssText =
+    WORLD_BTN_STYLE +
+    (gridLinesOn ? "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;" : "");
+  positionWorldButtons();
+};
+gridBtn.addEventListener("click", () => { gridLinesOn = !gridLinesOn; renderGridBtn(); });
+root.appendChild(gridBtn);
+
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
   const bottom = PHYLO_STRIP_H + 8;
@@ -767,11 +784,14 @@ function positionWorldButtons(): void {
   resetBtn.style.left = "8px";
   exportBtn.style.bottom = `${bottom}px`;
   exportBtn.style.right = `${panelW + 8}px`;
-  // Turbo sits to the right of reset.
+  // Turbo sits to the right of reset; grid to the right of turbo.
   turboBtn.style.bottom = `${bottom}px`;
   turboBtn.style.left = `${8 + resetBtn.offsetWidth + 8}px`;
+  gridBtn.style.bottom = `${bottom}px`;
+  gridBtn.style.left = `${8 + resetBtn.offsetWidth + 8 + turboBtn.offsetWidth + 8}px`;
 }
 renderTurboBtn();
+renderGridBtn();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -1276,6 +1296,17 @@ function render(): void {
   // canvas sized to the world); we just blit it per frame.
   if (!terrainBitmap) buildTerrainBitmap();
   if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
+
+  // Region grid overlay (toggled by the lower-left button). Matches
+  // REGION_PX so the dissolved/reserve region boundaries are visible.
+  if (gridLinesOn) {
+    ctx.strokeStyle = "rgba(150, 200, 220, 0.14)";
+    ctx.lineWidth = 1 / tScale; // crisp ~1 device-px regardless of zoom
+    ctx.beginPath();
+    for (let gx = 0; gx <= width; gx += REGION_PX) { ctx.moveTo(gx, 0); ctx.lineTo(gx, height); }
+    for (let gy = 0; gy <= height; gy += REGION_PX) { ctx.moveTo(0, gy); ctx.lineTo(width, gy); }
+    ctx.stroke();
+  }
 
   // Highlight along the surface line.
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
