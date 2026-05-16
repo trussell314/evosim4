@@ -5289,8 +5289,45 @@ function radiusForMass(m: number, density: number): number {
   return Math.cbrt((3 * m) / (4 * Math.PI * density));
 }
 
+// --- TEMP mass-leak audit (gated; off in production) ---------------
+export const MASS_AUDIT = {
+  on: false, last: 0, ticks: 0, acc: new Map<string, number>(),
+};
+function auditMolar(world: World): number {
+  let s = 0;
+  for (const c of world.creatures) {
+    s += c.store.energy[c.idx];
+    const cols = c.store.chemCols;
+    for (let k = 0; k < CHEMICAL_COUNT; k++) s += cols[k][c.idx] * CHEMICALS[k].molarMass;
+  }
+  const ps = world.particleStore;
+  for (let i = 0; i < world.particles.length; i++) {
+    const r = ps.r[i];
+    const d = ps.density[i] || (CHEM_BASE_DENSITY[ps.chemId[i]] || 1);
+    s += d * (4 / 3) * Math.PI * r * r * r;
+  }
+  const amb = world.ambient, res = world.reserve;
+  for (let b = 0; b < amb.length; b += AMBIENT_STRIDE) {
+    for (let k = 0; k < CHEMICAL_COUNT; k++) {
+      const mm = CHEMICALS[k].molarMass;
+      s += amb[b + k] * mm + res[b + k] * mm;
+    }
+  }
+  const atm = world.atmosphere;
+  for (const k of MOLECULE_IDS) s += atm[k];
+  return s;
+}
+function massMark(world: World, label: string): void {
+  if (!MASS_AUDIT.on) return;
+  const cur = auditMolar(world);
+  MASS_AUDIT.acc.set(label, (MASS_AUDIT.acc.get(label) ?? 0) + (cur - MASS_AUDIT.last));
+  MASS_AUDIT.last = cur;
+}
+// -------------------------------------------------------------------
+
 export function step(world: World, dt: number): void {
   world.t += dt;
+  if (MASS_AUDIT.on) { MASS_AUDIT.last = auditMolar(world); MASS_AUDIT.ticks++; }
   // Snapshot living lineages at the *start* of this step so we can
   // count lineage extinctions at the end (any lineageRoot that was
   // alive going in but isn't alive coming out has gone extinct this
@@ -5354,13 +5391,9 @@ export function step(world: World, dt: number): void {
   } else {
     applyBondSprings(world, dt);
     applyForces(world, dt);
+    massMark(world, "physics1");
     updateCreatures(world, dt);
-    // Hand creature-vs-creature collisions to the resolveCollisions
-    // hook so it overlaps with the parallel particle-collision phase.
-    // resolveCreatureSedimentCollisions used to be a hook too but it
-    // writes particle positions/velocities directly; running it
-    // concurrent with the particle workers was a data race on the
-    // particle SAB columns. Run it serially after the barrier.
+    massMark(world, "updateCreatures");
     resolveCollisions(
       world,
       () => resolveCreatureCollisions(world),
@@ -5369,20 +5402,29 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
     applyWalls(world);
+    massMark(world, "collisions");
     sampleRegionTemps(world);
     seedRamp(world, dt);
+    massMark(world, "seedRamp");
     aerate(world, dt);
     aerateAmbient(world, dt);
+    massMark(world, "aerate");
     diffuseRegions(world, dt);
     diffuseReserve(world, dt);
+    massMark(world, "diffuse");
     dissolveParticles(world, dt);
+    massMark(world, "dissolve");
     denatureWaste(world, dt);
+    massMark(world, "denatureWaste");
     precipitateRegions(world);
+    massMark(world, "precipitate");
     reservePass(world);
+    massMark(world, "reservePass");
     replenishParticles(world, dt);
     decayParticles(world, dt);
     advanceFadingGhosts(world, dt);
     pruneSpecies(world);
+    massMark(world, "tail");
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
   // *start* of this step but isn't alive now has gone extinct in this
