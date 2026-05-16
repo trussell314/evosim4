@@ -142,9 +142,24 @@ hud.appendChild(hudBar);
 hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
 hud.appendChild(inspector);
+// Pin the SELECTED cell's species. The star on the analysis-panel
+// cards only reaches species that are in Top 5 / Pinned / Notable;
+// this lets you pin any species at all -- just click its cell, then
+// this button. Hidden when nothing is selected. Label/visibility
+// refreshed each frame by updateInspector().
+const pinSpeciesBtn = document.createElement("div");
+pinSpeciesBtn.style.cssText =
+  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#ffd24c;display:none;" + HUD_FONT;
+hud.appendChild(pinSpeciesBtn);
 hud.appendChild(disasmHeader);
 hud.appendChild(disasmBody);
 root.appendChild(hud);
+
+pinSpeciesBtn.addEventListener("click", () => {
+  const sel = selectedCell();
+  if (!sel) return;
+  togglePin(sel.speciesKey, sel.genome, sel.color, peakBiomassByKey.get(sel.speciesKey) ?? 0);
+});
 
 let hudMinimized = true;
 inspector.style.display = "none";
@@ -2142,8 +2157,16 @@ function updateInspector(): void {
   refreshActiveDisasm();
   const c = selectedCell();
   if (!c) {
+    pinSpeciesBtn.style.display = "none";
     inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
     return;
+  }
+  {
+    const isPinned = pinnedSpecies.has(c.speciesKey);
+    pinSpeciesBtn.style.display = "";
+    pinSpeciesBtn.style.color = isPinned ? "#ffd24c" : "#789";
+    pinSpeciesBtn.textContent =
+      `${isPinned ? "★" : "☆"} ${isPinned ? "unpin" : "pin"} species ${c.speciesKey.slice(0, 6)}`;
   }
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
