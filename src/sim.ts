@@ -1193,6 +1193,17 @@ export interface World {
   creatureStore: CreatureStore;
   particleTarget: number;
   particleSpawnRate: number;
+  // One-shot startup seeding. When useSeedRamp is true the world is
+  // born empty and seedRamp() adds a fixed batch of particles once per
+  // sim-second (in the spawn-spec ratio) until particleTarget is
+  // reached; then initialSeedDone latches true and NOTHING respawns
+  // (no ongoing replenish) -- the pool is fixed for the rest of the
+  // run. Founders are held back until initialSeedDone. When
+  // useSeedRamp is false (tests / direct callers) the world is fully
+  // seeded up front and the legacy continuous replenish stays on.
+  useSeedRamp: boolean;
+  initialSeedDone: boolean;
+  seedRampClock: number;
   // extinctionCount counts founding-lineage extinction events. Each
   // step we diff the previous live-lineage set against the current
   // one; any lineage that was alive last step but not this step
@@ -3380,6 +3391,12 @@ export function createWorld(
     creatureStore: new CreatureStore(512),
     particleTarget,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
+    // Production (delayedSpawn) uses the one-shot ramp; tests / direct
+    // callers keep the legacy "fully seeded up front + continuous
+    // replenish" behavior so their assertions hold.
+    useSeedRamp: !!opts?.delayedSpawn,
+    initialSeedDone: !opts?.delayedSpawn,
+    seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveLineageRoots: new Set(),
     nextLineageRoot: 0,
@@ -3450,25 +3467,15 @@ export function createWorld(
   // of obstacle collision afterward.
   generateObstacles(world);
   rebuildObstacleIndex(world);
-  // Seed the world with a variety of particles up front. Distribution
-  // is intentionally uneven: mineral substrate dominates, with rare
-  // payload-bearing organics that give early cells a direct (rather
-  // than synthesis-only) path to specific molecules. Runs for both
-  // delayed and immediate-spawn worlds -- the warmup gates only
-  // suppress *replenish* / aerate / founders, not the initial mix.
-  seedInitialParticles(world);
-  // World starts empty: just water and a handful of founder cells.
-  // Each founder is independent (its own genome, its own lineageRoot
-  // id) so we get several parallel lineages to watch. Particles
-  // trickle in via replenishParticles() afterward.
-  //
-  // Production paths (sim.worker.ts main world init) pass
-  // { delayedSpawn: true } so the user-facing experience gets a
-  // warmup window: terrain is already in place, water column fills
-  // around WATER_FILL_DELAY_SEC, founders enter around
-  // FOUNDER_SPAWN_DELAY_SEC. Tests + direct callers use the default
-  // (no warmup) and get founders synchronously here so existing
-  // unit tests keep working.
+  // Particle seeding. Production (delayedSpawn) is born empty and the
+  // one-shot seedRamp() fills the pool over the first seconds; founders
+  // are withheld until that completes (see step()). Tests / direct
+  // callers seed the full mix up front so their assertions hold.
+  if (!opts?.delayedSpawn) {
+    seedInitialParticles(world);
+  }
+  // Tests + direct callers also get founders synchronously here so
+  // existing unit tests keep working.
   if (!opts?.delayedSpawn) {
     // Skip ahead past the spawn-delay gates first so founders' bornAt
     // (set inside spawnFounder from world.t) matches the wall clock
@@ -3673,6 +3680,41 @@ function seedInitialParticles(world: World): void {
     spawnOne(spec);
   }
   while (world.particles.length < target) spawnOne(pickSpawnSpec());
+}
+
+// One-shot startup ramp (production worlds). Once per sim-second, inject
+// a fixed batch of particles in the spawn-spec ratio. dissolve/reserve
+// run later in the same tick, so each batch nets out to a partial gain;
+// the ramp keeps going until the visible count reaches particleTarget,
+// then latches done forever (nothing respawns afterward -- the pool is
+// fixed for the rest of the run). Founders are gated on this completing.
+const SEED_RAMP_PERIOD_SEC = 1;
+const SEED_RAMP_BATCH = 1000;
+function seedRamp(world: World, dt: number): void {
+  if (!world.useSeedRamp || world.initialSeedDone) return;
+  if (world.particles.length >= world.particleTarget) {
+    world.initialSeedDone = true;
+    return;
+  }
+  world.seedRampClock += dt;
+  while (world.seedRampClock >= SEED_RAMP_PERIOD_SEC) {
+    world.seedRampClock -= SEED_RAMP_PERIOD_SEC;
+    const room = world.particleTarget - world.particles.length;
+    if (room <= 0) break;
+    const n = Math.min(SEED_RAMP_BATCH, room);
+    for (let i = 0; i < n; i++) {
+      const spec = pickSpawnSpec();
+      const r = spawnRadius(spec.chemId);
+      pushParticle(world, {
+        ...randomWaterPos(world, r),
+        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+        r,
+        chemId: spec.chemId,
+        density: rollChemDensity(spec),
+      });
+    }
+  }
+  if (world.particles.length >= world.particleTarget) world.initialSeedDone = true;
 }
 
 
@@ -4049,6 +4091,19 @@ CHEM_MOLAR_SOLUBILITY[CHEM_ENZ] = 1e-3;    // colloidal protein, low
 CHEM_MOLAR_SOLUBILITY[CHEM_MRNA] = 1e-3;   // nucleic, low
 CHEM_MOLAR_SOLUBILITY[CHEM_BIOPOLYMER] = 1e-6; // structural, insoluble
 CHEM_MOLAR_SOLUBILITY[CHEM_MEMBRANE] = 1e-7;   // lipid, insoluble
+// Procedural generics rolled their solubility on a 0.01..5 "mol/L"
+// scale that was never calibrated against the N_A/M * V capacity
+// formula -- at that scale every generic is effectively infinitely
+// soluble (capacity dwarfs the whole particle budget, so they all
+// dissolve and almost none ever render). Scale the generic block down
+// into the same realistic band the bootstrap food chems sit in. The
+// relative spread between generics is preserved; only the absolute
+// magnitude shifts, so a few stay mildly soluble and most behave as
+// particulate matter.
+const GENERIC_SOLUBILITY_SCALE = 1e-3;
+for (let i = NAMED_CHEMICAL_COUNT; i < CHEMICAL_COUNT; i++) {
+  CHEM_MOLAR_SOLUBILITY[i] *= GENERIC_SOLUBILITY_SCALE;
+}
 
 // Temperature factor on solubility. Gases get LESS soluble warm
 // (inverse, Henry's law); condensed phases get MORE soluble warm
@@ -5117,6 +5172,7 @@ export function step(world: World, dt: number): void {
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
     sampleRegionTemps(world);
+    seedRamp(world, dt);
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
@@ -5156,6 +5212,7 @@ export function step(world: World, dt: number): void {
     resolveObstacleCollisions(world);
     applyWalls(world);
     sampleRegionTemps(world);
+    seedRamp(world, dt);
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
@@ -5194,10 +5251,12 @@ export function step(world: World, dt: number): void {
   const capMult = 2 + deficit * 0.8;
   const allDead = currentLineages.size === 0;
   const overCap = world.particles.length >= world.particleTarget * capMult;
-  // Suppress founder spawning entirely until the new-world delay has
-  // elapsed. After that the loop runs every step as usual; on a
-  // reloaded save world.t is already past the delay so it's a no-op.
-  const delayDone = world.t >= FOUNDER_SPAWN_DELAY_SEC;
+  // Suppress founder spawning until the world is ready. Ramp worlds
+  // (production) hold founders back until the one-shot seed ramp has
+  // finished filling the pool; legacy/test worlds use the time delay.
+  const delayDone = world.useSeedRamp
+    ? world.initialSeedDone
+    : world.t >= FOUNDER_SPAWN_DELAY_SEC;
   if (delayDone && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     const need = world.founderTarget - currentLineages.size;
@@ -5242,6 +5301,9 @@ function decayParticles(world: World, dt: number): void {
 }
 
 function replenishParticles(world: World, dt: number): void {
+  // Ramp worlds (production) do a one-shot startup seed only -- there
+  // is no continuous replenishment; once seeded the pool is fixed.
+  if (world.useSeedRamp) return;
   // particleSpawnRate <= 0 disables ALL spawning (used by tests that
   // want a frozen world).
   if (world.particleSpawnRate <= 0) return;
@@ -7660,6 +7722,9 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.creatures.length = 0;
   while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
   world.fadingGhosts.length = 0;
+  // A restored world is already populated -- never re-run the one-shot
+  // startup ramp or withhold founders on load.
+  world.initialSeedDone = true;
   world.species.clear();
   world.phylogenyEvents.length = 0;
   world.t = saved.t;
@@ -7858,10 +7923,10 @@ export interface RenderSnapshot extends WorldEnv {
   species: SpeciesSnapshot[];
   phylogenyEvents: PhylogenyEvent[];
   // Per-chemical global aggregates for the chemistry panel. Indexed by
-  // chem id, length CHEMICAL_COUNT. chemDissolved = total dissolved
-  // mass summed over every region; chemReserveCount = reserve mass
-  // expressed in 2px-particle equivalents (same conversion reservePass
-  // uses), summed over every region.
+  // chem id, length CHEMICAL_COUNT. Both are summed over every region
+  // and expressed in 2px-particle equivalents (mass / mass-per-2px-
+  // particle, the same conversion reservePass uses) so the panel reads
+  // in particles alongside the rendered column.
   chemDissolved: Float32Array;
   chemReserveCount: Float32Array;
   // Optional per-phase timing. Mirrors world.profile when present.
@@ -7990,10 +8055,19 @@ export function takeSnapshot(world: World): RenderSnapshot {
         chemReserveCount[k] += res[base + k];
       }
     }
+    // Express BOTH dissolved and reserve as 2px-particle equivalents
+    // (mass / mass-per-2px-particle) so the panel reads in particles,
+    // consistent with the rendered column.
     for (let k = 0; k < CHEMICAL_COUNT; k++) {
       const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
       const massPer = density * volPer;
-      chemReserveCount[k] = massPer > 0 ? chemReserveCount[k] / massPer : 0;
+      if (massPer > 0) {
+        chemDissolved[k] /= massPer;
+        chemReserveCount[k] /= massPer;
+      } else {
+        chemDissolved[k] = 0;
+        chemReserveCount[k] = 0;
+      }
     }
   }
   return {
