@@ -242,15 +242,20 @@ function rebuildSnapshotIndexes(): void {
   for (const sp of snapshot.species) snapshotSpeciesByKey.set(sp.key, sp);
   snapshotCreatureById.clear();
   for (const c of snapshot.creatures) snapshotCreatureById.set(c.id, c);
-  // Keep selection alive across reproduction. The parent keeps its id
-  // through fission so selection normally just stays put; but if the
-  // selected cell dies (e.g. spent itself dividing), hand selection
-  // down to a child it spawned so the user keeps following the line
-  // instead of the tooltip blinking out.
-  if (selectedCellId != null && !snapshotCreatureById.has(selectedCellId)) {
-    for (const c of snapshot.creatures) {
-      if (c.parentId === selectedCellId) { selectedCellId = c.id; break; }
-    }
+}
+
+// Keep selection alive across reproduction. The parent keeps its id
+// through fission so selection normally just stays put; but if the
+// selected cell dies (e.g. spent itself dividing), hand selection
+// down to a child it spawned so the user keeps following the line
+// instead of the tooltip blinking out. Kept OUT of
+// rebuildSnapshotIndexes: that runs once at module-bootstrap (before
+// the selectedCellId binding initializes), and touching it there
+// would throw a TDZ ReferenceError and abort the whole module.
+function descendSelectionIfOrphaned(): void {
+  if (selectedCellId == null || snapshotCreatureById.has(selectedCellId)) return;
+  for (const c of snapshot.creatures) {
+    if (c.parentId === selectedCellId) { selectedCellId = c.id; return; }
   }
 }
 rebuildSnapshotIndexes();
@@ -359,6 +364,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     const tIntake = performance.now();
     snapshot = msg.snapshot;
     rebuildSnapshotIndexes();
+    descendSelectionIfOrphaned();
     workerSimMsThisFrame += msg.simMs;
     workerAdvancedThisFrame += msg.advanced;
     if (msg.err) {
