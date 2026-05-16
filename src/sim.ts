@@ -1224,6 +1224,11 @@ export interface World {
   // progressed from what it started with -- see founderLifespanBonus.
   // Entry removed when the founder leaves world.creatures.
   founderBirthScore: Map<number, { mass: number; mrna: number; machinery: number }>;
+  // speciesKeys the user has pinned in the UI. A founder whose
+  // speciesKey is in here is exempt from the age cull so a watched
+  // lineage isn't retired out from under the observer. Set from the
+  // main thread via the "setPinnedSpecies" worker message.
+  pinnedSpecies: Set<string>;
   gravity: number;
   drag: number;
   surfaceAmp: number;
@@ -3288,6 +3293,7 @@ export function createWorld(
     founderIds: new Set<number>(),
     founderReproduced: new Set<number>(),
     founderBirthScore: new Map(),
+    pinnedSpecies: new Set<string>(),
     gravity: 60,
     drag: 0.6,
     surfaceAmp: 55, surfaceLength: 200, surfacePeriod: 7, surfaceDecay: 90,
@@ -5514,6 +5520,7 @@ function updateCreatures(world: World, dt: number): void {
     // age out naturally instead of hitting the wall artificially).
     const founderTooOld = world.founderIds.has(c.id)
       && !world.founderReproduced.has(c.id)
+      && !world.pinnedSpecies.has(c.speciesKey)
       && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC + founderLifespanBonus(world, c);
     if (
       (c.energy <= 0 && noFuel(c))

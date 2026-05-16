@@ -181,6 +181,45 @@ const savedJson = (() => {
   catch { return null; }
 })();
 
+// Marked-species persistence. Two independent collections, both keyed
+// by speciesKey and both storing the FULL genome bytes so an entry
+// survives the species going extinct (and a page reload):
+//   - pinned: user-starred species. Their founders are also exempt
+//     from the age cull (worker is told the key set).
+//   - hallOfFame: sim-driven "best so far", auto-maintained, capped.
+// Lineage history is intentionally NOT saved (nice-to-have only).
+interface MarkedSpecies {
+  key: string;
+  genome: number[];   // full genome bytes -- the whole point
+  color: string;
+  at: number;         // sim-time the entry was recorded
+  peakBio: number;
+}
+const PIN_KEY = "evosim4:pins";
+const HOF_KEY = "evosim4:hof";
+const HOF_LIMIT = 8; // "best 5-10"
+function loadMarked(storeKey: string): Map<string, MarkedSpecies> {
+  const m = new Map<string, MarkedSpecies>();
+  try {
+    const raw = localStorage.getItem(storeKey);
+    if (raw) {
+      for (const e of JSON.parse(raw) as MarkedSpecies[]) {
+        if (e && typeof e.key === "string" && Array.isArray(e.genome)) m.set(e.key, e);
+      }
+    }
+  } catch { /* corrupt / unavailable -- start empty */ }
+  return m;
+}
+const pinnedSpecies = loadMarked(PIN_KEY);
+const hallOfFame = loadMarked(HOF_KEY);
+function persistMarked(storeKey: string, m: Map<string, MarkedSpecies>): void {
+  try { localStorage.setItem(storeKey, JSON.stringify([...m.values()])); }
+  catch { /* quota / private mode -- in-memory only */ }
+}
+function syncPinnedToWorker(): void {
+  simWorker.postMessage({ type: "setPinnedSpecies", keys: [...pinnedSpecies.keys()] });
+}
+
 // Bootstrap snapshot: build a transient world purely to produce an
 // empty initial RenderSnapshot for the renderer to draw against until
 // the worker delivers its first real one. The local world is never
@@ -338,6 +377,11 @@ simWorker.postMessage({
   height: WORLD_SIZE.h,
   savedJson,
 });
+// Re-establish cull protection for pinned species. FIFO message
+// order guarantees the worker has built (or restored) its world
+// from the init above before this applies. speciesKey is a
+// deterministic genome hash, so restored species re-match by key.
+syncPinnedToWorker();
 // If we passed a saved JSON in and the worker silently fell back to
 // fresh (schema mismatch / malformed), the worker's "save" stream
 // will overwrite localStorage with the fresh world a minute later --
@@ -544,7 +588,41 @@ const analysisBody = document.createElement("div");
 analysisBody.style.cssText =
   "white-space:pre-wrap;padding:8px 10px;overflow-y:auto;display:none;" +
   "max-height:calc(100vh - 36px);";
+// Tab bar: Top 5 (live ranking) | Pinned (user stars) | Notable
+// (sim-driven hall of fame). Hidden while the panel is minimized.
+type AnalysisTab = "top" | "pinned" | "notable";
+let analysisTab: AnalysisTab = "top";
+const analysisTabs = document.createElement("div");
+analysisTabs.style.cssText =
+  "display:none;border-bottom:1px solid #1a3340;";
+const TAB_DEFS: { id: AnalysisTab; label: string }[] = [
+  { id: "top", label: "Top 5" },
+  { id: "pinned", label: "Pinned" },
+  { id: "notable", label: "Notable" },
+];
+const tabButtons = new Map<AnalysisTab, HTMLSpanElement>();
+function styleTab(btn: HTMLSpanElement, active: boolean): void {
+  btn.style.cssText =
+    "display:inline-block;padding:5px 10px;cursor:pointer;user-select:none;" +
+    "font-size:11px;" +
+    (active
+      ? "color:#cff;border-bottom:2px solid #4cc;font-weight:bold;"
+      : "color:#7aa;border-bottom:2px solid transparent;");
+}
+for (const def of TAB_DEFS) {
+  const btn = document.createElement("span");
+  btn.textContent = def.label;
+  styleTab(btn, def.id === analysisTab);
+  btn.addEventListener("click", () => {
+    analysisTab = def.id;
+    for (const [id, b] of tabButtons) styleTab(b, id === analysisTab);
+    renderAnalysisPanel();
+  });
+  tabButtons.set(def.id, btn);
+  analysisTabs.appendChild(btn);
+}
 analysisPanel.appendChild(analysisHeader);
+analysisPanel.appendChild(analysisTabs);
 analysisPanel.appendChild(analysisBody);
 root.appendChild(analysisPanel);
 // When minimized, hide the title text so just the [+] sits in the tab.
@@ -553,12 +631,16 @@ analysisHeader.addEventListener("click", () => {
   analysisMinimized = !analysisMinimized;
   analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
   analysisBody.style.display = analysisMinimized ? "none" : "";
+  analysisTabs.style.display = analysisMinimized ? "none" : "";
   analysisToggle.textContent = analysisMinimized ? "+" : "–";
   analysisTitle.style.display = analysisMinimized ? "none" : "";
   analysisHeader.style.justifyContent = analysisMinimized ? "center" : "space-between";
   analysisHeader.style.padding = analysisMinimized ? "6px 4px" : "6px 8px";
   resize();
   positionWorldButtons();
+  // Populate immediately on expand instead of waiting for the next
+  // 60s analysis cycle.
+  if (!analysisMinimized) renderAnalysisPanel();
 });
 
 // Reset (bottom-left) + export (bottom-right) sit inside the world
@@ -2230,30 +2312,30 @@ function updateDiagBar(): void {
 //   4. firstSeen ascending (older species win ties)
 const ANALYSIS_INTERVAL_SEC = 60;
 let lastAnalysisT = -Infinity;
-function maybeAnalyzeGenomes(): void {
-  if (snapshot.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
-  lastAnalysisT = snapshot.t;
 
-  // Rank by all-time-peak biomass, which the phylogeny render keeps
-  // updated each frame. Live-only biomass swings wildly (cells
-  // momentarily drain their biomass on fission), so a top-5 keyed on
-  // it would flicker / report 0 for extinct lineages. Peak is the
-  // honest "how big did this lineage ever get".
-  type Row = {
-    sp: SpeciesSnapshot;
-    alive: boolean;
-    duration: number;
-    biomass: number;
-    cells: number;
-  };
-  const rows: Row[] = [];
+type AnalysisRow = {
+  key: string;
+  genome: Uint8Array;
+  color: string;
+  alive: boolean;
+  duration: number;
+  biomass: number;
+  cells: number;
+};
+
+// Live species ranked by all-time-peak biomass (the phylogeny render
+// keeps peakBiomassByKey updated). Live-only biomass swings wildly on
+// fission, so peak is the honest "how big did this lineage ever get".
+function computeRankedRows(): AnalysisRow[] {
+  const rows: AnalysisRow[] = [];
   for (const sp of snapshot.species) {
     const alive = sp.alive > 0;
-    const duration = (alive ? snapshot.t : sp.lastSeen) - sp.firstSeen;
     rows.push({
-      sp,
+      key: sp.key,
+      genome: sp.genome,
+      color: sp.color,
       alive,
-      duration,
+      duration: (alive ? snapshot.t : sp.lastSeen) - sp.firstSeen,
       biomass: peakBiomassByKey.get(sp.key) ?? sp.peakBiomass,
       cells: sp.alive,
     });
@@ -2262,57 +2344,141 @@ function maybeAnalyzeGenomes(): void {
     if (b.biomass !== a.biomass) return b.biomass - a.biomass;
     if (b.duration !== a.duration) return b.duration - a.duration;
     if (b.cells !== a.cells) return b.cells - a.cells;
-    return a.sp.firstSeen - b.sp.firstSeen; // oldest first as final tiebreaker
+    return 0;
   });
-  const top = rows.slice(0, 5);
+  return rows;
+}
 
-  // Render the panel content fresh each cycle (no append/history --
-  // the panel is a current top-5 snapshot, not a log).
+// Sim-driven hall of fame: every analysis cycle, fold the current
+// ranked species into a persisted best-N-by-peak-biomass set. Full
+// genome stored so an entry survives extinction + reload.
+function updateHallOfFame(rows: AnalysisRow[]): void {
+  for (const r of rows.slice(0, HOF_LIMIT)) {
+    const prev = hallOfFame.get(r.key);
+    if (prev === undefined || r.biomass > prev.peakBio) {
+      hallOfFame.set(r.key, {
+        key: r.key, genome: Array.from(r.genome), color: r.color,
+        at: snapshot.t, peakBio: r.biomass,
+      });
+    }
+  }
+  if (hallOfFame.size > HOF_LIMIT) {
+    const keep = [...hallOfFame.values()]
+      .sort((a, b) => b.peakBio - a.peakBio)
+      .slice(0, HOF_LIMIT);
+    hallOfFame.clear();
+    for (const e of keep) hallOfFame.set(e.key, e);
+  }
+  persistMarked(HOF_KEY, hallOfFame);
+}
+
+function togglePin(key: string, genome: Uint8Array, color: string, peakBio: number): void {
+  if (pinnedSpecies.has(key)) {
+    pinnedSpecies.delete(key);
+  } else {
+    pinnedSpecies.set(key, {
+      key, genome: Array.from(genome), color, at: snapshot.t, peakBio,
+    });
+  }
+  persistMarked(PIN_KEY, pinnedSpecies);
+  syncPinnedToWorker();
+  renderAnalysisPanel();
+}
+
+// One species card. rankLabel is "#1" etc for ranked tabs, "" for
+// flat lists. status text is precomputed by the caller.
+function buildSpeciesCard(
+  key: string, genome: Uint8Array, color: string,
+  rankLabel: string, status: string, statsLine: string, peakBio: number,
+): HTMLDivElement {
+  const block = document.createElement("div");
+  block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
+  const dot = `<span style="display:inline-block;width:8px;height:8px;background:${color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
+  const tm = trophicMode(genome);
+  const trophicChip =
+    `<span style="display:inline-block;padding:1px 5px;border-radius:3px;` +
+    `background:${tm.bg};color:${tm.fg};font-size:9px;font-weight:bold;` +
+    `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
+  const headDiv = document.createElement("div");
+  const star = document.createElement("span");
+  const pinned = pinnedSpecies.has(key);
+  star.textContent = pinned ? "★" : "☆";
+  star.title = pinned ? "unpin (re-enables age cull)" : "pin (protects founders from age cull)";
+  star.style.cssText =
+    "cursor:pointer;user-select:none;margin-right:6px;vertical-align:middle;" +
+    (pinned ? "color:#ffd24c;" : "color:#789;");
+  star.addEventListener("click", () => togglePin(key, genome, color, peakBio));
+  headDiv.appendChild(star);
+  const rest = document.createElement("span");
+  rest.innerHTML =
+    (rankLabel ? `<b>${rankLabel}</b>  ` : "") +
+    `${dot}${trophicChip}` +
+    `<b style="font-size:13px;letter-spacing:0.5px;">${genomeTag(genome)}</b>` +
+    `<span style="opacity:.7"> (${genome.length}b)</span>  ${status}`;
+  headDiv.appendChild(rest);
+  const statsDiv = document.createElement("div");
+  statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
+  statsDiv.textContent = statsLine;
+  const proseDiv = document.createElement("div");
+  proseDiv.style.cssText = "padding-top:3px;";
+  proseDiv.textContent = describeGenomeProse(genome);
+  block.appendChild(headDiv);
+  block.appendChild(statsDiv);
+  block.appendChild(proseDiv);
+  return block;
+}
+
+function renderAnalysisPanel(): void {
+  if (analysisMinimized) return;
   analysisBody.innerHTML = "";
   const header = document.createElement("div");
   header.style.cssText = "padding:6px 0 8px;font-weight:bold;border-bottom:1px solid #1a3340;";
-  header.textContent = `Top 5 species at t=${formatAge(snapshot.t)} (across ${snapshot.species.length} tracked)`;
   analysisBody.appendChild(header);
 
-  for (let i = 0; i < top.length; i++) {
-    const row = top[i];
-    const sp = row.sp;
-    const status = row.alive
-      ? `ALIVE`
-      : `EXTINCT ${formatAge(snapshot.t - sp.lastSeen)} ago`;
-    const block = document.createElement("div");
-    block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
-    const dot = `<span style="display:inline-block;width:8px;height:8px;background:${sp.color};border-radius:50%;margin-right:6px;vertical-align:middle;"></span>`;
-    // Genome id + size up front in a bigger weight so the eye lands
-    // there first; the rest is the supporting stats line. Trophic
-    // mode shown as a small color-coded chip so autotroph vs
-    // heterotroph vs predator is glanceable.
-    const tm = trophicMode(sp.genome);
-    const trophicChip =
-      `<span style="display:inline-block;padding:1px 5px;border-radius:3px;` +
-      `background:${tm.bg};color:${tm.fg};font-size:9px;font-weight:bold;` +
-      `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
-    const headLine =
-      `${dot}<b>#${i + 1}</b>  ` +
-      `${trophicChip}` +
-      `<b style="font-size:13px;letter-spacing:0.5px;">${genomeTag(sp.genome)}</b>` +
-      `<span style="opacity:.7"> (${sp.genome.length}b)</span>  ${status}`;
-    const statsLine =
-      `duration=${formatAge(row.duration)}  peakBio=${row.biomass.toFixed(0)}  cells=${row.cells}`;
-    const prose = describeGenomeProse(sp.genome);
-    const proseDiv = document.createElement("div");
-    proseDiv.style.cssText = "padding-top:3px;";
-    proseDiv.textContent = prose;
-    const headDiv = document.createElement("div");
-    headDiv.innerHTML = headLine;
-    const statsDiv = document.createElement("div");
-    statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
-    statsDiv.textContent = statsLine;
-    block.appendChild(headDiv);
-    block.appendChild(statsDiv);
-    block.appendChild(proseDiv);
-    analysisBody.appendChild(block);
+  if (analysisTab === "top") {
+    const rows = computeRankedRows().slice(0, 5);
+    header.textContent = `Top 5 live at t=${formatAge(snapshot.t)} (${snapshot.species.length} tracked)`;
+    rows.forEach((r, i) => {
+      const status = r.alive ? "ALIVE" : "EXTINCT";
+      const stats = `duration=${formatAge(r.duration)}  peakBio=${r.biomass.toFixed(0)}  cells=${r.cells}`;
+      analysisBody.appendChild(buildSpeciesCard(r.key, r.genome, r.color, `#${i + 1}`, status, stats, r.biomass));
+    });
+    return;
   }
+
+  // Pinned + Notable read from the persisted maps so entries survive
+  // extinction / reload; live status is looked up by key when present.
+  const src = analysisTab === "pinned" ? pinnedSpecies : hallOfFame;
+  const entries = [...src.values()].sort((a, b) => b.peakBio - a.peakBio);
+  header.textContent = analysisTab === "pinned"
+    ? `Pinned species (${entries.length}) -- founders cull-exempt`
+    : `Notable: best ${entries.length} ever seen`;
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "padding:10px 0;opacity:0.7;";
+    empty.textContent = analysisTab === "pinned"
+      ? "No pinned species yet. Tap the ☆ on any species card to pin it."
+      : "No notable species yet -- they accrue as the sim runs.";
+    analysisBody.appendChild(empty);
+    return;
+  }
+  for (const e of entries) {
+    const live = snapshotSpeciesByKey.get(e.key);
+    const status = live && live.alive > 0
+      ? `ALIVE (${live.alive} cells)`
+      : `EXTINCT`;
+    const stats = `peakBio=${e.peakBio.toFixed(0)}  noted@t=${formatAge(e.at)}`;
+    analysisBody.appendChild(
+      buildSpeciesCard(e.key, Uint8Array.from(e.genome), e.color, "", status, stats, e.peakBio),
+    );
+  }
+}
+
+function maybeAnalyzeGenomes(): void {
+  if (snapshot.t - lastAnalysisT < ANALYSIS_INTERVAL_SEC) return;
+  lastAnalysisT = snapshot.t;
+  updateHallOfFame(computeRankedRows());
+  renderAnalysisPanel();
 }
 
 // Trophic mode chip for the sidebar: same op-presence rules viableGenome

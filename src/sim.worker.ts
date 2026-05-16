@@ -72,6 +72,7 @@ type WorkerInbound =
   | { type: "toggleProfile" }
   | { type: "applySaved"; json: string }
   | { type: "requestSave" }
+  | { type: "setPinnedSpecies"; keys: string[] }
   | { type: "particle-pool-message"; index: number; data: unknown }
   | { type: "particle-pool-error"; index: number; message: string };
 
@@ -132,6 +133,9 @@ self.addEventListener("message", (e: MessageEvent) => {
     }
     case "setTurbo":
       turbo = !!m.turbo;
+      break;
+    case "setPinnedSpecies":
+      if (world) world.pinnedSpecies = new Set(m.keys);
       break;
     case "toggleProfile":
       if (world) world.profile = world.profile ? undefined : makeProfile();
