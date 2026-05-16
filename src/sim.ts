@@ -3500,6 +3500,33 @@ function founderLifespanBonus(world: World, c: Creature): number {
 // The rock terrain itself is in place from t=0 -- no warmup needed.
 const WATER_FILL_DELAY_SEC = 30;
 
+// Founders draw a bounded amount of each chem from the regional
+// reserve -- their own region first, one random region as fallback
+// -- recirculating mass the cap has sequestered (esp. minerals)
+// back into the food web. Per-chem cap keeps a huge reserve from
+// ballooning a founder (which would re-trigger the spawn-explosion
+// failure). Mass-conserving: reserve down, cell pool up.
+const FOUNDER_RESERVE_DRAW_PER_CHEM = 50;
+function drawFounderReserve(world: World, c: Creature, x: number, y: number): void {
+  const res = world.reserve;
+  const nReg = regionCols(world) * regionRows(world);
+  if (nReg <= 0) return;
+  const localBase = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
+  const randBase = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
+  const cs = c.store; const ci = c.idx;
+  const CAP = FOUNDER_RESERVE_DRAW_PER_CHEM;
+  for (let k = 0; k < AMBIENT_STRIDE; k++) {
+    let take = 0;
+    const lv = res[localBase + k];
+    if (lv > 0) { take = lv < CAP ? lv : CAP; res[localBase + k] = lv - take; }
+    if (take < CAP && randBase !== localBase) {
+      const rv = res[randBase + k];
+      if (rv > 0) { const more = Math.min(rv, CAP - take); res[randBase + k] = rv - more; take += more; }
+    }
+    if (take > 0) cs.chemCols[k][ci] += take;
+  }
+}
+
 function spawnFounder(world: World): Creature {
   const z = world.depth * 0.5;
   // Reject-sample positions until we find one that's not within
@@ -3539,6 +3566,9 @@ function spawnFounder(world: World): Creature {
     if (okay) break;
   }
   const c = makeCreature(world, x, y, z);
+  // Recirculate cap-sequestered reserve mass into the new founder.
+  drawFounderReserve(world, c, x, y);
+  updateCreatureRadius(c); // reflect the drawn mass in r / density
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
   world.creatures.push(c);

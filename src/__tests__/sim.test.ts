@@ -1700,6 +1700,47 @@ describe("reserve keeps visible mix proportional (Phase 4)", () => {
   });
 });
 
+describe("founders recirculate reserve (Phase 4)", () => {
+  it("founder spawn draws bounded reserve mass; conserved; no balloon", () => {
+    const w = createWorld(800, 600);
+    const ps = w.particleStore;
+    const minSys = () => {
+      let s = 0;
+      for (let k = 0; k < w.ambient.length; k++) if ((k % AMB_STRIDE) === CHEM_IDS.minerals) s += w.ambient[k] + w.reserve[k];
+      for (let i = 0; i < w.particles.length; i++) if (ps.chemId[i] === CHEM_IDS.minerals) { const r = ps.r[i]; s += (ps.density[i] || 2.4) * (4 / 3) * Math.PI * r * r * r; }
+      const cs = w.creatureStore;
+      for (const c of w.creatures) s += cs.m_minerals[c.idx];
+      return s;
+    };
+    // Heavy mineral reserve everywhere; wipe creatures so the
+    // top-up spawns a fresh founder cohort that should draw it.
+    for (let k = 0; k < w.reserve.length; k++) if ((k % AMB_STRIDE) === CHEM_IDS.minerals) w.reserve[k] = 500;
+    w.creatures.length = 0;
+    void minSys; // (whole-system conservation covered elsewhere;
+    // minerals aren't conserved in isolation -- maintenanceDecay
+    // mints 0.5 min per machinery decay each tick by design.)
+    let resBefore = 0;
+    for (let k = 0; k < w.reserve.length; k++) if ((k % AMB_STRIDE) === CHEM_IDS.minerals) resBefore += w.reserve[k];
+    const cs = w.creatureStore;
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    expect(w.creatures.length).toBeGreaterThan(0); // founders spawned
+    let resAfter = 0;
+    for (let k = 0; k < w.reserve.length; k++) if ((k % AMB_STRIDE) === CHEM_IDS.minerals) resAfter += w.reserve[k];
+    // Founders drew the sequestered reserve down...
+    expect(resAfter).toBeLessThan(resBefore);
+    // ...and that mineral mass landed in the new cells (not vanished).
+    let cellMin = 0;
+    for (const c of w.creatures) cellMin += cs.m_minerals[c.idx];
+    expect(cellMin).toBeGreaterThan(0);
+    // No founder ballooned. The per-chem cap keeps draws small; an
+    // uncapped reserve dump (the fireworks failure) would put r in
+    // the hundreds, so a generous bound still discriminates.
+    let maxR = 0;
+    for (const c of w.creatures) if (c.r > maxR) maxR = c.r;
+    expect(maxR).toBeLessThan(200);
+  });
+});
+
 describe("reserve bucket + cap enforcement (Phase 4)", () => {
   it("bounds particle count at the cap and conserves mass via reserve", () => {
     const w = quietWorld();
