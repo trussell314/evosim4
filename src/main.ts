@@ -151,7 +151,7 @@ hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
 hud.appendChild(inspector);
 // Pin the SELECTED cell's species. The star on the analysis-panel
-// cards only reaches species that are in Top 5 / Pinned / Notable;
+// cards only reaches species that are in Top 10 / Pinned / Notable;
 // this lets you pin any species at all -- just click its cell, then
 // this button. Hidden when nothing is selected. Label/visibility
 // refreshed each frame by updateInspector().
@@ -618,7 +618,7 @@ const analysisBody = document.createElement("div");
 analysisBody.style.cssText =
   "white-space:pre-wrap;padding:8px 10px;overflow-y:auto;display:none;" +
   "max-height:calc(100vh - 36px);";
-// Tab bar: Top 5 (live ranking) | Pinned (user stars) | Notable
+// Tab bar: Top 10 (live ranking) | Pinned (user stars) | Notable
 // (sim-driven hall of fame). Hidden while the panel is minimized.
 type AnalysisTab = "top" | "pinned" | "notable";
 let analysisTab: AnalysisTab = "top";
@@ -626,7 +626,7 @@ const analysisTabs = document.createElement("div");
 analysisTabs.style.cssText =
   "display:none;border-bottom:1px solid #1a3340;";
 const TAB_DEFS: { id: AnalysisTab; label: string }[] = [
-  { id: "top", label: "Top 5" },
+  { id: "top", label: "Top 10" },
   { id: "pinned", label: "Pinned" },
   { id: "notable", label: "Notable" },
 ];
@@ -1713,10 +1713,16 @@ function drawPhylogeny(): void {
   // of recomputing genomeKey each frame -- somatic drift doesn't move a
   // cell to a different species, so the birth key is the right bucket.
   bioByKey.clear();
+  // Per-species live total cell mass (energy + all molecular contents),
+  // used to scale the slot heights below.
+  const massByKey = new Map<string, number>();
   for (const c of snapshot.creatures) {
     // Membrane is the structural reserve in the chemistry-overhaul
     // model (replaces the retired biomass chemical).
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
+    let tm = c.energy;
+    for (const k of MOLECULE_IDS) tm += c.molecules[k];
+    massByKey.set(c.speciesKey, (massByKey.get(c.speciesKey) ?? 0) + tm);
   }
   // Update the main-side peak map from this sample. The phylogeny
   // render runs every frame, so the peak tracks tightly without
@@ -1751,22 +1757,22 @@ function drawPhylogeny(): void {
     visibleSpecies.sort((a, b) => a.lane - b.lane);
   }
 
-  let maxBio = 0;
+  let maxMass = 0;
   for (const sp of visible) {
-    const b = bioByKey.get(sp.key) ?? 0;
-    if (b > maxBio) maxBio = b;
+    const m = massByKey.get(sp.key) ?? 0;
+    if (m > maxMass) maxMass = m;
   }
 
-  // Slot heights: living species scale up to LIVE_H_MAX by biomass relative
-  // to the largest extant species; extinct species occupy a thin baseline
-  // slot so their lifespan segment stays visible. If the total exceeds the
-  // available innerH, scale everything down to fit.
+  // Slot heights: living species scale up to LIVE_H_MAX by total cell
+  // mass relative to the largest extant species; extinct species occupy
+  // a thin baseline slot so their lifespan segment stays visible. If the
+  // total exceeds the available innerH, scale everything down to fit.
   const LIVE_H_MAX = 7;
   const LIVE_H_MIN = 1.2;
   const EXTINCT_H = 0.6;
   const heights = visible.map((sp) => {
     if (sp.alive <= 0) return EXTINCT_H;
-    const frac = maxBio > 0 ? (bioByKey.get(sp.key) ?? 0) / maxBio : 0;
+    const frac = maxMass > 0 ? (massByKey.get(sp.key) ?? 0) / maxMass : 0;
     return Math.max(LIVE_H_MIN, frac * LIVE_H_MAX);
   });
   const totalH = heights.reduce((a, b) => a + b, 0);
@@ -1826,7 +1832,7 @@ function drawPhylogeny(): void {
   ctx.font = UI_CANVAS_FONT;
   const filterTag = phyloFilterTop5 ? "  [TOP 5 alive, F toggles]" : "  (F: top 5 filter)";
   ctx.fillText(
-    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ biomass, yellow = convergence)${filterTag}`,
+    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ total mass, yellow = convergence)${filterTag}`,
     8,
     stripY + 11,
   );
@@ -2377,14 +2383,13 @@ function updateDiagBar(): void {
   }
 }
 
-// Sidebar panel: this run's top 5 species (past and current),
+// Sidebar panel: this run's top 10 species (past and current),
 // refreshed every ANALYSIS_INTERVAL_SEC of sim-time.
 //
-// Sort key (descending):
-//   1. Duration (sp.alive>0 ? now - firstSeen : lastSeen - firstSeen)
-//   2. Total biomass across living members (0 for extinct)
-//   3. Cell count (sp.alive)
-//   4. firstSeen ascending (older species win ties)
+// Sort key:
+//   1. Live cell count (sp.alive), descending
+//   2. Total cell mass across living members, descending
+//   3. firstSeen ascending (oldest species win ties)
 const ANALYSIS_INTERVAL_SEC = 60;
 let lastAnalysisT = -Infinity;
 
@@ -2395,13 +2400,21 @@ type AnalysisRow = {
   alive: boolean;
   duration: number;
   biomass: number;
+  mass: number;
   cells: number;
+  firstSeen: number;
 };
 
-// Live species ranked by all-time-peak biomass (the phylogeny render
-// keeps peakBiomassByKey updated). Live-only biomass swings wildly on
-// fission, so peak is the honest "how big did this lineage ever get".
+// Top species ranked by live cell count, then total live cell mass,
+// then age. Total cell mass is summed from the live creature snapshots
+// (energy + molecular contents), distinct from membrane-based biomass.
 function computeRankedRows(): AnalysisRow[] {
+  const massByKey = new Map<string, number>();
+  for (const c of snapshot.creatures) {
+    let m = c.energy;
+    for (const k of MOLECULE_IDS) m += c.molecules[k];
+    massByKey.set(c.speciesKey, (massByKey.get(c.speciesKey) ?? 0) + m);
+  }
   const rows: AnalysisRow[] = [];
   for (const sp of snapshot.species) {
     const alive = sp.alive > 0;
@@ -2412,14 +2425,15 @@ function computeRankedRows(): AnalysisRow[] {
       alive,
       duration: (alive ? snapshot.t : sp.lastSeen) - sp.firstSeen,
       biomass: peakBiomassByKey.get(sp.key) ?? sp.peakBiomass,
+      mass: massByKey.get(sp.key) ?? 0,
       cells: sp.alive,
+      firstSeen: sp.firstSeen,
     });
   }
   rows.sort((a, b) => {
-    if (b.biomass !== a.biomass) return b.biomass - a.biomass;
-    if (b.duration !== a.duration) return b.duration - a.duration;
     if (b.cells !== a.cells) return b.cells - a.cells;
-    return 0;
+    if (b.mass !== a.mass) return b.mass - a.mass;
+    return a.firstSeen - b.firstSeen;
   });
   return rows;
 }
@@ -2476,7 +2490,7 @@ function buildSpeciesCard(
     `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
   // Pinning lives in the HUD inspector (select a cell -> pin its
   // species), not here -- a card only exists for species already in
-  // Top 5 / Pinned / Notable, which can't reach an arbitrary species.
+  // Top 10 / Pinned / Notable, which can't reach an arbitrary species.
   const headDiv = document.createElement("div");
   headDiv.innerHTML =
     (rankLabel ? `<b>${rankLabel}</b>  ` : "") +
@@ -2517,8 +2531,8 @@ function renderAnalysisPanel(): void {
   analysisBody.appendChild(header);
 
   if (analysisTab === "top") {
-    const rows = computeRankedRows().slice(0, 5);
-    header.textContent = `Top 5 live at t=${formatAge(snapshot.t)} (${snapshot.species.length} tracked)`;
+    const rows = computeRankedRows().slice(0, 10);
+    header.textContent = `Top 10 live at t=${formatAge(snapshot.t)} (${snapshot.species.length} tracked)`;
     rows.forEach((r, i) => {
       const status = r.alive ? "ALIVE" : "EXTINCT";
       const stats = `duration=${formatAge(r.duration)}  peakBio=${r.biomass.toFixed(0)}  cells=${r.cells}`;

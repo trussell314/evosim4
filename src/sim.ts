@@ -1415,7 +1415,6 @@ const PREDATION_ENERGY_PER_MASS = 0.1;
 const BASE_METABOLIC_DRAIN = 0.5;
 const BASE_METABOLIC_PER_MASS = 0.0003;
 const DEATH_RELEASE_R_MIN = 1.2;
-const DEATH_RELEASE_SCATTER = 30;
 
 // Thrust energy scaling. Starter cell mass is ~224 (reserves + molecules +
 // ATP), so THRUST_MASS_REF=200 keeps the starter near the no-penalty line
@@ -6163,9 +6162,7 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
         x: c.x + (Math.random() - 0.5) * 6,
         y: c.y + (Math.random() - 0.5) * 6,
         z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
-        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
+        vx: 0, vy: 0, vz: 0, // released in place -- no death momentum
         r,
         chemId: k,
       });
@@ -6198,9 +6195,7 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
         x: c.x + (Math.random() - 0.5) * 6,
         y: c.y + (Math.random() - 0.5) * 6,
         z: Math.min(world.depth - r, Math.max(r, c.z + (Math.random() - 0.5) * 4)),
-        vx: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vy: (Math.random() - 0.5) * 2 * DEATH_RELEASE_SCATTER,
-        vz: (Math.random() - 0.5) * DEATH_RELEASE_SCATTER,
+        vx: 0, vy: 0, vz: 0, // released in place -- no death momentum
         r,
         chemId: CHEM_BIOPOLYMER,
         genericChem: payload,
