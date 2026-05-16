@@ -3657,8 +3657,15 @@ function pickSpawnSpec(): SpawnChemSpec {
 // stay tiny, others land in a particle-rich patch and start fat.
 const FOUNDER_SCOOP_R_MIN = 14;
 const FOUNDER_SCOOP_R_MAX = 50;
-function makeCreature(world: World, x: number, y: number, z: number): Creature {
-  const genome = makeRandomViableGenome();
+function makeCreature(
+  world: World, x: number, y: number, z: number, genomeOverride?: Uint8Array,
+): Creature {
+  // genomeOverride: used by spawnSpeciesInstance to materialize a
+  // specific pinned/notable genome instead of rolling a random one.
+  // The minimal molecule seed below is the "force it" floor (the cell
+  // is viable even in barren water); the particle scoop layered on
+  // top is the "use available resources if present" part.
+  const genome = genomeOverride ? new Uint8Array(genomeOverride) : makeRandomViableGenome();
   let hasChl = false, hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
@@ -3735,6 +3742,43 @@ function makeCreature(world: World, x: number, y: number, z: number): Creature {
     removeParticleAt(world, i);
   }
   updateCreatureRadius(c);
+  return c;
+}
+
+// User-triggered spawn of a specific genome (from the Pinned /
+// Notable species lists). Mirrors spawnFounder's placement +
+// species-tracking bookkeeping, but with a caller-supplied genome and
+// WITHOUT joining founderIds -- a manually conjured cell lives a
+// normal life, it isn't a founding lineage and isn't subject to (or
+// exempt from) the founder age cull. "Use available resources if
+// present, otherwise force it" is satisfied by makeCreature: the
+// fixed molecule seed is the forced viability floor and the local
+// particle scoop is the opportunistic resource use. Returns null if
+// the creature cap is full.
+export function spawnSpeciesInstance(world: World, genome: Uint8Array): Creature | null {
+  if (world.creatures.length >= MAX_CREATURES) return null;
+  const z = world.depth * 0.5;
+  const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
+  const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
+  let x = world.width * 0.5, y = world.height * 0.5;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const cx = world.width * (0.1 + 0.8 * Math.random());
+    const cy = world.height * (0.1 + 0.8 * Math.random());
+    if (founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) continue;
+    let okay = true;
+    for (let k = 0; k < world.creatures.length; k++) {
+      const o = world.creatures[k];
+      const dx = o.x - cx, dy = o.y - cy;
+      if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+    }
+    x = cx; y = cy;
+    if (okay) break;
+  }
+  const c = makeCreature(world, x, y, z, genome);
+  c.bornAt = world.t;
+  c.lineageRoot = world.nextLineageRoot++;
+  world.creatures.push(c);
+  noteCreatureBirth(world, c, undefined);
   return c;
 }
 

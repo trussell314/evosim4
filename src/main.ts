@@ -2419,12 +2419,26 @@ function buildSpeciesCard(
   const statsDiv = document.createElement("div");
   statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
   statsDiv.textContent = statsLine;
+  // Spawn: drop a fresh instance of exactly this genome into the
+  // world. The worker uses local particles if the spawn patch has
+  // any, otherwise the fixed molecule seed forces viability anyway.
+  const spawnBtn = document.createElement("button");
+  spawnBtn.textContent = "Spawn";
+  spawnBtn.style.cssText =
+    "margin-top:4px;padding:2px 8px;border:1px solid #356;border-radius:3px;" +
+    "background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;font-size:10px;";
+  spawnBtn.addEventListener("click", () => {
+    simWorker.postMessage({ type: "spawnSpecies", genome: Array.from(genome) });
+    spawnBtn.textContent = "Spawned ✓";
+    setTimeout(() => { spawnBtn.textContent = "Spawn"; }, 1200);
+  });
   const proseDiv = document.createElement("div");
   proseDiv.style.cssText = "padding-top:3px;";
   proseDiv.textContent = describeGenomeProse(genome);
   block.appendChild(headDiv);
   block.appendChild(statsDiv);
   block.appendChild(proseDiv);
+  block.appendChild(spawnBtn);
   return block;
 }
 

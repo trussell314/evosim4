@@ -23,6 +23,7 @@ import {
   setParticleForceDispatcher,
   step,
   takeSnapshot,
+  spawnSpeciesInstance,
   CHEM_BASE_DENSITY,
   type ParticleForceParams,
   type RenderSnapshot,
@@ -73,6 +74,7 @@ type WorkerInbound =
   | { type: "applySaved"; json: string }
   | { type: "requestSave" }
   | { type: "setPinnedSpecies"; keys: string[] }
+  | { type: "spawnSpecies"; genome: number[] }
   | { type: "particle-pool-message"; index: number; data: unknown }
   | { type: "particle-pool-error"; index: number; message: string };
 
@@ -136,6 +138,11 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setPinnedSpecies":
       if (world) world.pinnedSpecies = new Set(m.keys);
+      break;
+    case "spawnSpecies":
+      if (world && m.genome.length > 0) {
+        spawnSpeciesInstance(world, Uint8Array.from(m.genome));
+      }
       break;
     case "toggleProfile":
       if (world) world.profile = world.profile ? undefined : makeProfile();

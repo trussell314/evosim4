@@ -131,12 +131,12 @@ describe("smoke: default-creature ecosystem (long run)", () => {
     expect(a).not.toEqual(c);
   });
 
-  it("runs 1 default creature for 120 simulated seconds without crashing or NaN-ing", () => {
+  it("runs the default founder cohort for 120 simulated seconds without crashing or NaN-ing", () => {
     const w = createWorld(800, 600);
     runAndObserve(w, 120, 1 / 60, 10);
   });
 
-  it("runs 3 default creatures for 60 simulated seconds without crashing or NaN-ing", () => {
+  it("runs the founder cohort + 2 extra clones for 60 simulated seconds without crashing or NaN-ing", () => {
     const w = createWorld(800, 600);
     const proto = w.creatures[0];
     const cloneOf = (px: number, py: number) => {
@@ -190,7 +190,16 @@ function runAndObserve(w: World, durationSec: number, dt: number, logEvery: numb
 
   expect(final.hasNaN).toBe(false);
   expect(final.particles).toBeGreaterThan(0);
-  expect(final.pop).toBeLessThanOrEqual(80);
+  // createWorld seeds a full founder cohort (~30-50, FOUNDER_TARGET=50)
+  // and the top-up loop sustains that many distinct lineages, so the
+  // old ceiling of 80 no longer reflects a healthy short run --
+  // especially after the viability buffs (ambient aa+min, fa spawn
+  // bump, founder lifespan bonus) let more founders reproduce inside
+  // the observation window. The assertion's real job is to catch an
+  // unbounded explosion toward the MAX_CREATURES=400 hard cap, not to
+  // pin an exact population, so bound it well below the cap with
+  // headroom for normal growth.
+  expect(final.pop).toBeLessThanOrEqual(250);
   for (const c of w.creatures) {
     expect(c.x).toBeGreaterThanOrEqual(0);
     expect(c.x).toBeLessThan(w.width);
