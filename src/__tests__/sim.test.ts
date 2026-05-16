@@ -10,6 +10,10 @@ import {
   type Molecules,
   MOLECULE_IDS,
   CHEM_IDS,
+  regionDissolvedCapacity,
+  regionVolumeL,
+  regionCols,
+  regionRows,
   createWorld,
   seedParticles,
   step,
@@ -1600,6 +1604,36 @@ describe("adhesion (multicell bonds)", () => {
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds.length).toBe(0);
+  });
+});
+
+describe("region dissolved-capacity calibration (Phase 0)", () => {
+  it("M is fitted so food chems stay particulate and byproducts dissolve", () => {
+    const w = createWorld(800, 600);
+    const T = 15; // TEMP_BASELINE -> solubilityTempFactor == 1
+    const cap = (id: number) => regionDissolvedCapacity(id, w, T);
+    // Insoluble food chems: <1 particle-equivalent => effectively zero
+    // capacity, so any amount precipitates / stays edible.
+    expect(cap(CHEM_IDS.biopolymer)).toBeLessThan(1);
+    expect(cap(CHEM_IDS.minerals)).toBeLessThan(1);
+    expect(cap(CHEM_IDS.fattyAcid)).toBeLessThan(1);
+    expect(cap(CHEM_IDS.membrane)).toBeLessThan(1);
+    // Soluble byproducts / sugars: large capacity => they dissolve
+    // into the regional field rather than persisting as particles.
+    expect(cap(CHEM_IDS.glucose)).toBeGreaterThan(1000);
+    expect(cap(CHEM_IDS.aminoAcid)).toBeGreaterThan(1000);
+    expect(cap(CHEM_IDS.waste)).toBeGreaterThan(1000);
+    // Gases: moderate (CO2 >> O2, both finite and > food chems).
+    expect(cap(CHEM_IDS.co2)).toBeGreaterThan(cap(CHEM_IDS.o2));
+    expect(cap(CHEM_IDS.o2)).toBeGreaterThan(cap(CHEM_IDS.biopolymer));
+  });
+  it("region grid + volume are sane for both world orientations", () => {
+    for (const [W, H] of [[800, 600], [600, 800]] as const) {
+      const w = createWorld(W, H);
+      expect(regionCols(w) * regionRows(w)).toBeGreaterThan(50);
+      expect(regionVolumeL(w)).toBeGreaterThan(1);   // litres, positive
+      expect(regionVolumeL(w)).toBeLessThan(1e6);
+    }
   });
 });
 
