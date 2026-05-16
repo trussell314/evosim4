@@ -1811,6 +1811,11 @@ const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
     // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6.
     { chemId: CHEM_MIN, weight: 7.5, initialCount: 250, densityJitter: { lo: 1.4, hi: 2.6 } },
     { chemId: CHEM_FA, weight: 1.5, initialCount: 90 },
+    // ADP spawns as a normal single-chem particle now (was a
+    // special "primordial adenosine" molecule-rider seed). Cells
+    // get it by ingesting adp particles like any other chem; the
+    // ATP economy is fed by ongoing spawn, not a one-time dump.
+    { chemId: CHEM_ADP, weight: 2.0, initialCount: 250 },
     // Gas split: O2 60%, CO2 40% (matches the old catab table).
     { chemId: CHEM_O2, weight: 0.3, initialCount: 12 },
     { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
@@ -2411,29 +2416,16 @@ function initialAtmosphere(): Molecules {
   return a;
 }
 
-// Saturation target for each chem in the ambient pool. Water in
-// contact with the atmosphere equilibrates toward these values; the
-// equilibration rate is what aerateAmbient() drives.
+// Atmosphere<->dissolved equilibrium target. ONLY the gases: water
+// in contact with air equilibrates dissolved O2/CO2 toward these
+// (Henry's-law-ish), the rate driven by aerateAmbient(). The old
+// aa/min "primordial soup" floors were retired -- with the regional
+// reserve + founders drawing from reserve, every chemical now enters
+// solely as particles, so seeding the dissolved field with aa/min
+// from nowhere is both redundant and inconsistent with that model.
 const AMBIENT_TARGET = new Float32Array(CHEMICAL_COUNT);
 AMBIENT_TARGET[CHEM_O2] = 12;   // matches the old O2_AMBIENT constant
 AMBIENT_TARGET[CHEM_CO2] = 1;   // matches CO2_AMBIENT
-// Free amino acid in the water column ("primordial soup"). Cells
-// diffuse against it via the standard ambient path, so a starving
-// founder gets a slow trickle of aa even before any digestion
-// fires. Tuned low (0.3) so the steady-state contribution is small
-// compared to in-cell biosynthesis -- it's a bootstrap aid, not a
-// free meal. Mass-conserving: cells return aa to ambient on
-// excretion / decay.
-AMBIENT_TARGET[CHEM_AA] = 0.3;
-// Trace dissolved mineral. min is insoluble (solubility 0.02) and
-// dense (2.4), so free particles sink and precipitate out fast --
-// there's effectively no mineral reservoir in the water column for a
-// founder to diffuse against, and min is on every machinery-synth
-// path (aa/chl/enz/mrna all consume it). A small ambient floor gives
-// a founder that scooped a mineral-poor patch a slow recovery
-// trickle instead of being permanently mineral-locked. Kept lower
-// than aa (0.15) since min permeability is only 0.1 anyway.
-AMBIENT_TARGET[CHEM_MIN] = 0.15;
 
 function initialAmbient(width: number, height: number): Float32Array {
   // Regional dissolved field: every region's block starts at the
@@ -3629,46 +3621,8 @@ function seedInitialParticles(world: World): void {
       });
     }
   }
-  seedAdpParticles(world);
 }
 
-// Primordial adenosine: spawn N organic particles each carrying a
-// small adp molecule payload. Adenosine (adp + atp) is otherwise a
-// closed pool in this sim's food web -- death / predation / excretion
-// cycle it between cells but nothing creates it from outside, so a
-// one-time seed gives the initial population a richer ATP economy
-// than just the founder adp:5 inheritance can support. Models
-// "primordial salvage food" -- pre-biotic adenosine that cells
-// scavenge before evolving their own synthesis.
-//
-// Particles are molecule-tagged so INGEST routes them straight into
-// c.molecules.adp (no catabolism needed); see the if(p.molecules)
-// branch of the INGEST handler. Material is organic for visual /
-// gravity consistency with other molecule-bearing particles.
-const SEED_ADP_PARTICLES = 500;
-const SEED_ADP_PER_PARTICLE = 1.0;
-
-function seedAdpParticles(world: World): void {
-  const W = world.width;
-  const H = world.height;
-  const surfaceY = world.surfaceY;
-  const yRange = (H - surfaceY) * 0.85;
-  for (let i = 0; i < SEED_ADP_PARTICLES; i++) {
-    const r = 1 + Math.random() * 1.5;
-    const molecules = emptyMolecules();
-    molecules.adp = SEED_ADP_PER_PARTICLE;
-    pushParticle(world, {
-      x: Math.random() * W,
-      y: surfaceY + Math.random() * yRange,
-      z: r + Math.random() * (world.depth - 2 * r),
-      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
-      r,
-      chemId: CHEM_BIOPOLYMER,
-      density: 0.7 + Math.random() * 0.6, // matches the old organic jitter
-      molecules,
-    });
-  }
-}
 
 // Particle spawn radius. All particles -- mineral, organic, gas --
 // share the small 1..2.5px range now that the sediment bed is gone.
