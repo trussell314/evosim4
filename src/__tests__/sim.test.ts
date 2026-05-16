@@ -1261,23 +1261,34 @@ describe("creature: death by starvation", () => {
   it("released mass approximately conserved", () => {
     const w = quietWorld();
     for (let i = 0; i < 550; i++) pushParticle(w, { x: 50 + (i % 700), y: 10 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
-    const before = new Set(w.particles);
+    // Total mineral mass across the whole system (particles +
+    // reserve + dissolved). Phase 4's proportional reserve makes
+    // individual particles fungible, so the right invariant is
+    // "the dead cell's mineral mass is conserved system-wide", not
+    // "appears as N specific new particles".
+    const ps = w.particleStore;
+    const minSys = () => {
+      let s = ambTotal(w, CHEM_IDS.minerals);
+      for (let k = 0; k < w.reserve.length; k++) {
+        if ((k % AMB_STRIDE) === CHEM_IDS.minerals) s += w.reserve[k];
+      }
+      for (let i = 0; i < w.particles.length; i++) {
+        if (ps.chemId[i] !== CHEM_IDS.minerals) continue;
+        const r = ps.r[i];
+        s += (ps.density[i] || 2.4) * (4 / 3) * Math.PI * r * r * r;
+      }
+      return s;
+    };
     const c = makeCreature({ energy: 0 });
     c.molecules.biopolymer = 0;
     c.molecules.minerals = 100;
     w.creatures.push(c);
+    const before = minSys() + 100; // + the cell's 100 mineral mass
+    expect(w.creatures.includes(c)).toBe(true);
     step(w, 1 / 60);
-    let m = 0;
-    for (const p of w.particles) {
-      if (before.has(p)) continue;
-      if (p.chemId === CHEM_IDS.minerals) {
-        const ps = w.particleStore;
-        const d = ps.density[p.idx] !== 0 ? ps.density[p.idx] : 2.4;
-        m += d * (4 / 3) * Math.PI * p.r * p.r * p.r;
-      }
-    }
-    expect(m).toBeGreaterThanOrEqual(99);
-    expect(m).toBeLessThan(110);
+    expect(w.creatures.includes(c)).toBe(false); // starved & died
+    const after = minSys();        // cell's 100 now released into the system
+    expect(Math.abs(after - before)).toBeLessThan(before * 0.02 + 2);
   });
   it("released particles spawn near the dead cell", () => {
     const w = quietWorld();
@@ -1655,6 +1666,37 @@ describe("region dissolved-capacity calibration (Phase 0)", () => {
       expect(regionVolumeL(w)).toBeGreaterThan(1);   // litres, positive
       expect(regionVolumeL(w)).toBeLessThan(1e6);
     }
+  });
+});
+
+describe("reserve keeps visible mix proportional (Phase 4)", () => {
+  it("visible per-chem ratio mirrors (visible+reserve) per-chem ratio", () => {
+    const w = quietWorld();
+    w.aerationRate = 0;
+    w.particleSpawnRate = 0;
+    const target = w.particleTarget;
+    // 2:1 minerals:biopolymer, total ~6x the cap. Default density +
+    // r=2 so each particle's mass == the reserve mass-per-particle
+    // (reserve-equivalent count == demoted count exactly).
+    const NMIN = target * 4, NBIO = target * 2;
+    for (let i = 0; i < NMIN; i++) pushParticle(w, { x: 5 + Math.random() * (w.width - 10), y: w.surfaceY + 5 + Math.random() * 150, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals });
+    for (let i = 0; i < NBIO; i++) pushParticle(w, { x: 5 + Math.random() * (w.width - 10), y: w.surfaceY + 5 + Math.random() * 150, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.biopolymer });
+    for (let i = 0; i < 20; i++) step(w, 1 / 60);
+    const ps = w.particleStore;
+    let visMin = 0, visBio = 0;
+    for (let i = 0; i < w.particles.length; i++) {
+      if (ps.chemId[i] === CHEM_IDS.minerals) visMin++;
+      else if (ps.chemId[i] === CHEM_IDS.biopolymer) visBio++;
+    }
+    // Cap respected.
+    expect(w.particles.length).toBeLessThanOrEqual(target);
+    // Both chems still represented (proportional, not winner-take-all).
+    expect(visMin).toBeGreaterThan(0);
+    expect(visBio).toBeGreaterThan(0);
+    // Visible ratio ~= total ratio (2:1) within 20%.
+    const ratio = visMin / visBio;
+    expect(ratio).toBeGreaterThan(2 * 0.8);
+    expect(ratio).toBeLessThan(2 * 1.2);
   });
 });
 

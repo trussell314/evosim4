@@ -4182,64 +4182,108 @@ function precipitateRegions(world: World): void {
 // re-spawn 2px particles, drawing mass LOCALLY from a region that
 // holds it. This is what finally bounds particle count (and thus
 // kills the over-density rightward-drift bug) without losing mass.
-const RESERVE_PROMOTE_CHEM_PICKS = 8; // chem re-picks per tick (cost bound)
+// Per-tick scratch for reservePass's proportional balancing.
+const RESERVE_CHEMCOUNT = new Uint32Array(CHEMICAL_COUNT); // visible count / chem
+const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve equiv / chem
+const RESERVE_WANT = new Int32Array(CHEMICAL_COUNT);       // desired visible / chem
+const RESERVE_SURPLUS = new Int32Array(CHEMICAL_COUNT);    // visible - want (positive)
 function reservePass(world: World): void {
   const target = world.particleTarget;
   const store = world.particleStore;
   const res = world.reserve;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
   const volPer = FOUR_THIRDS_PI * PRECIP_R * PRECIP_R * PRECIP_R;
-
-  // --- Demote: shed SETTLED sediment above the cap into local
-  // reserve. Only particles that have gone quiet (>= sleep
-  // threshold) are eligible -- active / freshly-spawned particles
-  // (food cells are chasing, just-released corpse mass, precipitate)
-  // are protected, so the cap is enforced against the long-lived
-  // sediment that actually drives unbounded growth while a brief
-  // transient overage during a spawn burst is tolerated (soft cap).
-  for (let i = world.particles.length - 1; i >= 0 && world.particles.length > target; i--) {
-    if (i >= world.particles.length) continue;
-    if (store.genericChem[i] || store.molecules[i]) continue; // keep payload particles
-    if (store.quietTicks[i] < SLEEP_THRESHOLD_TICKS) continue; // active -> protected
-    const chemId = store.chemId[i];
-    const r = store.r[i];
-    if (r <= 0) continue;
-    const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
-    const mass = density * FOUR_THIRDS_PI * r * r * r;
-    const ri = regionIndexAt(world, store.x[i], store.y[i]);
-    res[ri * AMBIENT_STRIDE + chemId] += mass; // mass-conserving
-    removeParticleAt(world, i);
-  }
-
-  // --- Promote: refill toward the cap from reserve. Pick the chem
-  // with the largest worldwide reserve, drain it region-locally,
-  // repeat for a bounded number of chem picks per tick.
+  // Keep the VISIBLE particle mix a proportional sample of the
+  // TOTAL (visible + reserve) mix, per chemical, capped at
+  // particleTarget. Payload particles (genericChem/molecules) carry
+  // identity -> never demoted; they hold visible slots and shrink
+  // the budget available to fungible chems.
   const cols = regionCols(world);
   const rows = regionRows(world);
   const nReg = cols * rows;
   const surfaceY = world.surfaceY;
-  for (let pick = 0; pick < RESERVE_PROMOTE_CHEM_PICKS; pick++) {
-    if (world.particles.length >= target) break;
-    // Globally most-abundant reserved chem.
-    let bestChem = -1, bestTotal = 0;
-    for (let k = 0; k < AMBIENT_STRIDE; k++) {
-      let tot = 0;
-      for (let ri = 0; ri < nReg; ri++) tot += res[ri * AMBIENT_STRIDE + k];
-      if (tot > bestTotal) { bestTotal = tot; bestChem = k; }
-    }
-    if (bestChem < 0) break;
-    const k = bestChem;
+  const visN = RESERVE_CHEMCOUNT; // non-payload visible count / chem
+  visN.fill(0);
+  let payloadN = 0;
+  for (let i = 0; i < world.particles.length; i++) {
+    if (store.genericChem[i] || store.molecules[i]) { payloadN++; continue; }
+    visN[store.chemId[i]]++;
+  }
+  const tot = RESERVE_TOT; // visible + reserve-equivalent count / chem
+  let grand = 0;
+  for (let k = 0; k < AMBIENT_STRIDE; k++) {
     const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
     const massPer = density * volPer;
-    if (massPer <= 0) break;
-    let promotedAny = false;
-    for (let ri = 0; ri < nReg && world.particles.length < target; ri++) {
+    let rmass = 0;
+    for (let ri = 0; ri < nReg; ri++) rmass += res[ri * AMBIENT_STRIDE + k];
+    const resEquiv = massPer > 0 ? rmass / massPer : 0;
+    const t = visN[k] + resEquiv;
+    tot[k] = t;
+    grand += t;
+  }
+  const budget = Math.max(0, target - payloadN);
+  const visibleWanted = Math.min(budget, Math.round(grand));
+  // proportional desired visible count / chem; floor then hand out
+  // the remainder by largest fractional shortfall (deterministic,
+  // keeps sum(want) == visibleWanted).
+  const want = RESERVE_WANT;
+  let sumWant = 0;
+  for (let k = 0; k < AMBIENT_STRIDE; k++) {
+    const w = grand > 0 ? Math.floor(visibleWanted * tot[k] / grand) : 0;
+    want[k] = w;
+    sumWant += w;
+  }
+  let rem = visibleWanted - sumWant;
+  while (rem > 0) {
+    let bk = -1, bf = -1;
+    for (let k = 0; k < AMBIENT_STRIDE; k++) {
+      if (tot[k] <= 0) continue;
+      const frac = (visibleWanted * tot[k] / grand) - want[k];
+      if (frac > bf) { bf = frac; bk = k; }
+    }
+    if (bk < 0) break;
+    want[bk]++; rem--;
+  }
+
+  // --- Demote per-chem surplus (visN[k] > want[k]) into local
+  // reserve, one descending pass; mass-conserving.
+  const surplus = RESERVE_SURPLUS;
+  let anySurplus = false;
+  for (let k = 0; k < AMBIENT_STRIDE; k++) {
+    const s = visN[k] - want[k];
+    surplus[k] = s > 0 ? s : 0;
+    if (s > 0) anySurplus = true;
+  }
+  if (anySurplus) {
+    for (let i = world.particles.length - 1; i >= 0; i--) {
+      if (i >= world.particles.length) continue;
+      if (store.genericChem[i] || store.molecules[i]) continue;
+      const k = store.chemId[i];
+      if (surplus[k] <= 0) continue;
+      const r = store.r[i];
+      const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
+      res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
+        += density * FOUR_THIRDS_PI * r * r * r;
+      removeParticleAt(world, i);
+      surplus[k]--;
+    }
+  }
+
+  // --- Promote per-chem deficit (want[k] > visN[k]) from that
+  // chem's reserve, drawing mass region-locally.
+  for (let k = 0; k < AMBIENT_STRIDE; k++) {
+    let need = want[k] - visN[k];
+    if (need <= 0) continue;
+    const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+    const massPer = density * volPer;
+    if (massPer <= 0) continue;
+    for (let ri = 0; ri < nReg && need > 0; ri++) {
       const ak = ri * AMBIENT_STRIDE + k;
       let avail = res[ak];
       if (avail < massPer) continue;
       const rx = ri % cols, ry = (ri / cols) | 0;
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
-      while (avail >= massPer && world.particles.length < target) {
+      while (avail >= massPer && need > 0) {
         const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
         let py = y0 + Math.random() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
@@ -4249,11 +4293,28 @@ function reservePass(world: World): void {
           vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
         });
         avail -= massPer;
-        promotedAny = true;
+        need--;
       }
       res[ak] = avail;
     }
-    if (!promotedAny) break; // nothing promotable -> stop
+  }
+
+  // --- Hard-cap backstop (rounding / payload-heavy edge cases):
+  // shed any remaining non-payload first, then payload as the
+  // absolute last resort, so particles.length <= target always.
+  if (world.particles.length > target) {
+    for (let pass = 0; pass < 2 && world.particles.length > target; pass++) {
+      for (let i = world.particles.length - 1; i >= 0 && world.particles.length > target; i--) {
+        if (i >= world.particles.length) continue;
+        if (pass === 0 && (store.genericChem[i] || store.molecules[i])) continue;
+        const k = store.chemId[i];
+        const r = store.r[i];
+        const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
+        res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
+          += density * FOUR_THIRDS_PI * r * r * r;
+        removeParticleAt(world, i);
+      }
+    }
   }
 }
 // ===================================================================
