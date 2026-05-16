@@ -3584,6 +3584,10 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
   const cs = c.store; const ci = c.idx;
   const CAP = FOUNDER_RESERVE_DRAW_PER_CHEM;
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
+    // Don't birth cells pre-loaded with metabolic waste / CO2 -- the
+    // founder scoop is for building materials, not byproducts. (Newborns
+    // dying early were dumping a reserve-fed waste slug right back.)
+    if (k === CHEM_WASTE || k === CHEM_CO2) continue;
     let take = 0;
     const lv = res[localBase + k];
     if (lv > 0) { take = lv < CAP ? lv : CAP; res[localBase + k] = lv - take; }
