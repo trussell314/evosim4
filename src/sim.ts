@@ -1607,6 +1607,37 @@ const MRNA_REF = 5;
 const CHL_REF = 5;
 const ENZ_REF = 5;
 const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
+
+// Deterministic spawn-rarity ranking for the generic chems, shared
+// by BOTH the spawn-weight curve and the particle color. Rank 0 =
+// most commonly spawned, GENERIC_CHEMICAL_COUNT-1 = rarest. Fixed
+// PRNG seed -> stable across runs and the worker boundary, and
+// computed exactly once at module init (never recomputed, so a
+// chem's color is fixed for the whole sim run).
+const GENERIC_SPAWN_ORDER: number[] = (() => {
+  const g: number[] = [];
+  for (let k = NAMED_CHEMICAL_COUNT; k < CHEMICAL_COUNT; k++) g.push(k);
+  const rng = mulberry32(0x5EED9A1C);
+  for (let i = g.length - 1; i > 0; i--) {
+    const j = (rng() * (i + 1)) | 0;
+    const t = g[i]; g[i] = g[j]; g[j] = t;
+  }
+  return g; // g[rank] = chemId
+})();
+const GENERIC_SPAWN_RANK = (() => {
+  const r = new Int32Array(CHEMICAL_COUNT);
+  for (let rank = 0; rank < GENERIC_SPAWN_ORDER.length; rank++) r[GENERIC_SPAWN_ORDER[rank]] = rank;
+  return r;
+})();
+// Gray (most-seeded) -> bright orange (rarest). t in [0,1].
+// gray #808080 (128,128,128) -> orange #ff8000 (255,128,0).
+function grayToOrange(t: number): string {
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  const R = Math.round(128 + t * 127);
+  const B = Math.round(128 - t * 128);
+  const hex = (n: number): string => n.toString(16).padStart(2, "0");
+  return `#${hex(R)}80${hex(B)}`;
+}
 // Phase B of the chemistry overhaul (CHEMISTRY_OVERHAUL.md): the
 // chemical table is now the single source of truth for every
 // substance the engine reasons about, with full property rows
@@ -1821,16 +1852,11 @@ const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
     { chemId: CHEM_CO2, weight: 0.2, initialCount: 8 },
   ];
   // All generic chems also spawn as single-chem particles, lopsided.
-  const gens: number[] = [];
-  for (let k = NAMED_CHEMICAL_COUNT; k < CHEMICAL_COUNT; k++) gens.push(k);
-  const rng = mulberry32(0x5EED9A1C);
-  for (let i = gens.length - 1; i > 0; i--) {
-    const j = (rng() * (i + 1)) | 0;
-    const t = gens[i]; gens[i] = gens[j]; gens[j] = t;
-  }
-  for (let rank = 0; rank < gens.length; rank++) {
+  // Uses the shared GENERIC_SPAWN_ORDER so the spawn weight and the
+  // gray->orange color agree on which chems are common vs rare.
+  for (let rank = 0; rank < GENERIC_SPAWN_ORDER.length; rank++) {
     const w = GEN_SPAWN_TOP * Math.pow(GEN_SPAWN_DECAY, rank);
-    specs.push({ chemId: gens[rank], weight: w, initialCount: Math.round(w * GEN_SPAWN_INITIAL_SCALE) });
+    specs.push({ chemId: GENERIC_SPAWN_ORDER[rank], weight: w, initialCount: Math.round(w * GEN_SPAWN_INITIAL_SCALE) });
   }
   return specs;
 })();
@@ -1853,16 +1879,6 @@ for (let i = 0; i < SENSOR_CHEMS.length; i++) SENSOR_BIN_BY_CHEM[SENSOR_CHEMS[i]
 // chemCols[k] (k < 8). Resolved against MOLECULE_INDEX which is
 // already populated above by the time this line evaluates.
 const CHEM_NAMED_MOL_IDX: number[] = NAMED_CHEMICALS.map((n) => MOLECULE_INDEX[n]);
-
-// Deterministic per-chem procedural color: walk a hue ring and pair
-// with phase-driven saturation/lightness so a glance at the particle
-// tells you roughly what state it tends to be in.
-function procColor(rng: () => number, phase: ChemPhase): string {
-  const h = Math.floor(rng() * 360);
-  const sat = phase === "gas" ? 25 : phase === "solid" ? 35 : 55;
-  const light = phase === "gas" ? 78 : phase === "solid" ? 45 : 60;
-  return `hsl(${h}deg ${sat}% ${light}%)`;
-}
 
 function buildChemicalTable(): ChemicalDef[] {
   const out: ChemicalDef[] = [];
@@ -1922,7 +1938,7 @@ function buildChemicalTable(): ChemicalDef[] {
       permeability,
       bondEnergy,
       role: "none",
-      color: procColor(rng, defaultPhase),
+      color: grayToOrange(GENERIC_SPAWN_RANK[i] / (GENERIC_CHEMICAL_COUNT - 1)),
       isSignal: false,
     });
   }
