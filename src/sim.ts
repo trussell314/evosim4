@@ -2507,6 +2507,36 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   return world.surfaceY + dy;
 }
 
+// Per-tick surface-height lookup. surfaceYAt() is ~5 Math.sin calls;
+// applyWalls invokes it once per particle AND once per creature for
+// the floating-surface clamp (4000+ transcendental calls/tick). The
+// surface depends only on x and world.t, both constant within a
+// step, so sample it across the width once and linear-interpolate.
+// SURFACE_LUT_STEP=2px keeps interpolation error sub-pixel; fully
+// deterministic so the reproducibility test is unaffected.
+const SURFACE_LUT_STEP = 2;
+let SURFACE_LUT = new Float32Array(0);
+let SURFACE_LUT_N = 0;
+function buildSurfaceLUT(world: World): void {
+  const n = Math.max(2, Math.ceil(world.width / SURFACE_LUT_STEP) + 1);
+  if (SURFACE_LUT.length < n) SURFACE_LUT = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    SURFACE_LUT[i] = surfaceYAt(world, i * SURFACE_LUT_STEP);
+  }
+  SURFACE_LUT_N = n;
+}
+function surfaceYLUT(x: number): number {
+  if (SURFACE_LUT_N === 0) return SURFACE_LUT[0] ?? 0;
+  let fx = x / SURFACE_LUT_STEP;
+  if (fx <= 0) return SURFACE_LUT[0];
+  const maxI = SURFACE_LUT_N - 1;
+  if (fx >= maxI) return SURFACE_LUT[maxI];
+  const i = fx | 0;
+  const f = fx - i;
+  const a = SURFACE_LUT[i];
+  return a + (SURFACE_LUT[i + 1] - a) * f;
+}
+
 export function temperatureAt(world: WorldEnv, x: number, y: number): number {
   const span = Math.max(1, world.height - world.surfaceY);
   const depth = Math.max(0, Math.min(1, (y - world.surfaceY) / span));
@@ -6623,21 +6653,19 @@ function resolveCreaturePair(a: Creature, b: Creature, e: number): void {
 // genome fires INGEST on a mineral at contact still consumes the
 // particle before this bounce runs. (Phase D collapse: rock/sand/clay
 // are all CHEM_MIN now; the clay-permeable carve-out is gone.)
-function resolveCreatureSedimentCollisions(world: World): void {
-  const ps = world.particles;
-  const cs = world.creatures;
-  if (cs.length === 0) return;
-  for (let pi = 0; pi < ps.length; pi++) {
-    const p = ps[pi];
-    if (p.chemId !== CHEM_MIN) continue;
-    const range = p.r + 30;
-    forCreaturesNear(p.x, p.y, range, (c) => {
-      let dx = c.x - p.x;
-      let dy = c.y - p.y;
-      let dz = c.z - p.z;
-      const minD = c.r + p.r;
-      const dsq = dx * dx + dy * dy + dz * dz;
-      if (dsq >= minD * minD) return;
+// Hoisted visitor: forCreaturesNear took a fresh arrow per mineral
+// particle (~1900 closure allocations/tick = real GC pressure). One
+// reused function reading the current particle from a module slot
+// keeps behaviour + iteration order bit-identical with zero allocs.
+let SED_P: Particle | null = null;
+function sedimentVisit(c: Creature): void {
+  const p = SED_P!;
+  let dx = c.x - p.x;
+  let dy = c.y - p.y;
+  let dz = c.z - p.z;
+  const minD = c.r + p.r;
+  const dsq = dx * dx + dy * dy + dz * dz;
+  if (dsq >= minD * minD) return;
       let dist = Math.sqrt(dsq);
       if (dist < 1e-6) { dx = 0; dy = -1; dz = 0; dist = 1; }
       const nx = dx / dist;
@@ -6671,8 +6699,18 @@ function resolveCreatureSedimentCollisions(world: World): void {
       p.vx -= ix / pm;
       p.vy -= iy / pm;
       p.vz -= iz / pm;
-    });
+}
+function resolveCreatureSedimentCollisions(world: World): void {
+  const ps = world.particles;
+  const cs = world.creatures;
+  if (cs.length === 0) return;
+  for (let pi = 0; pi < ps.length; pi++) {
+    const p = ps[pi];
+    if (p.chemId !== CHEM_MIN) continue;
+    SED_P = p;
+    forCreaturesNear(p.x, p.y, p.r + 30, sedimentVisit);
   }
+  SED_P = null;
 }
 
 function checkNeighborCellSoa(
@@ -6740,6 +6778,9 @@ function resolvePairSoa(
 }
 
 function applyWalls(world: World): void {
+  // One surface-profile LUT for the whole pass: surfaceYAt is ~5
+  // sins and we'd otherwise call it for every particle + creature.
+  buildSurfaceLUT(world);
   // Gas particles that drift up past the (wavy) water surface escape
   // to the atmosphere. Dump their molecules into world.atmosphere on
   // the way out so the loop is mass-conserving and aeration can later
@@ -6749,7 +6790,7 @@ function applyWalls(world: World): void {
     // Gas particles (O2 or CO2 chem) that drift up past the (wavy)
     // water surface escape to the atmosphere.
     const cId = p.chemId;
-    if ((cId === CHEM_O2 || cId === CHEM_CO2) && p.y - p.r < surfaceYAt(world, p.x)) {
+    if ((cId === CHEM_O2 || cId === CHEM_CO2) && p.y - p.r < surfaceYLUT(p.x)) {
       const pm = p.molecules;
       if (pm) {
         for (const k of MOLECULE_IDS) {
@@ -6778,7 +6819,7 @@ function applyWalls(world: World): void {
       // Non-gas objects (creatures, solid particles) clamp at the wavy
       // surface so floating lipids ride the wave instead of poking above
       // the visible water line. Gas escape is handled above.
-      const top = surfaceYAt(world, o.x) + o.r;
+      const top = surfaceYLUT(o.x) + o.r;
       if (o.y < top) { o.y = top; if (o.vy < 0) o.vy = 0; }
     }
     if (o.r * 2 >= world.depth) {
