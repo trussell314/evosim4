@@ -149,7 +149,8 @@ hud.appendChild(inspector);
 // refreshed each frame by updateInspector().
 const pinSpeciesBtn = document.createElement("div");
 pinSpeciesBtn.style.cssText =
-  "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#ffd24c;display:none;" + HUD_FONT;
+  "display:none;align-items:center;gap:8px;padding:4px 9px 6px;" +
+  "cursor:pointer;user-select:none;" + HUD_FONT;
 hud.appendChild(pinSpeciesBtn);
 hud.appendChild(disasmHeader);
 hud.appendChild(disasmBody);
@@ -2163,10 +2164,13 @@ function updateInspector(): void {
   }
   {
     const isPinned = pinnedSpecies.has(c.speciesKey);
-    pinSpeciesBtn.style.display = "";
-    pinSpeciesBtn.style.color = isPinned ? "#ffd24c" : "#789";
-    pinSpeciesBtn.textContent =
-      `${isPinned ? "★" : "☆"} ${isPinned ? "unpin" : "pin"} species ${c.speciesKey.slice(0, 6)}`;
+    pinSpeciesBtn.style.display = "flex";
+    const col = isPinned ? "#ffd24c" : "#9ee";
+    pinSpeciesBtn.innerHTML =
+      `<span style="font-size:30px;line-height:1;color:${col};">` +
+      `${isPinned ? "★" : "☆"}</span>` +
+      `<span style="color:${col};">${isPinned ? "unpin" : "pin"} species ` +
+      `<b>${c.speciesKey.slice(0, 6)}</b></span>`;
   }
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
@@ -2411,8 +2415,8 @@ function togglePin(key: string, genome: Uint8Array, color: string, peakBio: numb
 // One species card. rankLabel is "#1" etc for ranked tabs, "" for
 // flat lists. status text is precomputed by the caller.
 function buildSpeciesCard(
-  key: string, genome: Uint8Array, color: string,
-  rankLabel: string, status: string, statsLine: string, peakBio: number,
+  genome: Uint8Array, color: string,
+  rankLabel: string, status: string, statsLine: string,
 ): HTMLDivElement {
   const block = document.createElement("div");
   block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
@@ -2422,23 +2426,15 @@ function buildSpeciesCard(
     `<span style="display:inline-block;padding:1px 5px;border-radius:3px;` +
     `background:${tm.bg};color:${tm.fg};font-size:9px;font-weight:bold;` +
     `margin-right:6px;vertical-align:middle;">${tm.label}</span>`;
+  // Pinning lives in the HUD inspector (select a cell -> pin its
+  // species), not here -- a card only exists for species already in
+  // Top 5 / Pinned / Notable, which can't reach an arbitrary species.
   const headDiv = document.createElement("div");
-  const star = document.createElement("span");
-  const pinned = pinnedSpecies.has(key);
-  star.textContent = pinned ? "★" : "☆";
-  star.title = pinned ? "unpin (re-enables age cull)" : "pin (protects founders from age cull)";
-  star.style.cssText =
-    "cursor:pointer;user-select:none;margin-right:6px;vertical-align:middle;" +
-    (pinned ? "color:#ffd24c;" : "color:#789;");
-  star.addEventListener("click", () => togglePin(key, genome, color, peakBio));
-  headDiv.appendChild(star);
-  const rest = document.createElement("span");
-  rest.innerHTML =
+  headDiv.innerHTML =
     (rankLabel ? `<b>${rankLabel}</b>  ` : "") +
     `${dot}${trophicChip}` +
     `<b style="font-size:13px;letter-spacing:0.5px;">${genomeTag(genome)}</b>` +
     `<span style="opacity:.7"> (${genome.length}b)</span>  ${status}`;
-  headDiv.appendChild(rest);
   const statsDiv = document.createElement("div");
   statsDiv.style.cssText = "opacity:0.85;padding-top:2px;";
   statsDiv.textContent = statsLine;
@@ -2478,7 +2474,7 @@ function renderAnalysisPanel(): void {
     rows.forEach((r, i) => {
       const status = r.alive ? "ALIVE" : "EXTINCT";
       const stats = `duration=${formatAge(r.duration)}  peakBio=${r.biomass.toFixed(0)}  cells=${r.cells}`;
-      analysisBody.appendChild(buildSpeciesCard(r.key, r.genome, r.color, `#${i + 1}`, status, stats, r.biomass));
+      analysisBody.appendChild(buildSpeciesCard(r.genome, r.color, `#${i + 1}`, status, stats));
     });
     return;
   }
@@ -2506,7 +2502,7 @@ function renderAnalysisPanel(): void {
       : `EXTINCT`;
     const stats = `peakBio=${e.peakBio.toFixed(0)}  noted@t=${formatAge(e.at)}`;
     analysisBody.appendChild(
-      buildSpeciesCard(e.key, Uint8Array.from(e.genome), e.color, "", status, stats, e.peakBio),
+      buildSpeciesCard(Uint8Array.from(e.genome), e.color, "", status, stats),
     );
   }
 }
