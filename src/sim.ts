@@ -1918,6 +1918,10 @@ const SENSOR_CHEMS: ReadonlyArray<number> = [
 const SENSOR_BIN_BY_CHEM = new Int8Array(CHEMICAL_COUNT);
 SENSOR_BIN_BY_CHEM.fill(-1);
 for (let i = 0; i < SENSOR_CHEMS.length; i++) SENSOR_BIN_BY_CHEM[SENSOR_CHEMS[i]] = i;
+// Generic chems have no sensor slot of their own; for INGEST gating
+// they ride the biopolymer ("bulk organic") slot, the same gate that
+// used to eat the old aggregated generic corpse particle.
+const BIOPOLYMER_SENSOR_SLOT = SENSOR_BIN_BY_CHEM[CHEM_BIOPOLYMER];
 // CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
 // chemCols[k] (k < 8). Resolved against MOLECULE_INDEX which is
 // already populated above by the time this line evaluates.
@@ -6251,11 +6255,16 @@ function updateCreatures(world: World, dt: number): void {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
           const chemId = p.chemId;
-          const sensorSlot = SENSOR_BIN_BY_CHEM[chemId];
           // The legacy 6-slot INGEST gating still applies: cells opt
           // into eating each "sensor chem" (o2/co2/glu/biop/fa/min).
-          // Chemicals outside the sensor set are not ingestable via
-          // the legacy op -- a future op can lift that gate.
+          // Generic-chem particles (e.g. per-chem death debris) have no
+          // sensor slot of their own, so they're eaten under the
+          // biopolymer gate -- preserving the food-web path the old
+          // aggregated generic corpse particle had.
+          let sensorSlot = SENSOR_BIN_BY_CHEM[chemId];
+          if (sensorSlot < 0 && chemId >= NAMED_CHEMICAL_COUNT) {
+            sensorSlot = BIOPOLYMER_SENSOR_SLOT;
+          }
           if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;

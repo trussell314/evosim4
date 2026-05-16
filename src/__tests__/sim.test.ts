@@ -709,6 +709,18 @@ describe("creature: ingestion cost and cooldown", () => {
     expect(w.particles.length).toBe(0);
     expect(c.energy).toBeLessThan(e0);
   });
+  it("ingests a generic-chem particle under the biopolymer gate", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({ energy: 50, genome: OMNIVORE });
+    w.creatures.push(c);
+    const GEN = 45; // first generic chem id (NAMED_CHEMICAL_COUNT)
+    const before = c.store.chemCols[GEN][c.idx];
+    pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: GEN, density: 1.2 });
+    step(w, 0.001);
+    expect(w.particles.length).toBe(0); // eaten, not skipped
+    expect(c.store.chemCols[GEN][c.idx]).toBeGreaterThan(before);
+  });
   it("absorbs only one particle per cooldown window", () => {
     const w = quietWorld();
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
