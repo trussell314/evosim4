@@ -14,7 +14,6 @@ import {
   disassemble,
   mutateGenome,
   genomeMaterialCost,
-  makeDefaultGenome,
   OPERANDS,
 } from "../genome";
 
@@ -393,10 +392,11 @@ describe("mutateGenome", () => {
   it("rng=1 (never trigger) -> identical copy", () => {
     expect(Array.from(mutateGenome(new Uint8Array([1, 2, 3, 4, 5]), () => 1))).toEqual([1, 2, 3, 4, 5]);
   });
-  it("empty result -> falls back to default", () => {
+  it("every byte deleted -> kept non-empty (no curated-default revival)", () => {
     let call = 0;
     const rng = () => { call++; return call === 1 ? 0 : 1; };
-    expect(Array.from(mutateGenome(new Uint8Array([7]), rng))).toEqual(Array.from(makeDefaultGenome()));
+    const out = mutateGenome(new Uint8Array([7]), rng);
+    expect(out.length).toBe(1);
   });
   it("rng=0 -> trailing insert keeps result non-empty", () => {
     const out = mutateGenome(new Uint8Array([1, 2, 3, 4, 5]), () => 0);
@@ -411,8 +411,8 @@ describe("mutateGenome", () => {
     const input = new Uint8Array(64).fill(0xAA);
     expect(Array.from(mutateGenome(input, mulberry32(1)))).not.toEqual(Array.from(mutateGenome(input, mulberry32(2))));
   });
-  it("output stays at or below MAX_GENOME_BYTES (256)", () => {
-    expect(mutateGenome(new Uint8Array(250).fill(0), () => 0.001).length).toBeLessThanOrEqual(256);
+  it("output stays at or below MAX_GENOME_BYTES (1024)", () => {
+    expect(mutateGenome(new Uint8Array(1100).fill(0), () => 0.001).length).toBeLessThanOrEqual(1024);
   });
   it("mid-probability rng=0.5 preserves bytes", () => {
     expect(Array.from(mutateGenome(new Uint8Array([9, 8, 7, 6, 5]), () => 0.5))).toEqual([9, 8, 7, 6, 5]);
@@ -438,20 +438,3 @@ describe("genomeMaterialCost", () => {
   });
 });
 
-describe("makeDefaultGenome", () => {
-  it("returns fresh array each call (no shared mutation)", () => {
-    const a = makeDefaultGenome();
-    const b = makeDefaultGenome();
-    a[0] = 0;
-    expect(b[0]).not.toBe(0);
-  });
-  it("contains the starter behavior bytes", () => {
-    const g = makeDefaultGenome();
-    // K-5: external sensing went through SENSE_CHEMICAL only.
-    expect(Array.from(g)).toContain(OP.SENSE_CHEMICAL);
-    expect(g[g.length - 1]).toBe(OP.REPRODUCE);
-    expect(Array.from(g)).toContain(OP.THRUST);
-    expect(Array.from(g)).toContain(OP.SENSE_AMP);
-    expect(Array.from(g)).toContain(OP.SYNTH);
-  });
-});

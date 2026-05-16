@@ -999,81 +999,52 @@ export function viableGenome(genome: Uint8Array): boolean {
 // fail and waste reroll budget.
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // Triangular falloff on [16, 100]; clamping handles the math.
+  // Triangular falloff on [24, 100]; clamping handles the math.
   const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(16, Math.min(100, k));
+  return Math.max(24, Math.min(100, k));
 }
 
-// Generate a random viable genome. Size is sampled from the triangular
-// distribution above; each byte is drawn from the same OP/noop bias as
-// mutations (~2/3 chance of an executable op). The result is then
-// checked for viability (metabolism + reproduce); nonviable rolls are
-// rejected and re-rolled, with a hard cap so we can never spin
-// forever. After MAX_REROLLS, we fall back to makeDefaultGenome().
-const MAX_REROLLS = 64;
-export function makeRandomViableGenome(rng: () => number = Math.random): Uint8Array {
-  for (let attempt = 0; attempt < MAX_REROLLS; attempt++) {
-    const size = randomGenomeSize(rng);
-    const bytes = new Uint8Array(size);
-    // Each founder rolls a fresh op-bias in [0.5, 0.95] -- some land
-    // streamlined (5% noop, bacterium-like), some carry significant
-    // junk (~50% noop). The bias persists in the lineage because
-    // mutations use the parent's observed bias.
-    const opBias = randFounderOpBias(rng);
-    for (let i = 0; i < size; i++) bytes[i] = randSeedByte(rng, opBias);
-    if (viableGenome(bytes)) return bytes;
+// Viable-by-construction founder genome. Instead of rejection-sampling
+// against viableGenome (which a purely random genome essentially never
+// passes), we assemble the required ops as atomic tokens, shuffle their
+// order, and pad to a random size with junk filler. Every founder is a
+// distinct genome (token order, operands, size, and trailing junk all
+// randomized) yet guaranteed to satisfy the heterotroph viability
+// rules. No curated/hand-built genome is involved. Never returns null;
+// the `| null` return is kept so callers' skip-path stays valid.
+export function makeRandomViableGenome(
+  rng: () => number = Math.random,
+): Uint8Array | null {
+  const b = (): number => Math.floor(rng() * 256);
+  // Required tokens for a viable heterotroph (see viableGenome):
+  // reproduce, ingest, thrust, a SENSE op, and SYNTH for
+  // bio/mrna/fa/enz/aa. Operands randomized for diversity.
+  const tokens: number[][] = [
+    [OP.REPRODUCE],
+    [OP.INGEST, Math.floor(rng() * 6)],          // a sensor material
+    [OP.THRUST],
+    [OP.SENSE_CHEMICAL, Math.floor(rng() * CHEMICAL_COUNT)],
+    [OP.SYNTH, SYNTH_KIND.BIO, b()],
+    [OP.SYNTH, SYNTH_KIND.MRNA, b()],
+    [OP.SYNTH, SYNTH_KIND.FA, b()],
+    [OP.SYNTH, SYNTH_KIND.ENZ, b()],
+    [OP.SYNTH, SYNTH_KIND.AA, b()],
+  ];
+  // Fisher-Yates shuffle so structure differs founder to founder.
+  for (let i = tokens.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = tokens[i]; tokens[i] = tokens[j]; tokens[j] = t;
   }
-  // Fallback: every reroll missed the viability gate. Take the
-  // default genome and append a short randomized tail so distinct
-  // fallback founders don't all hash to the same speciesKey (which
-  // would make the HUD's lineage / species counts look wrong --
-  // many lineages collapsing to one species). The default is
-  // already viable; appended bytes are extra payload the VM may or
-  // may not execute.
-  const base = makeDefaultGenome();
-  const tailLen = 4 + Math.floor(rng() * 8);
-  const out = new Uint8Array(base.length + tailLen);
-  out.set(base);
-  for (let i = 0; i < tailLen; i++) out[base.length + i] = Math.floor(rng() * 256);
+  const core: number[] = [];
+  for (const tk of tokens) for (const byte of tk) core.push(byte);
+  // Pad with junk to a random total size. Junk goes AFTER the core so
+  // the required ops always decode at a fixed alignment from pc 0
+  // regardless of what the random filler bytes happen to be.
+  const target = Math.max(core.length, randomGenomeSize(rng));
+  const out = new Uint8Array(target);
+  for (let i = 0; i < core.length; i++) out[i] = core[i];
+  for (let i = core.length; i < target; i++) out[i] = b();
   return out;
-}
-
-export function makeDefaultGenome(): Uint8Array {
-  // Activated-chemo chem ids: biopolymer X=23, Y=24. These get
-  // populated each tick by the K-3 activation pass when the cell
-  // both has CHEM_CHEMORECEPTOR_BIOPOLYMER (synthesized via SYNTH
-  // CHEMO 0) and biopolymer particles in range. So this default
-  // heterotroph reads the activated chems and thrusts toward them.
-  const ACT_CHEMO_BIO_X = 23;
-  const ACT_CHEMO_BIO_Y = 24;
-  return new Uint8Array([
-    OP.SENSE_AMP,             // one sense amplifier -> 80px range
-    OP.SENSE_CHEMICAL, ACT_CHEMO_BIO_X,
-    OP.SENSE_CHEMICAL, ACT_CHEMO_BIO_Y,
-    OP.THRUST,
-    OP.INGEST, 1,             // biopolymer
-    OP.INGEST, 0,             // minerals
-    // Biosynthesis via unified SYNTH op. <kind, param> -- param is
-    // ignored for kinds that don't use it.
-    OP.SYNTH, SYNTH_KIND.ENZ, 0,
-    OP.SYNTH, SYNTH_KIND.FA, 0,
-    OP.SYNTH, SYNTH_KIND.BIO, 0,
-    OP.SYNTH, SYNTH_KIND.MRNA, 0,
-    OP.SYNTH, SYNTH_KIND.CHEMO, 0,    // chemoreceptor for biopolymer
-    OP.SYNTH, SYNTH_KIND.REPAIR, 0,   // repair_chem -> mutation damper
-    OP.SYNTH, SYNTH_KIND.CAT, 0,      // catalyst for reaction slot 0
-    // Reproduction gate: fission only when membrane + ATP are both
-    // healthy.
-    OP.SELF_MEMBRANE,
-    OP.PUSH8, 30,
-    OP.GT,
-    OP.SELF_ENERGY,
-    OP.PUSH8, 15,
-    OP.GT,
-    OP.AND,
-    OP.JZ, 1,
-    OP.REPRODUCE,
-  ]);
 }
 
 export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Float32Array {
@@ -1126,61 +1097,6 @@ function randMutByte(rng: () => number, opBias: number = OP_BYTE_BIAS): number {
   return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
 }
 
-// Seed-time byte distribution: same OP/noop bias as mutations, but
-// the OP pool is weighted toward ops a thriving cell typically wants.
-// A random founder is more likely to roll INGEST + REPRODUCE +
-// SYNTH_BIO + a food sensor than the truly uniform distribution
-// would produce, so we waste less time on viable-but-doomed
-// "barely passes the filter" founders. Other ops still appear at
-// their base weight; nothing is forbidden.
-const SEED_OP_WEIGHT: Record<number, number> = {
-  [OP.INGEST]:        3,
-  [OP.REPRODUCE]:     3,
-  // Unified SYNTH replaces 7 distinct SYNTH_* ops; bump its base
-  // weight so random genomes still roll enough SYNTH instances. Cells
-  // need multiple SYNTH ops (different kinds) for viability so this
-  // op is the most common in viable founders.
-  [OP.SYNTH]:        12,
-  [OP.THRUST]:        2,
-  [OP.SELF_MEMBRANE]: 1.5,
-  [OP.SELF_ENERGY]:   1.5,
-  [OP.GT]:            1.5,
-  [OP.JZ]:            1.5,
-  [OP.PUSH8]:         1.5,
-  // Only external-sensor primitive left. Boosted vs the old weight
-  // because every external reading now goes through it -- a typical
-  // viable founder needs several SENSE_CHEMICAL ops at different ids.
-  [OP.SENSE_CHEMICAL]: 4,
-};
-const SEED_OP_POOL: number[] = (() => {
-  const pool: number[] = [];
-  for (const op of OP_BYTES) {
-    const w = SEED_OP_WEIGHT[op] ?? 1;
-    // Integer weight: emit each op `Math.round(w * 2)` times so 1.5
-    // gives 3 copies vs base 2, etc. Resolution good enough; the bias
-    // is supposed to be "light" anyway.
-    const n = Math.max(1, Math.round(w * 2));
-    for (let i = 0; i < n; i++) pool.push(op);
-  }
-  return pool;
-})();
-function randSeedByte(rng: () => number, opBias: number): number {
-  if (rng() < opBias) return SEED_OP_POOL[Math.floor(rng() * SEED_OP_POOL.length)];
-  return NOOP_BYTES[Math.floor(rng() * NOOP_BYTES.length)];
-}
-
-// Founder op-bias range. Each new founder rolls a uniform value in
-// this interval; that becomes the genome's OP-vs-noop split for its
-// initial composition. Range covers tightly-packed bacteria-like
-// (0.95 = 5% noop) through moderately junky (0.5 = 50% noop). Within
-// the OP fraction, SEED_OP_POOL weights core useful ops higher; the
-// bias only controls the OP-vs-noop split, not which op gets picked.
-const FOUNDER_OP_BIAS_MIN = 0.50;
-const FOUNDER_OP_BIAS_MAX = 0.95;
-function randFounderOpBias(rng: () => number): number {
-  return FOUNDER_OP_BIAS_MIN + rng() * (FOUNDER_OP_BIAS_MAX - FOUNDER_OP_BIAS_MIN);
-}
-
 // Per-byte mutation rates at fission. Halved from the previous values
 // (0.003 / 0.0010) because the old rates produced ~7% of children with
 // a real mutation per fission and the 2/3 op-bias meant most of those
@@ -1194,7 +1110,7 @@ const P_INSERT = 0.0005;
 // nothing to absorb the loss -- bias against deletion at the mutation
 // level instead.
 const P_DELETE = 0.0003;
-export const MAX_GENOME_BYTES = 256;
+export const MAX_GENOME_BYTES = 1024;
 
 export function mutateGenome(
   genome: Uint8Array,
@@ -1223,7 +1139,9 @@ export function mutateGenome(
   if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
     out.push(randMutByte(rng, opBias));
   }
-  if (out.length === 0) return makeDefaultGenome();
+  // Every byte happened to delete: keep the genome non-empty with a
+  // single lineage-consistent random byte (no curated-default revival).
+  if (out.length === 0) out.push(randMutByte(rng, opBias));
   return new Uint8Array(out);
 }
 
@@ -1235,7 +1153,7 @@ export function somaticMutateOnce(
   genome: Uint8Array,
   rng: () => number = Math.random,
 ): Uint8Array {
-  if (genome.length === 0) return makeDefaultGenome();
+  if (genome.length === 0) return new Uint8Array([0]);
   // Somatic edits use the cell's own observed op-bias too, so an
   // aging cell drifts in a way consistent with its own composition.
   const opBias = observedOpBias(genome);

@@ -30,7 +30,36 @@ import {
   CreatureStore,
   newCreature,
 } from "../sim";
-import { OP, makeDefaultGenome, newVMState, type VMState } from "../genome";
+import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
+
+// Local viable-heterotroph genome for test creatures. Mirrors the
+// production curated default that used to exist before founders went
+// fully random; kept here so behavior tests stay deterministic without
+// the sim shipping a hand-built genome.
+const TEST_DEFAULT_GENOME = new Uint8Array([
+  OP.SENSE_AMP,
+  OP.SENSE_CHEMICAL, 23,
+  OP.SENSE_CHEMICAL, 24,
+  OP.THRUST,
+  OP.INGEST, 1,
+  OP.INGEST, 0,
+  OP.SYNTH, SYNTH_KIND.ENZ, 0,
+  OP.SYNTH, SYNTH_KIND.FA, 0,
+  OP.SYNTH, SYNTH_KIND.BIO, 0,
+  OP.SYNTH, SYNTH_KIND.MRNA, 0,
+  OP.SYNTH, SYNTH_KIND.CHEMO, 0,
+  OP.SYNTH, SYNTH_KIND.REPAIR, 0,
+  OP.SYNTH, SYNTH_KIND.CAT, 0,
+  OP.SELF_MEMBRANE,
+  OP.PUSH8, 30,
+  OP.GT,
+  OP.SELF_ENERGY,
+  OP.PUSH8, 15,
+  OP.GT,
+  OP.AND,
+  OP.JZ, 1,
+  OP.REPRODUCE,
+]);
 
 // Sentinel byte used by tests as a "no more useful ops" marker. The
 // HALT op was retired but the mark pattern keeps tests readable.
@@ -164,7 +193,7 @@ function makeCreature(overrides: Partial<{
     energy: overrides.energy ?? 100,
     senseRange: overrides.senseRange ?? 200,
     thrustAccel: overrides.thrustAccel ?? 70,
-    genome: overrides.genome ?? makeDefaultGenome(),
+    genome: overrides.genome ?? TEST_DEFAULT_GENOME,
     vm: overrides.vm ?? newVMState(),
     color: overrides.color ?? "#ffffff",
     ingestCooldown: overrides.ingestCooldown ?? 0,

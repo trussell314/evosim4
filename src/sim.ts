@@ -1018,8 +1018,8 @@ export function reactionName(slot: number): string {
 // 32-bit FNV-1a hash of a genome, rendered as a 6-char base36 tag
 // for use as a stable, content-derived species label. Replaces the
 // previous `sp.key.slice(0, 6)` (first 3 bytes of the genome) which
-// post-K-4/K-5 collides for every cell -- founders all start with
-// the same SENSE_AMP + SENSE_CHEMICAL prefix from makeDefaultGenome.
+// post-K-4/K-5 collided for every cell back when founders shared a
+// fixed curated-genome prefix (since removed -- founders are random).
 export function genomeTag(genome: Uint8Array): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < genome.length; i++) {
@@ -3491,7 +3491,7 @@ export function createWorld(
     const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + Math.random() * 0.4));
     for (let i = 0; i < initialFounders; i++) {
       const f = spawnFounder(world);
-      if (i === 0) {
+      if (f && i === 0) {
         world.anchorGenome = new Uint8Array(f.genome);
         f.color = genomeColor(f.genome, world.anchorGenome);
       }
@@ -3595,7 +3595,7 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
   }
 }
 
-function spawnFounder(world: World): Creature {
+function spawnFounder(world: World): Creature | null {
   const z = world.depth * 0.5;
   // Reject-sample positions until we find one that's not within
   // FOUNDER_MIN_SPACING of an existing creature. With ~25 founders
@@ -3634,6 +3634,7 @@ function spawnFounder(world: World): Creature {
     if (okay) break;
   }
   const c = makeCreature(world, x, y, z);
+  if (c === null) return null; // genome roll failed -- skip this founder
   // Recirculate cap-sequestered reserve mass into the new founder.
   drawFounderReserve(world, c, x, y);
   updateCreatureRadius(c); // reflect the drawn mass in r / density
@@ -3803,13 +3804,22 @@ const FOUNDER_SCOOP_R_MIN = 14;
 const FOUNDER_SCOOP_R_MAX = 50;
 function makeCreature(
   world: World, x: number, y: number, z: number, genomeOverride?: Uint8Array,
-): Creature {
+): Creature | null {
   // genomeOverride: used by spawnSpeciesInstance to materialize a
   // specific pinned/notable genome instead of rolling a random one.
   // The minimal molecule seed below is the "force it" floor (the cell
   // is viable even in barren water); the particle scoop layered on
   // top is the "use available resources if present" part.
-  const genome = genomeOverride ? new Uint8Array(genomeOverride) : makeRandomViableGenome();
+  const rolled = genomeOverride
+    ? new Uint8Array(genomeOverride)
+    : makeRandomViableGenome();
+  if (rolled === null) {
+    console.warn(
+      "makeRandomViableGenome: no viable genome in MAX_REROLLS -- skipping founder",
+    );
+    return null;
+  }
+  const genome = rolled;
   let hasChl = false, hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
@@ -3919,6 +3929,7 @@ export function spawnSpeciesInstance(world: World, genome: Uint8Array): Creature
     if (okay) break;
   }
   const c = makeCreature(world, x, y, z, genome);
+  if (c === null) return null; // unreachable with an explicit genome
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
   world.creatures.push(c);
@@ -5354,7 +5365,7 @@ export function step(world: World, dt: number): void {
       // When the world had just gone fully empty, the first new
       // founder also re-anchors the color palette so descendant
       // coloring restarts relative to this new root.
-      if (wasEmpty && i === 0) {
+      if (f && wasEmpty && i === 0) {
         world.anchorGenome = new Uint8Array(f.genome);
         f.color = genomeColor(f.genome, world.anchorGenome);
       }
