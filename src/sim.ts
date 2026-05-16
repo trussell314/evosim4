@@ -1823,6 +1823,12 @@ const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // to avoid a property-dispatch on CHEMICALS[id] every particle.
 CHEM_BASE_DENSITY = new Float32Array(CHEMICAL_COUNT);
 for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_BASE_DENSITY[i] = CHEMICALS[i].density;
+// Molar mass LUT. Chemistry stores AMOUNT (moles); a particle / reserve
+// / dissolved unit is PHYSICAL MASS = amount * molarMass. Every
+// chem<->physical conversion must use this so mass is conserved across
+// the boundary (named chems are all 1.0; generics roll 0.5..5.0).
+const CHEM_MM = new Float32Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_MM[i] = CHEMICALS[i].molarMass;
 // Exported color LUT, indexed by chem id. Used by the renderer in
 // main.ts to color free-floating particles by their chemical identity.
 export const CHEM_COLORS: ReadonlyArray<string> = CHEMICALS.map((c) => c.color);
@@ -3888,7 +3894,7 @@ function makeCreature(
     const dy = p.y - y;
     const dz = p.z - z;
     if (dx * dx + dy * dy + dz * dz >= rSq) continue;
-    cstore.chemCols[p.chemId][cidx] += mass(p);
+    cstore.chemCols[p.chemId][cidx] += mass(p) / CHEM_MM[p.chemId];
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
     }
@@ -4358,9 +4364,11 @@ function precipitateRegions(world: World): void {
       const excess = v - cap;
       if (excess <= 0) continue;
       const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
-      const massPer = density * volPer;
-      if (massPer <= 0) continue;
-      let count = Math.floor(excess / massPer);
+      // amb stores AMOUNT; a PRECIP particle's physical mass is
+      // density*volPer, i.e. amountPer = that / molarMass moles.
+      const amountPer = (density * volPer) / CHEM_MM[k];
+      if (amountPer <= 0) continue;
+      let count = Math.floor(excess / amountPer);
       if (count <= 0) continue;
       const room = world.particleTarget - world.particles.length;
       if (count > room) count = room;
@@ -4377,7 +4385,7 @@ function precipitateRegions(world: World): void {
           vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
         });
       }
-      amb[base + k] = v - count * massPer; // mass-conserving
+      amb[base + k] = v - count * amountPer; // mass-conserving
     }
   }
 }
@@ -4451,10 +4459,12 @@ function reservePass(world: World): void {
   let grand = 0;
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
     const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
-    const massPer = density * volPer;
+    // reserve stores AMOUNT; a PRECIP particle is density*volPer of
+    // PHYSICAL mass == amountPer moles of this chem.
+    const amountPer = (density * volPer) / CHEM_MM[k];
     let rmass = 0;
     for (let ri = 0; ri < nReg; ri++) rmass += res[ri * AMBIENT_STRIDE + k];
-    const resEquiv = massPer > 0 ? rmass / massPer : 0;
+    const resEquiv = amountPer > 0 ? rmass / amountPer : 0;
     const t = visN[k] + resEquiv;
     tot[k] = t;
     grand += t;
@@ -4501,7 +4511,7 @@ function reservePass(world: World): void {
       const r = store.r[i];
       const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
       res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
-        += density * FOUR_THIRDS_PI * r * r * r;
+        += (density * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[k];
       if (world.fadingGhosts.length < FADING_GHOST_MAX) {
         world.fadingGhosts.push({
           x: store.x[i], y: store.y[i], z: store.z[i],
@@ -4519,15 +4529,16 @@ function reservePass(world: World): void {
     let need = want[k] - visN[k];
     if (need <= 0) continue;
     const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
-    const massPer = density * volPer;
-    if (massPer <= 0) continue;
+    // reserve is AMOUNT; one PRECIP particle drains amountPer moles.
+    const amountPer = (density * volPer) / CHEM_MM[k];
+    if (amountPer <= 0) continue;
     for (let ri = 0; ri < nReg && need > 0; ri++) {
       const ak = ri * AMBIENT_STRIDE + k;
       let avail = res[ak];
-      if (avail < massPer) continue;
+      if (avail < amountPer) continue;
       const rx = ri % cols, ry = (ri / cols) | 0;
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
-      while (avail >= massPer && need > 0) {
+      while (avail >= amountPer && need > 0) {
         const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
         let py = y0 + Math.random() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
@@ -4536,7 +4547,7 @@ function reservePass(world: World): void {
           x: px, y: py, z: PRECIP_R + Math.random() * (world.depth - 2 * PRECIP_R),
           vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
         });
-        avail -= massPer;
+        avail -= amountPer;
         need--;
       }
       res[ak] = avail;
@@ -4555,7 +4566,7 @@ function reservePass(world: World): void {
         const r = store.r[i];
         const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
         res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
-          += density * FOUR_THIRDS_PI * r * r * r;
+          += (density * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[k];
         removeParticleAt(world, i);
       }
     }
@@ -4729,16 +4740,20 @@ function dissolveParticles(world: World, dt: number): void {
     const gap = cap - ambient[ak];
     if (gap <= 0) continue;
     const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
-    const mass = density * FOUR_THIRDS_PI * r * r * r;
-    // Rate proportional to surface area (4*pi*r^2) and capacity gap.
-    const dissolveMass = DISSOLVE_RATE_PER_AREA * gap * (r * r) * dt;
-    if (dissolveMass >= mass || r * Math.cbrt(1 - dissolveMass / mass) < MIN_DISSOLVE_R) {
-      ambient[ak] += mass;
+    const mm = CHEM_MM[chemId];
+    const physMass = density * FOUR_THIRDS_PI * r * r * r;
+    // ambient stores AMOUNT (moles); the particle is PHYSICAL MASS.
+    const amountTotal = physMass / mm;
+    // Rate proportional to surface area (4*pi*r^2) and capacity gap
+    // (gap is in amount units, so this is an amount).
+    const dissolveAmount = DISSOLVE_RATE_PER_AREA * gap * (r * r) * dt;
+    if (dissolveAmount >= amountTotal || r * Math.cbrt(1 - dissolveAmount / amountTotal) < MIN_DISSOLVE_R) {
+      ambient[ak] += amountTotal;
       removeParticleAt(world, i);
     } else {
-      const newMass = mass - dissolveMass;
+      const newMass = (amountTotal - dissolveAmount) * mm;
       PR[i] = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
-      ambient[ak] += dissolveMass;
+      ambient[ak] += dissolveAmount;
     }
   }
 }
@@ -5157,7 +5172,8 @@ function spawnExcretedParticle(
     return;
   }
   const density = CHEM_BASE_DENSITY[chemId];
-  const pr = Math.max(1.5, radiusForMass(m, density));
+  // m is chemical AMOUNT; the spawned particle carries PHYSICAL MASS.
+  const pr = Math.max(1.5, radiusForMass(m * CHEM_MM[chemId], density));
   const angle = Math.random() * Math.PI * 2;
   const ejectV = 25;
   // Clamp the spawn position so a wall-hugging cell can't drop a
@@ -6395,7 +6411,7 @@ function updateCreatures(world: World, dt: number): void {
               // chem slot. Biopolymer needs the digester reaction to
               // turn into glu/aa/fa; minerals stay as substrate; o2/co2
               // go straight to the respiration pool.
-              c.store.chemCols[chemId][c.idx] += mass(p);
+              c.store.chemCols[chemId][c.idx] += mass(p) / CHEM_MM[chemId];
             }
             // Generic-chemical payload (cells dump their generic pool
             // into one organic particle on death). Transfer into the
@@ -6558,7 +6574,9 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   // generic column on re-ingest (chemCols[NAMED+k] aliases it).
   const emit = (chemId: number, total: number, density: number): void => {
     if (total <= 0) return;
-    const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(total, density));
+    // total is chemical AMOUNT; the particle carries PHYSICAL MASS.
+    const physMass = total * CHEM_MM[chemId];
+    const r = Math.max(DEATH_RELEASE_R_MIN, radiusForMass(physMass, density));
     const jit = (): number => (Math.random() - 0.5) * DEATH_RELEASE_SCATTER;
     const z = world.depth > 2 * r
       ? Math.min(world.depth - r, Math.max(r, c.z + jit()))
@@ -8252,10 +8270,11 @@ export function takeSnapshot(world: World): RenderSnapshot {
     // consistent with the rendered column.
     for (let k = 0; k < CHEMICAL_COUNT; k++) {
       const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
-      const massPer = density * volPer;
-      if (massPer > 0) {
-        chemDissolved[k] /= massPer;
-        chemReserveCount[k] /= massPer;
+      // dissolved/reserve are AMOUNT; one 2px particle == amountPer moles.
+      const amountPer = (density * volPer) / CHEM_MM[k];
+      if (amountPer > 0) {
+        chemDissolved[k] /= amountPer;
+        chemReserveCount[k] /= amountPer;
       } else {
         chemDissolved[k] = 0;
         chemReserveCount[k] = 0;
