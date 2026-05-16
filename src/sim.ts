@@ -4791,10 +4791,19 @@ export function applyParticleForcesRange(
     let ay = grav * (1 - 1 / density);
     if (ay < -grav) ay = -grav; else if (ay > grav) ay = grav;
     const depth = yi > surfaceY ? yi - surfaceY : 0;
+    // Counter-propagating wave pair. The left-going component keeps a
+    // different wavenumber (1.3x / 1.4x) so the surface still looks
+    // irregular, but its time coefficient is matched to that
+    // wavenumber so |phase speed| equals the right-going component's.
+    // Mismatched phase speeds let particles get wave-captured
+    // ("surf") preferentially by the faster wave and migrate that way
+    // until they pile against a wall -- that was the rightward
+    // zipping. Equal |c| balances capture both directions: no net
+    // horizontal transport.
     const surfPR = kS * xi - wS * t;
-    const surfPL = 1.3 * kS * xi + 0.9 * wS * t + 1.1;
+    const surfPL = 1.3 * kS * xi + 1.3 * wS * t + 1.1;
     const swellPR = kL * xi - wL * t;
-    const swellPL = 1.4 * kL * xi + 0.7 * wL * t + 0.4;
+    const swellPL = 1.4 * kL * xi + 1.4 * wL * t + 0.4;
     const surface = surfAmp * 0.5 * (Math.sin(surfPR) + Math.sin(surfPL)) * Math.exp(-depth / surfDecay);
     const swell   = swellAmp * 0.5 * (Math.sin(swellPR) + Math.sin(swellPL)) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
@@ -4949,10 +4958,13 @@ function applyForces(world: World, dt: number): void {
     const depth = yi > surfaceY ? yi - surfaceY : 0;
     // Balanced rightward + leftward travelling waves -- see particle
     // loop above for rationale (no Stokes drift, no fixed nodes).
+    // Phase speeds of the counter-propagating pair kept equal in
+    // magnitude so wave-capture is balanced left/right (see the
+    // matching comment in applyParticleForcesRange).
     const surfPR = kS * xi - wS * t;
-    const surfPL = 1.3 * kS * xi + 0.9 * wS * t + 1.1;
+    const surfPL = 1.3 * kS * xi + 1.3 * wS * t + 1.1;
     const swellPR = kL * xi - wL * t;
-    const swellPL = 1.4 * kL * xi + 0.7 * wL * t + 0.4;
+    const swellPL = 1.4 * kL * xi + 1.4 * wL * t + 0.4;
     const surface = surfAmp * 0.5 * (Math.sin(surfPR) + Math.sin(surfPL)) * Math.exp(-depth / surfDecay);
     const swell   = swellAmp * 0.5 * (Math.sin(swellPR) + Math.sin(swellPL)) * Math.exp(-depth / swellDecay);
     const az      = zAmp * Math.sin(wL * t + kL * xi + 1.0) * Math.exp(-depth / swellDecay);
