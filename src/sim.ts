@@ -6207,12 +6207,21 @@ function updateCreatures(world: World, dt: number): void {
           ch.store.release(ch.idx);
           c.division = null;
         }
-        // Drop the founder ID tracking for any cell that's leaving
-        // world.creatures (spilled or absorbed), so the set doesn't
-        // accumulate stale ids across the run.
-        world.founderIds.delete(c.id);
-        world.founderReproduced.delete(c.id);
-        world.founderBirthScore.delete(c.id);
+        // Engulfed cells (in eaten AND in some predator's contents)
+        // keep their slot alive until that predator dies and pushes
+        // them back to world.creatures via released[]. An engulfed
+        // founder is NOT culled and KEEPS its founder identity, so it
+        // resumes as a founder if it's ever released -- being inside
+        // another cell is a protected state, not a death.
+        const engulfed = eaten.has(c) && inSomeContents.has(c);
+        if (!engulfed) {
+          // Drop founder tracking for cells that are truly gone
+          // (spilled/dead or predated-absorbed) so the sets don't
+          // accumulate stale ids across the run.
+          world.founderIds.delete(c.id);
+          world.founderReproduced.delete(c.id);
+          world.founderBirthScore.delete(c.id);
+        }
         if (spillSet.has(c)) {
           releaseChemsAsParticles(c, world);
           c.store.release(c.idx);
@@ -6220,9 +6229,6 @@ function updateCreatures(world: World, dt: number): void {
           // Predated -- absorbed entirely, no vacuole, slot is free.
           c.store.release(c.idx);
         }
-        // Engulfed cells (in eaten AND in some predator's contents)
-        // keep their slot alive until that predator dies and pushes
-        // them back to world.creatures via released[].
         noteCreatureDeath(world, c);
       } else {
         survivors.push(c);
