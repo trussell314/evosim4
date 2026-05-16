@@ -1273,6 +1273,11 @@ export interface World {
   // mass-conserving pool. Spatial resolution is global scalar for
   // MVP; a coarse 2D grid lands in a later phase without API change.
   ambient: Float32Array;
+  // Phase 4: invisible per-region chemical reserve (flat
+  // [region*CHEMICAL_COUNT + chem]). Holds mass demoted off-screen
+  // when the global particle cap is hit; promoted back to rendered
+  // particles when there's room. Same layout as `ambient`.
+  reserve: Float32Array;
   // Water temperature profile. The surface is warmer (sunlight), the
   // bottom is colder. Horizontal patches drift slowly via tempPatch*,
   // standing in for thermal convection without simulating it.
@@ -3343,6 +3348,11 @@ export function createWorld(
     aerationRate: width * AERATION_PER_PX,
     atmosphere: initialAtmosphere(),
     ambient: initialAmbient(width, height),
+    reserve: (() => {
+      const cols = Math.max(1, Math.ceil(width / REGION_PX));
+      const rows = Math.max(1, Math.ceil(height / REGION_PX));
+      return new Float32Array(cols * rows * CHEMICAL_COUNT);
+    })(),
     tempSurface: 28,
     tempBottom: 12,
     tempPatchAmp: 3,
@@ -4055,14 +4065,23 @@ function ambientBaseAt(world: { width: number; height: number }, x: number, y: n
 // stability limit (sum of 4 edge coeffs < 0.5).
 const REGION_DIFFUSION_HALFLIFE_S = 600;
 let REGION_DIFF_SCRATCH = new Float32Array(0);
+let REGION_DIFF_SCRATCH2 = new Float32Array(0);
 function diffuseRegions(world: World, dt: number): void {
+  // Same Jacobi machinery for both regional fields.
+  jacobiDiffuseField(world, world.ambient, false, dt);
+  jacobiDiffuseField(world, world.reserve, true, dt);
+}
+function jacobiDiffuseField(world: World, amb: Float32Array, useScratch2: boolean, dt: number): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
   const n = cols * rows;
   if (n < 2) return;
-  const amb = world.ambient;
-  if (REGION_DIFF_SCRATCH.length < amb.length) REGION_DIFF_SCRATCH = new Float32Array(amb.length);
-  const old = REGION_DIFF_SCRATCH;
+  if (useScratch2) {
+    if (REGION_DIFF_SCRATCH2.length < amb.length) REGION_DIFF_SCRATCH2 = new Float32Array(amb.length);
+  } else {
+    if (REGION_DIFF_SCRATCH.length < amb.length) REGION_DIFF_SCRATCH = new Float32Array(amb.length);
+  }
+  const old = useScratch2 ? REGION_DIFF_SCRATCH2 : REGION_DIFF_SCRATCH;
   old.set(amb.subarray(0, n * AMBIENT_STRIDE));
   const N = Math.max(cols, rows);
   const ticks = REGION_DIFFUSION_HALFLIFE_S / dt;
@@ -4154,6 +4173,89 @@ function precipitateRegions(world: World): void {
       }
       amb[base + k] = v - count * massPer; // mass-conserving
     }
+  }
+}
+
+// ---- Phase 4: reserve bucket + global cap enforcement ----------
+// Last pass each tick. Over the global particle cap -> demote the
+// excess (plain single-chem particles) into their region's reserve
+// (invisible, mass-conserved). Under the cap with reserve available
+// -> promote: pick the globally most-abundant reserved chem and
+// re-spawn 2px particles, drawing mass LOCALLY from a region that
+// holds it. This is what finally bounds particle count (and thus
+// kills the over-density rightward-drift bug) without losing mass.
+const RESERVE_PROMOTE_CHEM_PICKS = 8; // chem re-picks per tick (cost bound)
+function reservePass(world: World): void {
+  const target = world.particleTarget;
+  const store = world.particleStore;
+  const res = world.reserve;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  const volPer = FOUR_THIRDS_PI * PRECIP_R * PRECIP_R * PRECIP_R;
+
+  // --- Demote: shed SETTLED sediment above the cap into local
+  // reserve. Only particles that have gone quiet (>= sleep
+  // threshold) are eligible -- active / freshly-spawned particles
+  // (food cells are chasing, just-released corpse mass, precipitate)
+  // are protected, so the cap is enforced against the long-lived
+  // sediment that actually drives unbounded growth while a brief
+  // transient overage during a spawn burst is tolerated (soft cap).
+  for (let i = world.particles.length - 1; i >= 0 && world.particles.length > target; i--) {
+    if (i >= world.particles.length) continue;
+    if (store.genericChem[i] || store.molecules[i]) continue; // keep payload particles
+    if (store.quietTicks[i] < SLEEP_THRESHOLD_TICKS) continue; // active -> protected
+    const chemId = store.chemId[i];
+    const r = store.r[i];
+    if (r <= 0) continue;
+    const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
+    const mass = density * FOUR_THIRDS_PI * r * r * r;
+    const ri = regionIndexAt(world, store.x[i], store.y[i]);
+    res[ri * AMBIENT_STRIDE + chemId] += mass; // mass-conserving
+    removeParticleAt(world, i);
+  }
+
+  // --- Promote: refill toward the cap from reserve. Pick the chem
+  // with the largest worldwide reserve, drain it region-locally,
+  // repeat for a bounded number of chem picks per tick.
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const nReg = cols * rows;
+  const surfaceY = world.surfaceY;
+  for (let pick = 0; pick < RESERVE_PROMOTE_CHEM_PICKS; pick++) {
+    if (world.particles.length >= target) break;
+    // Globally most-abundant reserved chem.
+    let bestChem = -1, bestTotal = 0;
+    for (let k = 0; k < AMBIENT_STRIDE; k++) {
+      let tot = 0;
+      for (let ri = 0; ri < nReg; ri++) tot += res[ri * AMBIENT_STRIDE + k];
+      if (tot > bestTotal) { bestTotal = tot; bestChem = k; }
+    }
+    if (bestChem < 0) break;
+    const k = bestChem;
+    const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+    const massPer = density * volPer;
+    if (massPer <= 0) break;
+    let promotedAny = false;
+    for (let ri = 0; ri < nReg && world.particles.length < target; ri++) {
+      const ak = ri * AMBIENT_STRIDE + k;
+      let avail = res[ak];
+      if (avail < massPer) continue;
+      const rx = ri % cols, ry = (ri / cols) | 0;
+      const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
+      while (avail >= massPer && world.particles.length < target) {
+        const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
+        let py = y0 + Math.random() * REGION_PX;
+        if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
+        py = Math.min(world.height - PRECIP_R, py);
+        pushParticle(world, {
+          x: px, y: py, z: PRECIP_R + Math.random() * (world.depth - 2 * PRECIP_R),
+          vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
+        });
+        avail -= massPer;
+        promotedAny = true;
+      }
+      res[ak] = avail;
+    }
+    if (!promotedAny) break; // nothing promotable -> stop
   }
 }
 // ===================================================================
@@ -4851,6 +4953,7 @@ export function step(world: World, dt: number): void {
     diffuseRegions(world, dt);
     dissolveParticles(world, dt);
     precipitateRegions(world);
+    reservePass(world);
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
@@ -4888,6 +4991,7 @@ export function step(world: World, dt: number): void {
     diffuseRegions(world, dt);
     dissolveParticles(world, dt);
     precipitateRegions(world);
+    reservePass(world);
     replenishParticles(world, dt);
     decayParticles(world, dt);
     pruneSpecies(world);
@@ -7196,6 +7300,8 @@ interface SavedWorld {
   // Phase F ambient pool. Sparse list of (chemId, concentration);
   // missing entries default to zero on restore.
   ambient?: Array<{ i: number; v: number }>;
+  // Phase 4 reserve pool (invisible per-region chem mass). Sparse.
+  reserve?: Array<{ i: number; v: number }>;
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
@@ -7289,6 +7395,13 @@ export function serializeWorld(w: World): string {
       const out: Array<{ i: number; v: number }> = [];
       for (let k = 0; k < w.ambient.length; k++) {
         if (w.ambient[k] > 0) out.push({ i: k, v: w.ambient[k] });
+      }
+      return out;
+    })(),
+    reserve: (() => {
+      const out: Array<{ i: number; v: number }> = [];
+      for (let k = 0; k < w.reserve.length; k++) {
+        if (w.reserve[k] > 0) out.push({ i: k, v: w.reserve[k] });
       }
       return out;
     })(),
@@ -7414,6 +7527,15 @@ export function applySavedWorld(world: World, json: string): boolean {
     a.fill(0);
     for (const { i, v } of saved.ambient) {
       if (i >= 0 && i < a.length) a[i] = v;
+    }
+  }
+  {
+    const rsv = world.reserve;
+    rsv.fill(0);
+    if (saved.reserve) {
+      for (const { i, v } of saved.reserve) {
+        if (i >= 0 && i < rsv.length) rsv[i] = v;
+      }
     }
   }
   let maxLane = -1;

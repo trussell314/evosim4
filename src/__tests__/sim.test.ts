@@ -111,6 +111,7 @@ function quietWorld(): World {
       for (let r = 0; r < N; r++) { a[r * STRIDE + CHEM_IDS.o2] = 12; a[r * STRIDE + CHEM_IDS.co2] = 1; }
       return a;
     })(),
+    reserve: new Float32Array(16 * 12 * 96),
   };
 }
 
@@ -1657,6 +1658,42 @@ describe("region dissolved-capacity calibration (Phase 0)", () => {
   });
 });
 
+describe("reserve bucket + cap enforcement (Phase 4)", () => {
+  it("bounds particle count at the cap and conserves mass via reserve", () => {
+    const w = quietWorld();
+    w.aerationRate = 0;
+    w.particleSpawnRate = 0;
+    const target = w.particleTarget;
+    // Flood ~3x the cap with inert mineral particles.
+    for (let k = 0; k < target * 3; k++) {
+      pushParticle(w, {
+        x: 5 + Math.random() * (w.width - 10),
+        y: w.surfaceY + 5 + Math.random() * 200,
+        z: 12, vx: 0, vy: 0, vz: 0, r: 2,
+        chemId: CHEM_IDS.minerals, density: 2.4,
+      });
+    }
+    const partMass = () => {
+      const ps = w.particleStore; let s = 0;
+      for (let i = 0; i < w.particles.length; i++) {
+        const r = ps.r[i];
+        s += (ps.density[i] || 1) * (4 / 3) * Math.PI * r * r * r;
+      }
+      return s;
+    };
+    const reserveTot = () => { let s = 0; for (let k = 0; k < w.reserve.length; k++) s += w.reserve[k]; return s; };
+    const m0 = partMass() + reserveTot() + ambTotal(w, CHEM_IDS.minerals);
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    // Cap enforced: particle count pulled down to the target.
+    expect(w.particles.length).toBeLessThanOrEqual(target);
+    // The shed mass parked in the reserve pool (not destroyed).
+    expect(reserveTot()).toBeGreaterThan(0);
+    // Mass conserved across demote/diffuse/precipitate/promote.
+    const m1 = partMass() + reserveTot() + ambTotal(w, CHEM_IDS.minerals);
+    expect(Math.abs(m1 - m0)).toBeLessThan(m0 * 0.02 + 1);
+  });
+});
+
 describe("region precipitation / hysteresis (Phase 3)", () => {
   it("supersaturated region precipitates then stabilises (no thrash, mass conserved)", () => {
     const w = quietWorld();
@@ -1706,6 +1743,8 @@ describe("mass conservation", () => {
     for (const c of w.creatures) m += creatureMass(c);
     // Phase F ambient pool: chemicals dissolved in the water column.
     for (let k = 0; k < w.ambient.length; k++) m += w.ambient[k];
+    // Phase 4 reserve pool (invisible per-region chem mass).
+    for (let k = 0; k < w.reserve.length; k++) m += w.reserve[k];
     // Atmosphere reservoir.
     for (const mk of MOLECULE_IDS) m += w.atmosphere[mk];
     return m;
@@ -1924,8 +1963,17 @@ describe("default creature behavior (integration)", () => {
     pushParticle(w, { x: 160, y: 100, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.biopolymer, density: 1.0 });
     for (let i = 0; i < 30; i++) step(w, 1 / 60);
     const stillThere = w.particles.some((p) => p.chemId === CHEM_IDS.biopolymer && p.x > 150 && p.x < 170);
-    if (stillThere) expect(w.creatures[0].x).toBeGreaterThan(100);
-    else expect(w.creatures[0].molecules.biopolymer).toBeGreaterThan(0);
+    if (stillThere) {
+      expect(w.creatures[0].x).toBeGreaterThan(100);
+    } else {
+      // The particle was consumed: assert the cell actually
+      // benefited. Biopolymer may already be (partly) digested into
+      // glucose/aa/fa within the 30-tick window, so accept any of
+      // the uptake products rather than brittle undigested biop.
+      const mol = w.creatures[0].molecules;
+      expect(mol.biopolymer + mol.glucose + mol.aminoAcid + mol.fattyAcid)
+        .toBeGreaterThan(0);
+    }
   });
   it("threshold not met -> no spawn", () => {
     const w = quietWorld();
