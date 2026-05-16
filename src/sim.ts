@@ -3646,16 +3646,10 @@ function spawnFounder(world: World): Creature {
 
 
 function seedInitialParticles(world: World): void {
-  const W = world.width;
-  const H = world.height;
-  const surfaceY = world.surfaceY;
-  const yRange = (H - surfaceY) * 0.85;
   const spawnOne = (spec: SpawnChemSpec): void => {
     const r = 1 + Math.random() * 1.5;
     pushParticle(world, {
-      x: Math.random() * W,
-      y: surfaceY + Math.random() * yRange,
-      z: r + Math.random() * (world.depth - 2 * r),
+      ...randomWaterPos(world, r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       chemId: spec.chemId,
@@ -3676,6 +3670,20 @@ function seedInitialParticles(world: World): void {
 }
 
 
+// Uniform random position anywhere in the water body (full width, full
+// sub-surface column, full depth). Used by every material-spawn path so
+// both the initial seed and the periodic replenish scatter throughout
+// the world instead of raining down from the surface.
+function randomWaterPos(
+  world: World, r: number,
+): { x: number; y: number; z: number } {
+  return {
+    x: Math.random() * world.width,
+    y: world.surfaceY + Math.random() * (world.height - world.surfaceY),
+    z: r + Math.random() * (world.depth - 2 * r),
+  };
+}
+
 // Particle spawn radius. All particles -- mineral, organic, gas --
 // share the small 1..2.5px range now that the sediment bed is gone.
 // (Previously this branched on chemId to occasionally roll a large
@@ -3691,12 +3699,8 @@ export function seedParticles(world: World, n: number): void {
   for (let i = 0; i < n; i++) {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
-    // Spawn below the surface so the initial state matches the wall.
-    const yRange = (world.height - world.surfaceY) * 0.85;
     pushParticle(world, {
-      x: Math.random() * world.width,
-      y: world.surfaceY + Math.random() * yRange,
-      z: r + Math.random() * (world.depth - 2 * r),
+      ...randomWaterPos(world, r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       chemId: spec.chemId,
@@ -5181,9 +5185,7 @@ function replenishParticles(world: World, dt: number): void {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
     pushParticle(world, {
-      x: Math.random() * world.width,
-      y: world.surfaceY + r,
-      z: r + Math.random() * (world.depth - 2 * r),
+      ...randomWaterPos(world, r),
       vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
       r,
       chemId: spec.chemId,
