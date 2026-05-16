@@ -1657,6 +1657,34 @@ describe("region dissolved-capacity calibration (Phase 0)", () => {
   });
 });
 
+describe("region precipitation / hysteresis (Phase 3)", () => {
+  it("supersaturated region precipitates then stabilises (no thrash, mass conserved)", () => {
+    const w = quietWorld();
+    w.aerationRate = 0;
+    w.particleSpawnRate = 0;
+    const INJECT = 5000;
+    w.ambient[0 * AMB_STRIDE + CHEM_IDS.minerals] = INJECT;
+    const minMass = () => {
+      let s = ambTotal(w, CHEM_IDS.minerals);
+      const ps = w.particleStore;
+      for (let i = 0; i < w.particles.length; i++) {
+        if (ps.chemId[i] !== CHEM_IDS.minerals) continue;
+        const r = ps.r[i];
+        s += ps.density[i] * (4 / 3) * Math.PI * r * r * r;
+      }
+      return s;
+    };
+    const m0 = minMass();
+    for (let i = 0; i < 90; i++) step(w, 1 / 60);
+    const counts: number[] = [];
+    for (let i = 0; i < 60; i++) { step(w, 1 / 60); counts.push(w.particles.length); }
+    const lo = Math.min(...counts), hi = Math.max(...counts);
+    expect(hi - lo).toBeLessThanOrEqual(3); // deadband -> no thrash
+    expect(hi).toBeGreaterThan(0);          // precipitation happened
+    expect(Math.abs(minMass() - m0)).toBeLessThan(m0 * 0.02 + 1); // conserved
+  });
+});
+
 describe("mass conservation", () => {
   // Total system mass = particles + creatures + ambient pool + atmosphere.
   // The phase F mass-conservation invariant: every per-tick chemistry

@@ -4102,6 +4102,60 @@ function diffuseRegions(world: World, dt: number): void {
     }
   }
 }
+
+// ---- Phase 3: precipitation + hysteresis -----------------------
+// Dissolution refills a region up to capacity; precipitation sheds
+// anything ABOVE capacity back into rendered 2px particles. The
+// 90..100% deadband (REGION_DISSOLVE_LO) between the two stops a
+// just-precipitated particle from instantly re-dissolving.
+const REGION_DISSOLVE_LO = 0.9;
+const PRECIP_R = 2; // physical radius of a precipitated particle
+function precipitateRegions(world: World): void {
+  // Best-effort under the global particle cap; leftover supersaturation
+  // stays dissolved until capacity rises or Phase 4 reserve drains it.
+  if (world.particles.length >= world.particleTarget) return;
+  const amb = world.ambient;
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const nReg = cols * rows;
+  const surfaceY = world.surfaceY;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  const volPer = FOUR_THIRDS_PI * PRECIP_R * PRECIP_R * PRECIP_R;
+  for (let ri = 0; ri < nReg; ri++) {
+    const rx = ri % cols;
+    const ry = (ri / cols) | 0;
+    const tReg = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
+    const base = ri * AMBIENT_STRIDE;
+    for (let k = 0; k < AMBIENT_STRIDE; k++) {
+      const v = amb[base + k];
+      if (v <= 0) continue;
+      const cap = regionDissolvedCapacity(k, world, tReg);
+      const excess = v - cap;
+      if (excess <= 0) continue;
+      const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+      const massPer = density * volPer;
+      if (massPer <= 0) continue;
+      let count = Math.floor(excess / massPer);
+      if (count <= 0) continue;
+      const room = world.particleTarget - world.particles.length;
+      if (count > room) count = room;
+      if (count <= 0) { if (room <= 0) return; continue; }
+      // Spawn within this region's px box, below the surface.
+      const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
+      for (let s = 0; s < count; s++) {
+        const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
+        let py = y0 + Math.random() * REGION_PX;
+        if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
+        py = Math.min(world.height - PRECIP_R, py);
+        pushParticle(world, {
+          x: px, y: py, z: PRECIP_R + Math.random() * (world.depth - 2 * PRECIP_R),
+          vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
+        });
+      }
+      amb[base + k] = v - count * massPer; // mass-conserving
+    }
+  }
+}
 // ===================================================================
 
 
@@ -4262,8 +4316,13 @@ function dissolveParticles(world: World, dt: number): void {
     const cap = regionDissolvedCapacity(chemId, world, REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE);
     if (cap <= 0) continue;
     const ak = ri * AMBIENT_STRIDE + chemId;
+    // Hysteresis: only (re)start dissolving once the region is below
+    // the LOW watermark (90% of capacity). Precipitation drives it
+    // back down to ~capacity; the 90..100% deadband stops a freshly
+    // precipitated particle from instantly re-dissolving (thrash).
+    if (ambient[ak] >= REGION_DISSOLVE_LO * cap) continue;
     const gap = cap - ambient[ak];
-    if (gap <= 0) continue; // region saturated; no dissolution
+    if (gap <= 0) continue;
     const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
     const mass = density * FOUR_THIRDS_PI * r * r * r;
     // Rate proportional to surface area (4*pi*r^2) and capacity gap.
@@ -4789,8 +4848,9 @@ export function step(world: World, dt: number): void {
     sampleRegionTemps(world);
     aerate(world, dt);
     aerateAmbient(world, dt);
-    dissolveParticles(world, dt);
     diffuseRegions(world, dt);
+    dissolveParticles(world, dt);
+    precipitateRegions(world);
     n = performance.now(); p.aerate += n - m; m = n;
     replenishParticles(world, dt);
     n = performance.now(); p.replenish += n - m; m = n;
@@ -4825,8 +4885,9 @@ export function step(world: World, dt: number): void {
     sampleRegionTemps(world);
     aerate(world, dt);
     aerateAmbient(world, dt);
-    dissolveParticles(world, dt);
     diffuseRegions(world, dt);
+    dissolveParticles(world, dt);
+    precipitateRegions(world);
     replenishParticles(world, dt);
     decayParticles(world, dt);
     pruneSpecies(world);
