@@ -1118,6 +1118,12 @@ canvas.addEventListener("dblclick", () => { resetView(); });
 // Dramatic depth: near particles are crisp and full-color, deep ones get
 // heavy blur, low alpha, and shift toward the water-color background --
 // classic atmospheric perspective. Eight buckets give a smooth gradient.
+// All particles render at a fixed 2px radius regardless of their
+// physical radius. Per design: render size is decoupled from
+// physics -- buoyancy/drag/collision still use the particle's real
+// `r` (which encodes mass via density*r^3); only the visual is
+// unified. Cells are unaffected (drawn separately).
+const PARTICLE_RENDER_R = 2;
 const N_BUCKETS = 8;
 // Render only the front N_RENDER_BUCKETS depth layers. The deepest
 // bucket gets the heaviest canvas blur (3.2px) and lowest alpha
@@ -1315,8 +1321,8 @@ function render(): void {
       // every particle.
       for (let k = 0; k < group.length; k++) {
         const p = group[k];
-        ctx.moveTo(p.x + p.r, p.y);
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.moveTo(p.x + PARTICLE_RENDER_R, p.y);
+        ctx.arc(p.x, p.y, PARTICLE_RENDER_R, 0, Math.PI * 2);
       }
       ctx.fill();
     }
@@ -1327,8 +1333,8 @@ function render(): void {
       ctx.beginPath();
       for (let k = 0; k < toxic.length; k++) {
         const p = toxic[k];
-        ctx.moveTo(p.x + p.r, p.y);
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.moveTo(p.x + PARTICLE_RENDER_R, p.y);
+        ctx.arc(p.x, p.y, PARTICLE_RENDER_R, 0, Math.PI * 2);
       }
       ctx.fill();
     }
