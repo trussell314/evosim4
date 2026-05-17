@@ -1009,7 +1009,7 @@ export const NAMED_REACTION_NAMES: ReadonlyArray<string> = [
   "synthPhoto-V", "synthPhoto-L", "synthPhoto-S",
   "synthChemo-B", "synthChemo-M", "synthChemo-F", "synthChemo-0",
   "synthMech", "synthThermo", "synthMag",
-  "synthBond", "synthRepair",
+  "synthBond", "synthRepair", "synthBiop",
 ];
 export function reactionName(slot: number): string {
   return slot < NAMED_REACTION_NAMES.length ? NAMED_REACTION_NAMES[slot] : `rxn${slot}`;
@@ -1593,7 +1593,13 @@ const RX_TOXIFY = RX_BASE + 6;
 const RX_DEATH_CATDENATURE = RX_BASE + 7;
 const RX_DENATURE_WASTE = RX_BASE + 8;
 const RX_SYNTH_CATALYST = RX_BASE + 9;
-const RX_SYNTH_COUNT = 10;
+// Founder biogenesis: a new cell's fixed seed (membrane/adp/mrna/glu/
+// aa + its ATP) is matter. We debit the world reserve to pay for it
+// (mass-conserving); only the part the reserve couldn't cover is a
+// genuine external input -- recorded here so ATP/materials are never
+// silently conjured.
+const RX_BIOGENESIS = RX_BASE + 10;
+const RX_SYNTH_COUNT = 11;
 const NREACT = N_REACTIONS + RX_SYNTH_COUNT;
 // rxn buckets: [id][loc 0=cell 1=field][cat 0=uncat 1=catalyzed]
 const RX_LOC_CELL = 0, RX_LOC_FIELD = 1;
@@ -1775,6 +1781,9 @@ export function reactionCatalog(): ReactionInfo[] {
   syn(RX_DEATH_CATDENATURE, "death catalyst denature", [], aaMin);
   syn(RX_DENATURE_WASTE, "waste denature", [{ chem: CHEM_WASTE, coef: 1 }], [{ chem: CHEM_CO2, coef: 1 }]);
   syn(RX_SYNTH_CATALYST, "synth catalyst", aaMin, [{ chem: CHEM_ADP, coef: CAT_ATP_COST }]);
+  syn(RX_BIOGENESIS, "founder biogenesis (reserve→seed/ATP)", [],
+    [{ chem: CHEM_MEMBRANE, coef: 1 }, { chem: CHEM_ADP, coef: 5 }, { chem: CHEM_MRNA, coef: 5 },
+     { chem: CHEM_GLU, coef: 10 }, { chem: CHEM_AA, coef: 0.5 }]);
   REACTION_CATALOG = out;
   return out;
 }
@@ -2371,7 +2380,7 @@ function buildReactionTable(): Reaction[] {
 // D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
 // H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
 // disassembler can label catalyst slots by their bootstrap pathway.
-export const NAMED_REACTION_COUNT = 24;
+export const NAMED_REACTION_COUNT = 25;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +
@@ -2456,6 +2465,13 @@ function installNamedReactions(out: Reaction[]): void {
   // wires these into emergent adhesion + somatic-mutation control.
   out[22] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_BOND], [1], -2, 0.3, { gateMask: 1 << SYNTH_BIT_BOND, atpFloor: true, mrnaScale: true });
   out[23] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_REPAIR], [1], -3, 0.2, { gateMask: 1 << SYNTH_BIT_REPAIR, atpFloor: true, mrnaScale: true });
+  // Primary-production link (3a): fix glucose into the bulk-food
+  // storage polymer. This is what lets autotrophs feed the web --
+  // photosynthesis makes glu, this turns surplus glu into biopolymer
+  // that heterotrophs ingest + digest (out[10]) back to glu/aa/fa,
+  // closing the biopolymer/fa loop. Endergonic (storage costs a
+  // little ATP), SYNTH_BIO-gated, mRNA-scaled like other biosynth.
+  out[24] = mk([CHEM_GLU], [1], [CHEM_BIOPOLYMER], [1], -2, 0.5, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true });
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
@@ -3867,6 +3883,63 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
   }
 }
 
+// Founder seed amounts (mirror makeCreature). ATP is now real matter,
+// so spawning pays for the whole seed out of the world reserve where
+// possible; the uncovered remainder is the explicit, recorded
+// external input (RX_BIOGENESIS) -- nothing is silently conjured.
+const FOUNDER_SEED_ATP = 40;
+const FOUNDER_SEED_MAT: ReadonlyArray<readonly [number, number]> = [
+  [CHEM_MEMBRANE, 1], [CHEM_ADP, 5], [CHEM_MRNA, 5], [CHEM_GLU, 10], [CHEM_AA, 0.5],
+];
+function pullReserve(world: World, x: number, y: number, chem: number, want: number): number {
+  if (want <= 0) return 0;
+  const res = world.reserve;
+  const nReg = regionCols(world) * regionRows(world);
+  if (nReg <= 0) return 0;
+  const lb = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
+  const rb = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
+  const bases = lb === rb ? [lb] : [lb, rb];
+  let got = 0;
+  for (const base of bases) {
+    if (got >= want) break;
+    const v = res[base + chem];
+    if (v <= 0) continue;
+    const t = Math.min(v, want - got);
+    res[base + chem] = v - t; got += t;
+  }
+  return got;
+}
+function pullReserveAny(world: World, x: number, y: number, want: number): number {
+  if (want <= 0) return 0;
+  const res = world.reserve;
+  const nReg = regionCols(world) * regionRows(world);
+  if (nReg <= 0) return 0;
+  const lb = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
+  const rb = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
+  const bases = lb === rb ? [lb] : [lb, rb];
+  let got = 0;
+  for (const base of bases) {
+    for (let k = 0; k < AMBIENT_STRIDE && got < want; k++) {
+      if (k === CHEM_WASTE || k === CHEM_CO2) continue;
+      const v = res[base + k];
+      if (v <= 0) continue;
+      const t = Math.min(v, want - got);
+      res[base + k] = v - t; got += t;
+    }
+  }
+  return got;
+}
+// Pay for the founder's fixed seed (materials + ATP) out of reserve so
+// ATP/materials are conserved matter; record the founder spawn (and
+// the uncovered remainder = explicit external input) as RX_BIOGENESIS.
+function reconcileFounderSeed(world: World, x: number, y: number): void {
+  for (const [chem, amt] of FOUNDER_SEED_MAT) pullReserve(world, x, y, chem, amt);
+  const atpFromReserve = pullReserveAny(world, x, y, FOUNDER_SEED_ATP);
+  recordRxn(RX_BIOGENESIS, RX_LOC_CELL, 0);
+  const atpExternal = FOUNDER_SEED_ATP - atpFromReserve;
+  if (atpExternal > 0) recordAtp(ATP_OTHER, 0, atpExternal);
+}
+
 function spawnFounder(world: World): Creature | null {
   const z = world.depth * 0.5;
   // Reject-sample positions until we find one that's not within
@@ -3909,6 +3982,9 @@ function spawnFounder(world: World): Creature | null {
   if (c === null) return null; // genome roll failed -- skip this founder
   // Recirculate cap-sequestered reserve mass into the new founder.
   drawFounderReserve(world, c, x, y);
+  // ATP is real matter now: pay for the fixed seed out of reserve
+  // (conserving) and record the spawn / external remainder.
+  reconcileFounderSeed(world, x, y);
   updateCreatureRadius(c); // reflect the drawn mass in r / density
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
@@ -4110,13 +4186,12 @@ function makeCreature(
     return null;
   }
   const genome = rolled;
-  let hasChl = false, hasEnz = false;
+  let hasEnz = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
     if (b === OP.SYNTH) {
       const kind = (genome[(i + 1) % genome.length] ?? 0) % SYNTH_KIND_COUNT;
-      if (kind === SYNTH_KIND.CHL) hasChl = true;
-      else if (kind === SYNTH_KIND.ENZ) hasEnz = true;
+      if (kind === SYNTH_KIND.ENZ) hasEnz = true;
     }
   }
   // Minimal cell body: biomass just above MIN_VIABLE_MEMBRANE (the
@@ -4129,7 +4204,7 @@ function makeCreature(
     x, y, z,
     r: MIN_CREATURE_R,
     density: 1.0,
-    energy: 2,
+    energy: FOUNDER_SEED_ATP,
     senseRange: computeSenseRange(genome),
     thrustAccel: computeThrustAccel(genome),
     genome,
@@ -4141,14 +4216,21 @@ function makeCreature(
       // requires the cell to maintain it via SYNTH_BIO.
       membrane: 1,
       adp: 5,
-      mrna: 1,
+      // Enough mRNA for biosynth to run near full rate from birth
+      // (rate scales with mrna/MRNA_REF; the old seed of 1 = 20%).
+      mrna: 5,
+      // Glucose so the cell can respire to *sustain* ATP past the
+      // one-shot energy grant (it can't make ATP without fuel).
+      glucose: 10,
       // Seed a small amino acid pool so the new viability threshold
       // (MIN_VIABLE_AMINOACID) doesn't kill founders before they have
       // a chance to run SYNTH_AA / PREDATE / ENGULF. Maintenance
       // decay also funnels a fraction of biomass-loss into aa each
       // tick, but that takes a few sim-sec to accumulate.
       aminoAcid: 0.5,
-      chlorophyll: hasChl ? 0.5 : 0,
+      // No starter chlorophyll -- autotrophs must build it via
+      // SYNTH_CHL (now affordable thanks to the energy/mrna grant).
+      chlorophyll: 0,
       enzyme: hasEnz ? 0.5 : 0,
       // Founders start with ZERO receptors -- sensing is earned. A
       // lineage that runs biosynth (SYNTH_BIO bit) replenishes its
