@@ -1183,21 +1183,18 @@ exportBtn.addEventListener("click", () => {
 });
 dock.appendChild(exportBtn);
 
-// flexible gap so the particle-cap control right-aligns when there's room
-const dockSpacer = document.createElement("div");
-dockSpacer.style.cssText = "flex:1 1 12px;min-width:8px;";
-dock.appendChild(dockSpacer);
-
-// --- particle-cap control: a clearly-labelled bordered pill so the
-// -/+ obviously belong to the cap (not a stray stepper by export) ---
+// --- particle-cap control: a clearly-labelled, solid bordered pill,
+// kept inline with the rest of the dock (no detaching spacer -- it
+// read as an orphaned/broken widget far to the right) ---
 let particleCap = 5000;
 const capWrap = document.createElement("div");
 capWrap.style.cssText =
-  "display:flex;align-items:center;gap:6px;padding:2px 8px;" +
-  "border:1px solid #1a3340;border-radius:4px;background:rgba(0,0,0,.35);";
+  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 0 auto;" +
+  "white-space:nowrap;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(2,12,18,0.95);";
 const capTitle = document.createElement("span");
 capTitle.textContent = "particle cap";
-capTitle.style.cssText = "opacity:0.75;";
+capTitle.style.cssText = "opacity:0.7;white-space:nowrap;";
 const capValue = document.createElement("span");
 capValue.style.cssText = "font-weight:bold;min-width:4ch;text-align:right;";
 const capMinus = mkDockBtn("−", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
