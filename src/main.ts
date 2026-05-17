@@ -1101,6 +1101,30 @@ function setOverlay(mode: HeatmapMode): void {
 overlaySelectEl.addEventListener("change", () => setOverlay(overlaySelectEl.value as HeatmapMode));
 dock.appendChild(overlaySelectEl);
 
+// Density-overlay source toggles: rendered particles, dissolved
+// field, reserve field -- all on by default. Combined on the same
+// 2px-particle-equivalent scale.
+let densRend = true, densDiss = true, densResv = true;
+const densSrcWrap = document.createElement("label");
+densSrcWrap.style.cssText = "display:flex;align-items:center;gap:7px;" + HUD_FONT;
+function mkSrcChk(text: string, get: () => boolean, set: (v: boolean) => void): HTMLLabelElement {
+  const l = document.createElement("label");
+  l.style.cssText = "display:flex;align-items:center;gap:2px;cursor:pointer;color:#9ee;";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = get();
+  cb.style.cssText = "cursor:pointer;";
+  cb.addEventListener("change", () => set(cb.checked));
+  l.append(cb, document.createTextNode(text));
+  return l;
+}
+densSrcWrap.append(
+  mkSrcChk("rend", () => densRend, (v) => { densRend = v; }),
+  mkSrcChk("diss", () => densDiss, (v) => { densDiss = v; }),
+  mkSrcChk("resv", () => densResv, (v) => { densResv = v; }),
+);
+dock.appendChild(densSrcWrap);
+
 // --- profile toggle (worker-side; dumps current profile on disable) ---
 let profileOn = false;
 const profileBtn = mkDockBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
@@ -1874,20 +1898,46 @@ function drawHeatmap(): void {
     return;
   }
   if (heatmapMode === "density") {
-  // Density: count particles per heatmap cell.
-  const counts = new Uint16Array(cols * rows);
-  for (const p of snapshot.particles) {
-    const cx = Math.floor(p.x / cell);
-    const cy = Math.floor((p.y - surfaceY) / cell);
-    if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
-    counts[cy * cols + cx]++;
+  // Combined density in 2px-particle-equivalents: rendered particles
+  // (count) + dissolved + reserve fields (per-region PE spread over
+  // the heatmap cells covering that region), each gated by its
+  // checkbox. All on => total stuff per cell.
+  const dens = new Float32Array(cols * rows);
+  if (densRend) {
+    for (const p of snapshot.particles) {
+      const cx = Math.floor(p.x / cell);
+      const cy = Math.floor((p.y - surfaceY) / cell);
+      if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+      dens[cy * cols + cx] += 1;
+    }
   }
-  let maxC = 1;
-  for (let i = 0; i < counts.length; i++) if (counts[i] > maxC) maxC = counts[i];
+  if (densDiss || densResv) {
+    const rCols = Math.max(1, Math.ceil(width / REGION_PX));
+    const rRows = Math.max(1, Math.ceil(height / REGION_PX));
+    // a heatmap cell is smaller than a region; give it the region's
+    // PE prorated by area so values stay per-cell comparable.
+    const areaFrac = (cell * cell) / (REGION_PX * REGION_PX);
+    const aPE = snapshot.ambientPE, vPE = snapshot.reservePE;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const wx = c * cell + cell / 2;
+        const wy = surfaceY + r * cell + cell / 2;
+        let rx = Math.floor(wx / REGION_PX); if (rx < 0) rx = 0; else if (rx >= rCols) rx = rCols - 1;
+        let ry = Math.floor(wy / REGION_PX); if (ry < 0) ry = 0; else if (ry >= rRows) ry = rRows - 1;
+        const ri = ry * rCols + rx;
+        let add = 0;
+        if (densDiss && aPE && ri < aPE.length) add += aPE[ri] * areaFrac;
+        if (densResv && vPE && ri < vPE.length) add += vPE[ri] * areaFrac;
+        dens[r * cols + c] += add;
+      }
+    }
+  }
+  let maxC = 1e-6;
+  for (let i = 0; i < dens.length; i++) if (dens[i] > maxC) maxC = dens[i];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const n = counts[r * cols + c];
-      if (n === 0) continue;
+      const n = dens[r * cols + c];
+      if (n <= 0) continue;
       ctx.fillStyle = heatColorDensity(n / maxC);
       ctx.fillRect(c * cell, surfaceY + r * cell, cell, cell);
     }
@@ -1895,7 +1945,8 @@ function drawHeatmap(): void {
   ctx.globalAlpha = 1;
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.font = UI_CANVAS_FONT;
-  ctx.fillText(`heatmap: particle density (max ${maxC}/cell, H toggles)`, 8, surfaceY + 14);
+  const srcs = [densRend && "rend", densDiss && "diss", densResv && "resv"].filter(Boolean).join("+") || "none";
+  ctx.fillText(`heatmap: density [${srcs}] (max ${maxC.toFixed(0)}/cell, H toggles)`, 8, surfaceY + 14);
     return;
   }
 }

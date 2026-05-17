@@ -8708,6 +8708,10 @@ export interface RenderSnapshot extends WorldEnv {
   // in particles alongside the rendered column.
   chemDissolved: Float32Array;
   chemReserveCount: Float32Array;
+  // Per-region dissolved / reserve totals in 2px-particle-equivalents
+  // (row-major, regionCols x regionRows). For the density overlay.
+  ambientPE: Float32Array;
+  reservePE: Float32Array;
   // Per-reaction lifetime execution counts (indexed by reaction id;
   // see reactionCatalog()). Absent if accounting is disabled.
   reactionTotals?: Int32Array;
@@ -8829,17 +8833,32 @@ export function takeSnapshot(world: World): RenderSnapshot {
   // Per-chem global aggregates: sum dissolved + reserve across regions.
   const chemDissolved = new Float32Array(CHEMICAL_COUNT);
   const chemReserveCount = new Float32Array(CHEMICAL_COUNT);
+  const amb = world.ambient;
+  const res = world.reserve;
+  const nReg = amb.length / AMBIENT_STRIDE;
+  // Per-region dissolved / reserve totals in 2px-particle-equivalents
+  // (same scale as rendered particles) so the density overlay can mix
+  // all three sources on one footing.
+  const ambientPE = new Float32Array(nReg);
+  const reservePE = new Float32Array(nReg);
   {
-    const amb = world.ambient;
-    const res = world.reserve;
-    const nReg = amb.length / AMBIENT_STRIDE;
     const volPer = (4 / 3) * Math.PI * PRECIP_R * PRECIP_R * PRECIP_R;
+    const amountPerArr = new Float32Array(CHEMICAL_COUNT);
+    for (let k = 0; k < CHEMICAL_COUNT; k++) {
+      const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+      amountPerArr[k] = (d * volPer) / CHEM_MM[k];
+    }
     for (let ri = 0; ri < nReg; ri++) {
       const base = ri * AMBIENT_STRIDE;
+      let aPE = 0, rPE = 0;
       for (let k = 0; k < CHEMICAL_COUNT; k++) {
         chemDissolved[k] += amb[base + k];
         chemReserveCount[k] += res[base + k];
+        const ap = amountPerArr[k];
+        if (ap > 0) { aPE += amb[base + k] / ap; rPE += res[base + k] / ap; }
       }
+      ambientPE[ri] = aPE;
+      reservePE[ri] = rPE;
     }
     // Express BOTH dissolved and reserve as 2px-particle equivalents
     // (mass / mass-per-2px-particle) so the panel reads in particles,
@@ -8900,6 +8919,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     phylogenyEvents: world.phylogenyEvents.slice(),
     chemDissolved,
     chemReserveCount,
+    ambientPE,
+    reservePE,
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
     foundersEnabled: world.foundersEnabled !== false,
