@@ -115,17 +115,13 @@ hud.style.cssText =
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
   "display:flex;justify-content:space-between;align-items:center;padding:2px 4px;" +
-  "cursor:pointer;user-select:none;color:#9ee;gap:8px;" + HUD_FONT;
+  "user-select:none;color:#9ee;gap:8px;" + HUD_FONT;
 // Live stats shown on the bar even when the HUD body is collapsed.
 // Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
 hudStats.style.cssText = "padding:0 4px;" + HUD_FONT;
 hudStats.textContent = "fps=--  sim=--x  t=0s";
-const hudToggle = document.createElement("span");
-hudToggle.textContent = "[+]";
-hudToggle.style.cssText = "padding:0 4px;" + HUD_FONT;
 hudBar.appendChild(hudStats);
-hudBar.appendChild(hudToggle);
 // Per-frame timing, always visible (even when the inspector body is
 // collapsed) so render/sim budget is glanceable while iterating.
 const hudTimings = document.createElement("div");
@@ -153,41 +149,30 @@ disasmHeader.textContent = "[+] show disasm";
 const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;" + HUD_FONT;
+// HUD is now a static top-left status strip (stats / timings / diag).
+// The selected-cell inspector, pin control and disasm moved into the
+// Inspector tab of the right-side organisms drawer.
 hud.appendChild(hudBar);
 hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
-hud.appendChild(inspector);
-// Pin the SELECTED cell's species. The star on the analysis-panel
-// cards only reaches species that are in Top 10 / Pinned / Notable;
-// this lets you pin any species at all -- just click its cell, then
-// this button. Hidden when nothing is selected. Label/visibility
-// refreshed each frame by updateInspector().
+root.appendChild(hud);
+
+// Pin the SELECTED cell's species. The star on the species cards only
+// reaches species in Top 10 / Pinned / Notable; this lets you pin any
+// species -- click its cell, then this button. Hidden when nothing is
+// selected. Label/visibility refreshed each frame by updateInspector().
 const pinSpeciesBtn = document.createElement("div");
 pinSpeciesBtn.style.cssText =
   "display:none;align-items:center;gap:8px;padding:4px 9px 6px;" +
   "cursor:pointer;user-select:none;" + HUD_FONT;
-hud.appendChild(pinSpeciesBtn);
-hud.appendChild(disasmHeader);
-hud.appendChild(disasmBody);
-root.appendChild(hud);
-
 pinSpeciesBtn.addEventListener("click", () => {
   const sel = selectedCell();
   if (!sel) return;
   togglePin(sel.speciesKey, sel.genome, sel.color, peakBiomassByKey.get(sel.speciesKey) ?? 0);
 });
 
-let hudMinimized = true;
-inspector.style.display = "none";
-disasmHeader.style.display = "none";
+// Disasm stays a collapsible sub-section inside the Inspector tab.
 let disasmExpanded = false;
-hudBar.addEventListener("click", () => {
-  hudMinimized = !hudMinimized;
-  inspector.style.display = hudMinimized ? "none" : "";
-  disasmHeader.style.display = hudMinimized ? "none" : "";
-  disasmBody.style.display = (hudMinimized || !disasmExpanded) ? "none" : "";
-  hudToggle.textContent = hudMinimized ? "[+]" : "[–]";
-});
 disasmHeader.addEventListener("click", () => {
   disasmExpanded = !disasmExpanded;
   disasmBody.style.display = disasmExpanded ? "" : "none";
@@ -618,7 +603,7 @@ analysisHeader.style.cssText =
 // title sits left and the toggle sits right; in the 26px minimized
 // tab there's only the toggle, and centered looks right.
 const analysisTitle = document.createElement("span");
-analysisTitle.textContent = "genome analysis";
+analysisTitle.textContent = "organisms";
 analysisTitle.style.cssText = `font-weight:bold;font-size:${UI_FONT_PX}px;`;
 const analysisToggle = document.createElement("span");
 analysisToggle.textContent = "+";
@@ -628,21 +613,40 @@ analysisToggle.textContent = "+";
 analysisToggle.style.cssText = "padding:0 4px;";
 analysisHeader.appendChild(analysisTitle);
 analysisHeader.appendChild(analysisToggle);
+const PANE_MAXH = "max-height:calc(100vh - 72px);";
+// List body (Top 10 / Pinned / Notable species cards).
 const analysisBody = document.createElement("div");
 analysisBody.style.cssText =
-  "white-space:pre-wrap;padding:8px 10px;overflow-y:auto;display:none;" +
-  "max-height:calc(100vh - 36px);";
-// Tab bar: Top 10 (live ranking) | Pinned (user stars) | Notable
-// (sim-driven hall of fame). Hidden while the panel is minimized.
-type AnalysisTab = "top" | "pinned" | "notable";
-let analysisTab: AnalysisTab = "top";
+  "white-space:pre-wrap;padding:8px 10px;overflow-y:auto;display:none;" + PANE_MAXH;
+// Inspector pane: selected-cell readout + pin control + disasm. The
+// disasm grid is wide, so allow both-axis scroll.
+const inspectorPane = document.createElement("div");
+inspectorPane.style.cssText =
+  "padding:6px 4px 10px;overflow:auto;display:none;" + PANE_MAXH;
+inspectorPane.appendChild(inspector);
+inspectorPane.appendChild(pinSpeciesBtn);
+inspectorPane.appendChild(disasmHeader);
+inspectorPane.appendChild(disasmBody);
+// Genome pane: the population genome-size histogram canvas.
+const genomePane = document.createElement("div");
+genomePane.style.cssText = "padding:8px 10px;display:none;";
+const gsCanvas = document.createElement("canvas");
+gsCanvas.style.cssText = "width:100%;height:160px;display:block;";
+genomePane.appendChild(gsCanvas);
+
+// Tabs: Inspector (selected cell) | Top 10 / Pinned / Notable (species
+// lists) | Genome (size histogram). Hidden while the panel is minimized.
+type AnalysisTab = "inspector" | "top" | "pinned" | "notable" | "genome";
+let analysisTab: AnalysisTab = "inspector";
 const analysisTabs = document.createElement("div");
 analysisTabs.style.cssText =
-  "display:none;border-bottom:1px solid #1a3340;";
+  "display:none;border-bottom:1px solid #1a3340;overflow-x:auto;white-space:nowrap;";
 const TAB_DEFS: { id: AnalysisTab; label: string }[] = [
+  { id: "inspector", label: "Inspector" },
   { id: "top", label: "Top 10" },
   { id: "pinned", label: "Pinned" },
   { id: "notable", label: "Notable" },
+  { id: "genome", label: "Genome" },
 ];
 const tabButtons = new Map<AnalysisTab, HTMLSpanElement>();
 function styleTab(btn: HTMLSpanElement, active: boolean): void {
@@ -653,6 +657,15 @@ function styleTab(btn: HTMLSpanElement, active: boolean): void {
       ? "color:#cff;border-bottom:2px solid #4cc;font-weight:bold;"
       : "color:#7aa;border-bottom:2px solid transparent;");
 }
+function isListTab(t: AnalysisTab): boolean {
+  return t === "top" || t === "pinned" || t === "notable";
+}
+function applyTabVisibility(): void {
+  const open = !analysisMinimized;
+  analysisBody.style.display = open && isListTab(analysisTab) ? "" : "none";
+  inspectorPane.style.display = open && analysisTab === "inspector" ? "" : "none";
+  genomePane.style.display = open && analysisTab === "genome" ? "" : "none";
+}
 for (const def of TAB_DEFS) {
   const btn = document.createElement("span");
   btn.textContent = def.label;
@@ -660,6 +673,7 @@ for (const def of TAB_DEFS) {
   btn.addEventListener("click", () => {
     analysisTab = def.id;
     for (const [id, b] of tabButtons) styleTab(b, id === analysisTab);
+    applyTabVisibility();
     renderAnalysisPanel();
   });
   tabButtons.set(def.id, btn);
@@ -668,18 +682,20 @@ for (const def of TAB_DEFS) {
 analysisPanel.appendChild(analysisHeader);
 analysisPanel.appendChild(analysisTabs);
 analysisPanel.appendChild(analysisBody);
+analysisPanel.appendChild(inspectorPane);
+analysisPanel.appendChild(genomePane);
 root.appendChild(analysisPanel);
 // When minimized, hide the title text so just the [+] sits in the tab.
 analysisTitle.style.display = "none";
 analysisHeader.addEventListener("click", () => {
   analysisMinimized = !analysisMinimized;
   analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
-  analysisBody.style.display = analysisMinimized ? "none" : "";
   analysisTabs.style.display = analysisMinimized ? "none" : "";
   analysisToggle.textContent = analysisMinimized ? "+" : "–";
   analysisTitle.style.display = analysisMinimized ? "none" : "";
   analysisHeader.style.justifyContent = analysisMinimized ? "center" : "space-between";
   analysisHeader.style.padding = analysisMinimized ? "6px 4px" : "6px 8px";
+  applyTabVisibility();
   resize();
   positionWorldButtons();
   // Populate immediately on expand instead of waiting for the next
@@ -1232,7 +1248,7 @@ function resize(): void {
   const fullW = vv ? vv.width : window.innerWidth;
   const h = vv ? vv.height : window.innerHeight;
   // Reserve a strip on each side for the slide-out consoles (left =
-  // chemistry, right = genome analysis) so the canvas doesn't render
+  // chemistry, right = organisms) so the canvas doesn't render
   // under either. Each width depends on whether that panel is expanded.
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
   const leftW = leftPanelWidth();
@@ -1295,13 +1311,6 @@ canvas.addEventListener("click", (e) => {
   const rect = canvas.getBoundingClientRect();
   const cx = e.clientX - rect.left;
   const cy = e.clientY - rect.top;
-  // Genome-stats panel toggle. Hit-test in CSS pixel space against
-  // the last-rendered toggle rect.
-  const t = gsToggleRect;
-  if (cx >= t.x && cx <= t.x + t.w && cy >= t.y && cy <= t.y + t.h) {
-    gsMinimized = !gsMinimized;
-    return;
-  }
   const w = canvasToWorld(cx, cy);
   const best = findCellAt(w.x, w.y);
   if (best >= 0) {
@@ -1866,7 +1875,7 @@ function render(): void {
   // Reset to DPR-only transform before drawing.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawPhylogeny();
-  drawGenomeStats();
+  if (!analysisMinimized && analysisTab === "genome") drawGenomeStats();
 }
 
 // The overlay is driven solely by the controls-bar <select> via
@@ -2049,29 +2058,30 @@ function heatColorDensity(x: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-// Population genome-size histogram in the top-right corner. Bars are
-// counts of cells per length bucket; vertical lines mark mean and
-// mean ± stddev so you can see at a glance whether genomes are
-// bloating, collapsing, or settled.
-const GS_PANEL_W = 240;
-const GS_PANEL_H_FULL = 110;
-const GS_PANEL_H_MIN = 22;
-const GS_PANEL_MARGIN = 8;
+// Population genome-size histogram, drawn into the Genome tab's own
+// canvas. Bars are counts of cells per length bucket; vertical lines
+// mark mean and mean ± stddev so you can see at a glance whether
+// genomes are bloating, collapsing, or settled.
 const GS_BUCKET_BYTES = 4;      // 4 bytes per bucket
 const GS_N_BUCKETS = 25;        // covers 0..100 bytes
 const GS_BUCKETS = new Int32Array(GS_N_BUCKETS);
 const GS_TICK_BYTES = [0, 25, 50, 75, 100]; // x-axis labels
-let gsMinimized = true;
-// Last-rendered toggle rect, used by the canvas click handler to
-// hit-test the minimize/expand button. Updated each frame.
-let gsToggleRect = { x: 0, y: 0, w: 0, h: 0 };
 
 function drawGenomeStats(): void {
+  const gctx = gsCanvas.getContext("2d");
+  if (!gctx) return;
   const dpr = getDpr();
-  const canvasCssW = canvas.width / dpr;
-  const panelH = gsMinimized ? GS_PANEL_H_MIN : GS_PANEL_H_FULL;
-  const panelX = canvasCssW - GS_PANEL_W - GS_PANEL_MARGIN;
-  const panelY = GS_PANEL_MARGIN;
+  const cssW = gsCanvas.clientWidth || (ANALYSIS_PANEL_W - 20);
+  const cssH = 160;
+  const needW = Math.max(1, Math.round(cssW * dpr));
+  const needH = Math.max(1, Math.round(cssH * dpr));
+  if (gsCanvas.width !== needW || gsCanvas.height !== needH) {
+    gsCanvas.width = needW;
+    gsCanvas.height = needH;
+  }
+  gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  gctx.clearRect(0, 0, cssW, cssH);
+
   const cs = snapshot.creatures;
   const n = cs.length;
 
@@ -2093,98 +2103,69 @@ function drawGenomeStats(): void {
   let maxCount = 1;
   for (let i = 0; i < GS_N_BUCKETS; i++) if (GS_BUCKETS[i] > maxCount) maxCount = GS_BUCKETS[i];
 
-  // Panel chrome.
-  ctx.fillStyle = "rgba(4,16,24,0.78)";
-  ctx.fillRect(panelX, panelY, GS_PANEL_W, panelH);
-  ctx.strokeStyle = "#1a3340";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(panelX + 0.5, panelY + 0.5, GS_PANEL_W - 1, panelH - 1);
+  gctx.fillStyle = "#9ee";
+  gctx.font = UI_CANVAS_FONT;
+  gctx.textBaseline = "top";
+  gctx.textAlign = "left";
+  gctx.fillText(
+    `n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`,
+    4, 4,
+  );
 
-  // Minimize/maximize toggle in the top-right of the panel header.
-  // Draw the toggle BEFORE the header text so the text can be width-
-  // capped to end before the toggle's left edge (otherwise the text
-  // grows long enough to draw through the toggle box -- visible as
-  // "max=N[+]" overlap).
-  const tw = 16, th = 14;
-  const tx = panelX + GS_PANEL_W - tw - 4;
-  const ty = panelY + 3;
-  gsToggleRect = { x: tx, y: ty, w: tw, h: th };
-  ctx.strokeStyle = "#9ee";
-  ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
-  ctx.fillStyle = "#9ee";
-  ctx.font = UI_CANVAS_FONT;
-  ctx.textBaseline = "top";
-  ctx.textAlign = "center";
-  ctx.fillText(gsMinimized ? "+" : "–", tx + tw / 2, ty + 2);
-  ctx.textAlign = "left";
-
-  // Header text, truncated to leave room for the toggle.
-  const fullHdr = `genome size  n=${n}  µ=${mean.toFixed(1)}  σ=${stddev.toFixed(1)}  max=${maxLen}`;
-  const headerBudget = tx - (panelX + 6) - 4;
-  let hdr = fullHdr;
-  if (ctx.measureText(hdr).width > headerBudget) {
-    while (hdr.length > 4 && ctx.measureText(hdr + "…").width > headerBudget) hdr = hdr.slice(0, -1);
-    hdr = hdr + "…";
-  }
-  ctx.fillText(hdr, panelX + 6, panelY + 4);
-
-  if (gsMinimized) return;
-
-  // Plot area: leave room for header (18px) and tick-label band (14px).
-  const plotX = panelX + 6;
-  const plotY = panelY + 22;
-  const plotW = GS_PANEL_W - 12;
-  const plotH = panelH - 22 - 18;
+  const plotX = 6;
+  const plotY = 26;
+  const plotW = cssW - 12;
+  const plotH = cssH - plotY - 20;
   const bucketW = plotW / GS_N_BUCKETS;
   const maxBytes = GS_N_BUCKETS * GS_BUCKET_BYTES;
   const xForByteLen = (L: number) =>
     plotX + Math.min(plotW, Math.max(0, (L / maxBytes) * plotW));
 
   // Bars.
-  ctx.fillStyle = "#5fa9c4";
+  gctx.fillStyle = "#5fa9c4";
   for (let i = 0; i < GS_N_BUCKETS; i++) {
     const c = GS_BUCKETS[i];
     if (c === 0) continue;
     const h = (c / maxCount) * plotH;
-    ctx.fillRect(plotX + i * bucketW, plotY + (plotH - h), Math.max(1, bucketW - 1), h);
+    gctx.fillRect(plotX + i * bucketW, plotY + (plotH - h), Math.max(1, bucketW - 1), h);
   }
 
   // Baseline + tick marks with byte-count labels.
-  ctx.strokeStyle = "#456773";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(plotX, plotY + plotH + 0.5);
-  ctx.lineTo(plotX + plotW, plotY + plotH + 0.5);
-  ctx.stroke();
-  ctx.fillStyle = "#7ab";
-  ctx.textAlign = "center";
+  gctx.strokeStyle = "#456773";
+  gctx.lineWidth = 1;
+  gctx.beginPath();
+  gctx.moveTo(plotX, plotY + plotH + 0.5);
+  gctx.lineTo(plotX + plotW, plotY + plotH + 0.5);
+  gctx.stroke();
+  gctx.fillStyle = "#7ab";
+  gctx.textAlign = "center";
   for (const b of GS_TICK_BYTES) {
     const x = xForByteLen(b);
-    ctx.beginPath();
-    ctx.moveTo(x, plotY + plotH);
-    ctx.lineTo(x, plotY + plotH + 3);
-    ctx.stroke();
-    ctx.fillText(String(b), x, plotY + plotH + 5);
+    gctx.beginPath();
+    gctx.moveTo(x, plotY + plotH);
+    gctx.lineTo(x, plotY + plotH + 3);
+    gctx.stroke();
+    gctx.fillText(String(b), x, plotY + plotH + 5);
   }
-  ctx.textAlign = "left";
+  gctx.textAlign = "left";
 
   // Mean + ±stddev lines.
   if (n > 0) {
     const xMean = xForByteLen(mean);
-    ctx.strokeStyle = "#f0c050";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(xMean, plotY);
-    ctx.lineTo(xMean, plotY + plotH);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(240,192,80,0.55)";
-    ctx.lineWidth = 1;
+    gctx.strokeStyle = "#f0c050";
+    gctx.lineWidth = 1.5;
+    gctx.beginPath();
+    gctx.moveTo(xMean, plotY);
+    gctx.lineTo(xMean, plotY + plotH);
+    gctx.stroke();
+    gctx.strokeStyle = "rgba(240,192,80,0.55)";
+    gctx.lineWidth = 1;
     for (const off of [-stddev, stddev]) {
       const x = xForByteLen(mean + off);
-      ctx.beginPath();
-      ctx.moveTo(x, plotY);
-      ctx.lineTo(x, plotY + plotH);
-      ctx.stroke();
+      gctx.beginPath();
+      gctx.moveTo(x, plotY);
+      gctx.lineTo(x, plotY + plotH);
+      gctx.stroke();
     }
   }
 }
@@ -3058,7 +3039,7 @@ function buildSpeciesCard(
 }
 
 function renderAnalysisPanel(): void {
-  if (analysisMinimized) return;
+  if (analysisMinimized || !isListTab(analysisTab)) return;
   analysisBody.innerHTML = "";
   const header = document.createElement("div");
   header.style.cssText = "padding:6px 0 8px;font-weight:bold;border-bottom:1px solid #1a3340;";
