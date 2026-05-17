@@ -1128,6 +1128,33 @@ densSrcWrap.append(
 );
 dock.appendChild(densSrcWrap);
 
+// Density-overlay material filter. -1 = all chems; otherwise only
+// that chem contributes (rendered filtered client-side; dissolved/
+// reserve come from the worker's per-chem per-region field).
+let densityChemSel = -1;
+const densChemSel = document.createElement("select");
+densChemSel.title = "Density overlay: limit to one material";
+densChemSel.style.cssText =
+  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;max-width:13ch;" + HUD_FONT;
+{
+  const optAll = document.createElement("option");
+  optAll.value = "-1"; optAll.textContent = "mat: all";
+  densChemSel.appendChild(optAll);
+  const nChem = snapshot.chemDissolved ? snapshot.chemDissolved.length : 0;
+  for (let k = 0; k < nChem; k++) {
+    const o = document.createElement("option");
+    o.value = String(k); o.textContent = chemName(k);
+    densChemSel.appendChild(o);
+  }
+}
+densChemSel.addEventListener("change", () => {
+  const v = parseInt(densChemSel.value, 10);
+  densityChemSel = Number.isNaN(v) ? -1 : v;
+  simWorker.postMessage({ type: "setDensityChem", chem: densityChemSel });
+});
+dock.appendChild(densChemSel);
+
 // --- profile toggle (worker-side; dumps current profile on disable) ---
 let profileOn = false;
 const profileBtn = mkDockBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
@@ -1913,9 +1940,16 @@ function drawHeatmap(): void {
   // (count) + dissolved + reserve fields (per-region PE spread over
   // the heatmap cells covering that region), each gated by its
   // checkbox. All on => total stuff per cell.
+  // Material filter: -1 = all chems. When a chem is focused, rendered
+  // is filtered client-side; dissolved/reserve use the worker's
+  // per-chem per-region field (present once the worker has applied
+  // the same focus chem -- snapshot.densityChem echoes it).
+  const matSel = densityChemSel;
+  const matName = matSel < 0 ? "all" : chemName(matSel);
   const dens = new Float32Array(cols * rows);
   if (densRend) {
     for (const p of snapshot.particles) {
+      if (matSel >= 0 && p.chemId !== matSel) continue;
       const cx = Math.floor(p.x / cell);
       const cy = Math.floor((p.y - surfaceY) / cell);
       if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
@@ -1928,7 +1962,11 @@ function drawHeatmap(): void {
     // a heatmap cell is smaller than a region; give it the region's
     // PE prorated by area so values stay per-cell comparable.
     const areaFrac = (cell * cell) / (REGION_PX * REGION_PX);
-    const aPE = snapshot.ambientPE, vPE = snapshot.reservePE;
+    // All chems -> aggregate PE; specific chem -> worker per-chem PE,
+    // but only once the worker echoes the matching focus chem.
+    const perChemReady = matSel >= 0 && snapshot.densityChem === matSel;
+    const aPE = matSel < 0 ? snapshot.ambientPE : (perChemReady ? snapshot.densityChemAmbPE : undefined);
+    const vPE = matSel < 0 ? snapshot.reservePE : (perChemReady ? snapshot.densityChemResPE : undefined);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const wx = c * cell + cell / 2;
@@ -1957,7 +1995,7 @@ function drawHeatmap(): void {
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.font = UI_CANVAS_FONT;
   const srcs = [densRend && "rend", densDiss && "diss", densResv && "resv"].filter(Boolean).join("+") || "none";
-  ctx.fillText(`heatmap: density [${srcs}] (max ${maxC.toFixed(0)}/cell, H toggles)`, 8, surfaceY + 14);
+  ctx.fillText(`heatmap: density [${srcs}] · mat:${matName} (max ${maxC.toFixed(0)}/cell, H toggles)`, 8, surfaceY + 14);
     return;
   }
 }

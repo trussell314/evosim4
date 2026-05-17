@@ -1197,6 +1197,9 @@ export interface World {
   // Whether the founder top-up spawns new lineages. Optional: absent
   // (older saves / test literals) means enabled. Persisted.
   foundersEnabled?: boolean;
+  // UI focus chem for the density overlay (-1 / absent = all chems).
+  // Transient; not persisted.
+  densityChem?: number;
   width: number;
   height: number;
   depth: number;
@@ -8712,6 +8715,11 @@ export interface RenderSnapshot extends WorldEnv {
   // (row-major, regionCols x regionRows). For the density overlay.
   ambientPE: Float32Array;
   reservePE: Float32Array;
+  // Density-overlay material filter: the focused chem and its
+  // per-region dissolved/reserve PE (present only when one is focused).
+  densityChem?: number;
+  densityChemAmbPE?: Float32Array;
+  densityChemResPE?: Float32Array;
   // Per-reaction lifetime execution counts (indexed by reaction id;
   // see reactionCatalog()). Absent if accounting is disabled.
   reactionTotals?: Int32Array;
@@ -8841,6 +8849,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
   // all three sources on one footing.
   const ambientPE = new Float32Array(nReg);
   const reservePE = new Float32Array(nReg);
+  let densityChemAmbPE: Float32Array | undefined;
+  let densityChemResPE: Float32Array | undefined;
   {
     const volPer = (4 / 3) * Math.PI * PRECIP_R * PRECIP_R * PRECIP_R;
     const amountPerArr = new Float32Array(CHEMICAL_COUNT);
@@ -8859,6 +8869,21 @@ export function takeSnapshot(world: World): RenderSnapshot {
       }
       ambientPE[ri] = aPE;
       reservePE[ri] = rPE;
+    }
+    // Per-region PE for the UI's focus chem (density overlay material
+    // filter). Only when a valid chem is focused -- nReg floats each.
+    const fc = world.densityChem;
+    if (typeof fc === "number" && fc >= 0 && fc < CHEMICAL_COUNT) {
+      const ap = amountPerArr[fc];
+      densityChemAmbPE = new Float32Array(nReg);
+      densityChemResPE = new Float32Array(nReg);
+      if (ap > 0) {
+        for (let ri = 0; ri < nReg; ri++) {
+          const b = ri * AMBIENT_STRIDE + fc;
+          densityChemAmbPE[ri] = amb[b] / ap;
+          densityChemResPE[ri] = res[b] / ap;
+        }
+      }
     }
     // Express BOTH dissolved and reserve as 2px-particle equivalents
     // (mass / mass-per-2px-particle) so the panel reads in particles,
@@ -8921,6 +8946,9 @@ export function takeSnapshot(world: World): RenderSnapshot {
     chemReserveCount,
     ambientPE,
     reservePE,
+    densityChem: world.densityChem,
+    densityChemAmbPE,
+    densityChemResPE,
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
     foundersEnabled: world.foundersEnabled !== false,

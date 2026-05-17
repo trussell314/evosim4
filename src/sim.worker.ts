@@ -77,6 +77,7 @@ type WorkerInbound =
   | { type: "setPinnedSpecies"; keys: string[] }
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
+  | { type: "setDensityChem"; chem: number }
   | { type: "spawnSpecies"; genome: number[] }
   | { type: "particle-pool-message"; index: number; data: unknown }
   | { type: "particle-pool-error"; index: number; message: string };
@@ -147,6 +148,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setFoundersEnabled":
       if (world) world.foundersEnabled = m.on;
+      break;
+    case "setDensityChem":
+      if (world) world.densityChem = m.chem;
       break;
     case "spawnSpecies":
       if (world && m.genome.length > 0) {
