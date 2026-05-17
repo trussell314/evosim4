@@ -577,9 +577,6 @@ refreshActiveDisasm();
 // bottom wall sits PHYLO_STRIP_H pixels above the canvas bottom so cells
 // never overlap the timeline.
 const PHYLO_STRIP_H = 70;
-// Dedicated band for the world-control dock, reserved below the world
-// (above the phylogeny strip) so the dock doesn't sit over the world.
-const DOCK_BAND_H = 46;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
@@ -985,46 +982,80 @@ leftHeader.addEventListener("click", () => {
   else { lastChemPanelMs = 0; updateChemPanel(); positionChemDetail(); }
 });
 // ===================================================================
-// World control dock: a single flex bar of all world controls, sitting
-// just above the phylogeny strip between the side panels. Replaces the
-// old hand-positioned floating buttons + offset math. New controls
-// (e.g. the gradient overlay) just append here.
+
+// ===================================================================
+// Bottom Controls bar. Reserved region (its measured height is taken
+// out of the world fit, so it never overlays the world), grouped into
+// run / world / view, collapsible to a slim handle. Replaces the old
+// floating dock. Explicit text color here -- bare label spans were
+// invisible because the container set no color.
 // ---------------------------------------------------------------------
-const DOCK_BTN =
-  "padding:4px 10px;border:1px solid #1a3340;border-radius:4px;" +
-  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;white-space:nowrap;" +
+let controlsBarH = 40;        // measured each layout
+let controlsCollapsed = false;
+const CBTN =
+  "padding:4px 9px;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;white-space:nowrap;" +
   HUD_FONT;
-function mkDockBtn(label: string, title: string): HTMLButtonElement {
+function mkBtn(label: string, title: string): HTMLButtonElement {
   const b = document.createElement("button");
-  b.textContent = label;
-  b.title = title;
-  b.style.cssText = DOCK_BTN;
+  b.textContent = label; b.title = title; b.style.cssText = CBTN;
   return b;
 }
-// active = on-state tint; pass a tint css fragment for the colour.
-function setDockActive(b: HTMLButtonElement, on: boolean, tint: string): void {
-  b.style.cssText = DOCK_BTN + (on ? tint : "");
+function setBtn(b: HTMLButtonElement, on: boolean, tint: string): void {
+  b.style.cssText = CBTN + (on ? tint : "");
 }
-const TINT_AMBER = "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a;";
-const TINT_TEAL = "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;";
-const TINT_GREEN = "background:rgba(0,50,20,.75);color:#9efba8;border-color:#3a8a5a;";
-const TINT_RED = "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
+const T_AMBER = "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a;";
+const T_TEAL  = "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;";
+const T_GREEN = "background:rgba(0,50,20,.75);color:#9efba8;border-color:#3a8a5a;";
+const T_RED   = "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
 
-const dock = document.createElement("div");
-dock.style.cssText =
-  "position:fixed;z-index:10;display:flex;flex-wrap:wrap;align-items:center;" +
-  "gap:6px;padding:5px 8px;border:1px solid #1a3340;border-radius:6px;" +
-  "background:rgba(2,12,18,0.82);" + HUD_FONT;
-root.appendChild(dock);
+const ctrlBar = document.createElement("div");
+ctrlBar.style.cssText =
+  "position:fixed;z-index:10;bottom:0;display:flex;flex-wrap:wrap;" +
+  "align-items:center;gap:6px 10px;padding:5px 8px;box-sizing:border-box;" +
+  "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
+  HUD_FONT;
+root.appendChild(ctrlBar);
 
-// --- reset (two-tap to confirm) ---
-const resetBtn = mkDockBtn("reset", "Clear saved world and start fresh");
+// Collapse handle (always visible, far left of the bar).
+const ctrlHandle = document.createElement("button");
+ctrlHandle.style.cssText = CBTN + "padding:4px 8px;";
+const ctrlGroupsWrap = document.createElement("div");
+ctrlGroupsWrap.style.cssText =
+  "display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;flex:1 1 auto;";
+function renderCtrlCollapsed(): void {
+  ctrlHandle.textContent = controlsCollapsed ? "▸ controls" : "▾ controls";
+  ctrlGroupsWrap.style.display = controlsCollapsed ? "none" : "flex";
+}
+ctrlHandle.addEventListener("click", () => {
+  controlsCollapsed = !controlsCollapsed;
+  renderCtrlCollapsed();
+  positionWorldButtons();
+  resize();
+});
+ctrlBar.append(ctrlHandle, ctrlGroupsWrap);
+
+// A labelled control group.
+function mkGroup(name: string): HTMLDivElement {
+  const g = document.createElement("div");
+  g.style.cssText = "display:flex;align-items:center;gap:6px;";
+  const lab = document.createElement("span");
+  lab.textContent = name;
+  lab.style.cssText = "opacity:0.55;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;";
+  g.appendChild(lab);
+  ctrlGroupsWrap.appendChild(g);
+  return g;
+}
+const gRun = mkGroup("run");
+const gWorld = mkGroup("world");
+const gView = mkGroup("view");
+
+// ---- run: reset / turbo / profile / export ----
+const resetBtn = mkBtn("reset", "Clear saved world and start fresh");
 let resetArmedUntil = 0;
 let resetArmTimer: ReturnType<typeof setTimeout> | null = null;
 function disarmReset(): void {
-  resetArmedUntil = 0;
-  resetBtn.textContent = "reset";
-  resetBtn.style.cssText = DOCK_BTN;
+  resetArmedUntil = 0; resetBtn.textContent = "reset"; resetBtn.style.cssText = CBTN;
   if (resetArmTimer) { clearTimeout(resetArmTimer); resetArmTimer = null; }
 }
 resetBtn.addEventListener("click", () => {
@@ -1032,111 +1063,126 @@ resetBtn.addEventListener("click", () => {
   if (now < resetArmedUntil) { hardReset(); return; }
   resetArmedUntil = now + 3000;
   resetBtn.textContent = "tap again to wipe";
-  resetBtn.style.cssText = DOCK_BTN + TINT_RED;
+  resetBtn.style.cssText = CBTN + T_RED;
   if (resetArmTimer) clearTimeout(resetArmTimer);
   resetArmTimer = setTimeout(disarmReset, 3000);
 });
-dock.appendChild(resetBtn);
-
-// --- turbo ---
 let turboMode = false;
 let turboFrameCounter = 0;
-const TURBO_RENDER_EVERY = 30; // one render per ~500ms at 60fps rAF
-const turboBtn = mkDockBtn("turbo", "Run sim flat-out; render once per ~500ms");
+const TURBO_RENDER_EVERY = 30;
+const turboBtn = mkBtn("turbo", "Run sim flat-out; render once per ~500ms");
 turboBtn.addEventListener("click", () => {
   turboMode = !turboMode;
   turboFrameCounter = 0;
   turboBtn.textContent = turboMode ? "turbo on" : "turbo";
-  setDockActive(turboBtn, turboMode, TINT_AMBER);
+  setBtn(turboBtn, turboMode, T_AMBER);
   simWorker.postMessage({ type: "setTurbo", turbo: turboMode });
 });
-dock.appendChild(turboBtn);
-
-// --- region grid overlay ---
-let gridLinesOn = false;
-const gridBtn = mkDockBtn("grid", "Toggle the region grid overlay");
-gridBtn.addEventListener("click", () => {
-  gridLinesOn = !gridLinesOn;
-  gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
-  setDockActive(gridBtn, gridLinesOn, TINT_TEAL);
+let profileOn = false;
+const profileBtn = mkBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
+profileBtn.addEventListener("click", () => {
+  if (profileOn && snapshot.profile) dumpProfile();
+  profileOn = !profileOn;
+  setBtn(profileBtn, profileOn, T_TEAL);
+  simWorker.postMessage({ type: "toggleProfile" });
 });
-dock.appendChild(gridBtn);
+const exportBtn = mkBtn("export", "Download the saved world as JSON");
+exportBtn.addEventListener("click", () => {
+  const json = latestSaveJson;
+  if (!json) { alert("export not ready yet -- try again in a moment"); return; }
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `evosim4-save-t${Math.floor(snapshot.t)}s.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+});
+gRun.append(resetBtn, turboBtn, profileBtn, exportBtn);
 
-// --- founder generation toggle (persisted with world state) ---
+// ---- world: founders / particle cap ----
 let foundersOn = true;
-const foundersBtn = mkDockBtn("founders on", "Toggle spawning of new founder lineages (saved with the world)");
-setDockActive(foundersBtn, true, TINT_GREEN);
+const foundersBtn = mkBtn("founders on", "Toggle spawning of new founder lineages (saved with the world)");
+setBtn(foundersBtn, true, T_GREEN);
 foundersBtn.addEventListener("click", () => {
   foundersOn = !foundersOn;
   foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
-  setDockActive(foundersBtn, foundersOn, TINT_GREEN);
+  setBtn(foundersBtn, foundersOn, T_GREEN);
   simWorker.postMessage({ type: "setFoundersEnabled", on: foundersOn });
 });
-// Keep the button truthful to loaded/saved state (called from the
-// snapshot handler). Only repaint when it actually changed.
 function syncFoundersBtn(on: boolean): void {
   if (on === foundersOn) return;
   foundersOn = on;
   foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
-  setDockActive(foundersBtn, foundersOn, TINT_GREEN);
+  setBtn(foundersBtn, foundersOn, T_GREEN);
 }
-dock.appendChild(foundersBtn);
+let particleCap = 5000;
+const capWrap = document.createElement("div");
+capWrap.style.cssText =
+  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 0 auto;" +
+  "white-space:nowrap;border:1px solid #1a3340;border-radius:4px;color:#9ee;" +
+  "background:rgba(0,0,0,.4);";
+const capTitle = document.createElement("span");
+capTitle.textContent = "cap"; capTitle.style.cssText = "opacity:0.7;";
+const capValue = document.createElement("span");
+capValue.style.cssText = "font-weight:bold;min-width:4ch;text-align:right;color:#cfe;";
+const capMinus = mkBtn("−", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
+const capPlus = mkBtn("+", `Raise the particle cap by ${PARTICLE_TARGET_STEP}`);
+capMinus.style.cssText = CBTN + "padding:1px 9px;";
+capPlus.style.cssText = CBTN + "padding:1px 9px;";
+function renderCapLabel(): void { capValue.textContent = String(particleCap); }
+function nudgeCap(delta: number): void {
+  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
+  renderCapLabel();
+  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
+}
+capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
+capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
+renderCapLabel();
+capWrap.append(capTitle, capMinus, capValue, capPlus);
+gWorld.append(foundersBtn, capWrap);
 
-// --- overlay selector (field heatmap; gradient modes will slot in) ---
+// ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
+const SELECT_CSS =
+  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.5);color:#9ee;cursor:pointer;" + HUD_FONT;
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay (also: H to cycle)";
-overlaySelectEl.style.cssText =
-  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
-  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" + HUD_FONT;
-for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: particle density"]] as [HeatmapMode, string][]) {
+overlaySelectEl.style.cssText = SELECT_CSS;
+for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
-  o.value = val; o.textContent = txt;
-  overlaySelectEl.appendChild(o);
+  o.value = val; o.textContent = txt; overlaySelectEl.appendChild(o);
 }
 function setOverlay(mode: HeatmapMode): void {
   heatmapMode = mode;
   if (overlaySelectEl.value !== mode) overlaySelectEl.value = mode;
 }
 overlaySelectEl.addEventListener("change", () => setOverlay(overlaySelectEl.value as HeatmapMode));
-dock.appendChild(overlaySelectEl);
-
-// Density-overlay source toggles: rendered particles, dissolved
-// field, reserve field -- all on by default. Combined on the same
-// 2px-particle-equivalent scale.
 let densRend = true, densDiss = true, densResv = true;
-const densSrcWrap = document.createElement("label");
-densSrcWrap.style.cssText = "display:flex;align-items:center;gap:7px;" + HUD_FONT;
-function mkSrcChk(text: string, get: () => boolean, set: (v: boolean) => void): HTMLLabelElement {
+const densSrcWrap = document.createElement("span");
+densSrcWrap.style.cssText = "display:flex;align-items:center;gap:7px;color:#9ee;";
+function mkSrcChk(text: string, set: (v: boolean) => void): HTMLLabelElement {
   const l = document.createElement("label");
-  l.style.cssText = "display:flex;align-items:center;gap:2px;cursor:pointer;color:#9ee;";
+  l.style.cssText = "display:flex;align-items:center;gap:2px;cursor:pointer;";
   const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = get();
-  cb.style.cssText = "cursor:pointer;";
+  cb.type = "checkbox"; cb.checked = true; cb.style.cssText = "cursor:pointer;";
   cb.addEventListener("change", () => set(cb.checked));
   l.append(cb, document.createTextNode(text));
   return l;
 }
 densSrcWrap.append(
-  mkSrcChk("rend", () => densRend, (v) => { densRend = v; }),
-  mkSrcChk("diss", () => densDiss, (v) => { densDiss = v; }),
-  mkSrcChk("resv", () => densResv, (v) => { densResv = v; }),
+  mkSrcChk("rend", (v) => { densRend = v; }),
+  mkSrcChk("diss", (v) => { densDiss = v; }),
+  mkSrcChk("resv", (v) => { densResv = v; }),
 );
-dock.appendChild(densSrcWrap);
-
-// Density-overlay material filter. -1 = all chems; otherwise only
-// that chem contributes (rendered filtered client-side; dissolved/
-// reserve come from the worker's per-chem per-region field).
 let densityChemSel = -1;
 const densChemSel = document.createElement("select");
 densChemSel.title = "Density overlay: limit to one material";
-densChemSel.style.cssText =
-  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
-  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;max-width:13ch;" + HUD_FONT;
+densChemSel.style.cssText = SELECT_CSS + "max-width:13ch;";
 {
   const optAll = document.createElement("option");
   optAll.value = "-1"; optAll.textContent = "mat: all";
@@ -1153,76 +1199,27 @@ densChemSel.addEventListener("change", () => {
   densityChemSel = Number.isNaN(v) ? -1 : v;
   simWorker.postMessage({ type: "setDensityChem", chem: densityChemSel });
 });
-dock.appendChild(densChemSel);
-
-// --- profile toggle (worker-side; dumps current profile on disable) ---
-let profileOn = false;
-const profileBtn = mkDockBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
-profileBtn.addEventListener("click", () => {
-  if (profileOn && snapshot.profile) dumpProfile();
-  profileOn = !profileOn;
-  setDockActive(profileBtn, profileOn, TINT_TEAL);
-  simWorker.postMessage({ type: "toggleProfile" });
+let gridLinesOn = false;
+const gridBtn = mkBtn("grid", "Toggle the region grid overlay");
+gridBtn.addEventListener("click", () => {
+  gridLinesOn = !gridLinesOn;
+  gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
+  setBtn(gridBtn, gridLinesOn, T_TEAL);
 });
-dock.appendChild(profileBtn);
+gView.append(overlaySelectEl, densSrcWrap, densChemSel, gridBtn);
 
-// --- export (an action; grouped with the other action buttons) ---
-const exportBtn = mkDockBtn("export", "Download the saved world as JSON");
-exportBtn.addEventListener("click", () => {
-  const json = latestSaveJson;
-  if (!json) { alert("export not ready yet -- try again in a moment"); return; }
-  const blob = new Blob([json], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `evosim4-save-t${Math.floor(snapshot.t)}s.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-});
-dock.appendChild(exportBtn);
+renderCtrlCollapsed();
 
-// --- particle-cap control: a clearly-labelled, solid bordered pill,
-// kept inline with the rest of the dock (no detaching spacer -- it
-// read as an orphaned/broken widget far to the right) ---
-let particleCap = 5000;
-const capWrap = document.createElement("div");
-capWrap.style.cssText =
-  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 0 auto;" +
-  "white-space:nowrap;border:1px solid #1a3340;border-radius:4px;" +
-  "background:rgba(2,12,18,0.95);";
-const capTitle = document.createElement("span");
-capTitle.textContent = "particle cap";
-capTitle.style.cssText = "opacity:0.7;white-space:nowrap;";
-const capValue = document.createElement("span");
-capValue.style.cssText = "font-weight:bold;min-width:4ch;text-align:right;";
-const capMinus = mkDockBtn("−", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
-const capPlus = mkDockBtn("+", `Raise the particle cap by ${PARTICLE_TARGET_STEP}`);
-capMinus.style.cssText = DOCK_BTN + "padding:1px 9px;";
-capPlus.style.cssText = DOCK_BTN + "padding:1px 9px;";
-function renderCapLabel(): void { capValue.textContent = String(particleCap); }
-function nudgeCap(delta: number): void {
-  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
-  renderCapLabel();
-  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
-}
-capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
-capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
-renderCapLabel();
-capWrap.append(capTitle, capMinus, capValue, capPlus);
-dock.appendChild(capWrap);
-
-// Single positioning pass: dock fills the gap between the side panels,
-// just above the phylogeny strip. Flex handles internal layout.
+// Geometry: span between the side panels, anchored to screen bottom;
+// measure real height so the world fit can reserve exactly that.
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
-  const lx = leftPanelWidth() + 8;
-  dock.style.left = `${lx}px`;
-  dock.style.right = `${panelW + 8}px`;
-  // Sits in its reserved DOCK_BAND_H band, just above the phylo strip.
-  dock.style.bottom = `${PHYLO_STRIP_H + 6}px`;
+  ctrlBar.style.left = `${leftPanelWidth()}px`;
+  ctrlBar.style.right = `${panelW}px`;
+  controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
 }
+function bottomReserveH(): number { return PHYLO_STRIP_H + controlsBarH; }
+
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -1246,14 +1243,16 @@ function resize(): void {
   // Fit world into the canvas area above the phylogeny strip with a
   // uniform scale + center-letterbox. The world's logical dimensions
   // never change -- this only computes how to draw it on screen.
+  // Lay out + measure the controls bar first so the world fit can
+  // reserve its real height (it never overlaps the world).
+  positionWorldButtons();
   const availW = w;
-  const availH = Math.max(1, h - PHYLO_STRIP_H - DOCK_BAND_H);
+  const availH = Math.max(1, h - bottomReserveH());
   const sx = availW / WORLD_SIZE.w;
   const sy = availH / WORLD_SIZE.h;
   viewScale = Math.min(sx, sy);
   viewOffsetX = (availW - WORLD_SIZE.w * viewScale) / 2;
   viewOffsetY = (availH - WORLD_SIZE.h * viewScale) / 2;
-  positionWorldButtons();
 }
 resize();
 window.addEventListener("resize", resize);
@@ -1456,7 +1455,7 @@ function resetView(): void { viewZoom = 1; viewPanX = 0; viewPanY = 0; }
 function clampPan(): void {
   const canvasW = canvas.clientWidth;
   const canvasH = canvas.clientHeight;
-  const availH = Math.max(1, canvasH - PHYLO_STRIP_H);
+  const availH = Math.max(1, canvasH - bottomReserveH());
   const drawW = WORLD_SIZE.w * viewScale * viewZoom;
   const drawH = WORLD_SIZE.h * viewScale * viewZoom;
   const originX = viewOffsetX * viewZoom;
@@ -2169,7 +2168,8 @@ function drawPhylogeny(): void {
   const dpr = getDpr();
   const canvasCssH = canvas.height / dpr;
   const canvasCssW = canvas.width / dpr;
-  const stripY = canvasCssH - stripH;
+  // Phylogeny sits directly above the bottom controls bar.
+  const stripY = canvasCssH - stripH - controlsBarH;
   const w = canvasCssW;
 
   // Semi-opaque panel so the strip is legible over particles drawn underneath.
