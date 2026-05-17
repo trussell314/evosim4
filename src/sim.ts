@@ -1245,6 +1245,11 @@ export interface World {
   // disable spontaneous founder spawning while they assert specific
   // population shapes.
   founderTarget: number;
+  // Sim-time of the last founder spawned by the rare-immigration
+  // rescue trickle. Gates the trickle so founders are a rare external
+  // rescue, not a continuous population subsidy. Transient (not
+  // serialized -- reloading just resets the trickle clock).
+  lastFounderTrickleT: number;
   // Set of creature IDs that were spawned as founders (vs. born from
   // fission). Used by the age-based founder-cull -- see FOUNDER_LIFESPAN_SEC.
   // Stays populated for the founder's entire life so the HUD's
@@ -3717,6 +3722,7 @@ export function createWorld(
     liveLineageRoots: new Set(),
     nextLineageRoot: 0,
     founderTarget: FOUNDER_TARGET,
+    lastFounderTrickleT: -1e9,
     // Transient set of currently-alive founder cell IDs. Used to give
     // every founder a fixed 180s lifespan after spawn so the founders
     // can't dominate indefinitely -- their descendants have to take
@@ -3818,8 +3824,20 @@ export function createWorld(
 // FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
 // batch" constants any more.
 const FOUNDER_TARGET = 50;
-// Founder top-up always refills the full deficit (founderTarget minus
-// current live lineages) every step it's short -- no wave throttle.
+// Rare-immigration model. Founders are NOT a population subsidy that
+// refills to FOUNDER_TARGET every step -- they are a rare external
+// rescue. Spawning is gated two ways: (1) only when the live lineage
+// pool has collapsed below FOUNDER_RESCUE_FLOOR (a self-sufficient
+// ecosystem sustains itself on descendants and never triggers it),
+// and (2) at most one new founder per FOUNDER_TRICKLE_INTERVAL_SEC
+// sim-seconds. Total extinction (zero lineages) still gets an
+// immediate reseed so a dead world can restart. This makes "stable
+// population" mean genuine self-sufficiency rather than a hidden
+// firehose of fresh genomes.
+const FOUNDER_RESCUE_FLOOR = 8;
+const FOUNDER_TRICKLE_INTERVAL_SEC = 15;
+// (legacy note) Founder top-up previously refilled the full deficit
+// (founderTarget minus current live lineages) every step it was short.
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
 // water column time to populate before any creatures enter the
@@ -4223,11 +4241,13 @@ function makeCreature(
   }
   const genome = rolled;
   let hasEnz = false;
+  let hasChl = false;
   for (let i = 0; i < genome.length; i++) {
     const b = genome[i];
     if (b === OP.SYNTH) {
       const kind = (genome[(i + 1) % genome.length] ?? 0) % SYNTH_KIND_COUNT;
       if (kind === SYNTH_KIND.ENZ) hasEnz = true;
+      if (kind === SYNTH_KIND.CHL) hasChl = true;
     }
   }
   // Minimal cell body: biomass just above MIN_VIABLE_MEMBRANE (the
@@ -4264,9 +4284,14 @@ function makeCreature(
       // decay also funnels a fraction of biomass-loss into aa each
       // tick, but that takes a few sim-sec to accumulate.
       aminoAcid: 0.5,
-      // No starter chlorophyll -- autotrophs must build it via
-      // SYNTH_CHL (now affordable thanks to the energy/mrna grant).
-      chlorophyll: 0,
+      // Heritable pigment: a founder whose genome expresses SYNTH_CHL
+      // inherits a small starter chlorophyll pool, exactly as enzyme
+      // users get a starter enzyme pool. Phototroph machinery is
+      // inherited, not synthesized from zero each generation; children
+      // already inherit chl via fission, so this only seeds founders.
+      // Still gated on the genome carrying SYNTH_CHL -- no free lunch
+      // for lineages that can't express the pathway.
+      chlorophyll: hasChl ? 0.5 : 0,
       enzyme: hasEnz ? 0.5 : 0,
       // Founders start with ZERO receptors -- sensing is earned. A
       // lineage that runs biosynth (SYNTH_BIO bit) replenishes its
@@ -5261,20 +5286,23 @@ const ATM_AMBIENT_RATE = 0.5; // fraction of gap that crosses per sec at peak ac
 // deliberately stays at 1x (see aerateAmbient) so it accumulates and
 // gives chlorophyll users a carbon niche.
 const O2_SURFACE_EXCHANGE_MULT = 10;
-// Open-boundary gas exchange (option A): the atmosphere is the outside
-// air -- an effectively unbounded O2 reservoir and CO2 sink. Each tick
-// the modelled atmosphere relaxes back toward its baseline (O2 topped
-// back up, accumulated CO2 vented away), so dissolved O2 can always be
-// replenished regardless of biological demand and excess CO2 leaves
-// the system. Gases are therefore intentionally NOT mass-closed.
-const ATM_VENT_RATE = 0.25; // fraction of (baseline - current)/sec
+// Asymmetric boundary. O2 is open: the atmosphere is effectively
+// unbounded outside air, relaxed back toward baseline each tick so
+// dissolved O2 can always be replenished regardless of biological
+// demand. CO2 is CLOSED: the atmospheric CO2 pool is finite and
+// conserved -- respired CO2 returns to it via the surface exchange
+// below, photosynthesis draws it back down, and nothing vents it out
+// of the system. Carbon is therefore mass-closed (an ocean is a vast
+// carbonate buffer that recycles carbon, not exports it); O2 is the
+// one deliberate open reservoir.
+const ATM_VENT_RATE = 0.25; // fraction of (baseline - current)/sec, O2 only
 function aerateAmbient(world: World, dt: number): void {
   const ambient = world.ambient;
   const atm = world.atmosphere;
-  // Open boundary: relax atmospheric gases toward outside-air baseline.
+  // Open boundary for O2 only: relax atmospheric O2 toward outside-air
+  // baseline. CO2 is intentionally NOT vented -- it is a conserved pool.
   const vent = Math.min(1, ATM_VENT_RATE * dt);
   atm.o2 += (ATMOSPHERE_INIT_O2 - atm.o2) * vent;
-  atm.co2 += (ATMOSPHERE_INIT_CO2 - atm.co2) * vent;
   // Surface activity 0..1; even calm water has 0.3 of the rate.
   const act = 0.3 + 0.7 * surfaceActivity(world);
   const baseRate = ATM_AMBIENT_RATE * act * dt;
@@ -5922,17 +5950,25 @@ export function step(world: World, dt: number): void {
   const delayDone = world.useSeedRamp
     ? world.initialSeedDone
     : world.t >= FOUNDER_SPAWN_DELAY_SEC;
-  if (delayDone && world.foundersEnabled !== false && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
-    const wasEmpty = currentLineages.size === 0;
-    // Always top off to founderTarget in one go (no wave throttle):
-    // spawn the full deficit every step it's below target.
-    const need = world.founderTarget - currentLineages.size;
-    for (let i = 0; i < need; i++) {
-      const f = spawnFounder(world);
-      // When the world had just gone fully empty, the first new
-      // founder also re-anchors the color palette so descendant
-      // coloring restarts relative to this new root.
-      if (f && wasEmpty && i === 0) {
+  const belowFloor = currentLineages.size < FOUNDER_RESCUE_FLOOR;
+  const wasEmpty = currentLineages.size === 0;
+  // Rare immigration: only rescue when the lineage pool has collapsed
+  // below the floor, and then only a trickle. Total extinction bypasses
+  // the interval so a fully dead world restarts promptly; otherwise at
+  // most one new founder per FOUNDER_TRICKLE_INTERVAL_SEC.
+  const trickleDue = wasEmpty
+    || world.t - world.lastFounderTrickleT >= FOUNDER_TRICKLE_INTERVAL_SEC;
+  if (
+    delayDone && world.foundersEnabled !== false && world.founderTarget > 0
+    && (allDead || !overCap) && belowFloor && trickleDue
+  ) {
+    const f = spawnFounder(world);
+    if (f) {
+      world.lastFounderTrickleT = world.t;
+      // When the world had just gone fully empty, the new founder also
+      // re-anchors the color palette so descendant coloring restarts
+      // relative to this new root.
+      if (wasEmpty) {
         world.anchorGenome = new Uint8Array(f.genome);
         f.color = genomeColor(f.genome, world.anchorGenome);
       }
