@@ -1056,13 +1056,13 @@ export function makeRandomViableGenome(
   // pure-autotroph branch; pure photoautotrophs can still evolve from
   // these by losing INGEST via mutation.
   if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
-  // ~10% of founders are adhesive. The SYNTH BOND param byte is the
+  // ~50% of founders are adhesive. The SYNTH BOND param byte is the
   // cell's greenbeard marker: a random tag here, inherited by the whole
   // clonal lineage (fission copies the genome) so descendants recognize
   // each other and form colonies, while distinct founder lineages get
   // distinct tags and stay bond-incompatible. Mutation drifts the tag,
   // letting colonies speciate into separate tribes over time.
-  if (rng() < 0.10) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
+  if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
   // Every founder builds 1-2 sensory receptors. Founders used to start
   // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
   // receptor chem -- so they drifted until sensing happened to evolve.
