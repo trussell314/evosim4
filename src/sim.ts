@@ -3536,7 +3536,7 @@ const FOUNDER_TARGET = 50;
 // (A fully-empty world bypasses the interval so extinction recovery
 // isn't stalled 30s.)
 const FOUNDER_BATCH_MAX = 10;
-const FOUNDER_BATCH_INTERVAL_SEC = 30;
+const FOUNDER_BATCH_INTERVAL_SEC = 10;
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
 // water column time to populate before any creatures enter the
