@@ -858,6 +858,10 @@ export class Creature {
   // retain their original lineageRoot (they're alive, just confined
   // to a vacuole) but only world.creatures contribute to the count.
   lineageRoot: number = -1;
+  // Greenbeard adhesion tag (0..255), refreshed from the VM each tick a
+  // cell expresses SYNTH BOND; -1 = not adhesive. Genome-encoded and
+  // inherited, so a clonal colony shares one marker.
+  bondMarker: number = -1;
   // id of the cell this one fissioned from (-1 for founders). Purely
   // for the UI: lets selection "descend" to a child if the selected
   // cell divides and the parent later dies.
@@ -2763,6 +2767,15 @@ const REPAIR_WINDOW_TICKS = 30;
 // either pool active.
 const REPAIR_ACTIVE_THRESH = 0.1;
 const BOND_FORMATION_THRESH = 0.1;
+// Greenbeard recognition tolerance. Two adhesive cells only bond if
+// their genome-encoded bond markers (0..255, the SYNTH BOND param)
+// differ by <= this. Clonal kin share an identical marker (diff 0) and
+// always recognize; the band gives a few point-mutations of drift
+// before a sub-lineage becomes bond-incompatible, so colonies speciate
+// gradually rather than fracturing on the first mutation. Small
+// relative to the 256-value space so distinct founder lineages
+// (random tags) rarely cross-bond by accident.
+const BOND_MARKER_TOL = 4;
 // Horizontal current: amplitude (px/s^2 of acceleration) and the rate of
 // the slow direction-reversal oscillation (rad/sec; 2pi/600 ~ 10 sim-min).
 // Currently disabled (0) -- when on it piles sediment against one wall
@@ -6132,7 +6145,8 @@ function aerate(world: World, dt: number): void {
 }
 
 // Adhesion springs: pull bonded creatures toward their contact distance.
-// Bonds that stretch beyond BOND_BREAK_RATIO * restLen snap.
+// Bonds snap when stretched beyond BOND_BREAK_RATIO * restLen, or when
+// either side lets its CHEM_BOND pool lapse below BOND_FORMATION_THRESH.
 //
 // Pair de-duplication: bonds are mutual (each side has the other in its
 // list), so processing each (a, b) without care would apply forces
@@ -6157,7 +6171,12 @@ function applyBondSprings(world: World, dt: number): void {
       const distSq = dx * dx + dy * dy;
       const restLen = a.r + b.r;
       const breakLen = restLen * BOND_BREAK_RATIO;
-      if (distSq > breakLen * breakLen) {
+      // Sever on overstretch, or when either side stops maintaining its
+      // CHEM_BOND pool (stops expressing SYNTH BOND): adhesion is an
+      // active, continuously-paid trait, not a permanent weld.
+      if (distSq > breakLen * breakLen
+          || a.store.chemCols[CHEM_BOND][a.idx] < BOND_FORMATION_THRESH
+          || b.store.chemCols[CHEM_BOND][b.idx] < BOND_FORMATION_THRESH) {
         bonds.splice(bi, 1);
         const j = b.bonds.indexOf(a);
         if (j >= 0) b.bonds.splice(j, 1);
@@ -6727,17 +6746,29 @@ function updateCreatures(world: World, dt: number): void {
 
     if (vmOut.reproduce) tryReproduce(c, world);
 
-    // K-5: passive bond formation. Both this cell and the nearest
-    // neighbor must hold CHEM_BOND above BOND_FORMATION_THRESH; bonds
-    // self-form (and self-break in the bond-spring pass when either
-    // side drops below the threshold). No op required: the genome
-    // controls bonding by deciding whether to SYNTH BOND.
-    if (c.bonds.length < MAX_BONDS && c.store.chemCols[CHEM_BOND][c.idx] >= BOND_FORMATION_THRESH) {
+    // Refresh the greenbeard marker whenever the cell expressed SYNTH
+    // BOND this tick. Persisted between expressing ticks so a genome
+    // that gates BOND behind control flow keeps its identity; -1 until
+    // first expressed.
+    if ((vmOut.synthMask & (1 << SYNTH_BIT_BOND)) !== 0) c.bondMarker = vmOut.bondMarker;
+
+    // K-5: passive bond formation, greenbeard-gated. Both this cell and
+    // the nearest neighbor must hold CHEM_BOND above
+    // BOND_FORMATION_THRESH AND carry compatible bond markers (genome-
+    // encoded recognition: |markerA - markerB| <= BOND_MARKER_TOL).
+    // Bonds self-form here and self-break in the bond-spring pass when
+    // either side's CHEM_BOND drops below threshold. No op required:
+    // the genome controls bonding by deciding whether (and with which
+    // marker) to SYNTH BOND.
+    if (c.bonds.length < MAX_BONDS && c.bondMarker >= 0
+        && c.store.chemCols[CHEM_BOND][c.idx] >= BOND_FORMATION_THRESH) {
       let nearest: Creature | null = null;
       let bestSq = (c.r + 24) * (c.r + 24);
       forCreaturesNear(c.x, c.y, c.r + 24, (other) => {
         if (other === c || eaten.has(other) || c.bonds.includes(other) || other.bonds.length >= MAX_BONDS) return;
         if (other.store.chemCols[CHEM_BOND][other.idx] < BOND_FORMATION_THRESH) return;
+        // Greenbeard recognition: only bond to a compatible marker.
+        if (other.bondMarker < 0 || Math.abs(other.bondMarker - c.bondMarker) > BOND_MARKER_TOL) return;
         const dx = other.x - c.x;
         const dy = other.y - c.y;
         const dsq = dx * dx + dy * dy;

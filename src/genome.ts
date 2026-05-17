@@ -244,6 +244,13 @@ export interface VMOutputs {
   // what it actually wants to build instead of always trying every
   // product (and wasting ATP on chlorophyll it never uses).
   synthMask: number;
+  // Greenbeard adhesion tag. When SYNTH BOND runs this tick its param
+  // byte (0..255) is exposed here; -1 means the cell did not express
+  // bonding. Bond formation only links cells whose markers match
+  // within BOND_MARKER_TOL, so the recognition rule is genome-encoded
+  // and evolvable (mutation drifts the marker, splitting colonies into
+  // bond-incompatible tribes over time).
+  bondMarker: number;
   // Bit flags for generic catalyst synthesis this tick. Bit k is set
   // by SYNTH_CAT with operand mod N_CATALYSTS == k. The
   // sim runs catalyst synthesis for slot k iff bit k is set.
@@ -268,6 +275,7 @@ export function newOutputs(): VMOutputs {
     predate: false, engulf: false,
     ingestMaterials: new Uint8Array(6),
     synthMask: 0,
+    bondMarker: -1,
     catSynthMask: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     instructions: 0,
@@ -302,6 +310,7 @@ export function runTick(
   out.engulf = false;
   out.ingestMaterials.fill(0);
   out.synthMask = 0;
+  out.bondMarker = -1;
   out.catSynthMask = 0;
   out.spliceMode = 0;
   out.spliceOffset = 0;
@@ -390,7 +399,7 @@ export function runTick(
           case SYNTH_KIND.MECH:   out.synthMask |= 1 << SYNTH_BIT_MECH; break;
           case SYNTH_KIND.THERMO: out.synthMask |= 1 << SYNTH_BIT_THERMO; break;
           case SYNTH_KIND.MAGNETO: out.synthMask |= 1 << SYNTH_BIT_MAGNETO; break;
-          case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; break;
+          case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
           case SYNTH_KIND.REPAIR: out.synthMask |= 1 << SYNTH_BIT_REPAIR; break;
           case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
         }
@@ -1047,6 +1056,13 @@ export function makeRandomViableGenome(
   // pure-autotroph branch; pure photoautotrophs can still evolve from
   // these by losing INGEST via mutation.
   if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
+  // ~10% of founders are adhesive. The SYNTH BOND param byte is the
+  // cell's greenbeard marker: a random tag here, inherited by the whole
+  // clonal lineage (fission copies the genome) so descendants recognize
+  // each other and form colonies, while distinct founder lineages get
+  // distinct tags and stay bond-incompatible. Mutation drifts the tag,
+  // letting colonies speciate into separate tribes over time.
+  if (rng() < 0.10) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
   // Every founder builds 1-2 sensory receptors. Founders used to start
   // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
   // receptor chem -- so they drifted until sensing happened to evolve.

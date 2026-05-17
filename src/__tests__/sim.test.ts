@@ -1742,31 +1742,49 @@ describe("aeration & surface escape", () => {
 });
 
 describe("adhesion (multicell bonds)", () => {
-  // K-5: bonds now form passively when both partners hold CHEM_BOND
-  // (chem id 39) above BOND_FORMATION_THRESH. No op needed -- a
-  // genome that wants colonies just SYNTHs bond_chem.
+  // K-5: bonds form passively when both partners hold CHEM_BOND
+  // (chem id 39) above BOND_FORMATION_THRESH AND carry compatible
+  // greenbeard markers. No op needed -- a genome that wants colonies
+  // SYNTHs bond_chem, whose param byte is the recognition tag.
   const CHEM_BOND_ID = 39;
-  function seedBondPool(c: ReturnType<typeof makeCreature>): void {
+  function seedBondPool(c: ReturnType<typeof makeCreature>, marker = 7): void {
     c.store.chemCols[CHEM_BOND_ID][c.idx] = 1.0;
+    // Cells under test have inert HALT genomes, so the VM never sets
+    // the marker; assign it directly to emulate having expressed
+    // SYNTH BOND with this tag.
+    c.bondMarker = marker;
   }
-  it("two cells with bond_chem auto-bond in range", () => {
+  it("two cells with matching bond markers auto-bond in range", () => {
     const w = quietWorld();
     const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
-    seedBondPool(a);
-    seedBondPool(b);
+    seedBondPool(a, 7);
+    seedBondPool(b, 7);
     w.creatures.push(a, b);
     step(w, 1 / 60);
     expect(a.bonds).toContain(b);
     expect(b.bonds).toContain(a);
   });
+  it("cells with incompatible bond markers do not bond (greenbeard)", () => {
+    const w = quietWorld();
+    const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    seedBondPool(a, 10);
+    seedBondPool(b, 200);
+    w.creatures.push(a, b);
+    step(w, 1 / 60);
+    expect(a.bonds).not.toContain(b);
+    expect(b.bonds).not.toContain(a);
+  });
   it("bond breaks when cells are pulled far apart", () => {
     const w = quietWorld();
     const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    seedBondPool(a); seedBondPool(b);
     a.bonds.push(b); b.bonds.push(a);
     w.creatures.push(a, b);
-    // Teleport b far away. Spring pass should snap the bond.
+    // Teleport b far away. Spring pass should snap the bond on
+    // overstretch (pools are seeded so the threshold rule doesn't fire).
     b.x = 5000;
     step(w, 1 / 60);
     expect(a.bonds).not.toContain(b);
@@ -1776,6 +1794,7 @@ describe("adhesion (multicell bonds)", () => {
     const w = quietWorld();
     const a = makeCreature({ x: 400, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
     const b = makeCreature({ x: 410, y: 300, energy: 50, genome: new Uint8Array([HALT_MARK]) });
+    seedBondPool(a); seedBondPool(b);
     a.bonds.push(b); b.bonds.push(a);
     // Force b to die: zero biomass + zero fuel.
     b.molecules.membrane = 0;
