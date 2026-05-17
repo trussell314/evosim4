@@ -1012,6 +1012,7 @@ export const NAMED_REACTION_NAMES: ReadonlyArray<string> = [
   "synthChemo-B", "synthChemo-M", "synthChemo-F", "synthChemo-0",
   "synthMech", "synthThermo", "synthMag",
   "synthBond", "synthRepair", "synthBiop",
+  "lightRxn",
 ];
 export function reactionName(slot: number): string {
   return slot < NAMED_REACTION_NAMES.length ? NAMED_REACTION_NAMES[slot] : `rxn${slot}`;
@@ -2414,7 +2415,7 @@ function buildReactionTable(): Reaction[] {
 // D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
 // H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
 // disassembler can label catalyst slots by their bootstrap pathway.
-export const NAMED_REACTION_COUNT = 25;
+export const NAMED_REACTION_COUNT = 26;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +
@@ -2510,6 +2511,19 @@ function installNamedReactions(out: Reaction[]): void {
   // closing the biopolymer/fa loop. Endergonic (storage costs a
   // little ATP), SYNTH_BIO-gated, mRNA-scaled like other biosynth.
   out[24] = mk([CHEM_GLU], [1], [CHEM_BIOPOLYMER], [1], -2, 0.5, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true });
+  // Photophosphorylation (the "light reaction"). Pure light-driven
+  // ADP -> ATP, no matter substrate/product: chlorophyll harvests
+  // light to regenerate the cell's ATP pool. The engine's exergonic
+  // path conserves the ADP<->ATP swap (needs ADP available). This is
+  // the autotroph's energy source -- previously photosynthesis only
+  // had carbon FIXATION (out[3], endergonic -1 ATP) with no light
+  // energy input, so a phototroph was a net energy sink and could
+  // never escape the chl-synthesis chicken-and-egg. Now light->ATP
+  // funds chl synthesis (-8) and fixation (-1), and scales with the
+  // chl pool (chlScale) for an autocatalytic takeoff. Gated only on
+  // carrying chlorophyll (gateMask 0), exactly like out[3], so
+  // autotrophy stays emergent from the genome's SYNTH_CHL.
+  out[25] = mk([], [], [], [], +6, 4, { lightIn: 1, chlScale: true, surfaceScale: true });
 }
 
 // Hot inner loop. Slot-major iteration so each catalystCols[k] is one
