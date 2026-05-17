@@ -4895,6 +4895,11 @@ function weatherMinerals(world: World, dt: number): void {
 // removed from atmosphere. Driven by surface activity so a calm
 // surface lets gases stratify; a stormy surface mixes them in.
 const ATM_AMBIENT_RATE = 0.5; // fraction of gap that crosses per sec at peak activity
+// O2 surface exchange is driven 10x harder than the base rate so the
+// surface layer stays oxygenated and feeds the bulk by diffusion. CO2
+// deliberately stays at 1x (see aerateAmbient) so it accumulates and
+// gives chlorophyll users a carbon niche.
+const O2_SURFACE_EXCHANGE_MULT = 10;
 // Open-boundary gas exchange (option A): the atmosphere is the outside
 // air -- an effectively unbounded O2 reservoir and CO2 sink. Each tick
 // the modelled atmosphere relaxes back toward its baseline (O2 topped
@@ -4911,7 +4916,7 @@ function aerateAmbient(world: World, dt: number): void {
   atm.co2 += (ATMOSPHERE_INIT_CO2 - atm.co2) * vent;
   // Surface activity 0..1; even calm water has 0.3 of the rate.
   const act = 0.3 + 0.7 * surfaceActivity(world);
-  const rate = ATM_AMBIENT_RATE * act * dt;
+  const baseRate = ATM_AMBIENT_RATE * act * dt;
   const cols = regionCols(world);
   const nRegions = cols * regionRows(world);
   // Gas exchange is a SURFACE phenomenon: only the region row that
@@ -4924,13 +4929,19 @@ function aerateAmbient(world: World, dt: number): void {
     regionRows(world) - 1,
     Math.max(0, (world.surfaceY / REGION_PX) | 0),
   );
-  const pairs: Array<[number, keyof Molecules]> = [
-    [CHEM_O2, "o2"],
-    [CHEM_CO2, "co2"],
+  // Per-gas surface-exchange multiplier. O2 is pushed hard (10x) so
+  // the surface stays well oxygenated and feeds the bulk via
+  // diffusion. CO2 stays at the base rate ON PURPOSE: we want
+  // dissolved CO2 to build up somewhat instead of being vented out
+  // fast, so chlorophyll users have a carbon source to exploit.
+  const pairs: Array<[number, keyof Molecules, number]> = [
+    [CHEM_O2, "o2", O2_SURFACE_EXCHANGE_MULT],
+    [CHEM_CO2, "co2", 1],
   ];
-  for (const [k, molKey] of pairs) {
+  for (const [k, molKey, mult] of pairs) {
     const target = AMBIENT_TARGET[k];
     if (target <= 0) continue;
+    const rate = baseRate * mult;
     for (let r = 0; r < nRegions; r++) {
       if (((r / cols) | 0) !== surfaceRow) continue;
       const ak = r * AMBIENT_STRIDE + k;
