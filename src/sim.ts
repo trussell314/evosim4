@@ -1734,6 +1734,9 @@ export interface ReactionInfo {
   label: string;
   consumes: ReactionTerm[];
   produces: ReactionTerm[];
+  // true = an external/spawn input (founder biogenesis), excluded
+  // from the production/consumption time-series graph.
+  external?: boolean;
 }
 function rxnTermStr(t: ReactionTerm[]): string {
   if (t.length === 0) return "∅";
@@ -1784,7 +1787,25 @@ export function reactionCatalog(): ReactionInfo[] {
   syn(RX_BIOGENESIS, "founder biogenesis (reserve→seed/ATP)", [],
     [{ chem: CHEM_MEMBRANE, coef: 1 }, { chem: CHEM_ADP, coef: 5 }, { chem: CHEM_MRNA, coef: 5 },
      { chem: CHEM_GLU, coef: 10 }, { chem: CHEM_AA, coef: 0.5 }]);
+  out[out.length - 1].external = true; // spawn input, excluded from the graph
   REACTION_CATALOG = out;
+  return out;
+}
+// Per-window reaction counts (id -> total executions in that window,
+// loc+catalyzed summed), ordered oldest..newest (coarse, fine, then
+// the in-progress window). Drives the reaction-detail time graph.
+export function reactionWindowSeries(s: SavedRxnStats): { t0: number; counts: Int32Array }[] {
+  const mk = (w: SavedRxnWindow): { t0: number; counts: Int32Array } => {
+    const dense = denseInt(NREACT * 4, w.r);
+    const counts = new Int32Array(NREACT);
+    for (let id = 0; id < NREACT; id++) {
+      const b = id * 4;
+      counts[id] = dense[b] + dense[b + 1] + dense[b + 2] + dense[b + 3];
+    }
+    return { t0: w.t0, counts };
+  };
+  const out = [...(s.coarse || []), ...(s.fine || [])].map(mk);
+  if (s.cur) out.push(mk(s.cur));
   return out;
 }
 // Total executions to date per reaction id (cur + all windows, both
@@ -8658,6 +8679,8 @@ export interface RenderSnapshot extends WorldEnv {
   // Per-reaction lifetime execution counts (indexed by reaction id;
   // see reactionCatalog()). Absent if accounting is disabled.
   reactionTotals?: Int32Array;
+  // Windowed reaction history (sparse) for the detail time-graph.
+  rxnStatsHistory?: SavedRxnStats;
   // Optional per-phase timing. Mirrors world.profile when present.
   profile?: WorldProfile;
 }
@@ -8844,6 +8867,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     chemDissolved,
     chemReserveCount,
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
+    rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
     profile: world.profile,
   };
 }

@@ -71,6 +71,7 @@ import {
   reactionName,
   reactionCatalog,
   chemAmountToParticles,
+  reactionWindowSeries,
   type ReactionInfo,
   genomeTag,
   PARTICLE_TARGET_STEP,
@@ -794,7 +795,12 @@ function renderChemDetail(): void {
     `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #356;border-radius:3px;">close</span></div>` +
     (totals0
       ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
-      : `<div style="opacity:0.55;margin-bottom:8px;">prevalence-over-time graph: not captured yet</div>`) +
+      : `<canvas id="chemGraph" width="352" height="150" style="width:100%;height:150px;` +
+        `display:block;margin:2px 0 4px;background:rgba(0,0,0,0.25);border:1px solid #1a3340;"></canvas>` +
+        `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin-bottom:8px;">` +
+        `cumulative p-eq vs time — <span style="color:#9efba8;">produced</span> / ` +
+        `<span style="color:#ff9e9e;">consumed</span> / <span style="color:#fff;">net</span> ` +
+        `(spawn input excluded)</div>`) +
     `<div style="margin:6px 0;">Net since inception ` +
     `(produced − consumed): <b style="color:${netMass >= 0 ? "#9efba8" : "#ff9e9e"};">` +
     `${netMass >= 0 ? "+" : "−"}${fmtMass(Math.abs(netMass))} p-eq</b>` +
@@ -809,8 +815,84 @@ function renderChemDetail(): void {
     list(cNZ);
   const cl = chemDetail.querySelector("#chemDetailClose");
   if (cl) cl.addEventListener("click", closeChemDetail);
+  drawChemGraph(k);
   positionChemDetail();
   chemDetail.style.display = "";
+}
+
+// Cumulative produced (green) / consumed (red, negative) / net (white)
+// p-eq vs time for the selected material. Spawn input (external
+// biogenesis) excluded so the seed doesn't swamp the curve.
+function drawChemGraph(k: number): void {
+  const canvas = chemDetail.querySelector("#chemGraph") as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const hist = snapshot.rxnStatsHistory;
+  if (!RXN_CATALOG) RXN_CATALOG = reactionCatalog();
+  const series = hist ? reactionWindowSeries(hist) : [];
+  const coefOf = (terms: { chem: number; coef: number }[]): number => {
+    let s = 0; for (const t of terms) if (t.chem === k) s += t.coef; return s;
+  };
+  const prod = RXN_CATALOG
+    .filter((r) => !r.external && r.produces.some((t) => t.chem === k))
+    .map((r) => ({ id: r.id, coef: coefOf(r.produces) }));
+  const cons = RXN_CATALOG
+    .filter((r) => !r.external && r.consumes.some((t) => t.chem === k))
+    .map((r) => ({ id: r.id, coef: coefOf(r.consumes) }));
+  type P = { t: number; g: number; r: number; n: number };
+  const pts: P[] = [];
+  let cg = 0, cc = 0;
+  for (const w of series) {
+    let pa = 0, ca = 0;
+    for (const x of prod) pa += w.counts[x.id] * x.coef;
+    for (const x of cons) ca += w.counts[x.id] * x.coef;
+    cg += chemAmountToParticles(k, pa);
+    cc += chemAmountToParticles(k, ca);
+    pts.push({ t: w.t0, g: cg, r: -cc, n: cg - cc });
+  }
+  if (pts.length > 0) pts.push({ t: Math.max(snapshot.t, pts[pts.length - 1].t), g: cg, r: -cc, n: cg - cc });
+  if (pts.length < 2) {
+    ctx.fillStyle = "rgba(158,238,255,0.5)";
+    ctx.font = "11px ui-monospace,monospace";
+    ctx.fillText("collecting… (first window at ~60s)", 8, H / 2);
+    return;
+  }
+  const tMax = Math.max(1, pts[pts.length - 1].t);
+  let yMin = 0, yMax = 0;
+  for (const p of pts) {
+    yMax = Math.max(yMax, p.g, p.n);
+    yMin = Math.min(yMin, p.r, p.n);
+  }
+  if (yMax === yMin) yMax = yMin + 1;
+  const padL = 4, padR = 4, padT = 6, padB = 12;
+  const xx = (t: number): number => padL + (t / tMax) * (W - padL - padR);
+  const yy = (v: number): number => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+  // zero baseline
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, yy(0)); ctx.lineTo(W - padR, yy(0)); ctx.stroke();
+  const line = (sel: (p: P) => number, color: string, width: number): void => {
+    ctx.strokeStyle = color; ctx.lineWidth = width;
+    ctx.beginPath();
+    pts.forEach((p, idx) => {
+      const X = xx(p.t), Y = yy(sel(p));
+      if (idx === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.stroke();
+  };
+  line((p) => p.r, "#ff6b6b", 1.5);
+  line((p) => p.g, "#5dd97a", 1.5);
+  line((p) => p.n, "#ffffff", 2.5);
+  // x-axis end label (time = now)
+  ctx.fillStyle = "rgba(158,238,255,0.55)";
+  ctx.font = "10px ui-monospace,monospace";
+  const mm = Math.floor(tMax / 60);
+  ctx.fillText(`0`, padL, H - 2);
+  const lbl = `${mm}m`;
+  ctx.fillText(lbl, W - padR - ctx.measureText(lbl).width, H - 2);
 }
 
 // Lazily-built fixed row set: one <tr> per chem id, cells updated in
