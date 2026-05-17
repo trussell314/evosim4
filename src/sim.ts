@@ -4912,12 +4912,18 @@ function aerateAmbient(world: World, dt: number): void {
   // Surface activity 0..1; even calm water has 0.3 of the rate.
   const act = 0.3 + 0.7 * surfaceActivity(world);
   const rate = ATM_AMBIENT_RATE * act * dt;
-  const nRegions = regionCols(world) * regionRows(world);
-  // O2 + CO2 are the gases that exchange with atmosphere today.
-  // Every region equilibrates its dissolved gas toward the target
-  // against the SHARED atmosphere; atm is decremented as regions
-  // pull from it (deterministic iteration order), so the global
-  // atmosphere reservoir still bounds total inflow exactly.
+  const cols = regionCols(world);
+  const nRegions = cols * regionRows(world);
+  // Gas exchange is a SURFACE phenomenon: only the region row that
+  // straddles the air/water interface exchanges with the atmosphere.
+  // O2/CO2 reach the deep water solely by diffuseRegions carrying the
+  // dissolved field downward -- so a real depth gradient (oxygenated
+  // surface, potentially anoxic deep) can emerge instead of every
+  // region being magically equilibrated with air.
+  const surfaceRow = Math.min(
+    regionRows(world) - 1,
+    Math.max(0, (world.surfaceY / REGION_PX) | 0),
+  );
   const pairs: Array<[number, keyof Molecules]> = [
     [CHEM_O2, "o2"],
     [CHEM_CO2, "co2"],
@@ -4926,6 +4932,7 @@ function aerateAmbient(world: World, dt: number): void {
     const target = AMBIENT_TARGET[k];
     if (target <= 0) continue;
     for (let r = 0; r < nRegions; r++) {
+      if (((r / cols) | 0) !== surfaceRow) continue;
       const ak = r * AMBIENT_STRIDE + k;
       const gap = target - ambient[ak];
       let flow = gap * rate;
