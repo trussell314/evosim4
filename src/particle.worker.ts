@@ -66,6 +66,8 @@ let cviews: {
   asleep: Uint8Array;
   cellStart: Int32Array;
   cellItems: Int32Array;
+  dpx: Float32Array; dpy: Float32Array; dpz: Float32Array;
+  dvx: Float32Array; dvy: Float32Array; dvz: Float32Array;
 } | null = null;
 
 function rebuildParticleViews(layout: ParticleSharedLayout) {
@@ -93,11 +95,20 @@ function rebuildCollisionViews(layout: CollisionSharedLayout) {
   // read by resolvePairSoa here; building views over the *shared*
   // buffer (rather than this worker's module-local copy from
   // sim.ts module init) is what makes the cross-worker handoff work.
+  const mp = layout.maxParticles;
   return {
-    mass: new Float32Array(b, o.mass, layout.maxParticles),
-    asleep: new Uint8Array(b, o.asleep, layout.maxParticles),
+    mass: new Float32Array(b, o.mass, mp),
+    asleep: new Uint8Array(b, o.asleep, mp),
     cellStart: new Int32Array(b, o.cellStart, layout.maxCells + 1),
-    cellItems: new Int32Array(b, o.cellItems, layout.maxParticles),
+    cellItems: new Int32Array(b, o.cellItems, mp),
+    // Jacobi delta accumulators (zeroed by the sim worker before each
+    // sweep; this worker only ADDs into them).
+    dpx: new Float32Array(b, o.dpx, mp),
+    dpy: new Float32Array(b, o.dpy, mp),
+    dpz: new Float32Array(b, o.dpz, mp),
+    dvx: new Float32Array(b, o.dvx, mp),
+    dvy: new Float32Array(b, o.dvy, mp),
+    dvz: new Float32Array(b, o.dvz, mp),
   };
 }
 
@@ -210,6 +221,8 @@ function loop(): void {
           pviews.PX, pviews.PY, pviews.PZ,
           pviews.PVX, pviews.PVY, pviews.PVZ,
           pviews.PR,
+          cviews.dpx, cviews.dpy, cviews.dpz,
+          cviews.dvx, cviews.dvy, cviews.dvz,
           cviews.mass, cviews.asleep,
           cviews.cellStart, cviews.cellItems,
           rowStart, rowStep,

@@ -7036,6 +7036,12 @@ export interface CollisionSharedLayout {
     asleep: number;
     cellStart: number;
     cellItems: number;
+    // Jacobi collision accumulators: per-particle position/velocity
+    // deltas. The sweep reads the frozen PX/PVX snapshot and only
+    // ACCUMULATES here; resolveCollisions applies them after the
+    // barrier. Order-independent -> no Gauss-Seidel directional drift.
+    dpx: number; dpy: number; dpz: number;
+    dvx: number; dvy: number; dvz: number;
   };
 }
 
@@ -7047,6 +7053,12 @@ function allocCollisionBuffer(): CollisionSharedLayout {
   offsets.asleep = o; o = align(o + COLLISION_MAX_PARTICLES);
   offsets.cellStart = o; o = align(o + (COLLISION_MAX_CELLS + 1) * 4);
   offsets.cellItems = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dpx = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dpy = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dpz = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dvx = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dvy = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
+  offsets.dvz = o; o = align(o + COLLISION_MAX_PARTICLES * 4);
   const total = o;
   let buffer: ArrayBufferLike;
   if (typeof SharedArrayBuffer !== "undefined" &&
@@ -7064,6 +7076,12 @@ const COLLISION_MASS = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOU
 const COLLISION_ASLEEP = new Uint8Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.asleep, COLLISION_MAX_PARTICLES);
 const COLLISION_CELL_START = new Int32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.cellStart, COLLISION_MAX_CELLS + 1);
 const COLLISION_CELL_ITEMS = new Int32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.cellItems, COLLISION_MAX_PARTICLES);
+const COLLISION_DPX = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dpx, COLLISION_MAX_PARTICLES);
+const COLLISION_DPY = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dpy, COLLISION_MAX_PARTICLES);
+const COLLISION_DPZ = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dpz, COLLISION_MAX_PARTICLES);
+const COLLISION_DVX = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dvx, COLLISION_MAX_PARTICLES);
+const COLLISION_DVY = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dvy, COLLISION_MAX_PARTICLES);
+const COLLISION_DVZ = new Float32Array(COLLISION_LAYOUT.buffer, COLLISION_LAYOUT.offsets.dvz, COLLISION_MAX_PARTICLES);
 // Per-cell counter scratch used during cellItems build. Not shared
 // across workers; only the sim worker touches it.
 let COLLISION_CELL_COUNTER = new Int32Array(0);
@@ -7294,6 +7312,8 @@ export function applyCollisionsRowRange(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array,
+  DX: Float32Array, DY: Float32Array, DZ: Float32Array,
+  DVX: Float32Array, DVY: Float32Array, DVZ: Float32Array,
   MASS: Float32Array, ASLEEP: Uint8Array,
   cellStart: Int32Array, cellItems: Int32Array,
   rowStart: number, rowStep: number,
@@ -7310,19 +7330,20 @@ export function applyCollisionsRowRange(
       for (let i = s0; i < s1; i++) {
         const ai = cellItems[i];
         for (let j = i + 1; j < s1; j++) {
-          resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, ai, cellItems[j], e);
+          resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, ai, cellItems[j], e);
         }
       }
       // Downstream neighbors: E, SW, S, SE. Pairs with each are
       // resolved exactly once because every cell only iterates its
-      // four downstream-of-(cx,cy) neighbors.
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
+      // four downstream-of-(cx,cy) neighbors. (Jacobi: which cell
+      // enumerates the pair no longer affects the result.)
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, cellStart, cellItems,
         ci, cx + 1, cy,     cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, cellStart, cellItems,
         ci, cx - 1, cy + 1, cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, cellStart, cellItems,
         ci, cx,     cy + 1, cols, rows, e);
-      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, cellStart, cellItems,
+      checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, cellStart, cellItems,
         ci, cx + 1, cy + 1, cols, rows, e);
     }
   }
@@ -7418,6 +7439,17 @@ function resolveCollisions(
       COLLISION_CELL_ITEMS[slot] = pi;
     }
 
+    // Jacobi: clear the per-particle delta accumulators before the
+    // sweep. Workers (or the serial path) only ADD into these reading
+    // the frozen PX/PVX snapshot; the summed result is applied once
+    // after the sweep, so visitation order can't bias the outcome.
+    COLLISION_DPX.fill(0, 0, n);
+    COLLISION_DPY.fill(0, 0, n);
+    COLLISION_DPZ.fill(0, 0, n);
+    COLLISION_DVX.fill(0, 0, n);
+    COLLISION_DVY.fill(0, 0, n);
+    COLLISION_DVZ.fill(0, 0, n);
+
     // Cache the dispatcher locally so a barrier-timeout teardown that
     // fires from inside wait0() (e.g. mobile suspends the tab, particle
     // workers stop responding) doesn't null the module-level reference
@@ -7447,23 +7479,42 @@ function resolveCollisions(
           for (let i = s0; i < s1; i++) {
             const ai = COLLISION_CELL_ITEMS[i];
             for (let j = i + 1; j < s1; j++) {
-              resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP, ai, COLLISION_CELL_ITEMS[j], e);
+              resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+                COLLISION_DPX, COLLISION_DPY, COLLISION_DPZ,
+                COLLISION_DVX, COLLISION_DVY, COLLISION_DVZ,
+                COLLISION_MASS, COLLISION_ASLEEP, ai, COLLISION_CELL_ITEMS[j], e);
             }
           }
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_DPX, COLLISION_DPY, COLLISION_DPZ, COLLISION_DVX, COLLISION_DVY, COLLISION_DVZ,
+            COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx + 1, cy,     cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_DPX, COLLISION_DPY, COLLISION_DPZ, COLLISION_DVX, COLLISION_DVY, COLLISION_DVZ,
+            COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx - 1, cy + 1, cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_DPX, COLLISION_DPY, COLLISION_DPZ, COLLISION_DVX, COLLISION_DVY, COLLISION_DVZ,
+            COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx,     cy + 1, cols, rows, e);
-          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, COLLISION_MASS, COLLISION_ASLEEP,
+          checkNeighborCellSoa(PX, PY, PZ, PVX, PVY, PVZ, PR,
+            COLLISION_DPX, COLLISION_DPY, COLLISION_DPZ, COLLISION_DVX, COLLISION_DVY, COLLISION_DVZ,
+            COLLISION_MASS, COLLISION_ASLEEP,
             COLLISION_CELL_START, COLLISION_CELL_ITEMS,
             ci, cx + 1, cy + 1, cols, rows, e);
         }
       }
+    }
+    // Jacobi apply: fold the summed deltas back into the live arrays
+    // once, after the whole sweep (both parallel parity phases or the
+    // serial pass). Next iteration rebuilds the grid from the updated
+    // snapshot -> iterative Jacobi convergence over collisionIters.
+    for (let i = 0; i < n; i++) {
+      PX[i] += COLLISION_DPX[i]; PY[i] += COLLISION_DPY[i]; PZ[i] += COLLISION_DPZ[i];
+      PVX[i] += COLLISION_DVX[i]; PVY[i] += COLLISION_DVY[i]; PVZ[i] += COLLISION_DVZ[i];
     }
   }
   // Serial path falls through with pending hooks. Run them now (after
@@ -7630,6 +7681,8 @@ function checkNeighborCellSoa(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array,
+  DX: Float32Array, DY: Float32Array, DZ: Float32Array,
+  DVX: Float32Array, DVY: Float32Array, DVZ: Float32Array,
   MASS: Float32Array, ASLEEP: Uint8Array,
   cellStart: Int32Array, cellItems: Int32Array,
   ci: number, nx: number, ny: number,
@@ -7644,15 +7697,23 @@ function checkNeighborCellSoa(
   for (let i = s0; i < s1; i++) {
     const ai = cellItems[i];
     for (let j = ns0; j < ns1; j++) {
-      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, MASS, ASLEEP, ai, cellItems[j], e);
+      resolvePairSoa(PX, PY, PZ, PVX, PVY, PVZ, PR, DX, DY, DZ, DVX, DVY, DVZ, MASS, ASLEEP, ai, cellItems[j], e);
     }
   }
 }
 
+// Jacobi pair resolution: reads the FROZEN PX/PVX snapshot, writes the
+// position/velocity correction for BOTH particles into the per-particle
+// delta accumulators (DX..DVZ). Never mutates PX/PVX, so the result is
+// independent of the order pairs/cells are visited (kills the
+// Gauss-Seidel left-to-right directional drift). resolveCollisions
+// applies the summed deltas after the sweep.
 function resolvePairSoa(
   PX: Float32Array, PY: Float32Array, PZ: Float32Array,
   PVX: Float32Array, PVY: Float32Array, PVZ: Float32Array,
   PR: Float32Array,
+  DX: Float32Array, DY: Float32Array, DZ: Float32Array,
+  DVX: Float32Array, DVY: Float32Array, DVZ: Float32Array,
   MASS: Float32Array, ASLEEP: Uint8Array,
   i: number, j: number, e: number,
 ): void {
@@ -7673,12 +7734,8 @@ function resolvePairSoa(
   const total = ma + mb;
   const corrA = overlap * (mb / total);
   const corrB = overlap * (ma / total);
-  PX[i] = ax - nxv * corrA;
-  PY[i] = ay - nyv * corrA;
-  PZ[i] = az - nzv * corrA;
-  PX[j] = bx + nxv * corrB;
-  PY[j] = by + nyv * corrB;
-  PZ[j] = bz + nzv * corrB;
+  DX[i] -= nxv * corrA; DY[i] -= nyv * corrA; DZ[i] -= nzv * corrA;
+  DX[j] += nxv * corrB; DY[j] += nyv * corrB; DZ[j] += nzv * corrB;
   const avx = PVX[i], avy = PVY[i], avz = PVZ[i];
   const bvx = PVX[j], bvy = PVY[j], bvz = PVZ[j];
   const rvx = bvx - avx, rvy = bvy - avy, rvz = bvz - avz;
@@ -7686,8 +7743,8 @@ function resolvePairSoa(
   if (vN >= 0) return;
   const jImp = (-(1 + e) * vN) / (1 / ma + 1 / mb);
   const ix = nxv * jImp, iy = nyv * jImp, iz = nzv * jImp;
-  PVX[i] = avx - ix / ma; PVY[i] = avy - iy / ma; PVZ[i] = avz - iz / ma;
-  PVX[j] = bvx + ix / mb; PVY[j] = bvy + iy / mb; PVZ[j] = bvz + iz / mb;
+  DVX[i] -= ix / ma; DVY[i] -= iy / ma; DVZ[i] -= iz / ma;
+  DVX[j] += ix / mb; DVY[j] += iy / mb; DVZ[j] += iz / mb;
 }
 
 function applyWalls(world: World): void {
