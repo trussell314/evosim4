@@ -2465,7 +2465,14 @@ function installNamedReactions(out: Reaction[]): void {
   // and sped up (0.2 -> 0.6, ~in line with membrane synth that
   // consumes fa) so living autotrophs/mixotrophs top up fatty acid
   // from abundant glucose instead of relying on necromass recycling.
-  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -3, 0.6, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true });
+  // synth_fa rate 0.6 -> 1.5: with light-driven ATP (out[25]) an
+  // autotroph can finally afford this, and it is the ONLY renewable
+  // fa source (photosynthesis makes glu, not fa). Membrane synth
+  // (out[9]=0.8, out[11]=0.6) consumes fa faster than 0.6 could
+  // supply, so phototrophs strip-mined the finite fa seed and died
+  // of mass membrane failure when it ran out. 1.5 gives renewable
+  // headroom for the CO2->glu->fa->membrane primary-production chain.
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -3, 1.5, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true });
   out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << SYNTH_BIT_CHL, atpFloor: true, mrnaScale: true }); // synth_chl
   out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << SYNTH_BIT_ENZ, atpFloor: true, mrnaScale: true }); // synth_enz
   out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << SYNTH_BIT_MRNA, atpFloor: true, mrnaScale: true }); // synth_ribo
@@ -2659,7 +2666,13 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
     if (rxn.chlScale) {
       const ch = s.chemCols[CHEM_CHL][i];
       if (ch <= 0) continue;
-      machineryMult *= ch / CHL_REF;
+      // Saturating, not linear: per-cell light harvesting is capped by
+      // finite incident photons. An unbounded chl/CHL_REF made the
+      // light reaction (out[25]) autocatalytic without diminishing
+      // returns -- cells hoarded carbon as excess chlorophyll (chl
+      // ran away to 4000+) instead of building fa/membranes/dividing.
+      // Flat above CHL_REF removes that incentive; identical below.
+      machineryMult *= Math.min(1, ch / CHL_REF);
     }
     if (rxn.enzScale) {
       const en = s.chemCols[CHEM_ENZ][i];
