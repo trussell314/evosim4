@@ -1179,6 +1179,12 @@ leftHeader.addEventListener("click", () => {
 // invisible because the container set no color.
 // ---------------------------------------------------------------------
 let controlsBarH = 40;        // measured each layout
+// Measured height of the fixed top status strip. The world fit
+// reserves it at the top (mirroring controlsBarH at the bottom) so
+// the world is never drawn behind the HUD -- the bar sits in its own
+// band, outside the world drawing area.
+let hudBarH = 0;
+function topReserveH(): number { return hudBarH; }
 let controlsCollapsed = false;
 const CBTN =
   "padding:4px 9px;border:1px solid #1a3340;border-radius:4px;" +
@@ -1210,7 +1216,8 @@ const ctrlHandle = document.createElement("button");
 ctrlHandle.style.cssText = CBTN + "padding:4px 8px;";
 const ctrlGroupsWrap = document.createElement("div");
 ctrlGroupsWrap.style.cssText =
-  "display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;flex:1 1 auto;";
+  "display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;" +
+  "flex:1 1 auto;min-width:0;max-width:100%;";
 function renderCtrlCollapsed(): void {
   ctrlHandle.textContent = controlsCollapsed ? "▸ controls" : "▾ controls";
   ctrlGroupsWrap.style.display = controlsCollapsed ? "none" : "flex";
@@ -1226,7 +1233,13 @@ ctrlBar.append(ctrlHandle, ctrlGroupsWrap);
 // A labelled control group.
 function mkGroup(name: string): HTMLDivElement {
   const g = document.createElement("div");
-  g.style.cssText = "display:flex;align-items:center;gap:6px;";
+  // Groups wrap internally too: on a narrow/mobile width a single
+  // group (e.g. WORLD = founders + cap slider) can be wider than the
+  // bar, so its buttons must break onto a new line instead of being
+  // clipped off the right edge.
+  g.style.cssText =
+    "display:flex;flex-wrap:wrap;align-items:center;gap:6px;" +
+    "min-width:0;max-width:100%;";
   const lab = document.createElement("span");
   lab.textContent = name;
   lab.style.cssText = "opacity:0.55;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;";
@@ -1307,9 +1320,9 @@ function syncFoundersBtn(on: boolean): void {
 let particleCap = 5000;
 const capWrap = document.createElement("div");
 capWrap.style.cssText =
-  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 0 auto;" +
-  "white-space:nowrap;border:1px solid #1a3340;border-radius:4px;color:#9ee;" +
-  "background:rgba(0,0,0,.4);";
+  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 1 auto;" +
+  "white-space:nowrap;max-width:100%;border:1px solid #1a3340;" +
+  "border-radius:4px;color:#9ee;background:rgba(0,0,0,.4);";
 const capTitle = document.createElement("span");
 capTitle.textContent = "cap"; capTitle.style.cssText = "opacity:0.7;";
 const capValue = document.createElement("span");
@@ -1408,7 +1421,17 @@ function positionWorldButtons(): void {
   controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${leftPanelWidth() + 8}px`;
+  hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
 }
+// The HUD grows/shrinks a line as its stats text wraps (longer sim
+// time, bigger population). Re-fit the world whenever its measured
+// height changes so the world band stays exactly below the bar. The
+// observer can't loop: a resize() doesn't change the HUD's width.
+new ResizeObserver(() => {
+  const prev = hudBarH;
+  hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
+  if (hudBarH !== prev) resize();
+}).observe(hud);
 function bottomReserveH(): number { return PHYLO_STRIP_H + controlsBarH; }
 
 
@@ -1438,13 +1461,14 @@ function resize(): void {
   // Lay out + measure the controls bar first so the world fit can
   // reserve its real height (it never overlaps the world).
   positionWorldButtons();
+  const top = topReserveH();
   const availW = w;
-  const availH = Math.max(1, h - bottomReserveH());
+  const availH = Math.max(1, h - top - bottomReserveH());
   const sx = availW / WORLD_SIZE.w;
   const sy = availH / WORLD_SIZE.h;
   viewScale = Math.min(sx, sy);
   viewOffsetX = (availW - WORLD_SIZE.w * viewScale) / 2;
-  viewOffsetY = (availH - WORLD_SIZE.h * viewScale) / 2;
+  viewOffsetY = top + (availH - WORLD_SIZE.h * viewScale) / 2;
 }
 resize();
 window.addEventListener("resize", resize);
@@ -1640,7 +1664,8 @@ function resetView(): void { viewZoom = 1; viewPanX = 0; viewPanY = 0; }
 function clampPan(): void {
   const canvasW = canvas.clientWidth;
   const canvasH = canvas.clientHeight;
-  const availH = Math.max(1, canvasH - bottomReserveH());
+  const top = topReserveH();
+  const availH = Math.max(1, canvasH - top - bottomReserveH());
   const drawW = WORLD_SIZE.w * viewScale * viewZoom;
   const drawH = WORLD_SIZE.h * viewScale * viewZoom;
   const originX = viewOffsetX * viewZoom;
@@ -1654,12 +1679,12 @@ function clampPan(): void {
     viewPanX = (canvasW - drawW) / 2 - originX;
   }
   if (drawH >= availH) {
-    const minPan = availH - originY - drawH;
-    const maxPan = -originY;
+    const minPan = top + availH - originY - drawH;
+    const maxPan = top - originY;
     if (viewPanY < minPan) viewPanY = minPan;
     else if (viewPanY > maxPan) viewPanY = maxPan;
   } else {
-    viewPanY = (availH - drawH) / 2 - originY;
+    viewPanY = top + (availH - drawH) / 2 - originY;
   }
 }
 
