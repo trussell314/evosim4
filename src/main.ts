@@ -221,7 +221,6 @@ interface MarkedSpecies {
   peakBio: number;
 }
 const PIN_KEY = "evosim4:pins";
-const HOF_KEY = "evosim4:hof";
 const HOF_LIMIT = 8; // "best 5-10"
 function loadMarked(storeKey: string): Map<string, MarkedSpecies> {
   const m = new Map<string, MarkedSpecies>();
@@ -236,7 +235,10 @@ function loadMarked(storeKey: string): Map<string, MarkedSpecies> {
   return m;
 }
 const pinnedSpecies = loadMarked(PIN_KEY);
-const hallOfFame = loadMarked(HOF_KEY);
+// Notable ("hall of fame") is scoped to THIS sim run only for now --
+// not loaded from or persisted to localStorage, so it starts empty
+// each session and doesn't bleed across different sims.
+const hallOfFame = new Map<string, MarkedSpecies>();
 function persistMarked(storeKey: string, m: Map<string, MarkedSpecies>): void {
   try { localStorage.setItem(storeKey, JSON.stringify([...m.values()])); }
   catch { /* quota / private mode -- in-memory only */ }
@@ -1043,8 +1045,11 @@ canvas.addEventListener("click", (e) => {
     // touch devices there's no mousemove to set the initial lock.
     lockedCellId = best;
   } else {
-    // Click on empty water clears the tooltip lock so the user can
-    // dismiss without waiting for the cell to die.
+    // Click on empty water deselects: clear the selection (so the
+    // inspector / "pin species" message clears) and drop the
+    // tooltip lock.
+    selectedCellId = null;
+    refreshActiveDisasm();
     lockedCellId = null;
   }
 });
@@ -2666,7 +2671,7 @@ function updateHallOfFame(rows: AnalysisRow[]): void {
     hallOfFame.clear();
     for (const e of keep) hallOfFame.set(e.key, e);
   }
-  persistMarked(HOF_KEY, hallOfFame);
+  // Intentionally NOT persisted: Notable is per-sim-run for now.
 }
 
 function togglePin(key: string, genome: Uint8Array, color: string, peakBio: number): void {
@@ -2752,7 +2757,11 @@ function renderAnalysisPanel(): void {
   // Pinned + Notable read from the persisted maps so entries survive
   // extinction / reload; live status is looked up by key when present.
   const src = analysisTab === "pinned" ? pinnedSpecies : hallOfFame;
-  const entries = [...src.values()].sort((a, b) => b.peakBio - a.peakBio);
+  // Pinned: newest-pinned first (by the sim-time it was recorded).
+  // Notable: best-ever first (peak biomass).
+  const entries = analysisTab === "pinned"
+    ? [...src.values()].sort((a, b) => b.at - a.at)
+    : [...src.values()].sort((a, b) => b.peakBio - a.peakBio);
   header.textContent = analysisTab === "pinned"
     ? `Pinned species (${entries.length}) -- founders cull-exempt`
     : `Notable: best ${entries.length} ever seen`;
