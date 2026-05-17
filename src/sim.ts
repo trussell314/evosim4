@@ -4486,9 +4486,11 @@ const RESERVE_SURPLUS = new Int32Array(CHEMICAL_COUNT);    // visible - want (po
 // abundant byproduct (e.g. minerals) from crowding the whole field.
 const PARTICLE_PER_CHEM_FRAC = 0.20;
 function reservePass(world: World): void {
-  // Settle window: cap is off, so nothing is demoted/promoted/shed --
-  // particles stay visible and find their natural equilibrium.
-  if (inSettleWindow(world)) return;
+  // Reserve demote/promote + the visible cap run from t=0, including
+  // during initial population. (The settle window still lets seedRamp
+  // / precipitate overfill past particleTarget via effectiveParticleCap;
+  // reservePass just moves that surplus into reserve instead of
+  // leaving it visible -- there's no reason to pause recirculation.)
   const target = world.particleTarget;
   const maxPerChem = Math.floor(PARTICLE_PER_CHEM_FRAC * target);
   const store = world.particleStore;
