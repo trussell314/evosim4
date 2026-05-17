@@ -8668,6 +8668,10 @@ export interface CreatureSnapshot {
   speciesKey: string;
   genome: Uint8Array;
   molecules: Molecules;
+  // Generic (non-named) internal chem pool, sparse [chemId, amount]
+  // pairs (chemId in NAMED_CHEMICAL_COUNT..CHEMICAL_COUNT-1). Only
+  // nonzero slots; most cells hold few generics so this stays tiny.
+  genericInternal: [number, number][];
   vmPc: number;
   vmStack: number[];
   bondsCount: number;
@@ -8760,6 +8764,17 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
       const i = c.idx;
       const o = out as unknown as Record<string, number>;
       for (let k = 0; k < MOLECULE_IDS.length; k++) o[MOLECULE_IDS[k]] = cols[k][i];
+      return out;
+    })(),
+    genericInternal: (() => {
+      const out: [number, number][] = [];
+      const cc = c.store.chemCols;
+      const i = c.idx;
+      for (let g = 0; g < GENERIC_CHEMICAL_COUNT; g++) {
+        const chemId = NAMED_CHEMICAL_COUNT + g;
+        const v = cc[chemId][i];
+        if (v > 0) out.push([chemId, v]);
+      }
       return out;
     })(),
     vmPc: c.vm.pc,

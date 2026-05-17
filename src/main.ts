@@ -1980,19 +1980,26 @@ function drawHeatmap(): void {
       }
     }
   }
-  if (densVivo && !(matSel >= NAMED_CHEMICAL_COUNT)) {
-    // Mass held inside living cells (creature internal molecule pools),
-    // converted to the same 2px-particle-equivalent scale as the
-    // dissolved/reserve fields. Generic chems aren't stored internally,
-    // so a generic material focus contributes nothing here.
+  if (densVivo) {
+    // Mass held inside living cells, converted to the same 2px-
+    // particle-equivalent scale as the dissolved/reserve fields.
+    // Covers both the named molecule pools and the sparse generic
+    // internal pool the snapshot ships.
     for (const c of snapshot.creatures) {
       let pe = 0;
       if (matSel < 0) {
         for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
           pe += chemAmountToParticles(k, c.molecules[NAMED_CHEMICALS[k]]);
         }
-      } else {
+        for (const [chemId, amt] of c.genericInternal) {
+          pe += chemAmountToParticles(chemId, amt);
+        }
+      } else if (matSel < NAMED_CHEMICAL_COUNT) {
         pe = chemAmountToParticles(matSel, c.molecules[NAMED_CHEMICALS[matSel]]);
+      } else {
+        for (const [chemId, amt] of c.genericInternal) {
+          if (chemId === matSel) { pe = chemAmountToParticles(matSel, amt); break; }
+        }
       }
       if (pe <= 0) continue;
       const cx = Math.floor(c.x / cell);
