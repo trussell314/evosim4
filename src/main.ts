@@ -108,7 +108,7 @@ const HUD_FONT =
 const hud = document.createElement("div");
 hud.style.cssText =
   "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
-  "border-radius:4px;" + HUD_FONT +
+  "border:1px solid #1a3340;border-radius:4px;" + HUD_FONT +
   "max-height:80vh;overflow:hidden;";
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
@@ -793,7 +793,7 @@ function renderChemDetail(): void {
   chemDetail.innerHTML =
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
     `<b style="font-size:${UI_FONT_PX + 2}px;">${esc(chemName(k))}</b>` +
-    `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #356;border-radius:3px;">close</span></div>` +
+    `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #1a3340;border-radius:3px;">close</span></div>` +
     (totals0
       ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
       : `<canvas id="chemGraph" width="352" height="150" style="width:100%;height:150px;` +
@@ -988,7 +988,7 @@ leftHeader.addEventListener("click", () => {
 // (e.g. the gradient overlay) just append here.
 // ---------------------------------------------------------------------
 const DOCK_BTN =
-  "padding:4px 10px;border:1px solid #356;border-radius:4px;" +
+  "padding:4px 10px;border:1px solid #1a3340;border-radius:4px;" +
   "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;white-space:nowrap;" +
   HUD_FONT;
 function mkDockBtn(label: string, title: string): HTMLButtonElement {
@@ -1010,7 +1010,7 @@ const TINT_RED = "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
 const dock = document.createElement("div");
 dock.style.cssText =
   "position:fixed;z-index:10;display:flex;flex-wrap:wrap;align-items:center;" +
-  "gap:6px;padding:5px 8px;border:1px solid #2a4450;border-radius:6px;" +
+  "gap:6px;padding:5px 8px;border:1px solid #1a3340;border-radius:6px;" +
   "background:rgba(2,12,18,0.82);" + HUD_FONT;
 root.appendChild(dock);
 
@@ -1087,7 +1087,7 @@ const HEATMAP_ALPHA = 0.28;
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay (also: H to cycle)";
 overlaySelectEl.style.cssText =
-  "padding:3px 6px;border:1px solid #356;border-radius:4px;" +
+  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
   "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" + HUD_FONT;
 for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: particle density"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
@@ -1289,7 +1289,7 @@ canvas.addEventListener("click", (e) => {
 const tooltip = document.createElement("div");
 tooltip.style.cssText =
   "position:fixed;pointer-events:none;display:none;z-index:9;" +
-  "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #356;" +
+  "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #1a3340;" +
   `padding:4px 6px;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};` +
   "border-radius:3px;white-space:pre;";
 document.body.appendChild(tooltip);
@@ -2965,7 +2965,7 @@ function buildSpeciesCard(
   const spawnBtn = document.createElement("button");
   spawnBtn.textContent = "Spawn";
   spawnBtn.style.cssText =
-    "margin-top:4px;padding:2px 8px;border:1px solid #356;border-radius:3px;" +
+    "margin-top:4px;padding:2px 8px;border:1px solid #1a3340;border-radius:3px;" +
     `background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;font-size:${UI_FONT_PX}px;`;
   spawnBtn.addEventListener("click", () => {
     simWorker.postMessage({ type: "spawnSpecies", genome: Array.from(genome) });
