@@ -1795,6 +1795,15 @@ export function reactionTotals(world: World): Int32Array {
   for (const w of rs.coarse) addAll(w.rxn);
   return t;
 }
+// Convert a chemical AMOUNT (moles) to 2px-particle-equivalents --
+// the exact conversion the chemistry panel uses for diss/resv, so
+// the reaction detail reads on the same scale as rend/diss/resv.
+export function chemAmountToParticles(chem: number, amount: number): number {
+  const density = CHEM_BASE_DENSITY[chem] > 0 ? CHEM_BASE_DENSITY[chem] : 1;
+  const volPer = (4 / 3) * Math.PI * PRECIP_R * PRECIP_R * PRECIP_R;
+  const amountPer = (density * volPer) / (CHEM_MM[chem] || 1);
+  return amountPer > 0 ? amount / amountPer : 0;
+}
 // ===================================================================
 const CHEMICAL_COUNT = 96;
 const NAMED_CHEMICAL_COUNT = 45;

@@ -70,6 +70,7 @@ import {
   chemName,
   reactionName,
   reactionCatalog,
+  chemAmountToParticles,
   type ReactionInfo,
   genomeTag,
   PARTICLE_TARGET_STEP,
@@ -762,8 +763,10 @@ function renderChemDetail(): void {
     const n = cnt(r.id);
     const pc = coefFor(r.produces);
     const cc = coefFor(r.consumes);
-    if (pc > 0) prod.push({ label: r.label, n, mass: n * pc });
-    if (cc > 0) cons.push({ label: r.label, n, mass: n * cc });
+    // amount moved = executions x coefficient; shown as 2px-particle-
+    // equivalents so it reads on the same scale as rend/diss/resv.
+    if (pc > 0) prod.push({ label: r.label, n, mass: chemAmountToParticles(k, n * pc) });
+    if (cc > 0) cons.push({ label: r.label, n, mass: chemAmountToParticles(k, n * cc) });
   }
   const nz = (a: Row[]): Row[] => a.filter((x) => x.n > 0).sort((x, y) => y.mass - x.mass);
   const pNZ = nz(prod), cNZ = nz(cons);
@@ -792,15 +795,17 @@ function renderChemDetail(): void {
     (totals0
       ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
       : `<div style="opacity:0.55;margin-bottom:8px;">prevalence-over-time graph: not captured yet</div>`) +
-    `<div style="margin:6px 0;">Net mass since inception ` +
+    `<div style="margin:6px 0;">Net since inception ` +
     `(produced − consumed): <b style="color:${netMass >= 0 ? "#9efba8" : "#ff9e9e"};">` +
-    `${netMass >= 0 ? "+" : "−"}${fmtMass(Math.abs(netMass))}</b>` +
+    `${netMass >= 0 ? "+" : "−"}${fmtMass(Math.abs(netMass))} p-eq</b>` +
     `<span style="opacity:0.55;"> &nbsp;(${(pTot - cTot).toLocaleString()} net events)</span></div>` +
-    `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${fmtMass(pMass)} mass · ${pTot.toLocaleString()} events)</div>` +
-    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mass&nbsp;(executions)</div>` +
+    `<div style="opacity:0.55;font-size:${UI_FONT_PX - 2}px;margin-bottom:6px;">` +
+    `values are 2px-particle-equivalents (same scale as rend/diss/resv)</div>` +
+    `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${fmtMass(pMass)} p-eq · ${pTot.toLocaleString()} events)</div>` +
+    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;p-eq&nbsp;(executions)</div>` +
     list(pNZ) +
-    `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${fmtMass(cMass)} mass · ${cTot.toLocaleString()} events)</div>` +
-    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mass&nbsp;(executions)</div>` +
+    `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${fmtMass(cMass)} p-eq · ${cTot.toLocaleString()} events)</div>` +
+    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;p-eq&nbsp;(executions)</div>` +
     list(cNZ);
   const cl = chemDetail.querySelector("#chemDetailClose");
   if (cl) cl.addEventListener("click", closeChemDetail);
