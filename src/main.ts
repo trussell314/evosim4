@@ -577,6 +577,9 @@ refreshActiveDisasm();
 // bottom wall sits PHYLO_STRIP_H pixels above the canvas bottom so cells
 // never overlap the timeline.
 const PHYLO_STRIP_H = 70;
+// Dedicated band for the world-control dock, reserved below the world
+// (above the phylogeny strip) so the dock doesn't sit over the world.
+const DOCK_BAND_H = 46;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
@@ -1136,33 +1139,7 @@ profileBtn.addEventListener("click", () => {
 });
 dock.appendChild(profileBtn);
 
-// flexible gap so the cap/export group right-aligns when there's room
-const dockSpacer = document.createElement("div");
-dockSpacer.style.cssText = "flex:1 1 12px;min-width:8px;";
-dock.appendChild(dockSpacer);
-
-// --- particle cap stepper ---
-let particleCap = 5000;
-const capWrap = document.createElement("div");
-capWrap.style.cssText = "display:flex;align-items:center;gap:6px;";
-const capLabel = document.createElement("span");
-const capMinus = mkDockBtn("-", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
-const capPlus = mkDockBtn("+", `Raise the particle cap by ${PARTICLE_TARGET_STEP}`);
-capMinus.style.cssText = DOCK_BTN + "padding:2px 9px;";
-capPlus.style.cssText = DOCK_BTN + "padding:2px 9px;";
-function renderCapLabel(): void { capLabel.textContent = `cap ${particleCap}`; }
-function nudgeCap(delta: number): void {
-  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
-  renderCapLabel();
-  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
-}
-capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
-capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
-renderCapLabel();
-capWrap.append(capLabel, capMinus, capPlus);
-dock.appendChild(capWrap);
-
-// --- export ---
+// --- export (an action; grouped with the other action buttons) ---
 const exportBtn = mkDockBtn("export", "Download the saved world as JSON");
 exportBtn.addEventListener("click", () => {
   const json = latestSaveJson;
@@ -1179,6 +1156,39 @@ exportBtn.addEventListener("click", () => {
 });
 dock.appendChild(exportBtn);
 
+// flexible gap so the particle-cap control right-aligns when there's room
+const dockSpacer = document.createElement("div");
+dockSpacer.style.cssText = "flex:1 1 12px;min-width:8px;";
+dock.appendChild(dockSpacer);
+
+// --- particle-cap control: a clearly-labelled bordered pill so the
+// -/+ obviously belong to the cap (not a stray stepper by export) ---
+let particleCap = 5000;
+const capWrap = document.createElement("div");
+capWrap.style.cssText =
+  "display:flex;align-items:center;gap:6px;padding:2px 8px;" +
+  "border:1px solid #1a3340;border-radius:4px;background:rgba(0,0,0,.35);";
+const capTitle = document.createElement("span");
+capTitle.textContent = "particle cap";
+capTitle.style.cssText = "opacity:0.75;";
+const capValue = document.createElement("span");
+capValue.style.cssText = "font-weight:bold;min-width:4ch;text-align:right;";
+const capMinus = mkDockBtn("−", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
+const capPlus = mkDockBtn("+", `Raise the particle cap by ${PARTICLE_TARGET_STEP}`);
+capMinus.style.cssText = DOCK_BTN + "padding:1px 9px;";
+capPlus.style.cssText = DOCK_BTN + "padding:1px 9px;";
+function renderCapLabel(): void { capValue.textContent = String(particleCap); }
+function nudgeCap(delta: number): void {
+  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
+  renderCapLabel();
+  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
+}
+capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
+capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
+renderCapLabel();
+capWrap.append(capTitle, capMinus, capValue, capPlus);
+dock.appendChild(capWrap);
+
 // Single positioning pass: dock fills the gap between the side panels,
 // just above the phylogeny strip. Flex handles internal layout.
 function positionWorldButtons(): void {
@@ -1186,7 +1196,8 @@ function positionWorldButtons(): void {
   const lx = leftPanelWidth() + 8;
   dock.style.left = `${lx}px`;
   dock.style.right = `${panelW + 8}px`;
-  dock.style.bottom = `${PHYLO_STRIP_H + 8}px`;
+  // Sits in its reserved DOCK_BAND_H band, just above the phylo strip.
+  dock.style.bottom = `${PHYLO_STRIP_H + 6}px`;
 }
 
 function resize(): void {
@@ -1212,7 +1223,7 @@ function resize(): void {
   // uniform scale + center-letterbox. The world's logical dimensions
   // never change -- this only computes how to draw it on screen.
   const availW = w;
-  const availH = Math.max(1, h - PHYLO_STRIP_H);
+  const availH = Math.max(1, h - PHYLO_STRIP_H - DOCK_BAND_H);
   const sx = availW / WORLD_SIZE.w;
   const sy = availH / WORLD_SIZE.h;
   viewScale = Math.min(sx, sy);
