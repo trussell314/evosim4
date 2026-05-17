@@ -2447,7 +2447,11 @@ function installNamedReactions(out: Reaction[]): void {
   // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.
   out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << SYNTH_BIT_AA, atpFloor: true, mrnaScale: true }); // synth_aa
-  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -6, 0.2, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true }); // synth_fa
+  // synth_fa: lipogenesis from photosynthate. Cheapened (-6 -> -3 ATP)
+  // and sped up (0.2 -> 0.6, ~in line with membrane synth that
+  // consumes fa) so living autotrophs/mixotrophs top up fatty acid
+  // from abundant glucose instead of relying on necromass recycling.
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -3, 0.6, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true });
   out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << SYNTH_BIT_CHL, atpFloor: true, mrnaScale: true }); // synth_chl
   out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << SYNTH_BIT_ENZ, atpFloor: true, mrnaScale: true }); // synth_enz
   out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << SYNTH_BIT_MRNA, atpFloor: true, mrnaScale: true }); // synth_ribo
