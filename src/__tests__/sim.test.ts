@@ -106,7 +106,7 @@ function quietWorld(): World {
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), fadingGhosts: [], creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, lastFounderBatchT: -Infinity, founderIds: new Set<number>(), founderReproduced: new Set<number>(), founderBirthScore: new Map(), pinnedSpecies: new Set<string>(),
+    particleTarget: 550, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, founderIds: new Set<number>(), founderReproduced: new Set<number>(), founderBirthScore: new Map(), pinnedSpecies: new Set<string>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -258,14 +258,14 @@ describe("createWorld", () => {
   it("initial particle target is a fixed cap, independent of world area", () => {
     const small = createWorld(800, 600);
     const big = createWorld(1600, 1200);
-    expect(small.particleTarget).toBe(5000);
-    expect(big.particleTarget).toBe(5000);
+    expect(small.particleTarget).toBe(2500);
+    expect(big.particleTarget).toBe(2500);
   });
 
   it("resizeWorld does not rescale the particle target", () => {
     const w = createWorld(800, 600);
     resizeWorld(w, 1600, 1200);
-    expect(w.particleTarget).toBe(5000);
+    expect(w.particleTarget).toBe(2500);
   });
 
   it("setParticleTarget changes the cap, clamps, and resyncs spawn rate", () => {
