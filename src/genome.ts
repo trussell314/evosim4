@@ -1046,7 +1046,7 @@ export function makeRandomViableGenome(
   // pure autotroph keeps viableGenome happy without special-casing the
   // pure-autotroph branch; pure photoautotrophs can still evolve from
   // these by losing INGEST via mutation.
-  if (rng() < 0.10) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
+  if (rng() < 0.20) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
   // Every founder builds 1-2 sensory receptors. Founders used to start
   // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
   // receptor chem -- so they drifted until sensing happened to evolve.
