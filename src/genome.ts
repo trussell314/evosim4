@@ -1040,6 +1040,13 @@ export function makeRandomViableGenome(
     [OP.SYNTH, SYNTH_KIND.ENZ, b()],
     [OP.SYNTH, SYNTH_KIND.AA, b()],
   ];
+  // ~10% of founders are chlorophyll synthesizers (mixotrophs): they
+  // keep the heterotroph kit but also build chlorophyll, so they can
+  // run photosynthesis (fix carbon, release O2). Mixotroph rather than
+  // pure autotroph keeps viableGenome happy without special-casing the
+  // pure-autotroph branch; pure photoautotrophs can still evolve from
+  // these by losing INGEST via mutation.
+  if (rng() < 0.10) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
   // Fisher-Yates shuffle so structure differs founder to founder.
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
