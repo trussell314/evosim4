@@ -2686,7 +2686,10 @@ function mulberry32(seed: number): () => number {
 // biosynthesizing (because it has no ATP) bleeds structure and
 // eventually drops below MIN_VIABLE_MEMBRANE, at which point it
 // autolyzes.
-const MEMBRANE_DECAY_PER_SEC = 0.005;
+// Halved (0.005 -> 0.0025): slower membrane turnover means cells
+// re-synthesize membrane (and thus consume fatty acid) at half the
+// rate -- the actual binding lever on the fa flux balance.
+const MEMBRANE_DECAY_PER_SEC = 0.0025;
 // The three mandatory-machinery molecules (chl/enz/ribo) gate hard at
 // zero now, so their decay is what eventually kills a starving cell.
 // Lowered to ~0.001 so cells survive temporary substrate shortages
