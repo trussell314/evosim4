@@ -3891,16 +3891,22 @@ const FOUNDER_SEED_ATP = 40;
 const FOUNDER_SEED_MAT: ReadonlyArray<readonly [number, number]> = [
   [CHEM_MEMBRANE, 1], [CHEM_ADP, 5], [CHEM_MRNA, 5], [CHEM_GLU, 10], [CHEM_AA, 0.5],
 ];
+// Region-index sweep order: the founder's own region first, then
+// every other region. Founders take from reserve FIRST wherever it
+// exists (anywhere in the world) before any ex-nihilo biogenesis.
+function reserveSweepBases(world: World, x: number, y: number): number[] {
+  const nReg = regionCols(world) * regionRows(world);
+  if (nReg <= 0) return [];
+  const local = Math.min(nReg - 1, Math.max(0, regionIndexAt(world, x, y)));
+  const out: number[] = [local * AMBIENT_STRIDE];
+  for (let ri = 0; ri < nReg; ri++) if (ri !== local) out.push(ri * AMBIENT_STRIDE);
+  return out;
+}
 function pullReserve(world: World, x: number, y: number, chem: number, want: number): number {
   if (want <= 0) return 0;
   const res = world.reserve;
-  const nReg = regionCols(world) * regionRows(world);
-  if (nReg <= 0) return 0;
-  const lb = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
-  const rb = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
-  const bases = lb === rb ? [lb] : [lb, rb];
   let got = 0;
-  for (const base of bases) {
+  for (const base of reserveSweepBases(world, x, y)) {
     if (got >= want) break;
     const v = res[base + chem];
     if (v <= 0) continue;
@@ -3912,13 +3918,9 @@ function pullReserve(world: World, x: number, y: number, chem: number, want: num
 function pullReserveAny(world: World, x: number, y: number, want: number): number {
   if (want <= 0) return 0;
   const res = world.reserve;
-  const nReg = regionCols(world) * regionRows(world);
-  if (nReg <= 0) return 0;
-  const lb = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
-  const rb = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
-  const bases = lb === rb ? [lb] : [lb, rb];
   let got = 0;
-  for (const base of bases) {
+  for (const base of reserveSweepBases(world, x, y)) {
+    if (got >= want) break;
     for (let k = 0; k < AMBIENT_STRIDE && got < want; k++) {
       if (k === CHEM_WASTE || k === CHEM_CO2) continue;
       const v = res[base + k];
