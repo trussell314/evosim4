@@ -1844,7 +1844,7 @@ export function chemAmountToParticles(chem: number, amount: number): number {
 }
 // ===================================================================
 const CHEMICAL_COUNT = 96;
-const NAMED_CHEMICAL_COUNT = 45;
+export const NAMED_CHEMICAL_COUNT = 45;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
 // and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
 // Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
@@ -1854,7 +1854,7 @@ const NAMED_CHEMICAL_COUNT = 45;
 // Order maps to chemCols[0..NAMED_CHEMICAL_COUNT-1]. Constants below
 // (CHEM_*) MUST match this order; see the table in CHEMISTRY_OVERHAUL.md
 // phase K for the locked layout.
-const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
+export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "adp",
   "waste", "chlorophyll", "enzyme", "mrna",
   "biopolymer", "membrane",

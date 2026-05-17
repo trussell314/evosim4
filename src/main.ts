@@ -71,6 +71,8 @@ import {
   reactionName,
   reactionCatalog,
   chemAmountToParticles,
+  NAMED_CHEMICALS,
+  NAMED_CHEMICAL_COUNT,
   reactionWindowSeries,
   type ReactionInfo,
   genomeTag,
@@ -766,7 +768,7 @@ function renderChemDetail(): void {
     const pc = coefFor(r.produces);
     const cc = coefFor(r.consumes);
     // amount moved = executions x coefficient; shown as 2px-particle-
-    // equivalents so it reads on the same scale as rend/diss/resv.
+    // equivalents so it reads on the same scale as dissolved/visible/simulated.
     if (pc > 0) prod.push({ label: r.label, n, mass: chemAmountToParticles(k, n * pc) });
     if (cc > 0) cons.push({ label: r.label, n, mass: chemAmountToParticles(k, n * cc) });
   }
@@ -807,7 +809,7 @@ function renderChemDetail(): void {
     `${netMass >= 0 ? "+" : "−"}${fmtMass(Math.abs(netMass))} p-eq</b>` +
     `<span style="opacity:0.55;"> &nbsp;(${(pTot - cTot).toLocaleString()} net events)</span></div>` +
     `<div style="opacity:0.55;font-size:${UI_FONT_PX - 2}px;margin-bottom:6px;">` +
-    `values are 2px-particle-equivalents (same scale as rend/diss/resv)</div>` +
+    `values are 2px-particle-equivalents (same scale as dissolved/visible/simulated)</div>` +
     `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${fmtMass(pMass)} p-eq · ${pTot.toLocaleString()} events)</div>` +
     `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;p-eq&nbsp;(executions)</div>` +
     list(pNZ) +
@@ -903,7 +905,7 @@ let chemRows: ChemRow[] | null = null;
 function buildChemTable(n: number): void {
   chemTable.textContent = "";
   const thead = document.createElement("tr");
-  for (const [label, alignRight] of [["chem", false], ["diss", true], ["rend", true], ["resv", true], ["", false]] as [string, boolean][]) {
+  for (const [label, alignRight] of [["chem", false], ["dissolved", true], ["visible", true], ["simulated", true], ["", false]] as [string, boolean][]) {
     const th = document.createElement("th");
     th.textContent = label;
     th.style.cssText =
@@ -1162,7 +1164,7 @@ function setOverlay(mode: HeatmapMode): void {
   if (overlaySelectEl.value !== mode) overlaySelectEl.value = mode;
 }
 overlaySelectEl.addEventListener("change", () => setOverlay(overlaySelectEl.value as HeatmapMode));
-let densRend = true, densDiss = true, densResv = true;
+let densRend = true, densDiss = true, densResv = true, densVivo = true;
 const densSrcWrap = document.createElement("span");
 densSrcWrap.style.cssText = "display:flex;align-items:center;gap:7px;color:#9ee;";
 function mkSrcChk(text: string, set: (v: boolean) => void): HTMLLabelElement {
@@ -1175,9 +1177,10 @@ function mkSrcChk(text: string, set: (v: boolean) => void): HTMLLabelElement {
   return l;
 }
 densSrcWrap.append(
-  mkSrcChk("rend", (v) => { densRend = v; }),
-  mkSrcChk("diss", (v) => { densDiss = v; }),
-  mkSrcChk("resv", (v) => { densResv = v; }),
+  mkSrcChk("visible", (v) => { densRend = v; }),
+  mkSrcChk("dissolved", (v) => { densDiss = v; }),
+  mkSrcChk("simulated", (v) => { densResv = v; }),
+  mkSrcChk("in vivo", (v) => { densVivo = v; }),
 );
 let densityChemSel = -1;
 const densChemSel = document.createElement("select");
@@ -1206,7 +1209,7 @@ gridBtn.addEventListener("click", () => {
   gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
   setBtn(gridBtn, gridLinesOn, T_TEAL);
 });
-gView.append(overlaySelectEl, densSrcWrap, densChemSel, gridBtn);
+gView.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn);
 
 renderCtrlCollapsed();
 
@@ -1977,6 +1980,27 @@ function drawHeatmap(): void {
       }
     }
   }
+  if (densVivo && !(matSel >= NAMED_CHEMICAL_COUNT)) {
+    // Mass held inside living cells (creature internal molecule pools),
+    // converted to the same 2px-particle-equivalent scale as the
+    // dissolved/reserve fields. Generic chems aren't stored internally,
+    // so a generic material focus contributes nothing here.
+    for (const c of snapshot.creatures) {
+      let pe = 0;
+      if (matSel < 0) {
+        for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+          pe += chemAmountToParticles(k, c.molecules[NAMED_CHEMICALS[k]]);
+        }
+      } else {
+        pe = chemAmountToParticles(matSel, c.molecules[NAMED_CHEMICALS[matSel]]);
+      }
+      if (pe <= 0) continue;
+      const cx = Math.floor(c.x / cell);
+      const cy = Math.floor((c.y - surfaceY) / cell);
+      if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+      dens[cy * cols + cx] += pe;
+    }
+  }
   let maxC = 1e-6;
   for (let i = 0; i < dens.length; i++) if (dens[i] > maxC) maxC = dens[i];
   for (let r = 0; r < rows; r++) {
@@ -1990,7 +2014,7 @@ function drawHeatmap(): void {
   ctx.globalAlpha = 1;
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.font = UI_CANVAS_FONT;
-  const srcs = [densRend && "rend", densDiss && "diss", densResv && "resv"].filter(Boolean).join("+") || "none";
+  const srcs = [densRend && "visible", densDiss && "dissolved", densResv && "simulated", densVivo && "in vivo"].filter(Boolean).join("+") || "none";
   ctx.fillText(`heatmap: density [${srcs}] · mat:${matName} (max ${maxC.toFixed(0)}/cell, H toggles)`, 8, surfaceY + 14);
     return;
   }
