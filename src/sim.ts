@@ -1189,6 +1189,9 @@ export interface World {
   // Optional cumulative counters for instrumentation. Optional so
   // hand-built test World literals don't need to populate it.
   stats?: SimStats;
+  // Reaction / ATP accounting (60s windows, persisted). Optional so
+  // hand-built test World literals don't need to populate it.
+  rxnStats?: RxnStats;
   width: number;
   height: number;
   depth: number;
@@ -1568,6 +1571,154 @@ const CAT_REF = 5;
 const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
 const CAT_DECAY_PER_SEC = 0.005;
+
+// ===================================================================
+// Reaction / ATP accounting -------------------------------------------
+// Raw occurrence counts for every chemical transformation (the 256-slot
+// REACTIONS table run in cells/organelles, catalyst synthesis, plus the
+// non-table conversions: maintenance decay, toxify, death catalyst
+// denature, waste denature), split by location (in a cell vs in a
+// field) and whether a catalyst was present. Plus a separate ATP
+// ledger: how much ATP each source consumed/produced. Bucketed into
+// 60-second windows; windows older than 1h compact to 5-minute
+// buckets. Persisted with the save.
+const RX_BASE = N_REACTIONS;
+const RX_MAINT_MEMBRANE = RX_BASE + 0;
+const RX_MAINT_ENZ = RX_BASE + 1;
+const RX_MAINT_CHL = RX_BASE + 2;
+const RX_MAINT_MRNA = RX_BASE + 3;
+const RX_MAINT_RECEPTOR = RX_BASE + 4;
+const RX_MAINT_CATALYST = RX_BASE + 5;
+const RX_TOXIFY = RX_BASE + 6;
+const RX_DEATH_CATDENATURE = RX_BASE + 7;
+const RX_DENATURE_WASTE = RX_BASE + 8;
+const RX_SYNTH_CATALYST = RX_BASE + 9;
+const RX_SYNTH_COUNT = 10;
+const NREACT = N_REACTIONS + RX_SYNTH_COUNT;
+// rxn buckets: [id][loc 0=cell 1=field][cat 0=uncat 1=catalyzed]
+const RX_LOC_CELL = 0, RX_LOC_FIELD = 1;
+function rxIdx(id: number, loc: number, cat: number): number {
+  return (id * 2 + loc) * 2 + cat;
+}
+// ATP ledger labels (consumed/produced amounts).
+const ATP_IDLE = 0, ATP_VM = 1, ATP_THRUST = 2, ATP_EXCRETE = 3,
+  ATP_INGEST = 4, ATP_ENGULF = 5, ATP_PREDATE = 6, ATP_REPRODUCE = 7,
+  ATP_RXN_ENDO = 8, ATP_RXN_EXO = 9, ATP_OTHER = 10;
+const ATP_LABEL_COUNT = 11;
+interface RxnWindow { t0: number; rxn: Int32Array; atp: Float64Array; }
+export interface RxnStats {
+  windowStart: number;
+  curRxn: Int32Array;   // NREACT*2*2
+  curAtp: Float64Array; // ATP_LABEL_COUNT*2 (k0 consumed, k1 produced)
+  fine: RxnWindow[];    // 60s windows, < 1h old
+  coarse: RxnWindow[];  // 300s aggregates, >= 1h old
+}
+function newRxnStats(): RxnStats {
+  return {
+    windowStart: 0,
+    curRxn: new Int32Array(NREACT * 4),
+    curAtp: new Float64Array(ATP_LABEL_COUNT * 2),
+    fine: [],
+    coarse: [],
+  };
+}
+// Set once per step() (chemistry is single-threaded in the sim worker)
+// so the deep reaction/decay/spendATP paths can record without
+// threading `world` through five hot signatures.
+let RXN_STATS_WORLD: World | undefined;
+function recordRxn(id: number, loc: number, cat: number): void {
+  const rs = RXN_STATS_WORLD && RXN_STATS_WORLD.rxnStats;
+  if (rs) rs.curRxn[rxIdx(id, loc, cat)]++;
+}
+function recordAtp(label: number, consumed: number, produced: number): void {
+  const rs = RXN_STATS_WORLD && RXN_STATS_WORLD.rxnStats;
+  if (!rs) return;
+  if (consumed) rs.curAtp[label * 2] += consumed;
+  if (produced) rs.curAtp[label * 2 + 1] += produced;
+}
+const RXN_WINDOW_SEC = 60;
+const RXN_FINE_RETAIN_SEC = 3600; // keep 60s windows for the last hour
+const RXN_COARSE_SEC = 300;       // older windows compact to 5-minute buckets
+function rollReactionWindow(world: World): void {
+  const rs = world.rxnStats;
+  if (!rs) return;
+  while (world.t - rs.windowStart >= RXN_WINDOW_SEC) {
+    rs.fine.push({ t0: rs.windowStart, rxn: rs.curRxn.slice(), atp: rs.curAtp.slice() });
+    rs.curRxn.fill(0);
+    rs.curAtp.fill(0);
+    rs.windowStart += RXN_WINDOW_SEC;
+  }
+  const cutoff = world.t - RXN_FINE_RETAIN_SEC;
+  while (rs.fine.length > 0 && rs.fine[0].t0 < cutoff) {
+    const w = rs.fine.shift() as RxnWindow;
+    const bucket = Math.floor(w.t0 / RXN_COARSE_SEC) * RXN_COARSE_SEC;
+    const last = rs.coarse.length > 0 ? rs.coarse[rs.coarse.length - 1] : undefined;
+    if (last && last.t0 === bucket) {
+      for (let i = 0; i < w.rxn.length; i++) last.rxn[i] += w.rxn[i];
+      for (let i = 0; i < w.atp.length; i++) last.atp[i] += w.atp[i];
+    } else {
+      rs.coarse.push({ t0: bucket, rxn: w.rxn, atp: w.atp });
+    }
+  }
+}
+// Sparse (idx,value) encoding so the save stays small -- most generic
+// reaction slots never fire.
+type RxnSparse = [number, number][];
+interface SavedRxnWindow { t0: number; r: RxnSparse; a: RxnSparse; }
+export interface SavedRxnStats {
+  windowStart: number;
+  cur: SavedRxnWindow;
+  fine: SavedRxnWindow[];
+  coarse: SavedRxnWindow[];
+}
+function sparseInt(a: Int32Array): RxnSparse {
+  const o: RxnSparse = [];
+  for (let i = 0; i < a.length; i++) if (a[i] !== 0) o.push([i, a[i]]);
+  return o;
+}
+function sparseFloat(a: Float64Array): RxnSparse {
+  const o: RxnSparse = [];
+  for (let i = 0; i < a.length; i++) if (a[i] !== 0) o.push([i, a[i]]);
+  return o;
+}
+function denseInt(len: number, p: RxnSparse | undefined): Int32Array {
+  const a = new Int32Array(len);
+  if (p) for (const [i, v] of p) if (i >= 0 && i < len) a[i] = v;
+  return a;
+}
+function denseFloat(len: number, p: RxnSparse | undefined): Float64Array {
+  const a = new Float64Array(len);
+  if (p) for (const [i, v] of p) if (i >= 0 && i < len) a[i] = v;
+  return a;
+}
+function snapToSaved(w: RxnWindow): SavedRxnWindow {
+  return { t0: w.t0, r: sparseInt(w.rxn), a: sparseFloat(w.atp) };
+}
+function savedToSnap(s: SavedRxnWindow): RxnWindow {
+  return {
+    t0: s.t0,
+    rxn: denseInt(NREACT * 4, s.r),
+    atp: denseFloat(ATP_LABEL_COUNT * 2, s.a),
+  };
+}
+export function serializeRxnStats(rs: RxnStats): SavedRxnStats {
+  return {
+    windowStart: rs.windowStart,
+    cur: { t0: rs.windowStart, r: sparseInt(rs.curRxn), a: sparseFloat(rs.curAtp) },
+    fine: rs.fine.map(snapToSaved),
+    coarse: rs.coarse.map(snapToSaved),
+  };
+}
+export function deserializeRxnStats(s: SavedRxnStats): RxnStats {
+  return {
+    windowStart: s.windowStart,
+    curRxn: denseInt(NREACT * 4, s.cur && s.cur.r),
+    curAtp: denseFloat(ATP_LABEL_COUNT * 2, s.cur && s.cur.a),
+    fine: (s.fine || []).map(savedToSnap),
+    coarse: (s.coarse || []).map(savedToSnap),
+  };
+}
+// ===================================================================
 const CHEMICAL_COUNT = 96;
 const NAMED_CHEMICAL_COUNT = 45;
 // Order matches chemical slot 0..13. Each entry is a key of Molecules
@@ -2380,6 +2531,11 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
       s.energy[i] += atpD * amt;
       s.chemCols[CHEM_ADP][i] -= atpD * amt;
     }
+    // Accounting: one firing of this slot (cell), catalyzed iff a
+    // catalyst pool actually boosted it. ATP flux into the ledger.
+    recordRxn(slot, RX_LOC_CELL, (pool > 0 && rxn.vmax > 0) ? 1 : 0);
+    if (atpD < 0) recordAtp(ATP_RXN_ENDO, -atpD * amt, 0);
+    else if (atpD > 0) recordAtp(ATP_RXN_EXO, 0, atpD * amt);
   }
 }
 
@@ -3419,6 +3575,7 @@ export function createWorld(
     useSeedRamp: !!opts?.delayedSpawn,
     initialSeedDone: !opts?.delayedSpawn,
     stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
+    rxnStats: newRxnStats(),
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveLineageRoots: new Set(),
@@ -4071,13 +4228,14 @@ function pruneSpecies(world: World): void {
 // Charge an ATP cost. Caps at available ATP and routes the spent mass into
 // ADP so the cell can later re-charge it via respiration. Returns the amount
 // actually paid (which may be less than requested if the cell ran out).
-function spendATP(c: Creature, want: number): number {
+function spendATP(c: Creature, want: number, src: number = ATP_OTHER): number {
   if (want <= 0) return 0;
   const s = c.store; const i = c.idx;
   const e = s.energy[i];
   const got = e < want ? e : want;
   s.energy[i] = e - got;
   s.m_adp[i] += got;
+  recordAtp(src, got, 0);
   return got;
 }
 
@@ -4831,16 +4989,16 @@ export function denatureWaste(world: World, dt: number): void {
   for (let ri = 0; ri < nReg; ri++) {
     const base = ri * AMBIENT_STRIDE;
     const aw = amb[base + CHEM_WASTE];
-    if (aw > 0) { const d = aw * frac; amb[base + CHEM_WASTE] = aw - d; amb[base + CHEM_CO2] += d; }
+    if (aw > 0) { const d = aw * frac; amb[base + CHEM_WASTE] = aw - d; amb[base + CHEM_CO2] += d; recordRxn(RX_DENATURE_WASTE, RX_LOC_FIELD, 0); }
     const rw = res[base + CHEM_WASTE];
-    if (rw > 0) { const d = rw * frac; res[base + CHEM_WASTE] = rw - d; res[base + CHEM_CO2] += d; }
+    if (rw > 0) { const d = rw * frac; res[base + CHEM_WASTE] = rw - d; res[base + CHEM_CO2] += d; recordRxn(RX_DENATURE_WASTE, RX_LOC_FIELD, 0); }
   }
   const store = world.particleStore;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const mol = store.molecules[i];
     if (mol) {
-      if (mol.waste > 0) { const d = mol.waste * frac; mol.waste -= d; mol.co2 += d; }
+      if (mol.waste > 0) { const d = mol.waste * frac; mol.waste -= d; mol.co2 += d; recordRxn(RX_DENATURE_WASTE, RX_LOC_FIELD, 0); }
       continue;
     }
     if (store.chemId[i] !== CHEM_WASTE) continue;
@@ -4850,6 +5008,7 @@ export function denatureWaste(world: World, dt: number): void {
     const dm = mass * frac;
     const base = regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE;
     amb[base + CHEM_CO2] += dm;
+    recordRxn(RX_DENATURE_WASTE, RX_LOC_FIELD, 0);
     const newMass = mass - dm;
     const newR = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
     if (newR < MIN_DISSOLVE_R) removeParticleAt(world, i);
@@ -5046,7 +5205,11 @@ function biosynthCatalyst(
   runSyntheticReaction(
     c, dt, CAT_SUBSTRATE_CHEM, CAT_SUBSTRATE_COUNT,
     -atpCost, vmax, /* atpFloor */ true,
-    (amt) => { col[i] += amt; },
+    (amt) => {
+      col[i] += amt;
+      recordRxn(RX_SYNTH_CATALYST, RX_LOC_CELL, 0);
+      recordAtp(ATP_RXN_ENDO, atpCost * amt, 0);
+    },
   );
 }
 
@@ -5064,7 +5227,7 @@ function autoExcrete(c: Creature, world: World): void {
     const want = co2 - EXCRETE_FLOOR;
     const affordable = Math.min(want, s.energy[i] / EXCRETE_ATP_PER_MASS);
     if (affordable > 0) {
-      spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
+      spendATP(c, affordable * EXCRETE_ATP_PER_MASS, ATP_EXCRETE);
       s.m_co2[i] -= affordable;
       world.ambient[base + CHEM_CO2] += affordable;
     }
@@ -5074,7 +5237,7 @@ function autoExcrete(c: Creature, world: World): void {
     const want = waste - EXCRETE_FLOOR;
     const affordable = Math.min(want, s.energy[i] / EXCRETE_ATP_PER_MASS);
     if (affordable > 0) {
-      spendATP(c, affordable * EXCRETE_ATP_PER_MASS);
+      spendATP(c, affordable * EXCRETE_ATP_PER_MASS, ATP_EXCRETE);
       s.m_waste[i] -= affordable;
       world.ambient[base + CHEM_WASTE] += affordable;
     }
@@ -5103,6 +5266,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_membrane[i] = memb - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_fattyAcid[i] += 0.5 * lost;
+    recordRxn(RX_MAINT_MEMBRANE, RX_LOC_CELL, 0);
   }
   const enz = s.m_enzyme[i];
   if (enz > 0) {
@@ -5110,6 +5274,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_enzyme[i] = enz - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
+    recordRxn(RX_MAINT_ENZ, RX_LOC_CELL, 0);
   }
   const chl = s.m_chlorophyll[i];
   if (chl > 0) {
@@ -5117,6 +5282,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_chlorophyll[i] = chl - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
+    recordRxn(RX_MAINT_CHL, RX_LOC_CELL, 0);
   }
   const rib = s.m_mrna[i];
   if (rib > 0) {
@@ -5124,6 +5290,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
     s.m_mrna[i] = rib - lost;
     s.m_aminoAcid[i] += 0.5 * lost;
     s.m_minerals[i] += 0.5 * lost;
+    recordRxn(RX_MAINT_MRNA, RX_LOC_CELL, 0);
   }
   // Receptor chems decay at the same rate as other machinery. Cells
   // that don't run biosynth lose their sensing capacity over minutes.
@@ -5141,6 +5308,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
       col[i] = v - lost;
       s.m_aminoAcid[i] += 0.5 * lost;
       s.m_minerals[i] += 0.5 * lost;
+      recordRxn(RX_MAINT_RECEPTOR, RX_LOC_CELL, 0);
     }
   }
   for (let k = 0; k < CATALYST_COUNT; k++) {
@@ -5151,6 +5319,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
       col[i] = v - lost;
       s.m_aminoAcid[i] += 0.5 * lost;
       s.m_minerals[i] += 0.5 * lost;
+      recordRxn(RX_MAINT_CATALYST, RX_LOC_CELL, 0);
     }
   }
 }
@@ -5255,6 +5424,7 @@ function toxify(c: Creature, dt: number): void {
   const damage = want < memb ? want : memb;
   s.m_membrane[i] = memb - damage;
   s.m_waste[i] = waste + damage;
+  recordRxn(RX_TOXIFY, RX_LOC_CELL, 0);
 }
 
 function spawnExcretedParticle(
@@ -5420,6 +5590,10 @@ function radiusForMass(m: number, density: number): number {
 
 export function step(world: World, dt: number): void {
   world.t += dt;
+  // Reaction/ATP accounting: bind the world for the deep record hooks
+  // (chemistry is single-threaded here) and roll the 60s window.
+  RXN_STATS_WORLD = world;
+  rollReactionWindow(world);
   // Snapshot living lineages at the *start* of this step so we can
   // count lineage extinctions at the end (any lineageRoot that was
   // alive going in but isn't alive coming out has gone extinct this
@@ -6116,7 +6290,7 @@ function updateCreatures(world: World, dt: number): void {
     // Cost of being alive. ATP turns into ADP, mass conserved. Drain
     // scales with temperature like the rest of metabolism.
     const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
-    spendATP(c, idleDrain);
+    spendATP(c, idleDrain, ATP_IDLE);
 
     // Catabolism is now handled by the biopolymer-digest reaction in
     // runGenericReactions (REACTIONS[10]), gated on enzyme.
@@ -6251,7 +6425,7 @@ function updateCreatures(world: World, dt: number): void {
     const ec = sp ? sp.execCounts : undefined;
     runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, vmOut, ec);
     if (sp) sp.vmTicks++;
-    spendATP(c, vmOut.instructions * ENERGY_PER_INSTRUCTION);
+    spendATP(c, vmOut.instructions * ENERGY_PER_INSTRUCTION, ATP_VM);
     // K-5: somatic-mutation suppression is now driven by CHEM_REPAIR
     // pool (set by SYNTH REPAIR). The somaticMutate path consults
     // c.repairTicks, but that window is now refreshed continuously
@@ -6330,7 +6504,7 @@ function updateCreatures(world: World, dt: number): void {
       // drag (~r ∝ mass^(1/3)) so a 10x cell pays only ~2.15x more to
       // move at the same speed, not 10x.
       const massScale = Math.max(1, Math.cbrt(creatureTotalMass(c) / THRUST_MASS_REF));
-      spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt);
+      spendATP(c, usedFrac * ENERGY_PER_THRUST_SEC * massScale * dt, ATP_THRUST);
     }
 
     // VM-controlled excretion. EXCRETE <operand> picks any chem id
@@ -6380,7 +6554,7 @@ function updateCreatures(world: World, dt: number): void {
           // static synthMask derived from its genome's SYNTH_* op set.
           other.organelleSynthMask = genomeSynthMask(other.genome);
           c.contents.push(other);
-          spendATP(c, cost);
+          spendATP(c, cost, ATP_ENGULF);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(other);
           ingested = true;
@@ -6438,7 +6612,7 @@ function updateCreatures(world: World, dt: number): void {
           c.energy += other.energy;
           for (const inner of other.contents) c.contents.push(inner);
           other.contents.length = 0;
-          spendATP(c, cost);
+          spendATP(c, cost, ATP_PREDATE);
           c.ingestCooldown = PREDATION_COOLDOWN_SEC;
           eaten.add(other);
           // Note: slot release is deferred to the death pass so the
@@ -6498,7 +6672,7 @@ function updateCreatures(world: World, dt: number): void {
                 gcCols[k][ci] += p.genericChem[k];
               }
             }
-            spendATP(c, INGEST_ENERGY_COST);
+            spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
             // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
             removeParticleAt(world, i);
@@ -6643,6 +6817,7 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
         cols[CHEM_AA][ci] += 0.5 * v;
         cols[CHEM_MIN][ci] += 0.5 * v;
         ccats[k][ci] = 0;
+        recordRxn(RX_DEATH_CATDENATURE, RX_LOC_CELL, 0);
       }
     }
   }
@@ -6713,7 +6888,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // This is the rate-limit on REPRODUCE: a cell can't fire it every tick
   // without paying for the failed cycles, so spamming the op starves the
   // cell instead of being free.
-  spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent));
+  spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent), ATP_REPRODUCE);
 
   if (world.creatures.length >= MAX_CREATURES) return;
   // Sexual reproduction (bonded crossover): if the parent currently has
@@ -7818,7 +7993,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:6:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:7:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -7889,6 +8064,9 @@ interface SavedWorld {
   // chosen budget survives a browser refresh. Optional: older saves
   // without it keep the current/default target.
   particleTarget?: number;
+  // Reaction / ATP accounting history. Optional: older saves restore
+  // with a fresh empty accumulator.
+  rxnStats?: SavedRxnStats;
   obstacles: Obstacle[];
   atmosphere?: Partial<Molecules>;
   // Phase F ambient pool. Sparse list of (chemId, concentration);
@@ -7984,6 +8162,7 @@ export function serializeWorld(w: World): string {
     extinctionCount: w.extinctionCount,
     founderTarget: w.founderTarget,
     particleTarget: w.particleTarget,
+    rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     atmosphere: { ...w.atmosphere },
     ambient: (() => {
@@ -8109,6 +8288,9 @@ export function applySavedWorld(world: World, json: string): boolean {
   if (typeof saved.particleTarget === "number") {
     setParticleTarget(world, saved.particleTarget);
   }
+  world.rxnStats = saved.rxnStats
+    ? deserializeRxnStats(saved.rxnStats)
+    : newRxnStats();
   world.dayPhase = saved.dayPhase;
   world.disturbanceIntensity = saved.disturbanceIntensity;
   world.disturbanceStartedAt = saved.disturbanceStartedAt;

@@ -30,6 +30,8 @@ import {
   pushParticle,
   CreatureStore,
   newCreature,
+  serializeRxnStats,
+  deserializeRxnStats,
 } from "../sim";
 import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
 
@@ -2220,5 +2222,82 @@ describe("default creature behavior (integration)", () => {
     w.creatures.push(c);
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(1);
+  });
+});
+
+describe("reaction / ATP accounting", () => {
+  const sum = (a: Int32Array | Float64Array): number => {
+    let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s;
+  };
+
+  it("accumulates reaction counts + ATP flux as the sim runs", () => {
+    const w = createWorld(800, 600);
+    const rs = w.rxnStats!;
+    expect(rs).toBeTruthy();
+    expect(sum(rs.curRxn)).toBe(0);
+    for (let i = 0; i < 20; i++) step(w, 1 / 60);
+    // Founders + their reactions ran -> some reactions counted and
+    // some ATP moved through the ledger.
+    expect(sum(rs.curRxn)).toBeGreaterThan(0);
+    expect(sum(rs.curAtp)).toBeGreaterThan(0);
+  });
+
+  it("rolls a 60s window: snapshots to fine[] and resets cur", () => {
+    const w = createWorld(800, 600);
+    const rs = w.rxnStats!;
+    // createWorld pre-advances world.t (~61s), so windowStart settles
+    // there on the first step. Accumulate into the *current* window.
+    for (let i = 0; i < 10; i++) step(w, 1 / 60);
+    const startWin = rs.windowStart;
+    const before = sum(rs.curRxn);
+    expect(before).toBeGreaterThan(0);
+    const fineBefore = rs.fine.length;
+    // Jump just past this window's 60s boundary; the next step rolls it.
+    w.t = startWin + 61;
+    step(w, 1 / 60);
+    expect(rs.windowStart).toBeGreaterThan(startWin);
+    expect(rs.fine.length).toBeGreaterThan(fineBefore);
+    // The just-closed window captured the pre-roll activity.
+    const closed = rs.fine[rs.fine.length - 1];
+    expect(sum(closed.rxn)).toBeGreaterThanOrEqual(before);
+  });
+
+  it("compacts >1h-old fine windows into 5-minute coarse buckets", () => {
+    const w = createWorld(800, 600);
+    const rs = w.rxnStats!;
+    for (let i = 0; i < 5; i++) step(w, 1 / 60);
+    // Jump ~70 minutes ahead: the early fine window must age into a
+    // coarse bucket; no fine window may remain older than 1h.
+    w.t = 70 * 60;
+    step(w, 1 / 60);
+    expect(rs.coarse.length).toBeGreaterThanOrEqual(1);
+    for (const win of rs.fine) expect(win.t0).toBeGreaterThanOrEqual(w.t - 3600 - 60);
+    // 5-minute bucket boundaries.
+    for (const win of rs.coarse) expect(win.t0 % 300).toBe(0);
+  });
+
+  it("serialize -> deserialize round-trips the accounting", () => {
+    const w = createWorld(800, 600);
+    const rs = w.rxnStats!;
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    w.t = 61; step(w, 1 / 60); // force a fine window to exist
+    const before = sum(rs.curRxn) + rs.fine.reduce((a, x) => a + sum(x.rxn), 0);
+    const restored = deserializeRxnStats(serializeRxnStats(rs));
+    const after = sum(restored.curRxn) + restored.fine.reduce((a, x) => a + sum(x.rxn), 0);
+    expect(after).toBe(before);
+    expect(restored.windowStart).toBe(rs.windowStart);
+    expect(restored.fine.length).toBe(rs.fine.length);
+  });
+
+  it("denatureWaste is recorded (out-of-cell field reaction)", () => {
+    const w = createWorld(800, 600);
+    const rs = w.rxnStats!;
+    const stride = w.ambient.length / (regionCols(w) * regionRows(w));
+    // Seed dissolved waste in every region so denatureWaste converts
+    // it during the step (which binds the accounting world).
+    for (let b = 0; b < w.ambient.length; b += stride) w.ambient[b + CHEM_IDS.waste] = 5;
+    const before = sum(rs.curRxn);
+    step(w, 1 / 60);
+    expect(sum(rs.curRxn)).toBeGreaterThan(before);
   });
 });
