@@ -1016,11 +1016,21 @@ export function makeRandomViableGenome(
   rng: () => number = Math.random,
 ): Uint8Array | null {
   const b = (): number => Math.floor(rng() * 256);
+  // Gated REPRODUCE: instead of a bare (unconditional) REPRODUCE that
+  // fires every tick and makes every new lineage balloon then
+  // boom/bust, wrap it in a randomized resource gate:
+  //   SELF_ENERGY|SELF_MEMBRANE ; PUSH8 thresh ; GT ; JZ +1 ; REPRODUCE
+  // i.e. only fission once the chosen reserve clears a per-founder
+  // random threshold. Kept as one atomic token so the JZ +1 skip
+  // stays aligned through the shuffle; threshold + which reserve are
+  // randomized per founder, and mutation/selection tune it from there.
+  const repSensor = rng() < 0.5 ? OP.SELF_ENERGY : OP.SELF_MEMBRANE;
+  const repThresh = 8 + Math.floor(rng() * 40); // 8..47, positive i8
   // Required tokens for a viable heterotroph (see viableGenome):
   // reproduce, ingest, thrust, a SENSE op, and SYNTH for
   // bio/mrna/fa/enz/aa. Operands randomized for diversity.
   const tokens: number[][] = [
-    [OP.REPRODUCE],
+    [repSensor, OP.PUSH8, repThresh, OP.GT, OP.JZ, 1, OP.REPRODUCE],
     [OP.INGEST, Math.floor(rng() * 6)],          // a sensor material
     [OP.THRUST],
     [OP.SENSE_CHEMICAL, Math.floor(rng() * CHEMICAL_COUNT)],
