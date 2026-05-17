@@ -1906,7 +1906,7 @@ const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
     { chemId: CHEM_BIOPOLYMER, weight: 4.5, densityJitter: { lo: 0.7, hi: 1.3 } },
     // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6.
     { chemId: CHEM_MIN, weight: 7.5, densityJitter: { lo: 1.4, hi: 2.6 } },
-    { chemId: CHEM_FA, weight: 1.5 },
+    { chemId: CHEM_FA, weight: 7.5 },
     // ADP is a normal single-chem spawn (was a "primordial
     // adenosine" molecule-rider seed); ATP economy fed by ongoing
     // spawn, not a one-time dump.
