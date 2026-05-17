@@ -1153,7 +1153,7 @@ const SELECT_CSS =
   "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
   "background:rgba(0,0,0,.5);color:#9ee;cursor:pointer;" + HUD_FONT;
 const overlaySelectEl = document.createElement("select");
-overlaySelectEl.title = "Field overlay (also: H to cycle)";
+overlaySelectEl.title = "Field overlay";
 overlaySelectEl.style.cssText = SELECT_CSS;
 for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
@@ -1869,13 +1869,11 @@ function render(): void {
   drawGenomeStats();
 }
 
-// `H` cycles the overlay (synced with the dock <select> via setOverlay);
-// the heatmap state itself lives in the dock block above. Drawn on top
-// of particles/cells but below the phylogeny strip as a tint.
+// The overlay is driven solely by the controls-bar <select> via
+// setOverlay; the heatmap state lives in the controls block above.
+// Drawn on top of particles/cells but below the phylogeny strip.
 window.addEventListener("keydown", (e) => {
-  if (e.key === "h" || e.key === "H") {
-    setOverlay(heatmapMode === "off" ? "temp" : heatmapMode === "temp" ? "density" : "off");
-  } else if (e.key === "p" || e.key === "P") {
+  if (e.key === "p" || e.key === "P") {
     if (snapshot.profile) dumpProfile();
     simWorker.postMessage({ type: "toggleProfile" });
   } else if (e.key === "f" || e.key === "F") {
@@ -1931,7 +1929,7 @@ function drawHeatmap(): void {
     ctx.globalAlpha = 1;
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     ctx.font = UI_CANVAS_FONT;
-    ctx.fillText("heatmap: temperature (cold blue → warm red, H toggles)", 8, surfaceY + 14);
+    ctx.fillText("heatmap: temperature (cold blue → warm red)", 8, surfaceY + 14);
     return;
   }
   if (heatmapMode === "density") {
@@ -2022,7 +2020,7 @@ function drawHeatmap(): void {
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.font = UI_CANVAS_FONT;
   const srcs = [densRend && "visible", densDiss && "dissolved", densResv && "simulated", densVivo && "in vivo"].filter(Boolean).join("+") || "none";
-  ctx.fillText(`heatmap: density [${srcs}] · mat:${matName} (max ${maxC.toFixed(0)}/cell, H toggles)`, 8, surfaceY + 14);
+  ctx.fillText(`heatmap: density [${srcs}] · mat:${matName} (max ${maxC.toFixed(0)}/cell)`, 8, surfaceY + 14);
     return;
   }
 }
