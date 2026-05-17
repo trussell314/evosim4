@@ -109,30 +109,28 @@ const HUD_FONT =
   `font-size:${UI_FONT_PX}px;line-height:1.3;font-weight:normal;font-style:normal;`;
 const hud = document.createElement("div");
 hud.style.cssText =
-  "position:fixed;top:8px;left:8px;color:#9ee;background:rgba(0,0,0,.45);" +
-  "border:1px solid #1a3340;border-radius:4px;" + HUD_FONT +
-  "max-height:80vh;overflow:hidden;";
+  "position:fixed;z-index:10;top:0;left:0;right:0;color:#9ee;" +
+  "background:rgba(2,12,18,0.96);border-bottom:1px solid #1a3340;" +
+  "box-sizing:border-box;padding:4px 8px;" + HUD_FONT;
 const hudBar = document.createElement("div");
 hudBar.style.cssText =
-  "display:flex;justify-content:space-between;align-items:center;padding:2px 4px;" +
-  "user-select:none;color:#9ee;gap:8px;" + HUD_FONT;
-// Live stats shown on the bar even when the HUD body is collapsed.
-// Updated by updateInspector() each frame.
+  "display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;" +
+  "user-select:none;color:#9ee;" + HUD_FONT;
+// Live stats shown on the strip. Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
-hudStats.style.cssText = "padding:0 4px;" + HUD_FONT;
+hudStats.style.cssText = HUD_FONT;
 hudStats.textContent = "fps=--  sim=--x  t=0s";
 hudBar.appendChild(hudStats);
-// Per-frame timing, always visible (even when the inspector body is
-// collapsed) so render/sim budget is glanceable while iterating.
-const hudTimings = document.createElement("div");
-hudTimings.style.cssText = "padding:0 8px 2px;color:#9ee;" + HUD_FONT;
+// Per-frame render/sim timing, inline beside the stats so the budget
+// is glanceable while iterating.
+const hudTimings = document.createElement("span");
+hudTimings.style.cssText = "opacity:0.8;" + HUD_FONT;
 hudTimings.textContent = "r=--ms  s=--ms";
-// Stall + error indicator: visible from the bar so mobile users
-// can see at a glance whether sim is paused / world is empty /
-// last step threw. Hidden by default; shown only when something
-// useful is going on.
+hudBar.appendChild(hudTimings);
+// Stall + error indicator. Hidden by default; shown only when
+// something useful is going on (sim paused / world empty / threw).
 const hudDiag = document.createElement("div");
-hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;display:none;" + HUD_FONT;
+hudDiag.style.cssText = "padding-top:2px;color:#f88;display:none;" + HUD_FONT;
 // Whole HUD is one font (9px). Each element sets it explicitly
 // rather than via inherit, because user-agent styles for <pre> can
 // override font-size from cascade in some browsers.
@@ -787,16 +785,21 @@ analysisHeader.addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------
-// Left slide-out: per-chemical global ledger (dissolved mass / rendered
-// particle count / reserve particle-equivalents). Mirrors the right
-// panel's minimize behavior; the canvas + bottom-left controls shift
-// right to make room when it's expanded.
+// Left slide-out: the "chemistry" drawer. Mirrors the organisms drawer
+// (responsive width, tab chrome, collapsible). Tabs:
+//   Ledger -- per-chem table (dissolved / visible / simulated) with a
+//             name filter + sortable columns; click a row for detail.
+//   Detail -- the selected material's reaction accounting + cumulative
+//             produced/consumed/net graph, folded in from the old
+//             fixed flyout so it no longer overlays the world.
 // ---------------------------------------------------------------------
-const LEFT_PANEL_W = 300;
+function chemPanelW(): number {
+  return Math.round(Math.max(340, Math.min(680, window.innerWidth * 0.40)));
+}
 const LEFT_PANEL_W_MIN = 26;
 let leftMinimized = true;
 function leftPanelWidth(): number {
-  return leftMinimized ? LEFT_PANEL_W_MIN : LEFT_PANEL_W;
+  return leftMinimized ? LEFT_PANEL_W_MIN : chemPanelW();
 }
 const leftPanel = document.createElement("div");
 leftPanel.style.cssText =
@@ -814,48 +817,96 @@ leftToggle.style.cssText = "padding:0 4px;";
 const leftTitle = document.createElement("span");
 leftTitle.textContent = "chemistry";
 leftTitle.style.cssText = `font-weight:bold;font-size:${UI_FONT_PX}px;display:none;`;
-// Toggle on the left, title on the right (panel opens leftward).
 leftHeader.appendChild(leftToggle);
 leftHeader.appendChild(leftTitle);
-const leftBody = document.createElement("div");
-leftBody.style.cssText =
-  "padding:8px 10px;overflow-y:auto;display:none;max-height:calc(100vh - 36px);";
+
+// Tab bar -- same chrome as the organisms drawer (styleTab reused).
+type ChemTab = "ledger" | "detail";
+let chemTab: ChemTab = "ledger";
+const chemTabs = document.createElement("div");
+chemTabs.style.cssText =
+  "display:none;flex-wrap:wrap;border-bottom:1px solid #1a3340;";
+const CHEM_TAB_DEFS: { id: ChemTab; label: string }[] = [
+  { id: "ledger", label: "Ledger" },
+  { id: "detail", label: "Detail" },
+];
+const chemTabBtns = new Map<ChemTab, HTMLSpanElement>();
+
+// Ledger pane: name filter + sortable per-chem table.
+const ledgerPane = document.createElement("div");
+ledgerPane.style.cssText =
+  "padding:8px 10px;overflow:auto;display:none;max-height:calc(100vh - 72px);";
+const chemFilter = document.createElement("input");
+chemFilter.type = "text";
+chemFilter.placeholder = "filter materials…";
+chemFilter.style.cssText =
+  "width:100%;box-sizing:border-box;margin-bottom:8px;padding:4px 6px;" +
+  "background:rgba(0,0,0,.4);border:1px solid #1a3340;border-radius:4px;" +
+  `color:#9ee;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};`;
 const chemTable = document.createElement("table");
 chemTable.style.cssText =
   "border-collapse:collapse;width:100%;font-size:" + UI_FONT_PX + "px;";
-leftBody.appendChild(chemTable);
+ledgerPane.appendChild(chemFilter);
+ledgerPane.appendChild(chemTable);
+
+// Detail pane: in-drawer reaction accounting + graph.
+const detailPane = document.createElement("div");
+detailPane.style.cssText =
+  "padding:10px 12px;overflow:auto;display:none;max-height:calc(100vh - 72px);" +
+  `font:${UI_FONT_PX}px/1.45 ${UI_FONT_FAMILY};`;
+
+const leftBody = document.createElement("div");
+leftBody.style.cssText = "display:none;";
+leftBody.appendChild(chemTabs);
+leftBody.appendChild(ledgerPane);
+leftBody.appendChild(detailPane);
 leftPanel.appendChild(leftHeader);
 leftPanel.appendChild(leftBody);
 root.appendChild(leftPanel);
 
-// Per-material detail window, opened by the row "i" buttons. Sits
-// immediately to the right of the (expanded) chemistry panel.
-const CHEM_DETAIL_W = 380;
 let chemDetailId: number | null = null;
-const chemDetail = document.createElement("div");
-chemDetail.style.cssText =
-  "position:fixed;top:0;bottom:0;width:" + CHEM_DETAIL_W + "px;" +
-  "background:rgba(4,16,24,0.96);color:#9ee;border-right:1px solid #1a3340;" +
-  `font:${UI_FONT_PX}px/1.45 ${UI_FONT_FAMILY};` +
-  "overflow-y:auto;padding:10px 12px;box-sizing:border-box;z-index:11;display:none;";
-root.appendChild(chemDetail);
-// Static (rebuilt never) reaction metadata; counts come from snapshot.
 let RXN_CATALOG: ReactionInfo[] | null = null;
-function positionChemDetail(): void {
-  chemDetail.style.left = (leftMinimized ? LEFT_PANEL_W_MIN : LEFT_PANEL_W) + "px";
+
+function applyChemTab(): void {
+  const open = !leftMinimized;
+  chemTabs.style.display = open ? "flex" : "none";
+  ledgerPane.style.display = open && chemTab === "ledger" ? "" : "none";
+  detailPane.style.display = open && chemTab === "detail" ? "" : "none";
+  for (const [id, b] of chemTabBtns) styleTab(b, id === chemTab);
 }
-function closeChemDetail(): void {
-  chemDetailId = null;
-  chemDetail.style.display = "none";
+for (const def of CHEM_TAB_DEFS) {
+  const btn = document.createElement("span");
+  btn.textContent = def.label;
+  styleTab(btn, def.id === chemTab);
+  btn.addEventListener("click", () => {
+    chemTab = def.id;
+    applyChemTab();
+    if (chemTab === "detail") renderChemDetail();
+  });
+  chemTabBtns.set(def.id, btn);
+  chemTabs.appendChild(btn);
 }
+function showChemDetail(k: number): void {
+  chemDetailId = k;
+  chemTab = "detail";
+  applyChemTab();
+  renderChemDetail();
+}
+function backToLedger(): void {
+  chemTab = "ledger";
+  applyChemTab();
+}
+
 function renderChemDetail(): void {
-  if (chemDetailId == null) return;
+  if (chemDetailId == null) {
+    detailPane.innerHTML =
+      `<div style="opacity:0.6;padding:6px 0;">Select a material in the Ledger tab.</div>`;
+    return;
+  }
   const k = chemDetailId;
   if (!RXN_CATALOG) RXN_CATALOG = reactionCatalog();
   const totals = snapshot.reactionTotals;
   const cnt = (id: number): number => (totals ? (totals[id] ?? 0) : 0);
-  // Per-execution amount of THIS material a reaction moves = its
-  // coefficient for chem k; total mass ≈ executions × coefficient.
   const coefFor = (terms: { chem: number; coef: number }[]): number => {
     let s = 0; for (const t of terms) if (t.chem === k) s += t.coef; return s;
   };
@@ -866,8 +917,6 @@ function renderChemDetail(): void {
     const n = cnt(r.id);
     const pc = coefFor(r.produces);
     const cc = coefFor(r.consumes);
-    // amount moved = executions x coefficient; shown as 2px-particle-
-    // equivalents so it reads on the same scale as dissolved/visible/simulated.
     if (pc > 0) prod.push({ label: r.label, n, mass: chemAmountToParticles(k, n * pc) });
     if (cc > 0) cons.push({ label: r.label, n, mass: chemAmountToParticles(k, n * cc) });
   }
@@ -891,10 +940,10 @@ function renderChemDetail(): void {
         `<span style="opacity:0.55;"> &nbsp;(${x.n.toLocaleString()}×)</span></span></div>`).join("");
   const totals0 = totals == null;
   const netMass = pMass - cMass;
-  chemDetail.innerHTML =
+  detailPane.innerHTML =
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
     `<b style="font-size:${UI_FONT_PX + 2}px;">${esc(chemName(k))}</b>` +
-    `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #1a3340;border-radius:3px;">close</span></div>` +
+    `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #1a3340;border-radius:3px;">‹ ledger</span></div>` +
     (totals0
       ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
       : `<canvas id="chemGraph" width="352" height="150" style="width:100%;height:150px;` +
@@ -915,21 +964,20 @@ function renderChemDetail(): void {
     `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${fmtMass(cMass)} p-eq · ${cTot.toLocaleString()} events)</div>` +
     `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;p-eq&nbsp;(executions)</div>` +
     list(cNZ);
-  const cl = chemDetail.querySelector("#chemDetailClose");
-  if (cl) cl.addEventListener("click", closeChemDetail);
+  const cl = detailPane.querySelector("#chemDetailClose");
+  if (cl) cl.addEventListener("click", backToLedger);
   drawChemGraph(k);
-  positionChemDetail();
-  chemDetail.style.display = "";
 }
 
 // Cumulative produced (green) / consumed (red, negative) / net (white)
-// p-eq vs time for the selected material. Spawn input (external
-// biogenesis) excluded so the seed doesn't swamp the curve.
+// p-eq vs time for the selected material. Spawn input excluded so the
+// seed doesn't swamp the curve.
 function drawChemGraph(k: number): void {
-  const canvas = chemDetail.querySelector("#chemGraph") as HTMLCanvasElement | null;
+  const canvas = detailPane.querySelector("#chemGraph") as HTMLCanvasElement | null;
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
+  canvas.width = Math.max(240, Math.floor((detailPane.clientWidth || chemPanelW()) - 28));
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
   const hist = snapshot.rxnStatsHistory;
@@ -972,7 +1020,6 @@ function drawChemGraph(k: number): void {
   const padL = 4, padR = 4, padT = 6, padB = 12;
   const xx = (t: number): number => padL + (t / tMax) * (W - padL - padR);
   const yy = (v: number): number => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
-  // zero baseline
   ctx.strokeStyle = "rgba(255,255,255,0.25)";
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(padL, yy(0)); ctx.lineTo(W - padR, yy(0)); ctx.stroke();
@@ -988,7 +1035,6 @@ function drawChemGraph(k: number): void {
   line((p) => p.r, "#ff6b6b", 1.5);
   line((p) => p.g, "#5dd97a", 1.5);
   line((p) => p.n, "#ffffff", 2.5);
-  // x-axis end label (time = now)
   ctx.fillStyle = "rgba(158,238,255,0.55)";
   ctx.font = "10px ui-monospace,monospace";
   const mm = Math.floor(tMax / 60);
@@ -998,50 +1044,88 @@ function drawChemGraph(k: number): void {
 }
 
 // Lazily-built fixed row set: one <tr> per chem id, cells updated in
-// place so the per-frame refresh never thrashes layout.
-type ChemRow = { name: HTMLTableCellElement; diss: HTMLTableCellElement; rend: HTMLTableCellElement; res: HTMLTableCellElement; info: HTMLTableCellElement };
+// place so the per-frame refresh never thrashes layout. Sorting just
+// re-appends the existing <tr>s; filtering toggles row display.
+type SortKey = "id" | "name" | "diss" | "rend" | "res";
+type ChemRow = {
+  k: number; tr: HTMLTableRowElement;
+  name: HTMLTableCellElement; diss: HTMLTableCellElement;
+  rend: HTMLTableCellElement; res: HTMLTableCellElement;
+  vName: string; vDiss: number; vRend: number; vRes: number;
+};
 let chemRows: ChemRow[] | null = null;
+let chemSortKey: SortKey = "id";
+let chemSortDir: 1 | -1 = 1;
+function setChemSort(key: SortKey): void {
+  if (chemSortKey === key) chemSortDir = (chemSortDir === 1 ? -1 : 1);
+  else { chemSortKey = key; chemSortDir = key === "name" || key === "id" ? 1 : -1; }
+  applyLedgerView();
+}
 function buildChemTable(n: number): void {
   chemTable.textContent = "";
   const thead = document.createElement("tr");
-  for (const [label, alignRight] of [["chem", false], ["dissolved", true], ["visible", true], ["simulated", true], ["", false]] as [string, boolean][]) {
+  const cols: [string, boolean, SortKey][] = [
+    ["chem", false, "name"], ["dissolved", true, "diss"],
+    ["visible", true, "rend"], ["simulated", true, "res"],
+  ];
+  for (const [label, alignRight, key] of cols) {
     const th = document.createElement("th");
     th.textContent = label;
     th.style.cssText =
       "text-align:" + (alignRight ? "right" : "left") +
-      ";padding:2px 4px;border-bottom:1px solid #1a3340;color:#7fb8c8;" +
-      "position:sticky;top:0;background:rgba(4,16,24,0.98);";
+      ";padding:2px 6px;border-bottom:1px solid #1a3340;color:#7fb8c8;" +
+      "position:sticky;top:0;background:rgba(4,16,24,0.98);cursor:pointer;" +
+      "user-select:none;white-space:nowrap;";
+    th.title = "sort";
+    th.addEventListener("click", () => setChemSort(key));
     thead.appendChild(th);
   }
   chemTable.appendChild(thead);
   const rows: ChemRow[] = [];
   for (let k = 0; k < n; k++) {
     const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.title = `accounting for ${chemName(k)}`;
+    tr.addEventListener("click", () => showChemDetail(k));
+    tr.addEventListener("mouseenter", () => { tr.style.background = "rgba(40,80,100,0.35)"; });
+    tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
     const mk = (alignRight: boolean): HTMLTableCellElement => {
       const td = document.createElement("td");
       td.style.cssText =
-        "padding:1px 4px;text-align:" + (alignRight ? "right" : "left") +
+        "padding:1px 6px;text-align:" + (alignRight ? "right" : "left") +
         ";border-bottom:1px solid rgba(26,51,64,0.5);white-space:nowrap;";
       tr.appendChild(td);
       return td;
     };
-    const name = mk(false), diss = mk(true), rend = mk(true), res = mk(true), info = mk(false);
+    const name = mk(false), diss = mk(true), rend = mk(true), res = mk(true);
     name.textContent = chemName(k);
-    info.style.textAlign = "center";
-    info.style.cursor = "pointer";
-    info.style.color = "#7fb8c8";
-    info.textContent = "ⓘ";
-    info.title = `accounting for ${chemName(k)}`;
-    info.addEventListener("click", () => {
-      if (chemDetailId === k) { closeChemDetail(); return; }
-      chemDetailId = k;
-      renderChemDetail();
-    });
     chemTable.appendChild(tr);
-    rows.push({ name, diss, rend, res, info });
+    rows.push({ k, tr, name, diss, rend, res, vName: chemName(k), vDiss: 0, vRend: 0, vRes: 0 });
   }
   chemRows = rows;
 }
+function applyLedgerView(): void {
+  if (!chemRows) return;
+  const q = chemFilter.value.trim().toLowerCase();
+  const cmp = (a: ChemRow, b: ChemRow): number => {
+    let d: number;
+    switch (chemSortKey) {
+      case "name": d = a.vName.localeCompare(b.vName); break;
+      case "diss": d = a.vDiss - b.vDiss; break;
+      case "rend": d = a.vRend - b.vRend; break;
+      case "res": d = a.vRes - b.vRes; break;
+      default: d = a.k - b.k;
+    }
+    return (d || a.k - b.k) * chemSortDir;
+  };
+  const ordered = [...chemRows].sort(cmp);
+  for (const r of ordered) {
+    r.tr.style.display = q && !r.vName.toLowerCase().includes(q) ? "none" : "";
+    chemTable.appendChild(r.tr); // re-append in sorted order
+  }
+}
+chemFilter.addEventListener("input", applyLedgerView);
+
 let lastChemPanelMs = 0;
 function updateChemPanel(): void {
   if (leftMinimized) return;
@@ -1054,7 +1138,6 @@ function updateChemPanel(): void {
   const n = diss.length;
   if (!chemRows || chemRows.length !== n) buildChemTable(n);
   const rows = chemRows!;
-  // Rendered particle count per chem id, from the live snapshot.
   const rendered = new Float64Array(n);
   for (const p of snapshot.particles) {
     const c = p.chemId;
@@ -1063,11 +1146,14 @@ function updateChemPanel(): void {
   const fmt = (v: number): string =>
     v === 0 ? "0" : v >= 1000 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(0) : v.toFixed(2);
   for (let k = 0; k < n; k++) {
-    rows[k].diss.textContent = fmt(diss[k]);
-    rows[k].rend.textContent = fmt(rendered[k]);
-    rows[k].res.textContent = fmt(resv[k]);
+    const r = rows[k];
+    r.vDiss = diss[k]; r.vRend = rendered[k]; r.vRes = resv[k];
+    r.diss.textContent = fmt(diss[k]);
+    r.rend.textContent = fmt(rendered[k]);
+    r.res.textContent = fmt(resv[k]);
   }
-  if (chemDetailId != null) renderChemDetail();
+  applyLedgerView();
+  if (chemTab === "detail" && chemDetailId != null) renderChemDetail();
 }
 leftHeader.addEventListener("click", () => {
   leftMinimized = !leftMinimized;
@@ -1077,10 +1163,10 @@ leftHeader.addEventListener("click", () => {
   leftTitle.style.display = leftMinimized ? "none" : "";
   leftHeader.style.justifyContent = leftMinimized ? "center" : "space-between";
   leftHeader.style.padding = leftMinimized ? "6px 4px" : "6px 8px";
+  applyChemTab();
   resize();
   positionWorldButtons();
-  if (leftMinimized) closeChemDetail();
-  else { lastChemPanelMs = 0; updateChemPanel(); positionChemDetail(); }
+  if (!leftMinimized) { lastChemPanelMs = 0; updateChemPanel(); }
 });
 // ===================================================================
 
