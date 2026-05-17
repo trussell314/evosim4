@@ -1718,6 +1718,83 @@ export function deserializeRxnStats(s: SavedRxnStats): RxnStats {
     coarse: (s.coarse || []).map(savedToSnap),
   };
 }
+// --- Reaction catalog: stable per-reaction metadata (what each
+// reaction consumes/produces + a human label) so the UI can show,
+// for any material, which reactions are its producers vs consumers
+// and how many times each has run to date.
+export interface ReactionTerm { chem: number; coef: number; }
+export interface ReactionInfo {
+  id: number;
+  label: string;
+  consumes: ReactionTerm[];
+  produces: ReactionTerm[];
+}
+function rxnTermStr(t: ReactionTerm[]): string {
+  if (t.length === 0) return "∅";
+  return t.map((x) => {
+    const c = Math.round(x.coef * 100) / 100;
+    const nm = x.chem < CHEM_SHORT_LABELS.length ? CHEM_SHORT_LABELS[x.chem] : `c${x.chem}`;
+    return (c === 1 ? "" : c + " ") + nm;
+  }).join(" + ");
+}
+let REACTION_CATALOG: ReactionInfo[] | null = null;
+export function reactionCatalog(): ReactionInfo[] {
+  if (REACTION_CATALOG) return REACTION_CATALOG;
+  const out: ReactionInfo[] = [];
+  for (let slot = 0; slot < N_REACTIONS; slot++) {
+    const r = REACTIONS[slot];
+    const consumes: ReactionTerm[] = [];
+    const produces: ReactionTerm[] = [];
+    for (let j = 0; j < r.sChem.length; j++) consumes.push({ chem: r.sChem[j], coef: r.sCount[j] });
+    for (let j = 0; j < r.pChem.length; j++) produces.push({ chem: r.pChem[j], coef: r.pCount[j] });
+    // ATP/ADP is engine-managed via atpDelta, not in sChem/pChem:
+    // endergonic spends ATP and yields ADP; exergonic consumes ADP.
+    if (r.atpDelta < 0) produces.push({ chem: CHEM_ADP, coef: -r.atpDelta });
+    else if (r.atpDelta > 0) consumes.push({ chem: CHEM_ADP, coef: r.atpDelta });
+    const named = slot < NAMED_REACTION_COUNT;
+    const label = (named ? reactionName(slot) + ": " : `gen#${slot}: `) +
+      rxnTermStr(consumes) + " → " + rxnTermStr(produces);
+    out.push({ id: slot, label, consumes, produces });
+  }
+  const RECEPTORS = [
+    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
+    CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
+    CHEM_CHEMORECEPTOR_MARKER0, CHEM_MECHANORECEPTOR, CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR,
+  ];
+  const aaMin: ReactionTerm[] = [{ chem: CHEM_AA, coef: 0.5 }, { chem: CHEM_MIN, coef: 0.5 }];
+  const syn = (id: number, name: string, cons: ReactionTerm[], prod: ReactionTerm[]): void => {
+    out.push({ id, label: `${name}: ${rxnTermStr(cons)} → ${rxnTermStr(prod)}`, consumes: cons, produces: prod });
+  };
+  syn(RX_MAINT_MEMBRANE, "maint membrane", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_AA, coef: 0.5 }, { chem: CHEM_FA, coef: 0.5 }]);
+  syn(RX_MAINT_ENZ, "maint enzyme", [{ chem: CHEM_ENZ, coef: 1 }], aaMin);
+  syn(RX_MAINT_CHL, "maint chlorophyll", [{ chem: CHEM_CHL, coef: 1 }], aaMin);
+  syn(RX_MAINT_MRNA, "maint mRNA", [{ chem: CHEM_MRNA, coef: 1 }], aaMin);
+  syn(RX_MAINT_RECEPTOR, "maint receptors", RECEPTORS.map((c) => ({ chem: c, coef: 1 })), aaMin);
+  syn(RX_MAINT_CATALYST, "maint catalyst", [], aaMin);
+  syn(RX_TOXIFY, "toxify", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_WASTE, coef: 1 }]);
+  syn(RX_DEATH_CATDENATURE, "death catalyst denature", [], aaMin);
+  syn(RX_DENATURE_WASTE, "waste denature", [{ chem: CHEM_WASTE, coef: 1 }], [{ chem: CHEM_CO2, coef: 1 }]);
+  syn(RX_SYNTH_CATALYST, "synth catalyst", aaMin, [{ chem: CHEM_ADP, coef: CAT_ATP_COST }]);
+  REACTION_CATALOG = out;
+  return out;
+}
+// Total executions to date per reaction id (cur + all windows, both
+// locations + catalyzed/uncatalyzed summed).
+export function reactionTotals(world: World): Int32Array {
+  const t = new Int32Array(NREACT);
+  const rs = world.rxnStats;
+  if (!rs) return t;
+  const addAll = (a: Int32Array): void => {
+    for (let id = 0; id < NREACT; id++) {
+      const b = id * 4;
+      t[id] += a[b] + a[b + 1] + a[b + 2] + a[b + 3];
+    }
+  };
+  addAll(rs.curRxn);
+  for (const w of rs.fine) addAll(w.rxn);
+  for (const w of rs.coarse) addAll(w.rxn);
+  return t;
+}
 // ===================================================================
 const CHEMICAL_COUNT = 96;
 const NAMED_CHEMICAL_COUNT = 45;
@@ -8485,6 +8562,9 @@ export interface RenderSnapshot extends WorldEnv {
   // in particles alongside the rendered column.
   chemDissolved: Float32Array;
   chemReserveCount: Float32Array;
+  // Per-reaction lifetime execution counts (indexed by reaction id;
+  // see reactionCatalog()). Absent if accounting is disabled.
+  reactionTotals?: Int32Array;
   // Optional per-phase timing. Mirrors world.profile when present.
   profile?: WorldProfile;
 }
@@ -8670,6 +8750,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     phylogenyEvents: world.phylogenyEvents.slice(),
     chemDissolved,
     chemReserveCount,
+    reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     profile: world.profile,
   };
 }

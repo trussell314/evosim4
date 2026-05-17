@@ -69,6 +69,8 @@ import {
   takeSnapshot,
   chemName,
   reactionName,
+  reactionCatalog,
+  type ReactionInfo,
   genomeTag,
   PARTICLE_TARGET_STEP,
   type RenderSnapshot,
@@ -722,14 +724,81 @@ leftPanel.appendChild(leftHeader);
 leftPanel.appendChild(leftBody);
 root.appendChild(leftPanel);
 
+// Per-material detail window, opened by the row "i" buttons. Sits
+// immediately to the right of the (expanded) chemistry panel.
+const CHEM_DETAIL_W = 380;
+let chemDetailId: number | null = null;
+const chemDetail = document.createElement("div");
+chemDetail.style.cssText =
+  "position:fixed;top:0;bottom:0;width:" + CHEM_DETAIL_W + "px;" +
+  "background:rgba(4,16,24,0.96);color:#9ee;border-right:1px solid #1a3340;" +
+  `font:${UI_FONT_PX}px/1.45 ${UI_FONT_FAMILY};` +
+  "overflow-y:auto;padding:10px 12px;box-sizing:border-box;z-index:11;display:none;";
+root.appendChild(chemDetail);
+// Static (rebuilt never) reaction metadata; counts come from snapshot.
+let RXN_CATALOG: ReactionInfo[] | null = null;
+function positionChemDetail(): void {
+  chemDetail.style.left = (leftMinimized ? LEFT_PANEL_W_MIN : LEFT_PANEL_W) + "px";
+}
+function closeChemDetail(): void {
+  chemDetailId = null;
+  chemDetail.style.display = "none";
+}
+function renderChemDetail(): void {
+  if (chemDetailId == null) return;
+  const k = chemDetailId;
+  if (!RXN_CATALOG) RXN_CATALOG = reactionCatalog();
+  const totals = snapshot.reactionTotals;
+  const cnt = (id: number): number => (totals ? (totals[id] ?? 0) : 0);
+  type Row = { label: string; n: number };
+  const prod: Row[] = [];
+  const cons: Row[] = [];
+  for (const r of RXN_CATALOG) {
+    const n = cnt(r.id);
+    if (r.produces.some((t) => t.chem === k)) prod.push({ label: r.label, n });
+    if (r.consumes.some((t) => t.chem === k)) cons.push({ label: r.label, n });
+  }
+  const nz = (a: Row[]): Row[] => a.filter((x) => x.n > 0).sort((x, y) => y.n - x.n);
+  const pNZ = nz(prod), cNZ = nz(cons);
+  const pTot = pNZ.reduce((s, x) => s + x.n, 0);
+  const cTot = cNZ.reduce((s, x) => s + x.n, 0);
+  const esc = (s: string): string =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const list = (rows: Row[]): string =>
+    rows.length === 0
+      ? `<div style="opacity:0.6;padding:2px 0;">none recorded</div>`
+      : rows.map((x) =>
+        `<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px solid rgba(26,51,64,0.4);">` +
+        `<span>${esc(x.label)}</span><span style="color:#cfe;">${x.n.toLocaleString()}</span></div>`).join("");
+  const totals0 = totals == null;
+  chemDetail.innerHTML =
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
+    `<b style="font-size:${UI_FONT_PX + 2}px;">${esc(chemName(k))}</b>` +
+    `<span id="chemDetailClose" style="cursor:pointer;padding:2px 8px;border:1px solid #356;border-radius:3px;">close</span></div>` +
+    (totals0
+      ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
+      : `<div style="opacity:0.55;margin-bottom:8px;">prevalence-over-time graph: not captured yet</div>`) +
+    `<div style="margin:6px 0;">Net reaction events since inception ` +
+    `(produced − consumed): <b style="color:${pTot - cTot >= 0 ? "#9efba8" : "#ff9e9e"};">` +
+    `${(pTot - cTot).toLocaleString()}</b></div>` +
+    `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${pTot.toLocaleString()} total)</div>` +
+    list(pNZ) +
+    `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${cTot.toLocaleString()} total)</div>` +
+    list(cNZ);
+  const cl = chemDetail.querySelector("#chemDetailClose");
+  if (cl) cl.addEventListener("click", closeChemDetail);
+  positionChemDetail();
+  chemDetail.style.display = "";
+}
+
 // Lazily-built fixed row set: one <tr> per chem id, cells updated in
 // place so the per-frame refresh never thrashes layout.
-type ChemRow = { name: HTMLTableCellElement; diss: HTMLTableCellElement; rend: HTMLTableCellElement; res: HTMLTableCellElement };
+type ChemRow = { name: HTMLTableCellElement; diss: HTMLTableCellElement; rend: HTMLTableCellElement; res: HTMLTableCellElement; info: HTMLTableCellElement };
 let chemRows: ChemRow[] | null = null;
 function buildChemTable(n: number): void {
   chemTable.textContent = "";
   const thead = document.createElement("tr");
-  for (const [label, alignRight] of [["chem", false], ["diss", true], ["rend", true], ["resv", true]] as [string, boolean][]) {
+  for (const [label, alignRight] of [["chem", false], ["diss", true], ["rend", true], ["resv", true], ["", false]] as [string, boolean][]) {
     const th = document.createElement("th");
     th.textContent = label;
     th.style.cssText =
@@ -750,10 +819,20 @@ function buildChemTable(n: number): void {
       tr.appendChild(td);
       return td;
     };
-    const name = mk(false), diss = mk(true), rend = mk(true), res = mk(true);
+    const name = mk(false), diss = mk(true), rend = mk(true), res = mk(true), info = mk(false);
     name.textContent = chemName(k);
+    info.style.textAlign = "center";
+    info.style.cursor = "pointer";
+    info.style.color = "#7fb8c8";
+    info.textContent = "ⓘ";
+    info.title = `accounting for ${chemName(k)}`;
+    info.addEventListener("click", () => {
+      if (chemDetailId === k) { closeChemDetail(); return; }
+      chemDetailId = k;
+      renderChemDetail();
+    });
     chemTable.appendChild(tr);
-    rows.push({ name, diss, rend, res });
+    rows.push({ name, diss, rend, res, info });
   }
   chemRows = rows;
 }
@@ -782,6 +861,7 @@ function updateChemPanel(): void {
     rows[k].rend.textContent = fmt(rendered[k]);
     rows[k].res.textContent = fmt(resv[k]);
   }
+  if (chemDetailId != null) renderChemDetail();
 }
 leftHeader.addEventListener("click", () => {
   leftMinimized = !leftMinimized;
@@ -793,7 +873,8 @@ leftHeader.addEventListener("click", () => {
   leftHeader.style.padding = leftMinimized ? "6px 4px" : "6px 8px";
   resize();
   positionWorldButtons();
-  if (!leftMinimized) { lastChemPanelMs = 0; updateChemPanel(); }
+  if (leftMinimized) closeChemDetail();
+  else { lastChemPanelMs = 0; updateChemPanel(); positionChemDetail(); }
 });
 
 // Reset (bottom-left) + export (bottom-right) sit inside the world
