@@ -3703,7 +3703,7 @@ function seedInitialParticles(world: World): void {
 // the ramp keeps going until the visible count reaches particleTarget,
 // then latches done forever (nothing respawns afterward -- the pool is
 // fixed for the rest of the run). Founders are gated on this completing.
-const SEED_RAMP_PERIOD_SEC = 5;
+const SEED_RAMP_PERIOD_SEC = 30;
 const SEED_RAMP_BATCH = 1000;
 function seedRamp(world: World, dt: number): void {
   if (!world.useSeedRamp || world.initialSeedDone) return;
