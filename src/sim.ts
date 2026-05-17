@@ -2184,17 +2184,10 @@ const GEN_SPAWN_DECAY = 0.82;
 const GEN_SPAWN_FLOOR = 0.025;
 const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
   const specs: SpawnChemSpec[] = [
-    // Carbon starts in recyclable polymer, not a fatty-acid free
-    // lunch. fa 7.5 -> 2 + biopolymer 4.5 -> 9: the large fa seed
-    // fuelled a violent heterotrophic overshoot (400+ cells) that
-    // strip-mined the non-renewable pool and crashed (dMem ~195).
-    // Safe now that photophosphorylation + the buffed glu->fa chain
-    // sustain autotrophs without the seed; biopolymer is digestible
-    // (out[10]) back to glu/aa/fa so bulk carbon stays in the loop.
-    { chemId: CHEM_BIOPOLYMER, weight: 9, densityJitter: { lo: 0.7, hi: 1.3 } },
+    { chemId: CHEM_BIOPOLYMER, weight: 4.5, densityJitter: { lo: 0.7, hi: 1.3 } },
     // Minerals: subsume rock + sand + clay. Density spans 1.4..2.6.
     { chemId: CHEM_MIN, weight: 7.5, densityJitter: { lo: 1.4, hi: 2.6 } },
-    { chemId: CHEM_FA, weight: 2 },
+    { chemId: CHEM_FA, weight: 7.5 },
     // ADP is a normal single-chem spawn (was a "primordial
     // adenosine" molecule-rider seed); ATP economy fed by ongoing
     // spawn, not a one-time dump.
