@@ -1194,6 +1194,9 @@ export interface World {
   // Reaction / ATP accounting (60s windows, persisted). Optional so
   // hand-built test World literals don't need to populate it.
   rxnStats?: RxnStats;
+  // Whether the founder top-up spawns new lineages. Optional: absent
+  // (older saves / test literals) means enabled. Persisted.
+  foundersEnabled?: boolean;
   width: number;
   height: number;
   depth: number;
@@ -3705,6 +3708,7 @@ export function createWorld(
     initialSeedDone: !opts?.delayedSpawn,
     stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
     rxnStats: newRxnStats(),
+    foundersEnabled: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveLineageRoots: new Set(),
@@ -5915,7 +5919,7 @@ export function step(world: World, dt: number): void {
   const delayDone = world.useSeedRamp
     ? world.initialSeedDone
     : world.t >= FOUNDER_SPAWN_DELAY_SEC;
-  if (delayDone && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
+  if (delayDone && world.foundersEnabled !== false && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
     // Always top off to founderTarget in one go (no wave throttle):
     // spawn the full deficit every step it's below target.
@@ -8278,6 +8282,8 @@ interface SavedWorld {
   // chosen budget survives a browser refresh. Optional: older saves
   // without it keep the current/default target.
   particleTarget?: number;
+  // Founder generation toggle. Absent (old saves) = enabled.
+  foundersEnabled?: boolean;
   // Reaction / ATP accounting history. Optional: older saves restore
   // with a fresh empty accumulator.
   rxnStats?: SavedRxnStats;
@@ -8376,6 +8382,7 @@ export function serializeWorld(w: World): string {
     extinctionCount: w.extinctionCount,
     founderTarget: w.founderTarget,
     particleTarget: w.particleTarget,
+    foundersEnabled: w.foundersEnabled,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     atmosphere: { ...w.atmosphere },
@@ -8502,6 +8509,8 @@ export function applySavedWorld(world: World, json: string): boolean {
   if (typeof saved.particleTarget === "number") {
     setParticleTarget(world, saved.particleTarget);
   }
+  // Absent in older saves -> founders enabled (prior behavior).
+  world.foundersEnabled = saved.foundersEnabled !== false;
   world.rxnStats = saved.rxnStats
     ? deserializeRxnStats(saved.rxnStats)
     : newRxnStats();
@@ -8702,6 +8711,8 @@ export interface RenderSnapshot extends WorldEnv {
   // Per-reaction lifetime execution counts (indexed by reaction id;
   // see reactionCatalog()). Absent if accounting is disabled.
   reactionTotals?: Int32Array;
+  // Mirrors world.foundersEnabled so the UI toggle reflects loaded state.
+  foundersEnabled?: boolean;
   // Windowed reaction history (sparse) for the detail time-graph.
   rxnStatsHistory?: SavedRxnStats;
   // Optional per-phase timing. Mirrors world.profile when present.
@@ -8891,6 +8902,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     chemReserveCount,
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
+    foundersEnabled: world.foundersEnabled !== false,
     profile: world.profile,
   };
 }

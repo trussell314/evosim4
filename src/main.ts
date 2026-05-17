@@ -448,6 +448,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
       particleCap = snapshot.particleTarget;
       renderCapLabel();
     }
+    syncFoundersBtn(snapshot.foundersEnabled !== false);
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
@@ -980,170 +981,189 @@ leftHeader.addEventListener("click", () => {
   if (leftMinimized) closeChemDetail();
   else { lastChemPanelMs = 0; updateChemPanel(); positionChemDetail(); }
 });
-
-// Reset (bottom-left) + export (bottom-right) sit inside the world
-// area, just above the phylogeny strip. The right button tracks the
-// analysis-panel width so it never disappears behind it.
-const WORLD_BTN_STYLE =
-  "position:fixed;z-index:10;padding:4px 10px;border:1px solid #356;" +
-  "border-radius:4px;background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" +
+// ===================================================================
+// World control dock: a single flex bar of all world controls, sitting
+// just above the phylogeny strip between the side panels. Replaces the
+// old hand-positioned floating buttons + offset math. New controls
+// (e.g. the gradient overlay) just append here.
+// ---------------------------------------------------------------------
+const DOCK_BTN =
+  "padding:4px 10px;border:1px solid #356;border-radius:4px;" +
+  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;white-space:nowrap;" +
   HUD_FONT;
-const resetBtn = document.createElement("button");
-resetBtn.textContent = "reset";
-resetBtn.title = "Clear saved world and start fresh";
-resetBtn.style.cssText = WORLD_BTN_STYLE;
+function mkDockBtn(label: string, title: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.title = title;
+  b.style.cssText = DOCK_BTN;
+  return b;
+}
+// active = on-state tint; pass a tint css fragment for the colour.
+function setDockActive(b: HTMLButtonElement, on: boolean, tint: string): void {
+  b.style.cssText = DOCK_BTN + (on ? tint : "");
+}
+const TINT_AMBER = "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a;";
+const TINT_TEAL = "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;";
+const TINT_GREEN = "background:rgba(0,50,20,.75);color:#9efba8;border-color:#3a8a5a;";
+const TINT_RED = "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
+
+const dock = document.createElement("div");
+dock.style.cssText =
+  "position:fixed;z-index:10;display:flex;flex-wrap:wrap;align-items:center;" +
+  "gap:6px;padding:5px 8px;border:1px solid #2a4450;border-radius:6px;" +
+  "background:rgba(2,12,18,0.82);" + HUD_FONT;
+root.appendChild(dock);
+
+// --- reset (two-tap to confirm) ---
+const resetBtn = mkDockBtn("reset", "Clear saved world and start fresh");
 let resetArmedUntil = 0;
 let resetArmTimer: ReturnType<typeof setTimeout> | null = null;
 function disarmReset(): void {
   resetArmedUntil = 0;
   resetBtn.textContent = "reset";
-  resetBtn.style.cssText = WORLD_BTN_STYLE;
-  positionWorldButtons();
+  resetBtn.style.cssText = DOCK_BTN;
   if (resetArmTimer) { clearTimeout(resetArmTimer); resetArmTimer = null; }
 }
 resetBtn.addEventListener("click", () => {
   const now = performance.now();
-  if (now < resetArmedUntil) {
-    hardReset();
-    return;
-  }
+  if (now < resetArmedUntil) { hardReset(); return; }
   resetArmedUntil = now + 3000;
   resetBtn.textContent = "tap again to wipe";
-  resetBtn.style.cssText =
-    WORLD_BTN_STYLE +
-    "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
-  positionWorldButtons();
+  resetBtn.style.cssText = DOCK_BTN + TINT_RED;
   if (resetArmTimer) clearTimeout(resetArmTimer);
   resetArmTimer = setTimeout(disarmReset, 3000);
 });
-root.appendChild(resetBtn);
+dock.appendChild(resetBtn);
 
-const exportBtn = document.createElement("button");
-exportBtn.textContent = "export";
-exportBtn.title = "Download the saved world as JSON";
-exportBtn.style.cssText = WORLD_BTN_STYLE;
+// --- turbo ---
+let turboMode = false;
+let turboFrameCounter = 0;
+const TURBO_RENDER_EVERY = 30; // one render per ~500ms at 60fps rAF
+const turboBtn = mkDockBtn("turbo", "Run sim flat-out; render once per ~500ms");
+turboBtn.addEventListener("click", () => {
+  turboMode = !turboMode;
+  turboFrameCounter = 0;
+  turboBtn.textContent = turboMode ? "turbo on" : "turbo";
+  setDockActive(turboBtn, turboMode, TINT_AMBER);
+  simWorker.postMessage({ type: "setTurbo", turbo: turboMode });
+});
+dock.appendChild(turboBtn);
+
+// --- region grid overlay ---
+let gridLinesOn = false;
+const gridBtn = mkDockBtn("grid", "Toggle the region grid overlay");
+gridBtn.addEventListener("click", () => {
+  gridLinesOn = !gridLinesOn;
+  gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
+  setDockActive(gridBtn, gridLinesOn, TINT_TEAL);
+});
+dock.appendChild(gridBtn);
+
+// --- founder generation toggle (persisted with world state) ---
+let foundersOn = true;
+const foundersBtn = mkDockBtn("founders on", "Toggle spawning of new founder lineages (saved with the world)");
+setDockActive(foundersBtn, true, TINT_GREEN);
+foundersBtn.addEventListener("click", () => {
+  foundersOn = !foundersOn;
+  foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
+  setDockActive(foundersBtn, foundersOn, TINT_GREEN);
+  simWorker.postMessage({ type: "setFoundersEnabled", on: foundersOn });
+});
+// Keep the button truthful to loaded/saved state (called from the
+// snapshot handler). Only repaint when it actually changed.
+function syncFoundersBtn(on: boolean): void {
+  if (on === foundersOn) return;
+  foundersOn = on;
+  foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
+  setDockActive(foundersBtn, foundersOn, TINT_GREEN);
+}
+dock.appendChild(foundersBtn);
+
+// --- overlay selector (field heatmap; gradient modes will slot in) ---
+type HeatmapMode = "off" | "temp" | "density";
+let heatmapMode: HeatmapMode = "off";
+const HEATMAP_CELL = 32;
+const HEATMAP_ALPHA = 0.28;
+const overlaySelectEl = document.createElement("select");
+overlaySelectEl.title = "Field overlay (also: H to cycle)";
+overlaySelectEl.style.cssText =
+  "padding:3px 6px;border:1px solid #356;border-radius:4px;" +
+  "background:rgba(0,0,0,.55);color:#9ee;cursor:pointer;" + HUD_FONT;
+for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: particle density"]] as [HeatmapMode, string][]) {
+  const o = document.createElement("option");
+  o.value = val; o.textContent = txt;
+  overlaySelectEl.appendChild(o);
+}
+function setOverlay(mode: HeatmapMode): void {
+  heatmapMode = mode;
+  if (overlaySelectEl.value !== mode) overlaySelectEl.value = mode;
+}
+overlaySelectEl.addEventListener("change", () => setOverlay(overlaySelectEl.value as HeatmapMode));
+dock.appendChild(overlaySelectEl);
+
+// --- profile toggle (worker-side; dumps current profile on disable) ---
+let profileOn = false;
+const profileBtn = mkDockBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
+profileBtn.addEventListener("click", () => {
+  if (profileOn && snapshot.profile) dumpProfile();
+  profileOn = !profileOn;
+  setDockActive(profileBtn, profileOn, TINT_TEAL);
+  simWorker.postMessage({ type: "toggleProfile" });
+});
+dock.appendChild(profileBtn);
+
+// flexible gap so the cap/export group right-aligns when there's room
+const dockSpacer = document.createElement("div");
+dockSpacer.style.cssText = "flex:1 1 12px;min-width:8px;";
+dock.appendChild(dockSpacer);
+
+// --- particle cap stepper ---
+let particleCap = 5000;
+const capWrap = document.createElement("div");
+capWrap.style.cssText = "display:flex;align-items:center;gap:6px;";
+const capLabel = document.createElement("span");
+const capMinus = mkDockBtn("-", `Lower the particle cap by ${PARTICLE_TARGET_STEP}`);
+const capPlus = mkDockBtn("+", `Raise the particle cap by ${PARTICLE_TARGET_STEP}`);
+capMinus.style.cssText = DOCK_BTN + "padding:2px 9px;";
+capPlus.style.cssText = DOCK_BTN + "padding:2px 9px;";
+function renderCapLabel(): void { capLabel.textContent = `cap ${particleCap}`; }
+function nudgeCap(delta: number): void {
+  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
+  renderCapLabel();
+  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
+}
+capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
+capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
+renderCapLabel();
+capWrap.append(capLabel, capMinus, capPlus);
+dock.appendChild(capWrap);
+
+// --- export ---
+const exportBtn = mkDockBtn("export", "Download the saved world as JSON");
 exportBtn.addEventListener("click", () => {
-  // Use the most recent save JSON the worker posted to us. It can be
-  // up to SAVE_INTERVAL_SEC stale (60s of sim time); for "current" we'd
-  // have to ask the worker and await its response, which is overkill
-  // for a manual export.
   const json = latestSaveJson;
-  if (!json) {
-    alert("export not ready yet -- try again in a moment");
-    return;
-  }
+  if (!json) { alert("export not ready yet -- try again in a moment"); return; }
   const blob = new Blob([json], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  // Filename includes sim time so consecutive exports don't overwrite.
   a.download = `evosim4-save-t${Math.floor(snapshot.t)}s.json`;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  // Revoke after a delay so the share sheet has time to read the blob.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 });
-root.appendChild(exportBtn);
+dock.appendChild(exportBtn);
 
-// Turbo mode: sim eats every available ms; render runs only once
-// every TURBO_RENDER_EVERY rAFs so the world is still glanceable.
-// Toggle button sits between reset and export.
-let turboMode = false;
-let turboFrameCounter = 0;
-const TURBO_RENDER_EVERY = 30; // one render per ~500ms at 60fps rAF
-const turboBtn = document.createElement("button");
-turboBtn.title = "Run sim flat-out; render once per ~500ms";
-const renderTurboBtn = (): void => {
-  turboBtn.textContent = turboMode ? "turbo on" : "turbo";
-  turboBtn.style.cssText =
-    WORLD_BTN_STYLE +
-    (turboMode ? "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a;" : "");
-  positionWorldButtons();
-};
-turboBtn.addEventListener("click", () => {
-  turboMode = !turboMode;
-  turboFrameCounter = 0;
-  renderTurboBtn();
-  simWorker.postMessage({ type: "setTurbo", turbo: turboMode });
-});
-root.appendChild(turboBtn);
-
-// Region-grid overlay toggle (lower-left, right of turbo). Draws a
-// light grid matching REGION_PX so the dissolved/reserve regions are
-// visible. Off by default.
-let gridLinesOn = false;
-const gridBtn = document.createElement("button");
-gridBtn.title = "Toggle the region grid overlay";
-const renderGridBtn = (): void => {
-  gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
-  gridBtn.style.cssText =
-    WORLD_BTN_STYLE +
-    (gridLinesOn ? "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;" : "");
-  positionWorldButtons();
-};
-gridBtn.addEventListener("click", () => { gridLinesOn = !gridLinesOn; renderGridBtn(); });
-root.appendChild(gridBtn);
-
-// Particle-cap readout + adjuster, sitting just above the bottom-left
-// button row. Buttons nudge the cap by PARTICLE_TARGET_STEP; the sim
-// reconciles the excess/shortage through the normal reserve passes.
-// particleCap mirrors the live snapshot.particleTarget so it stays
-// truthful across a loaded save.
-let particleCap = 5000;
-const capWrap = document.createElement("div");
-capWrap.style.cssText =
-  "position:fixed;z-index:10;display:flex;align-items:center;gap:6px;" +
-  "padding:4px 8px;border:1px solid #356;border-radius:4px;" +
-  "background:rgba(0,0,0,.55);color:#9ee;" + HUD_FONT;
-const capLabel = document.createElement("span");
-const capMinus = document.createElement("button");
-const capPlus = document.createElement("button");
-const CAP_BTN_STYLE =
-  "padding:1px 8px;border:1px solid #356;border-radius:3px;" +
-  "background:rgba(0,0,0,.4);color:#9ee;cursor:pointer;" + HUD_FONT;
-capMinus.textContent = "-";
-capPlus.textContent = "+";
-capMinus.style.cssText = CAP_BTN_STYLE;
-capPlus.style.cssText = CAP_BTN_STYLE;
-capMinus.title = `Lower the particle cap by ${PARTICLE_TARGET_STEP}`;
-capPlus.title = `Raise the particle cap by ${PARTICLE_TARGET_STEP}`;
-const renderCapLabel = (): void => {
-  capLabel.textContent = `Particle cap: ${particleCap}`;
-};
-const nudgeCap = (delta: number): void => {
-  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
-  renderCapLabel();
-  simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
-};
-capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
-capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
-renderCapLabel();
-capWrap.appendChild(capLabel);
-capWrap.appendChild(capMinus);
-capWrap.appendChild(capPlus);
-root.appendChild(capWrap);
-
+// Single positioning pass: dock fills the gap between the side panels,
+// just above the phylogeny strip. Flex handles internal layout.
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
-  const bottom = PHYLO_STRIP_H + 8;
-  // Bottom-left controls clear the left chemistry panel.
   const lx = leftPanelWidth() + 8;
-  resetBtn.style.bottom = `${bottom}px`;
-  resetBtn.style.left = `${lx}px`;
-  exportBtn.style.bottom = `${bottom}px`;
-  exportBtn.style.right = `${panelW + 8}px`;
-  // Turbo sits to the right of reset; grid to the right of turbo.
-  turboBtn.style.bottom = `${bottom}px`;
-  turboBtn.style.left = `${lx + resetBtn.offsetWidth + 8}px`;
-  gridBtn.style.bottom = `${bottom}px`;
-  gridBtn.style.left = `${lx + resetBtn.offsetWidth + 8 + turboBtn.offsetWidth + 8}px`;
-  // One row up from the buttons.
-  capWrap.style.left = `${lx}px`;
-  capWrap.style.bottom = `${bottom + resetBtn.offsetHeight + 6}px`;
+  dock.style.left = `${lx}px`;
+  dock.style.right = `${panelW + 8}px`;
+  dock.style.bottom = `${PHYLO_STRIP_H + 8}px`;
 }
-renderTurboBtn();
-renderGridBtn();
 
 function resize(): void {
   // Prefer the visual viewport on mobile: pinch-zoom changes visualViewport
@@ -1788,23 +1808,13 @@ function render(): void {
   drawGenomeStats();
 }
 
-// Optional field overlay. Cycles off -> temp -> density via the `H` key.
-// Drawn on top of particles + cells but below the phylogeny strip so it
-// reads as an atmospheric tint rather than blocking the bodies.
-type HeatmapMode = "off" | "temp" | "density";
-let heatmapMode: HeatmapMode = "off";
-const HEATMAP_CELL = 32;
-const HEATMAP_ALPHA = 0.28;
+// `H` cycles the overlay (synced with the dock <select> via setOverlay);
+// the heatmap state itself lives in the dock block above. Drawn on top
+// of particles/cells but below the phylogeny strip as a tint.
 window.addEventListener("keydown", (e) => {
   if (e.key === "h" || e.key === "H") {
-    heatmapMode =
-      heatmapMode === "off" ? "temp" :
-      heatmapMode === "temp" ? "density" : "off";
+    setOverlay(heatmapMode === "off" ? "temp" : heatmapMode === "temp" ? "density" : "off");
   } else if (e.key === "p" || e.key === "P") {
-    // Profile lives on the worker's world. We can't read it back
-    // synchronously, but the snapshot carries world.profile when set,
-    // so the dump fires whenever a profile is currently active in the
-    // last snapshot.
     if (snapshot.profile) dumpProfile();
     simWorker.postMessage({ type: "toggleProfile" });
   } else if (e.key === "f" || e.key === "F") {
