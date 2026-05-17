@@ -1006,6 +1006,17 @@ export function viableGenome(genome: Uint8Array): boolean {
 // acquisition) + 2 trophic-branch ops (SYNTH_ENZ + INGEST or
 // SYNTH_AA + SYNTH_CHL) + operand bytes. Smaller genomes always
 // fail and waste reroll budget.
+// Shipped default 0.50; ADH_PREV env var overrides it for A/B probes
+// only (clamped to [0,1], NaN-safe). Read once at module load.
+const ADHESION_PREVALENCE: number = (() => {
+  // globalThis access keeps this browser-safe (no `process` type in
+  // the src tsconfig); env is only set by the Node long-run probe.
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const raw = env?.ADH_PREV;
+  const v = raw === undefined ? 0.50 : Number(raw);
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.50;
+})();
+
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
   // Triangular falloff on [24, 100]; clamping handles the math.
@@ -1056,13 +1067,15 @@ export function makeRandomViableGenome(
   // pure-autotroph branch; pure photoautotrophs can still evolve from
   // these by losing INGEST via mutation.
   if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
-  // ~50% of founders are adhesive. The SYNTH BOND param byte is the
-  // cell's greenbeard marker: a random tag here, inherited by the whole
-  // clonal lineage (fission copies the genome) so descendants recognize
-  // each other and form colonies, while distinct founder lineages get
-  // distinct tags and stay bond-incompatible. Mutation drifts the tag,
-  // letting colonies speciate into separate tribes over time.
-  if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
+  // A fraction of founders are adhesive. The SYNTH BOND param byte is
+  // the cell's greenbeard marker: a random tag here, inherited by the
+  // whole clonal lineage (fission copies the genome) so descendants
+  // recognize each other and form colonies, while distinct founder
+  // lineages get distinct tags and stay bond-incompatible. Mutation
+  // drifts the tag, letting colonies speciate into tribes over time.
+  // Prevalence is env-overridable (ADH_PREV, 0..1) purely so the
+  // long-run probe can A/B it; default is the shipped value.
+  if (rng() < ADHESION_PREVALENCE) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
   // Every founder builds 1-2 sensory receptors. Founders used to start
   // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
   // receptor chem -- so they drifted until sensing happened to evolve.
