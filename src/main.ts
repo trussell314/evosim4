@@ -180,33 +180,74 @@ inspectorProse.style.cssText =
 
 // "genome" (was "disasm") stays a collapsible sub-section inside the
 // Inspector tab, with a copy-to-clipboard button (one op per line).
+// The whole bar is hidden by updateInspector when no cell is selected.
 let disasmExpanded = false;
 disasmHeader.addEventListener("click", () => {
   disasmExpanded = !disasmExpanded;
   disasmBody.style.display = disasmExpanded ? "" : "none";
-  copyDisasmBtn.style.display = disasmExpanded ? "" : "none";
   disasmHeader.textContent = disasmExpanded ? "[–] hide genome" : "[+] show genome";
 });
 const disasmBar = document.createElement("div");
-disasmBar.style.cssText = "display:flex;align-items:center;gap:8px;";
+disasmBar.style.cssText = "display:none;align-items:center;gap:8px;";
 disasmHeader.style.flex = "1 1 auto";
 const copyDisasmBtn = document.createElement("button");
 copyDisasmBtn.title = "Copy genome (one op per line)";
 copyDisasmBtn.textContent = "⧉";
 copyDisasmBtn.style.cssText =
-  "display:none;padding:2px 8px;margin:0 6px;border:1px solid #1a3340;" +
+  "padding:2px 8px;margin:0 6px;border:1px solid #1a3340;" +
   "border-radius:4px;background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;" +
   HUD_FONT;
+// Transient confirmation near the button. Some browsers block the
+// async clipboard API (insecure context / no permission); fall back
+// to a hidden-textarea execCommand copy and only claim success if a
+// path actually worked.
+const copyToast = document.createElement("div");
+copyToast.style.cssText =
+  "position:fixed;z-index:9999;display:none;padding:5px 9px;border-radius:4px;" +
+  "background:rgba(0,0,0,.88);pointer-events:none;white-space:nowrap;" + HUD_FONT;
+document.body.appendChild(copyToast);
+let copyToastTimer: ReturnType<typeof setTimeout> | undefined;
+function showCopyToast(msg: string, ok: boolean): void {
+  const r = copyDisasmBtn.getBoundingClientRect();
+  copyToast.textContent = msg;
+  copyToast.style.color = ok ? "#9efba8" : "#fdd";
+  copyToast.style.border = `1px solid ${ok ? "#2a6" : "#a55"}`;
+  copyToast.style.display = "";
+  const tw = copyToast.getBoundingClientRect().width || 150;
+  copyToast.style.left = `${Math.max(8, r.right - tw)}px`;
+  copyToast.style.top = `${Math.max(8, r.top - 30)}px`;
+  if (copyToastTimer) clearTimeout(copyToastTimer);
+  copyToastTimer = setTimeout(() => { copyToast.style.display = "none"; }, 2600);
+}
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0;";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
 copyDisasmBtn.addEventListener("click", async (ev) => {
   ev.stopPropagation();
   if (!activeDisasmRaw) return;
-  try {
-    await navigator.clipboard.writeText(activeDisasmRaw);
-    copyDisasmBtn.textContent = "✓";
-  } catch {
-    copyDisasmBtn.textContent = "✗";
-  }
+  const lines = activeDisasmRaw.split("\n").filter((l) => l.length > 0).length;
+  const ok = await copyToClipboard(activeDisasmRaw);
+  copyDisasmBtn.textContent = ok ? "✓" : "✗";
   setTimeout(() => { copyDisasmBtn.textContent = "⧉"; }, 1200);
+  showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok);
 });
 disasmBar.append(disasmHeader, copyDisasmBtn);
 
@@ -623,7 +664,11 @@ const peakBiomassByKey = new Map<string, number>();
 // Genome-analysis console: right-side sidebar. Collapsible -- when
 // minimized only a thin tab shows; expanded, the canvas shrinks to
 // leave room so the panel doesn't overlap the world.
-const ANALYSIS_PANEL_W = 320;
+// Expanded width scales with the viewport so wide screens get a
+// roomy drawer instead of a fixed narrow column that over-wraps.
+function analysisPanelW(): number {
+  return Math.round(Math.max(340, Math.min(680, window.innerWidth * 0.40)));
+}
 const ANALYSIS_PANEL_W_MIN = 26;
 let analysisMinimized = true;
 const analysisPanel = document.createElement("div");
@@ -727,7 +772,7 @@ root.appendChild(analysisPanel);
 analysisTitle.style.display = "none";
 analysisHeader.addEventListener("click", () => {
   analysisMinimized = !analysisMinimized;
-  analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
+  analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : analysisPanelW()) + "px";
   analysisTabs.style.display = analysisMinimized ? "none" : "flex";
   analysisToggle.textContent = analysisMinimized ? "+" : "–";
   analysisTitle.style.display = analysisMinimized ? "none" : "";
@@ -1270,7 +1315,7 @@ renderCtrlCollapsed();
 // Geometry: span between the side panels, anchored to screen bottom;
 // measure real height so the world fit can reserve exactly that.
 function positionWorldButtons(): void {
-  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
+  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : analysisPanelW();
   ctrlBar.style.left = `${leftPanelWidth()}px`;
   ctrlBar.style.right = `${panelW}px`;
   controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
@@ -1290,7 +1335,8 @@ function resize(): void {
   // Reserve a strip on each side for the slide-out consoles (left =
   // chemistry, right = organisms) so the canvas doesn't render
   // under either. Each width depends on whether that panel is expanded.
-  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W;
+  if (!analysisMinimized) analysisPanel.style.width = `${analysisPanelW()}px`;
+  const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : analysisPanelW();
   const leftW = leftPanelWidth();
   const reserve = panelW + leftW;
   const w = fullW > reserve * 2 ? fullW - reserve : Math.max(1, fullW - leftW);
@@ -2111,7 +2157,7 @@ function drawGenomeStats(): void {
   const gctx = gsCanvas.getContext("2d");
   if (!gctx) return;
   const dpr = getDpr();
-  const cssW = gsCanvas.clientWidth || (ANALYSIS_PANEL_W - 20);
+  const cssW = gsCanvas.clientWidth || (analysisPanelW() - 20);
   const cssH = 160;
   const needW = Math.max(1, Math.round(cssW * dpr));
   const needH = Math.max(1, Math.round(cssH * dpr));
@@ -2768,6 +2814,8 @@ function updateInspector(): void {
   if (!c) {
     pinSpeciesBtn.style.display = "none";
     inspectorProse.style.display = "none";
+    disasmBar.style.display = "none";
+    disasmBody.style.display = "none";
     inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
     return;
   }
@@ -2783,6 +2831,8 @@ function updateInspector(): void {
   }
   inspectorProse.style.display = "";
   inspectorProse.textContent = describeGenomeProse(c.genome);
+  disasmBar.style.display = "flex";
+  disasmBody.style.display = disasmExpanded ? "" : "none";
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
   const totalMass = molMass;
