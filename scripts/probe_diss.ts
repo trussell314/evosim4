@@ -35,13 +35,12 @@ function sample(): void {
 }
 
 let doneAt = -1;
-const MAX_T = 600;
+const MAX_T = 180; // stop after 3 minutes
 for (let s = 0; world.t < MAX_T; s++) {
   step(world, DT);
   if (doneAt < 0 && world.initialSeedDone) doneAt = world.t;
   if (s % 30 === 0) sample(); // every 0.5 sim-sec
-  if (doneAt >= 0 && world.t >= doneAt + 60) break;
 }
 sample();
-appendFileSync(OUT, `--- ramp latched at t=${doneAt.toFixed(2)}s; ran ${(world.t - doneAt).toFixed(1)}s past it ---\nDONE\n`);
+appendFileSync(OUT, `--- ramp latched at t=${doneAt.toFixed(2)}s; stopped at t=${world.t.toFixed(1)}s (3min cap) ---\nDONE\n`);
 console.log("done");

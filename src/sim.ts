@@ -1223,6 +1223,11 @@ export interface World {
   // disable spontaneous founder spawning while they assert specific
   // population shapes.
   founderTarget: number;
+  // Sim-time of the last founder top-up batch. Founders are now seeded
+  // in capped waves (FOUNDER_BATCH_MAX every FOUNDER_BATCH_INTERVAL_SEC)
+  // rather than all-at-once, so a fresh world ramps its population in
+  // instead of dumping the whole target instantly.
+  lastFounderBatchT: number;
   // Set of creature IDs that were spawned as founders (vs. born from
   // fission). Used by the age-based founder-cull -- see FOUNDER_LIFESPAN_SEC.
   // Stays populated for the founder's entire life so the HUD's
@@ -3411,6 +3416,7 @@ export function createWorld(
     liveLineageRoots: new Set(),
     nextLineageRoot: 0,
     founderTarget: FOUNDER_TARGET,
+    lastFounderBatchT: -Infinity,
     // Transient set of currently-alive founder cell IDs. Used to give
     // every founder a fixed 180s lifespan after spawn so the founders
     // can't dominate indefinitely -- their descendants have to take
@@ -3512,6 +3518,12 @@ export function createWorld(
 // FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
 // batch" constants any more.
 const FOUNDER_TARGET = 50;
+// Founder top-up is throttled into waves: at most FOUNDER_BATCH_MAX new
+// founders per FOUNDER_BATCH_INTERVAL_SEC, until founderTarget is met.
+// (A fully-empty world bypasses the interval so extinction recovery
+// isn't stalled 30s.)
+const FOUNDER_BATCH_MAX = 5;
+const FOUNDER_BATCH_INTERVAL_SEC = 30;
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
 // water column time to populate before any creatures enter the
@@ -3703,11 +3715,14 @@ function seedInitialParticles(world: World): void {
 // the ramp keeps going until the visible count reaches particleTarget,
 // then latches done forever (nothing respawns afterward -- the pool is
 // fixed for the rest of the run). Founders are gated on this completing.
-const SEED_RAMP_PERIOD_SEC = 30;
+const SEED_RAMP_PERIOD_SEC = 10;
 const SEED_RAMP_BATCH = 1000;
+// Hard time cap on the ramp: stop seeding after this many sim-seconds
+// even if particleTarget was never reached, then latch done forever.
+const SEED_RAMP_MAX_T = 180;
 function seedRamp(world: World, dt: number): void {
   if (!world.useSeedRamp || world.initialSeedDone) return;
-  if (world.particles.length >= world.particleTarget) {
+  if (world.particles.length >= world.particleTarget || world.t >= SEED_RAMP_MAX_T) {
     world.initialSeedDone = true;
     return;
   }
@@ -3729,7 +3744,7 @@ function seedRamp(world: World, dt: number): void {
       });
     }
   }
-  if (world.particles.length >= world.particleTarget) world.initialSeedDone = true;
+  if (world.particles.length >= world.particleTarget || world.t >= SEED_RAMP_MAX_T) world.initialSeedDone = true;
 }
 
 
@@ -5433,16 +5448,24 @@ export function step(world: World, dt: number): void {
     : world.t >= FOUNDER_SPAWN_DELAY_SEC;
   if (delayDone && world.founderTarget > 0 && (allDead || !overCap) && currentLineages.size < world.founderTarget) {
     const wasEmpty = currentLineages.size === 0;
-    const need = world.founderTarget - currentLineages.size;
-    for (let i = 0; i < need; i++) {
-      const f = spawnFounder(world);
-      // When the world had just gone fully empty, the first new
-      // founder also re-anchors the color palette so descendant
-      // coloring restarts relative to this new root.
-      if (f && wasEmpty && i === 0) {
-        world.anchorGenome = new Uint8Array(f.genome);
-        f.color = genomeColor(f.genome, world.anchorGenome);
+    // Wave throttle: ≤ FOUNDER_BATCH_MAX per FOUNDER_BATCH_INTERVAL_SEC.
+    // A fully-empty world spawns its first wave immediately (no 30s
+    // stall on extinction recovery); otherwise wait out the interval.
+    const intervalDone = wasEmpty || (world.t - world.lastFounderBatchT >= FOUNDER_BATCH_INTERVAL_SEC);
+    if (intervalDone) {
+      const need = world.founderTarget - currentLineages.size;
+      const batch = Math.min(FOUNDER_BATCH_MAX, need);
+      for (let i = 0; i < batch; i++) {
+        const f = spawnFounder(world);
+        // When the world had just gone fully empty, the first new
+        // founder also re-anchors the color palette so descendant
+        // coloring restarts relative to this new root.
+        if (f && wasEmpty && i === 0) {
+          world.anchorGenome = new Uint8Array(f.genome);
+          f.color = genomeColor(f.genome, world.anchorGenome);
+        }
       }
+      world.lastFounderBatchT = world.t;
     }
   }
 }
