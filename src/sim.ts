@@ -387,13 +387,15 @@ export interface ParticleData {
 // their named fields into the right column.
 // Fixed preallocated cap for CreatureStore. MAX_CREATURES (400) is
 // the hard ceiling on world.creatures; engulfed prey occupies extra
-// slots inside hosts, so we need headroom above 400. 768 keeps the
-// per-column stride at 3 KB (cap * 4), which means the 64 chemistry
-// columns the runGenericReactions inner loop touches per cell fit in
-// ~192 KB -- comfortably inside L2 -- when the loop sweeps cells. SAB-
-// backed columns can't grow without invalidating subworker views, so
-// this is the hard cap.
-const CREATURE_STORE_PREALLOC_CAP = 768;
+// slots inside hosts (and aren't counted by MAX_CREATURES), so peak
+// *simultaneously-allocated* slots can run well above 400 -- under
+// turbo churn + heavy engulfment 768 overflowed (alloc tried to grow
+// 768->1536 and threw, since SAB-backed columns can't grow without
+// invalidating subworker views). 4096 gives ~10x MAX_CREATURES of
+// headroom so growth is never attempted; the larger per-column
+// stride (16 KB) costs some L2 locality in the runGenericReactions
+// sweep, but a hard throw every step is far worse than that.
+const CREATURE_STORE_PREALLOC_CAP = 4096;
 
 // Layout descriptor for CreatureStore. Mirrors ParticleSharedLayout's
 // role: subworkers receive this in their init message and rebuild
