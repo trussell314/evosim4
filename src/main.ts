@@ -750,18 +750,29 @@ function renderChemDetail(): void {
   if (!RXN_CATALOG) RXN_CATALOG = reactionCatalog();
   const totals = snapshot.reactionTotals;
   const cnt = (id: number): number => (totals ? (totals[id] ?? 0) : 0);
-  type Row = { label: string; n: number };
+  // Per-execution amount of THIS material a reaction moves = its
+  // coefficient for chem k; total mass ≈ executions × coefficient.
+  const coefFor = (terms: { chem: number; coef: number }[]): number => {
+    let s = 0; for (const t of terms) if (t.chem === k) s += t.coef; return s;
+  };
+  type Row = { label: string; n: number; mass: number };
   const prod: Row[] = [];
   const cons: Row[] = [];
   for (const r of RXN_CATALOG) {
     const n = cnt(r.id);
-    if (r.produces.some((t) => t.chem === k)) prod.push({ label: r.label, n });
-    if (r.consumes.some((t) => t.chem === k)) cons.push({ label: r.label, n });
+    const pc = coefFor(r.produces);
+    const cc = coefFor(r.consumes);
+    if (pc > 0) prod.push({ label: r.label, n, mass: n * pc });
+    if (cc > 0) cons.push({ label: r.label, n, mass: n * cc });
   }
-  const nz = (a: Row[]): Row[] => a.filter((x) => x.n > 0).sort((x, y) => y.n - x.n);
+  const nz = (a: Row[]): Row[] => a.filter((x) => x.n > 0).sort((x, y) => y.mass - x.mass);
   const pNZ = nz(prod), cNZ = nz(cons);
   const pTot = pNZ.reduce((s, x) => s + x.n, 0);
   const cTot = cNZ.reduce((s, x) => s + x.n, 0);
+  const pMass = pNZ.reduce((s, x) => s + x.mass, 0);
+  const cMass = cNZ.reduce((s, x) => s + x.mass, 0);
+  const fmtMass = (v: number): string =>
+    v >= 1000 ? Math.round(v).toLocaleString() : v >= 1 ? v.toFixed(0) : v.toFixed(2);
   const esc = (s: string): string =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const list = (rows: Row[]): string =>
@@ -769,8 +780,11 @@ function renderChemDetail(): void {
       ? `<div style="opacity:0.6;padding:2px 0;">none recorded</div>`
       : rows.map((x) =>
         `<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px solid rgba(26,51,64,0.4);">` +
-        `<span>${esc(x.label)}</span><span style="color:#cfe;">${x.n.toLocaleString()}</span></div>`).join("");
+        `<span>${esc(x.label)}</span>` +
+        `<span style="white-space:nowrap;"><b style="color:#cfe;">${fmtMass(x.mass)}</b>` +
+        `<span style="opacity:0.55;"> &nbsp;(${x.n.toLocaleString()}×)</span></span></div>`).join("");
   const totals0 = totals == null;
+  const netMass = pMass - cMass;
   chemDetail.innerHTML =
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">` +
     `<b style="font-size:${UI_FONT_PX + 2}px;">${esc(chemName(k))}</b>` +
@@ -778,12 +792,15 @@ function renderChemDetail(): void {
     (totals0
       ? `<div style="opacity:0.6;margin-bottom:8px;">reaction accounting unavailable (no rxnStats)</div>`
       : `<div style="opacity:0.55;margin-bottom:8px;">prevalence-over-time graph: not captured yet</div>`) +
-    `<div style="margin:6px 0;">Net reaction events since inception ` +
-    `(produced − consumed): <b style="color:${pTot - cTot >= 0 ? "#9efba8" : "#ff9e9e"};">` +
-    `${(pTot - cTot).toLocaleString()}</b></div>` +
-    `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${pTot.toLocaleString()} total)</div>` +
+    `<div style="margin:6px 0;">Net mass since inception ` +
+    `(produced − consumed): <b style="color:${netMass >= 0 ? "#9efba8" : "#ff9e9e"};">` +
+    `${netMass >= 0 ? "+" : "−"}${fmtMass(Math.abs(netMass))}</b>` +
+    `<span style="opacity:0.55;"> &nbsp;(${(pTot - cTot).toLocaleString()} net events)</span></div>` +
+    `<div style="margin-top:10px;color:#9efba8;font-weight:bold;">Producers (+${fmtMass(pMass)} mass · ${pTot.toLocaleString()} events)</div>` +
+    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mass&nbsp;(executions)</div>` +
     list(pNZ) +
-    `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${cTot.toLocaleString()} total)</div>` +
+    `<div style="margin-top:12px;color:#ff9e9e;font-weight:bold;">Consumers (−${fmtMass(cMass)} mass · ${cTot.toLocaleString()} events)</div>` +
+    `<div style="opacity:0.5;font-size:${UI_FONT_PX - 2}px;margin:1px 0 3px;">reaction&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mass&nbsp;(executions)</div>` +
     list(cNZ);
   const cl = chemDetail.querySelector("#chemDetailClose");
   if (cl) cl.addEventListener("click", closeChemDetail);
