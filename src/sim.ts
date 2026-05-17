@@ -4859,15 +4859,56 @@ export function denatureWaste(world: World, dt: number): void {
   }
 }
 
+// Mineral weathering. Minerals are ~insoluble, so mineral PARTICLES
+// (from maintenance/catalyst decay -> 0.5 min, then precipitated) would
+// otherwise persist forever and pile up. Slowly weather mineral
+// particles back into the LOCAL dissolved field so cells can re-uptake
+// them (SYNTH_* consume CHEM_MIN). Acts ONLY on active particles --
+// the reserve pool is intentionally left untouched. Mass-conserving
+// (CHEM_MIN molarMass is 1, so particle physical mass == amount).
+const MINERAL_WEATHER_HALFLIFE_S = 90;
+function weatherMinerals(world: World, dt: number): void {
+  const frac = 1 - Math.pow(0.5, dt / MINERAL_WEATHER_HALFLIFE_S);
+  if (frac <= 0) return;
+  const amb = world.ambient;
+  const store = world.particleStore;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    if (store.molecules[i]) continue;
+    if (store.chemId[i] !== CHEM_MIN) continue;
+    const r = store.r[i];
+    const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[CHEM_MIN];
+    const mass = density * FOUR_THIRDS_PI * r * r * r;
+    const dm = mass * frac;
+    const base = regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE;
+    amb[base + CHEM_MIN] += dm; // CHEM_MIN molarMass == 1: physMass == amount
+    const newMass = mass - dm;
+    const newR = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
+    if (newR < MIN_DISSOLVE_R) removeParticleAt(world, i);
+    else store.r[i] = newR;
+  }
+}
+
 // Ambient ↔ atmosphere equilibration. Once per tick, gases in the
 // atmosphere dissolve into ambient (and vice versa) toward
 // AMBIENT_TARGET. Mass conserved: every unit added to ambient is
 // removed from atmosphere. Driven by surface activity so a calm
 // surface lets gases stratify; a stormy surface mixes them in.
 const ATM_AMBIENT_RATE = 0.5; // fraction of gap that crosses per sec at peak activity
+// Open-boundary gas exchange (option A): the atmosphere is the outside
+// air -- an effectively unbounded O2 reservoir and CO2 sink. Each tick
+// the modelled atmosphere relaxes back toward its baseline (O2 topped
+// back up, accumulated CO2 vented away), so dissolved O2 can always be
+// replenished regardless of biological demand and excess CO2 leaves
+// the system. Gases are therefore intentionally NOT mass-closed.
+const ATM_VENT_RATE = 0.25; // fraction of (baseline - current)/sec
 function aerateAmbient(world: World, dt: number): void {
   const ambient = world.ambient;
   const atm = world.atmosphere;
+  // Open boundary: relax atmospheric gases toward outside-air baseline.
+  const vent = Math.min(1, ATM_VENT_RATE * dt);
+  atm.o2 += (ATMOSPHERE_INIT_O2 - atm.o2) * vent;
+  atm.co2 += (ATMOSPHERE_INIT_CO2 - atm.co2) * vent;
   // Surface activity 0..1; even calm water has 0.3 of the rate.
   const act = 0.3 + 0.7 * surfaceActivity(world);
   const rate = ATM_AMBIENT_RATE * act * dt;
@@ -5407,6 +5448,7 @@ export function step(world: World, dt: number): void {
     diffuseReserve(world, dt);
     dissolveParticles(world, dt);
     denatureWaste(world, dt);
+    weatherMinerals(world, dt);
     precipitateRegions(world);
     reservePass(world);
     n = performance.now(); p.aerate += n - m; m = n;
@@ -5443,6 +5485,7 @@ export function step(world: World, dt: number): void {
     diffuseReserve(world, dt);
     dissolveParticles(world, dt);
     denatureWaste(world, dt);
+    weatherMinerals(world, dt);
     precipitateRegions(world);
     reservePass(world);
     replenishParticles(world, dt);
@@ -5569,7 +5612,8 @@ function replenishParticles(world: World, dt: number): void {
 // their molecule pool, just like other molecule-tagged particles.
 function aerate(world: World, dt: number): void {
   if (world.t < WATER_FILL_DELAY_SEC) return;
-  if (world.particles.length >= world.particleTarget) return;
+  const pCap = effectiveParticleCap(world);
+  if (world.particles.length >= pCap) return;
   // Surface chop drives entrainment of air bubbles. Quiet surface =>
   // baseline aeration; storms and choppy periods => much more O2 mixed in.
   const act = surfaceActivity(world);
@@ -5584,7 +5628,7 @@ function aerate(world: World, dt: number): void {
   let totalAtm = 0;
   for (const k of MOLECULE_IDS) totalAtm += atm[k];
   if (totalAtm <= 0) return;
-  for (let i = 0; i < n && world.particles.length < world.particleTarget; i++) {
+  for (let i = 0; i < n && world.particles.length < pCap; i++) {
     const r = 1 + Math.random() * 0.8;
     // Pull at most what's available; bubble may be smaller than the
     // nominal mass when the atmosphere is thin.
@@ -6587,8 +6631,11 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
       }
     }
   }
-  // (2, removed) ATP is energy, not matter -- it's simply gone on
-  // death. No ADP is conjured.
+  // Leftover ATP is released as ADP, exactly like spendATP does in
+  // life (energy -> ADP, 1:1). Annihilating it on death broke mass
+  // conservation (it was the entire post-settle audit drift); the
+  // ADP then emits with the rest of the pool below.
+  cols[CHEM_ADP][ci] += c.energy;
   c.energy = 0;
 
   // Emit one full-mass particle for a chem (no thresholding -- (3)

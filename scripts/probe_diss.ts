@@ -14,8 +14,8 @@ const STRIDE = CHEM_MOLAR_MASS.length;
 const world = createWorld(800, 600, { delayedSpawn: true }) as any;
 
 writeFileSync(OUT,
-  "t     parts cells totMolar  cell   part   amb    res    atm   cat  " +
-  "births dStrv dMem dMrn dAa  avgE  avgM  avgMem %chl\n");
+  "t parts cells totMolar cell part amb res cat | o2d co2d atmO2 atmCO2 min | " +
+  "births dMem dStrv avgE avgMem %chl\n");
 
 const perChem = new Float64Array(STRIDE); // reused scratch
 
@@ -70,19 +70,29 @@ function cellMetrics() {
   return { avgE: e / n, avgM: mass / n, avgMem: mem / n, chl: (100 * chl / n) };
 }
 
+function ambSum(k: number): number {
+  const A = world.ambient; let s = 0;
+  for (let b = 0; b < A.length; b += STRIDE) s += A[b + k];
+  return s;
+}
 function sample() {
-  const M = snapshotMaterials();
+  const M = snapshotMaterials(); // also fills perChem
   const cm = cellMetrics();
   const s = world.stats;
+  const o2d = ambSum(0), co2d = ambSum(1);
+  const atmO2 = world.atmosphere.o2 ?? 0, atmCO2 = world.atmosphere.co2 ?? 0;
   appendFileSync(OUT,
     `${world.t.toFixed(0).padStart(4)} ${String(world.particles.length).padStart(5)} ` +
     `${String(world.creatures.length).padStart(4)} ${M.tot.toFixed(0).padStart(8)} ` +
     `${M.cell.toFixed(0).padStart(6)} ${M.part.toFixed(0).padStart(6)} ${M.amb.toFixed(0).padStart(6)} ` +
-    `${M.res.toFixed(0).padStart(6)} ${M.atm.toFixed(0).padStart(5)} ${M.cat.toFixed(0).padStart(4)} ` +
-    `${String(s.births).padStart(6)} ${String(s.dStarve).padStart(5)} ${String(s.dMembrane).padStart(4)} ` +
-    `${String(s.dMrna).padStart(4)} ${String(s.dAa).padStart(4)} ` +
-    `${cm.avgE.toFixed(1).padStart(5)} ${cm.avgM.toFixed(1).padStart(5)} ${cm.avgMem.toFixed(2).padStart(6)} ` +
-    `${cm.chl.toFixed(0).padStart(4)}\n`);
+    `${M.res.toFixed(0).padStart(6)} ${M.cat.toFixed(0).padStart(5)} ` +
+    `o2d=${o2d.toFixed(0).padStart(5)} co2d=${co2d.toFixed(0).padStart(6)} ` +
+    `atmO2=${atmO2.toFixed(0).padStart(5)} atmCO2=${atmCO2.toFixed(0).padStart(6)} ` +
+    `min=${perChem[5].toFixed(0).padStart(7)} ` +
+    `b=${String(s.births).padStart(5)} dMem=${String(s.dMembrane).padStart(4)} ` +
+    `dStrv=${String(s.dStarve).padStart(4)} ` +
+    `aE=${cm.avgE.toFixed(0).padStart(4)} aMem=${cm.avgMem.toFixed(2).padStart(5)} ` +
+    `%chl=${cm.chl.toFixed(0).padStart(3)}\n`);
 }
 
 let totAt180 = 0;
