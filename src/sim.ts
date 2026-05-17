@@ -1177,7 +1177,18 @@ export interface PhylogenyEvent {
   convergence: boolean;
 }
 
+export interface SimStats {
+  births: number;       // cumulative successful child births
+  dStarve: number;      // deaths: energy<=0 & no fuel
+  dMembrane: number;    // deaths: membrane below viable
+  dMrna: number;        // deaths: mrna below viable
+  dAa: number;          // deaths: amino acid below viable
+  dOld: number;         // deaths: founder old-age cull
+}
 export interface World {
+  // Optional cumulative counters for instrumentation. Optional so
+  // hand-built test World literals don't need to populate it.
+  stats?: SimStats;
   width: number;
   height: number;
   depth: number;
@@ -1840,6 +1851,7 @@ export const CHEM_COLORS: ReadonlyArray<string> = CHEMICALS.map((c) => c.color);
 // Exported name LUT, indexed by chem id. HUD and disassembler use it
 // to label operands referencing chemicals.
 export const CHEM_NAMES: ReadonlyArray<string> = CHEMICALS.map((c) => c.name);
+export const CHEM_MOLAR_MASS: ReadonlyArray<number> = CHEMICALS.map((c) => c.molarMass);
 // Bootstrap chem id exports. Stable across the migration (phase E
 // renumbers them; tests pin to the export rather than to literals).
 export const CHEM_IDS = {
@@ -3411,6 +3423,7 @@ export function createWorld(
     // replenish" behavior so their assertions hold.
     useSeedRamp: !!opts?.delayedSpawn,
     initialSeedDone: !opts?.delayedSpawn,
+    stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveLineageRoots: new Set(),
@@ -3522,7 +3535,7 @@ const FOUNDER_TARGET = 50;
 // founders per FOUNDER_BATCH_INTERVAL_SEC, until founderTarget is met.
 // (A fully-empty world bypasses the interval so extinction recovery
 // isn't stalled 30s.)
-const FOUNDER_BATCH_MAX = 5;
+const FOUNDER_BATCH_MAX = 10;
 const FOUNDER_BATCH_INTERVAL_SEC = 30;
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
@@ -3544,6 +3557,10 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 // reproduce graduate out of the cull entirely (see advanceDivision)
 // so the "no immortal founders" property is preserved -- the cull
 // only takes founders that never managed to spawn a descendant.
+// Master switch for the age-based founder cull. Paused: founders only
+// die from real causes (starvation / membrane / mrna / aa loss), not
+// old age, so we can observe whether lineages establish on their own.
+const FOUNDER_CULL_ENABLED = false;
 const FOUNDER_LIFESPAN_SEC = 300;
 // A founder that hasn't fissioned yet but has measurably advanced
 // from its spawn state earns extra runway before the age cull --
@@ -3720,16 +3737,31 @@ const SEED_RAMP_BATCH = 1000;
 // Hard time cap on the ramp: stop seeding after this many sim-seconds
 // even if particleTarget was never reached, then latch done forever.
 const SEED_RAMP_MAX_T = 180;
+// Settle window: for the first SETTLE_NO_CAP_SEC sim-seconds the 5k
+// particle cap is OFF -- seedRamp/precipitate ignore particleTarget and
+// reservePass does nothing, so the world fills and finds its natural
+// dissolve/precipitate equilibrium unthrottled. After it, the cap
+// re-engages and reservePass demotes any surplus into reserve.
+const SETTLE_NO_CAP_SEC = 180;
+function inSettleWindow(world: World): boolean {
+  // Production (ramp) worlds only -- test/legacy worlds keep the cap
+  // always so cap-enforcement unit tests stay valid.
+  return world.useSeedRamp && world.t < SETTLE_NO_CAP_SEC;
+}
+function effectiveParticleCap(world: World): number {
+  return inSettleWindow(world) ? Infinity : world.particleTarget;
+}
 function seedRamp(world: World, dt: number): void {
   if (!world.useSeedRamp || world.initialSeedDone) return;
-  if (world.particles.length >= world.particleTarget || world.t >= SEED_RAMP_MAX_T) {
+  const cap = effectiveParticleCap(world);
+  if (world.particles.length >= cap || world.t >= SEED_RAMP_MAX_T) {
     world.initialSeedDone = true;
     return;
   }
   world.seedRampClock += dt;
   while (world.seedRampClock >= SEED_RAMP_PERIOD_SEC) {
     world.seedRampClock -= SEED_RAMP_PERIOD_SEC;
-    const room = world.particleTarget - world.particles.length;
+    const room = cap - world.particles.length;
     if (room <= 0) break;
     const n = Math.min(SEED_RAMP_BATCH, room);
     for (let i = 0; i < n; i++) {
@@ -3744,7 +3776,7 @@ function seedRamp(world: World, dt: number): void {
       });
     }
   }
-  if (world.particles.length >= world.particleTarget || world.t >= SEED_RAMP_MAX_T) world.initialSeedDone = true;
+  if (world.particles.length >= cap || world.t >= SEED_RAMP_MAX_T) world.initialSeedDone = true;
 }
 
 
@@ -3974,6 +4006,7 @@ export function genomeKey(genome: Uint8Array): string {
 const PHYLO_EVENT_CAP = 2000;
 
 function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefined): void {
+  if (world.stats) world.stats.births++;
   const key = genomeKey(c.genome);
   let sp = world.species.get(key);
   const wasNew = !sp;
@@ -4358,7 +4391,8 @@ const PRECIP_R = 2; // physical radius of a precipitated particle
 function precipitateRegions(world: World): void {
   // Best-effort under the global particle cap; leftover supersaturation
   // stays dissolved until capacity rises or Phase 4 reserve drains it.
-  if (world.particles.length >= world.particleTarget) return;
+  const pCap = effectiveParticleCap(world);
+  if (world.particles.length >= pCap) return;
   const amb = world.ambient;
   const cols = regionCols(world);
   const rows = regionRows(world);
@@ -4384,7 +4418,7 @@ function precipitateRegions(world: World): void {
       if (amountPer <= 0) continue;
       let count = Math.floor(excess / amountPer);
       if (count <= 0) continue;
-      const room = world.particleTarget - world.particles.length;
+      const room = pCap - world.particles.length;
       if (count > room) count = room;
       if (count <= 0) { if (room <= 0) return; continue; }
       // Spawn within this region's px box, below the surface.
@@ -4448,6 +4482,9 @@ const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve eq
 const RESERVE_WANT = new Int32Array(CHEMICAL_COUNT);       // desired visible / chem
 const RESERVE_SURPLUS = new Int32Array(CHEMICAL_COUNT);    // visible - want (positive)
 function reservePass(world: World): void {
+  // Settle window: cap is off, so nothing is demoted/promoted/shed --
+  // particles stay visible and find their natural equilibrium.
+  if (inSettleWindow(world)) return;
   const target = world.particleTarget;
   const store = world.particleStore;
   const res = world.reserve;
@@ -6432,17 +6469,24 @@ function updateCreatures(world: World, dt: number): void {
     // produced a viable child graduated into founderReproduced and
     // live a normal life (so a successful colony's anchor cell can
     // age out naturally instead of hitting the wall artificially).
-    const founderTooOld = world.founderIds.has(c.id)
+    const founderTooOld = FOUNDER_CULL_ENABLED
+      && world.founderIds.has(c.id)
       && !world.founderReproduced.has(c.id)
       && !world.pinnedSpecies.has(c.speciesKey)
       && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC + founderLifespanBonus(world, c);
-    if (
-      (c.energy <= 0 && noFuel(c))
-      || m.membrane < MIN_VIABLE_MEMBRANE
-      || m.mrna < MIN_VIABLE_RIBOSOME
-      || m.aminoAcid < MIN_VIABLE_AMINOACID
-      || founderTooOld
-    ) {
+    const starve = c.energy <= 0 && noFuel(c);
+    const lowMemb = m.membrane < MIN_VIABLE_MEMBRANE;
+    const lowMrna = m.mrna < MIN_VIABLE_RIBOSOME;
+    const lowAa = m.aminoAcid < MIN_VIABLE_AMINOACID;
+    if (starve || lowMemb || lowMrna || lowAa || founderTooOld) {
+      const st = world.stats;
+      if (st) {
+        if (starve) st.dStarve++;
+        else if (lowMemb) st.dMembrane++;
+        else if (lowMrna) st.dMrna++;
+        else if (lowAa) st.dAa++;
+        else st.dOld++;
+      }
       dead.push(c);
     }
   }
