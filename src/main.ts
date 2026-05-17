@@ -852,7 +852,8 @@ ledgerPane.appendChild(chemTable);
 // Detail pane: in-drawer reaction accounting + graph.
 const detailPane = document.createElement("div");
 detailPane.style.cssText =
-  "padding:10px 12px;overflow:auto;display:none;max-height:calc(100vh - 72px);" +
+  "padding:10px 12px;overflow-y:auto;overflow-x:hidden;display:none;" +
+  "max-height:calc(100vh - 72px);overflow-wrap:anywhere;word-break:break-word;" +
   `font:${UI_FONT_PX}px/1.45 ${UI_FONT_FAMILY};`;
 
 const leftBody = document.createElement("div");
@@ -935,7 +936,7 @@ function renderChemDetail(): void {
       ? `<div style="opacity:0.6;padding:2px 0;">none recorded</div>`
       : rows.map((x) =>
         `<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px solid rgba(26,51,64,0.4);">` +
-        `<span>${esc(x.label)}</span>` +
+        `<span style="min-width:0;overflow-wrap:anywhere;">${esc(x.label)}</span>` +
         `<span style="white-space:nowrap;"><b style="color:#cfe;">${fmtMass(x.mass)}</b>` +
         `<span style="opacity:0.55;"> &nbsp;(${x.n.toLocaleString()}×)</span></span></div>`).join("");
   const totals0 = totals == null;
