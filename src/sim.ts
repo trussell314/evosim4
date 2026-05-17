@@ -6109,11 +6109,14 @@ function aerate(world: World, dt: number): void {
     // a clean shot at rising back up to the surface.
     const insetMin = Math.min(AERATION_WALL_INSET, world.width * 0.25);
     const insetMax = Math.max(world.width - insetMin, insetMin + r * 2);
+    const spawnX = insetMin + Math.random() * Math.max(0, insetMax - insetMin);
     pushParticle(world, {
-      x: insetMin + Math.random() * Math.max(0, insetMax - insetMin),
-      // Just below the surface so the wall-escape pass doesn't immediately
-      // strip the new bubble.
-      y: world.surfaceY + r + 1,
+      x: spawnX,
+      // Just below the *wavy* surface at this x so the wall-escape pass
+      // doesn't immediately strip the new bubble. Using the flat
+      // world.surfaceY here made every fresh bubble appear on one
+      // horizontal line, ignoring the wave it should be sitting under.
+      y: surfaceYAt(world, spawnX) + r + 1,
       z: r + Math.random() * (world.depth - 2 * r),
       vx: (Math.random() - 0.5) * 4,
       vy: AERATION_BUBBLE_DROP_SPEED,
