@@ -5630,7 +5630,12 @@ function replenishParticles(world: World, dt: number): void {
 // their molecule pool, just like other molecule-tagged particles.
 function aerate(world: World, dt: number): void {
   if (world.t < WATER_FILL_DELAY_SEC) return;
-  const pCap = effectiveParticleCap(world);
+  // Bubble entrainment is gated by the REAL particle cap, never the
+  // settle-relaxed one: an unbounded surface bubble stream re-excites
+  // wave-capture "surfing" (the rightward zip) and floods the top
+  // band. O2 supply doesn't depend on this -- aerateAmbient() (a
+  // dissolved-field exchange, cap-independent, 10x O2) does the work.
+  const pCap = world.particleTarget;
   if (world.particles.length >= pCap) return;
   // Surface chop drives entrainment of air bubbles. Quiet surface =>
   // baseline aeration; storms and choppy periods => much more O2 mixed in.
