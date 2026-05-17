@@ -7842,6 +7842,10 @@ interface SavedWorld {
   nextDisturbanceAt: number;
   anchorGenome: number[];
   liveLineageRoots: number[];
+  // UI-controlled visible particle cap. Persisted so the user's
+  // chosen budget survives a browser refresh. Optional: older saves
+  // without it keep the current/default target.
+  particleTarget?: number;
   obstacles: Obstacle[];
   atmosphere?: Partial<Molecules>;
   // Phase F ambient pool. Sparse list of (chemId, concentration);
@@ -7936,6 +7940,7 @@ export function serializeWorld(w: World): string {
     nextLineageRoot: w.nextLineageRoot,
     extinctionCount: w.extinctionCount,
     founderTarget: w.founderTarget,
+    particleTarget: w.particleTarget,
     dayPhase: w.dayPhase,
     atmosphere: { ...w.atmosphere },
     ambient: (() => {
@@ -8055,6 +8060,12 @@ export function applySavedWorld(world: World, json: string): boolean {
   // effect even when restoring from a snapshot taken under an older
   // target. Tests / scripts that set founderTarget at runtime keep
   // doing so via direct mutation after createWorld returns.
+  // The visible particle cap IS restored (UI-controlled, must survive
+  // a refresh). setParticleTarget keeps particleSpawnRate consistent
+  // and clamps to the valid range. Older saves omit it -> keep default.
+  if (typeof saved.particleTarget === "number") {
+    setParticleTarget(world, saved.particleTarget);
+  }
   world.dayPhase = saved.dayPhase;
   world.disturbanceIntensity = saved.disturbanceIntensity;
   world.disturbanceStartedAt = saved.disturbanceStartedAt;
