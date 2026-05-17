@@ -1047,6 +1047,20 @@ export function makeRandomViableGenome(
   // pure-autotroph branch; pure photoautotrophs can still evolve from
   // these by losing INGEST via mutation.
   if (rng() < 0.10) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
+  // Every founder builds 1-2 sensory receptors. Founders used to start
+  // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
+  // receptor chem -- so they drifted until sensing happened to evolve.
+  // Give each a random 1-2 from the receptor set so they can actually
+  // navigate from birth. Kind + param randomized for diversity.
+  const RECEPTOR_KINDS = [
+    SYNTH_KIND.CHEMO, SYNTH_KIND.PHOTO, SYNTH_KIND.MECH,
+    SYNTH_KIND.THERMO, SYNTH_KIND.MAGNETO,
+  ];
+  const nRecept = 1 + (rng() < 0.5 ? 1 : 0);
+  for (let r = 0; r < nRecept; r++) {
+    const kind = RECEPTOR_KINDS[Math.floor(rng() * RECEPTOR_KINDS.length)];
+    tokens.push([OP.SYNTH, kind, b()]);
+  }
   // Fisher-Yates shuffle so structure differs founder to founder.
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));

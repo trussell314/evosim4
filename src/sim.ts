@@ -4481,11 +4481,16 @@ const RESERVE_CHEMCOUNT = new Uint32Array(CHEMICAL_COUNT); // visible count / ch
 const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve equiv / chem
 const RESERVE_WANT = new Int32Array(CHEMICAL_COUNT);       // desired visible / chem
 const RESERVE_SURPLUS = new Int32Array(CHEMICAL_COUNT);    // visible - want (positive)
+// No single material may occupy more than this fraction of the visible
+// particle budget; the rest of that chem stays in reserve. Stops one
+// abundant byproduct (e.g. minerals) from crowding the whole field.
+const PARTICLE_PER_CHEM_FRAC = 0.20;
 function reservePass(world: World): void {
   // Settle window: cap is off, so nothing is demoted/promoted/shed --
   // particles stay visible and find their natural equilibrium.
   if (inSettleWindow(world)) return;
   const target = world.particleTarget;
+  const maxPerChem = Math.floor(PARTICLE_PER_CHEM_FRAC * target);
   const store = world.particleStore;
   const res = world.reserve;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
@@ -4528,7 +4533,8 @@ function reservePass(world: World): void {
   const want = RESERVE_WANT;
   let sumWant = 0;
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
-    const w = grand > 0 ? Math.floor(visibleWanted * tot[k] / grand) : 0;
+    let w = grand > 0 ? Math.floor(visibleWanted * tot[k] / grand) : 0;
+    if (w > maxPerChem) w = maxPerChem; // per-material visible ceiling
     want[k] = w;
     sumWant += w;
   }
@@ -4536,11 +4542,11 @@ function reservePass(world: World): void {
   while (rem > 0) {
     let bk = -1, bf = -1;
     for (let k = 0; k < AMBIENT_STRIDE; k++) {
-      if (tot[k] <= 0) continue;
+      if (tot[k] <= 0 || want[k] >= maxPerChem) continue;
       const frac = (visibleWanted * tot[k] / grand) - want[k];
       if (frac > bf) { bf = frac; bk = k; }
     }
-    if (bk < 0) break;
+    if (bk < 0) break; // everything at its ceiling -> rest stays in reserve
     want[bk]++; rem--;
   }
 

@@ -1811,14 +1811,13 @@ describe("region dissolved-capacity calibration (Phase 0)", () => {
 });
 
 describe("reserve keeps visible mix proportional (Phase 4)", () => {
-  it("visible per-chem ratio mirrors (visible+reserve) per-chem ratio", () => {
+  it("no material exceeds the per-chem visible ceiling; rest stays in reserve", () => {
     const w = quietWorld();
     w.aerationRate = 0;
     w.particleSpawnRate = 0;
     const target = w.particleTarget;
-    // 2:1 minerals:biopolymer, total ~6x the cap. Default density +
-    // r=2 so each particle's mass == the reserve mass-per-particle
-    // (reserve-equivalent count == demoted count exactly).
+    const maxPerChem = Math.floor(0.20 * target); // PARTICLE_PER_CHEM_FRAC
+    // 2:1 minerals:biopolymer, both far above the 20% ceiling.
     const NMIN = target * 4, NBIO = target * 2;
     for (let i = 0; i < NMIN; i++) pushParticle(w, { x: 5 + Math.random() * (w.width - 10), y: w.surfaceY + 5 + Math.random() * 150, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals });
     for (let i = 0; i < NBIO; i++) pushParticle(w, { x: 5 + Math.random() * (w.width - 10), y: w.surfaceY + 5 + Math.random() * 150, z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.biopolymer });
@@ -1831,13 +1830,17 @@ describe("reserve keeps visible mix proportional (Phase 4)", () => {
     }
     // Cap respected.
     expect(w.particles.length).toBeLessThanOrEqual(target);
-    // Both chems still represented (proportional, not winner-take-all).
+    // Both chems still represented (not winner-take-all).
     expect(visMin).toBeGreaterThan(0);
     expect(visBio).toBeGreaterThan(0);
-    // Visible ratio ~= total ratio (2:1) within 20%.
-    const ratio = visMin / visBio;
-    expect(ratio).toBeGreaterThan(2 * 0.8);
-    expect(ratio).toBeLessThan(2 * 1.2);
+    // Neither material exceeds the per-chem ceiling (the surplus that
+    // would have been visible under pure proportionality is held in
+    // reserve instead). Both are far above the ceiling in total, so
+    // both should sit at (approximately) the ceiling.
+    expect(visMin).toBeLessThanOrEqual(maxPerChem);
+    expect(visBio).toBeLessThanOrEqual(maxPerChem);
+    expect(visMin).toBeGreaterThan(maxPerChem * 0.6);
+    expect(visBio).toBeGreaterThan(maxPerChem * 0.6);
   });
 });
 
@@ -1867,12 +1870,16 @@ describe("founders recirculate reserve (Phase 4)", () => {
     expect(w.creatures.length).toBeGreaterThan(0); // founders spawned
     let resAfter = 0;
     for (let k = 0; k < w.reserve.length; k++) if ((k % AMB_STRIDE) === CHEM_IDS.minerals) resAfter += w.reserve[k];
-    // Founders drew the sequestered reserve down...
-    expect(resAfter).toBeLessThan(resBefore);
-    // ...and that mineral mass landed in the new cells (not vanished).
+    // Recirculation happened: sequestered mineral reserve was drawn
+    // into the freshly-spawned founders (not vanished). (Net reserve
+    // total isn't a clean down-check anymore: the per-chem visible
+    // ceiling demotes mineral particles back into reserve and
+    // maintenanceDecay mints 0.5 min/tick, so reserve churns -- but it
+    // must stay bounded, no runaway.)
     let cellMin = 0;
     for (const c of w.creatures) cellMin += cs.m_minerals[c.idx];
     expect(cellMin).toBeGreaterThan(0);
+    expect(resAfter).toBeLessThan(resBefore * 1.5); // bounded, no explosion
     // No founder ballooned. The per-chem cap keeps draws small; an
     // uncapped reserve dump (the fireworks failure) would put r in
     // the hundreds, so a generous bound still discriminates.
