@@ -138,14 +138,15 @@ hudDiag.style.cssText = "padding:0 8px 2px;color:#f88;display:none;" + HUD_FONT;
 // override font-size from cascade in some browsers.
 const inspector = document.createElement("pre");
 inspector.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;" + HUD_FONT;
+  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre-wrap;" +
+  "overflow-wrap:anywhere;" + HUD_FONT;
 // Disasm gets its own collapsible section: it's much longer than the
 // rest of the inspector and almost never wanted at-a-glance. Click the
 // "[show disasm]" header to expand.
 const disasmHeader = document.createElement("div");
 disasmHeader.style.cssText =
   "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;" + HUD_FONT;
-disasmHeader.textContent = "[+] show disasm";
+disasmHeader.textContent = "[+] show genome";
 const disasmBody = document.createElement("pre");
 disasmBody.style.cssText =
   "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;" + HUD_FONT;
@@ -171,13 +172,43 @@ pinSpeciesBtn.addEventListener("click", () => {
   togglePin(sel.speciesKey, sel.genome, sel.color, peakBiomassByKey.get(sel.speciesKey) ?? 0);
 });
 
-// Disasm stays a collapsible sub-section inside the Inspector tab.
+// Human-readable genome summary -- the same prose shown on the
+// species cards. Filled by updateInspector when a cell is selected.
+const inspectorProse = document.createElement("div");
+inspectorProse.style.cssText =
+  "padding:6px 9px;color:#bcd;display:none;" + HUD_FONT;
+
+// "genome" (was "disasm") stays a collapsible sub-section inside the
+// Inspector tab, with a copy-to-clipboard button (one op per line).
 let disasmExpanded = false;
 disasmHeader.addEventListener("click", () => {
   disasmExpanded = !disasmExpanded;
   disasmBody.style.display = disasmExpanded ? "" : "none";
-  disasmHeader.textContent = disasmExpanded ? "[–] hide disasm" : "[+] show disasm";
+  copyDisasmBtn.style.display = disasmExpanded ? "" : "none";
+  disasmHeader.textContent = disasmExpanded ? "[–] hide genome" : "[+] show genome";
 });
+const disasmBar = document.createElement("div");
+disasmBar.style.cssText = "display:flex;align-items:center;gap:8px;";
+disasmHeader.style.flex = "1 1 auto";
+const copyDisasmBtn = document.createElement("button");
+copyDisasmBtn.title = "Copy genome (one op per line)";
+copyDisasmBtn.textContent = "⧉";
+copyDisasmBtn.style.cssText =
+  "display:none;padding:2px 8px;margin:0 6px;border:1px solid #1a3340;" +
+  "border-radius:4px;background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;" +
+  HUD_FONT;
+copyDisasmBtn.addEventListener("click", async (ev) => {
+  ev.stopPropagation();
+  if (!activeDisasmRaw) return;
+  try {
+    await navigator.clipboard.writeText(activeDisasmRaw);
+    copyDisasmBtn.textContent = "✓";
+  } catch {
+    copyDisasmBtn.textContent = "✗";
+  }
+  setTimeout(() => { copyDisasmBtn.textContent = "⧉"; }, 1200);
+});
+disasmBar.append(disasmHeader, copyDisasmBtn);
 
 // World dimensions are fixed at startup; zooming/resizing the browser
 // only changes the canvas's visual scale, never the underlying world.
@@ -524,11 +555,17 @@ function selectedCell(): CreatureSnapshot | null {
   return selectedCellId != null ? snapshotCreatureById.get(selectedCellId) ?? null : null;
 }
 let activeDisasm = "";
+// One op per line, unformatted -- what the copy button hands over.
+let activeDisasmRaw = "";
 function refreshActiveDisasm(): void {
   const sel = selectedCell();
-  activeDisasm = sel
-    ? formatDisasmColumns(disassemble(sel.genome, SENSOR_CHEM_LABELS), DISASM_COL_LINES)
-    : "";
+  if (sel) {
+    activeDisasmRaw = disassemble(sel.genome, SENSOR_CHEM_LABELS);
+    activeDisasm = formatDisasmColumns(activeDisasmRaw, DISASM_COL_LINES);
+  } else {
+    activeDisasmRaw = "";
+    activeDisasm = "";
+  }
 }
 // Width budget for the disasm body. Higher = more columns. Tuned to
 // look right against the 9px monospace font in EXPANDED_FONT.
@@ -625,7 +662,8 @@ inspectorPane.style.cssText =
   "padding:6px 4px 10px;overflow:auto;display:none;" + PANE_MAXH;
 inspectorPane.appendChild(inspector);
 inspectorPane.appendChild(pinSpeciesBtn);
-inspectorPane.appendChild(disasmHeader);
+inspectorPane.appendChild(inspectorProse);
+inspectorPane.appendChild(disasmBar);
 inspectorPane.appendChild(disasmBody);
 // Genome pane: the population genome-size histogram canvas.
 const genomePane = document.createElement("div");
@@ -640,7 +678,7 @@ type AnalysisTab = "inspector" | "top" | "pinned" | "notable" | "genome";
 let analysisTab: AnalysisTab = "inspector";
 const analysisTabs = document.createElement("div");
 analysisTabs.style.cssText =
-  "display:none;border-bottom:1px solid #1a3340;overflow-x:auto;white-space:nowrap;";
+  "display:none;flex-wrap:wrap;border-bottom:1px solid #1a3340;";
 const TAB_DEFS: { id: AnalysisTab; label: string }[] = [
   { id: "inspector", label: "Inspector" },
   { id: "top", label: "Top 10" },
@@ -690,7 +728,7 @@ analysisTitle.style.display = "none";
 analysisHeader.addEventListener("click", () => {
   analysisMinimized = !analysisMinimized;
   analysisPanel.style.width = (analysisMinimized ? ANALYSIS_PANEL_W_MIN : ANALYSIS_PANEL_W) + "px";
-  analysisTabs.style.display = analysisMinimized ? "none" : "";
+  analysisTabs.style.display = analysisMinimized ? "none" : "flex";
   analysisToggle.textContent = analysisMinimized ? "+" : "–";
   analysisTitle.style.display = analysisMinimized ? "none" : "";
   analysisHeader.style.justifyContent = analysisMinimized ? "center" : "space-between";
@@ -1236,6 +1274,8 @@ function positionWorldButtons(): void {
   ctrlBar.style.left = `${leftPanelWidth()}px`;
   ctrlBar.style.right = `${panelW}px`;
   controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
+  // Keep the status strip clear of the left slide-out's tab/panel.
+  hud.style.left = `${leftPanelWidth() + 8}px`;
 }
 function bottomReserveH(): number { return PHYLO_STRIP_H + controlsBarH; }
 
@@ -2727,6 +2767,7 @@ function updateInspector(): void {
   const c = selectedCell();
   if (!c) {
     pinSpeciesBtn.style.display = "none";
+    inspectorProse.style.display = "none";
     inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
     return;
   }
@@ -2740,6 +2781,8 @@ function updateInspector(): void {
       `<span style="color:${col};">${isPinned ? "unpin" : "pin"} species ` +
       `<b>${genomeTag(c.genome)}</b></span>`;
   }
+  inspectorProse.style.display = "";
+  inspectorProse.textContent = describeGenomeProse(c.genome);
   let molMass = c.energy;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
   const totalMass = molMass;
