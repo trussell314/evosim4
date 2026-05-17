@@ -1487,10 +1487,17 @@ describe("creature: death by starvation", () => {
       }
       return m;
     };
-    // Maintenance decay nibbles structural chems during the death
-    // tick; allow a 10% loss before particle release.
-    expect(massByChem(CHEM_IDS.membrane)).toBeGreaterThan(45);
-    expect(massByChem(CHEM_IDS.membrane)).toBeLessThan(52);
+    // Necromass lipolysis: the 50 membrane hydrolyzes to ~0.65 fa +
+    // ~0.35 aa (it does NOT survive as membrane particles). Enzyme +
+    // minerals still release as themselves. Mass is conserved
+    // (maintenance decay nibbles a little during the death tick).
+    // membrane does NOT survive as membrane; its lipid (~0.65) comes
+    // back as a fatty-acid particle. (The ~0.35 aa fraction is below
+    // the death-release particle floor and dissolves into ambient --
+    // the documented trace-amount rule -- so it's not a particle.)
+    expect(massByChem(CHEM_IDS.membrane)).toBeLessThan(2);
+    expect(massByChem(CHEM_IDS.fattyAcid)).toBeGreaterThan(28);
+    expect(massByChem(CHEM_IDS.fattyAcid)).toBeLessThan(35);
     expect(massByChem(CHEM_IDS.enzyme)).toBeGreaterThan(17);
     expect(massByChem(CHEM_IDS.enzyme)).toBeLessThan(22);
     expect(massByChem(CHEM_IDS.minerals)).toBeGreaterThan(28);

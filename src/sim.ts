@@ -1774,7 +1774,7 @@ export function reactionCatalog(): ReactionInfo[] {
   const syn = (id: number, name: string, cons: ReactionTerm[], prod: ReactionTerm[]): void => {
     out.push({ id, label: `${name}: ${rxnTermStr(cons)} → ${rxnTermStr(prod)}`, consumes: cons, produces: prod });
   };
-  syn(RX_MAINT_MEMBRANE, "maint membrane", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_AA, coef: 0.5 }, { chem: CHEM_FA, coef: 0.5 }]);
+  syn(RX_MAINT_MEMBRANE, "membrane hydrolysis", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_FA, coef: 0.65 }, { chem: CHEM_AA, coef: 0.35 }]);
   syn(RX_MAINT_ENZ, "maint enzyme", [{ chem: CHEM_ENZ, coef: 1 }], aaMin);
   syn(RX_MAINT_CHL, "maint chlorophyll", [{ chem: CHEM_CHL, coef: 1 }], aaMin);
   syn(RX_MAINT_MRNA, "maint mRNA", [{ chem: CHEM_MRNA, coef: 1 }], aaMin);
@@ -5455,8 +5455,10 @@ function maintenanceDecay(c: Creature, dt: number): void {
   if (memb > 0) {
     const lost = memb * MEMBRANE_DECAY_PER_SEC * stressMult * dt;
     s.m_membrane[i] = memb - lost;
-    s.m_aminoAcid[i] += 0.5 * lost;
-    s.m_fattyAcid[i] += 0.5 * lost;
+    // Phospholipid hydrolysis: ~65% of bilayer mass is fatty-acyl
+    // chains, ~35% glycerophosphate + N head-group (-> aa proxy).
+    s.m_aminoAcid[i] += 0.35 * lost;
+    s.m_fattyAcid[i] += 0.65 * lost;
     recordRxn(RX_MAINT_MEMBRANE, RX_LOC_CELL, 0);
   }
   const enz = s.m_enzyme[i];
@@ -7018,6 +7020,21 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   // ADP then emits with the rest of the pool below.
   cols[CHEM_ADP][ci] += c.energy;
   c.energy = 0;
+  // Necromass lipolysis: a dead cell's membrane bilayer hydrolyzes
+  // rather than persisting as inert membrane debris. Same chemistry
+  // as maintenance turnover (~0.65 fatty acid + 0.35 glycerophosphate/
+  // head-group -> aa). This is the realistic fatty-acid recycling
+  // path -- structural lipid returns to the environment as free fa
+  // for survivors to rebuild membranes from.
+  {
+    const mb = cols[CHEM_MEMBRANE][ci];
+    if (mb > 0) {
+      cols[CHEM_FA][ci] += 0.65 * mb;
+      cols[CHEM_AA][ci] += 0.35 * mb;
+      cols[CHEM_MEMBRANE][ci] = 0;
+      recordRxn(RX_MAINT_MEMBRANE, RX_LOC_CELL, 0);
+    }
+  }
 
   // Emit one full-mass particle for a chem (no thresholding -- (3)
   // removed). Placed in-place with only a small scatter ((5) toned
