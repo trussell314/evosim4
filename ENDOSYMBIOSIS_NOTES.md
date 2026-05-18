@@ -161,4 +161,73 @@ matter — is what's missing.
   show parasitism vs mutualism emerging (net ATP/material flux sign
   across the membrane, per lineage)?
 
+## 5. Mitochondrial precedent: how host control arose without permission
+
+Q: if a mitochondrion founder was once enveloped by a host founder,
+how did the host come to control the membrane/transport layer? Did the
+symbiont "allow" it?
+
+A: it never required permission. It is not negotiation — it is
+selection plus a mechanistic, one-way gene-flow ratchet.
+
+**Two membranes.** A mitochondrion has an inner membrane (the original
+α-proteobacterial symbiont's own plasma membrane — ETC / ATP synthase
+live here) and an outer membrane (host-derived in origin, the
+phagosomal wrap). Ownership ended up split and asymmetric: the
+symbiont kept a minimal inner shell; the host took over the interface
+and the supply chain. Human mito retains ~37 genes; the host nucleus
+encodes ~99% of mitochondrial proteins, including the membrane
+transporters and the TOM/TIM protein-import translocases.
+
+**The no-permission mechanism (endosymbiotic gene transfer, EGT):**
+
+1. Many symbionts; some die inside the host constantly (hundreds–
+   thousands of mitochondria; routine lysis). A dead symbiont spills
+   its DNA into the host cytoplasm.
+2. That DNA is incorporated into the host nuclear genome by ordinary
+   repair/recombination — passive, no agency, no consent. Still
+   observed today (NUMTs).
+3. Effectively irreversible (a ratchet): once a working copy sits in
+   the host nucleus the organelle copy is redundant and lost to
+   drift; the symbiont has no mechanism to take it back, and tiny
+   asexual organelle genomes degrade under Muller's ratchet anyway.
+4. The unit of selection shifts: a symbiont replicating only
+   vertically inside a host lineage has its fitness fused with the
+   host's. "Resisting" host control is not selectable once autonomy
+   is gone — the symbiont can't survive/propagate outside the
+   collective.
+
+So host takeover is death-triggered, mechanistic DNA escape
+(asymmetric + ratchet-like) plus selection on the fused collective.
+The symbiont's "consent" never enters the model. "Doesn't require
+permission" is the accurate framing.
+
+**Implication for the sim — the missing primitive.** The substrate
+currently lacks the one thing that makes host-takeover *emergent
+rather than scripted*: a death-triggered capability/gene transfer.
+Today inner death → `digestInnerIntoHost` moves the symbiont's
+*chems* but none of its *capability* (genome fragment / catalyst /
+synth competence). Add a mechanistic, no-permission EGT analog — on
+inner death, some probability the host absorbs a fragment of the
+symbiont's genome or a catalyst/synth capability — and host control of
+the interface can evolve on its own: selection on the collective plus
+an asymmetric, irreversible transfer, with no consent term anywhere.
+Combined with the contested-membrane model (C, §2), membrane control
+can then migrate hostward over generations as an emergent outcome,
+mirroring the real evolutionary story.
+
+Open sub-questions:
+- Transfer granularity: raw genome bytes spliced into the host genome
+  (lets the host's VM eventually express symbiont ops) vs. transfer of
+  a built capability (a catalyst pool / synth competence)? Bytes are
+  the more substrate-pure, more emergent choice.
+- Rate/gating: per-inner-death probability, scaled by how many
+  symbionts of that lineage the host carries (more copies → more
+  chances), to reproduce the ratchet without hard-coding directionality.
+- Reverse transfer should be possible but vanishingly likely (don't
+  forbid it — let the asymmetry be statistical, not a rule).
+- Does EGT plus internal division collapse the inner lineage's
+  autonomy too fast (instant domestication) or is there a parasite/
+  mutualist transient first? Needs a probe.
+
 _Status: notes only. Not scheduled, not implemented._
