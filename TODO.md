@@ -69,6 +69,23 @@ Living list of deferred work. Newest/explicit asks at top.
   `runGenericReactions` (skips transport slots),
   `runTransportReactions`, `runInnerCell` (vacuolar wiring).
 
+- **Consider extending transporters to generic chemicals (later).**
+  v1 deliberately covers only the 8 small-molecule metabolites (chem
+  ids 0–7) — the species a real membrane carrier moves. The generic
+  abstract chems (ids ~45–95) were excluded as transport-for-its-own-
+  sake and to spare the reaction-slot budget (each transporter eats one
+  procedurally-generated generic slot we overwrite post-build; 8 is
+  ~3% of that band, all 96 would be ~⅓ of the whole table). Worth
+  revisiting if emergent generic-chem signaling/economies appear that
+  would benefit from selective cross-membrane transport — e.g. a small
+  evolvable sub-band of generic-chem transporters rather than all of
+  them. Constraints to preserve: overwrite a contiguous post-build
+  band (keeps the seeded `buildReactionTable` rng draw order byte-
+  identical → determinism), don't encroach on the named head [0,26),
+  and weigh generic-reaction slots lost vs transport gained. Same
+  facilitated/atpDelta model as v1. Touch points: `TRANSPORT_CHEM_IDS`
+  / `installTransporters` in `sim/reactions.ts`.
+
 - **Temperature diffusion / thermal inertia.** Region temperature is
   rebuilt every tick from a model (baseline + drifting sine patch +
   depth gradient + a surface/wave term) with no inertia, so the
