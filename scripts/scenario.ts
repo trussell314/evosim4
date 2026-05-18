@@ -65,18 +65,19 @@ const SCENARIOS: Record<string, Scenario> = {
     coStock: [],
     describe:
       "Near-surface (max light exp(-y/250)), permanent midday " +
-      "(dayPhase=0.25, dayPeriod=1e9, no night). MINERAL-REPLETE: " +
-      "every autotroph biosynth step (aa/fa/chl/mrna) is min-gated " +
-      "and a no-INGEST cell only gets min via slow ambient diffusion " +
-      "(perm 0.1), so ambient CO2+MIN seeded to 50/region and re-" +
-      "topped every sample (chemostat); cells primed CO2=20 ADP=30 " +
-      "MIN=30 AA=5. No co-stock (a primary producer gains nothing). " +
-      "Founder spawns off.",
+      "(dayPhase=0.25, dayPeriod=1e9, no night). NUTRIENT-REPLETE " +
+      "broth: aa source synth_aa is vmax-limited (0.4) below the aa " +
+      "sinks (synth_membrane vmax 0.8 + chl/ribo/receptor), and aa " +
+      "(perm 0.5) + min (perm 0.1) diffuse, so ambient CO2=50 / " +
+      "MIN=50 / AA=30 seeded and re-topped every sample (chemostat); " +
+      "cells primed CO2=20 ADP=30 MIN=30 AA=5. No co-stock. Founder " +
+      "spawns off.",
     setup: (w, cells) => {
       w.dayPhase = 0.25;
       w.dayPeriod = 1e9;
       setAmbientAll(w, CHEM_CO2, 50);
       setAmbientAll(w, CHEM_MIN, 50);
+      setAmbientAll(w, CHEM_AA, 30);
       const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
       for (let k = 0; k < cells.length; k++) {
         const c = cells[k];
@@ -90,16 +91,12 @@ const SCENARIOS: Record<string, Scenario> = {
       }
     },
     replenish: (w) => {
-      // Keep the medium nutrient-replete (non-depleting): re-top
-      // ambient CO2 + minerals, and floor each live cell's mineral
-      // pool so slow min-diffusion (perm 0.1) never bottlenecks aa.
+      // Keep the medium nutrient-replete (non-depleting). aa + min
+      // diffuse in (perm 0.5 / 0.1); CO2 too. No per-cell injection
+      // -- uptake is via the medium so it stays a fair test.
       setAmbientAll(w, CHEM_CO2, 50);
       setAmbientAll(w, CHEM_MIN, 50);
-      for (const c of (w as unknown as { creatures: Cre[] }).creatures) {
-        if (c.store.chemCols[CHEM_MIN][c.idx] < 15) {
-          c.store.chemCols[CHEM_MIN][c.idx] = 15;
-        }
-      }
+      setAmbientAll(w, CHEM_AA, 30);
     },
   },
 };
@@ -159,6 +156,11 @@ function meanEnergy(): number {
   for (const c of cs) s += c.energy;
   return s / cs.length;
 }
+function nAboveMembrane(thresh: number): number {
+  let n = 0;
+  for (const c of w.creatures) if (c.store.chemCols[CHEM_MEMBRANE][c.idx] > thresh) n++;
+  return n;
+}
 
 console.log(`# scenario: ${id}  (x${focal.length} spawned${sc.coStock.length ? ", co-stock " + sc.coStock.map(c => c.id + ":" + c.count).join(",") : ", no co-stock"})`);
 console.log(`# ${sc.describe}`);
@@ -199,12 +201,13 @@ while (w.t < endT) {
     if (sc.replenish) sc.replenish(w);
     console.log(
       `t=${String(Math.round(w.t)).padStart(3)}s pop=${String(w.creatures.length).padStart(4)} ` +
+        `nMem>40=${String(nAboveMembrane(40)).padStart(3)} ` +
         `mMem=${meanCell(CHEM_MEMBRANE).toFixed(2).padStart(6)} ` +
         `mATP=${meanEnergy().toFixed(1).padStart(7)} ` +
         `mCHL=${meanCell(CHEM_CHL).toFixed(2).padStart(6)} ` +
         `mAA=${meanCell(CHEM_AA).toFixed(2).padStart(6)} ` +
         `mGLU=${meanCell(CHEM_GLU).toFixed(2).padStart(6)} ` +
-        `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1).padStart(5)} ` +
+        `ambAA=${ambientMean(w, CHEM_AA).toFixed(1).padStart(5)} ` +
         `ambMIN=${ambientMean(w, CHEM_MIN).toFixed(1).padStart(5)}`,
     );
   }
