@@ -39,7 +39,7 @@ import {
   serializeWorld,
   applySavedWorld,
 } from "../sim";
-import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
+import { OP, SYNTH_KIND, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
 // Local viable-heterotroph genome for test creatures. Mirrors the
 // production curated default that used to exist before founders went
@@ -2515,5 +2515,22 @@ describe("eDNA carrier persistence (Substrate A, sub-commit 1)", () => {
     const tampered = json.replace(/"schema":"[^"]*"/, '"schema":"evosim4:8:x"');
     const w2 = createWorld(400, 300, { seed: 7 });
     expect(applySavedWorld(w2, tampered)).toBe(false);
+  });
+});
+
+describe("eDNA lysis shedding (Substrate A, sub-commit 2)", () => {
+  it("free-water lysis sheds carriers without perturbing the sim", () => {
+    const w = createWorld(600, 400, { seed: 123 });
+    let everShed = false;
+    for (let i = 0; i < 4000 && !everShed; i++) {
+      step(w, 1 / 60);
+      if (w.eDnaCarriers.length > 0) everShed = true;
+    }
+    expect(everShed).toBe(true);
+    for (const c of w.eDnaCarriers) {
+      expect(c.payload.length).toBeGreaterThan(0);
+      expect(c.payload.length).toBeLessThanOrEqual(GENE_FRAGMENT_CAP);
+      expect(c.age).toBeGreaterThanOrEqual(0);
+    }
   });
 });

@@ -22,8 +22,10 @@ import {
   SYNTH_KIND,
   SYNTH_KIND_COUNT,
   SYNTH_BIT_BOND,
+  appendGenomeBytes,
+  GENE_FRAGMENT_CAP,
 } from "./genome";
-import { mulberry32 } from "./rng";
+import { mulberry32, mixHash } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
 export { genomeTag, genomeKey, genomeDistance, genomeColor };
 import {
@@ -2909,6 +2911,23 @@ const EDNA_LIFETIME_SEC = 30;
 // be allowed to balloon the list unbounded; past this the oldest are
 // dropped (they were closest to DNase retirement anyway).
 const EDNA_CARRIER_MAX = 4000;
+// Host-scoped buffer (intracellular EGT) is bounded: newly shed
+// fragments append, oldest bytes trim past this. A few fragments'
+// worth -- enough that recurrent symbiont death keeps material
+// available, not so much that one host hoards a whole genome.
+const EDNA_HOST_BUFFER_MAX = 4 * GENE_FRAGMENT_CAP;
+
+const EMPTY_BYTES = new Uint8Array(0);
+
+// Deterministic source-window offset for a shed fragment. Uses the
+// landed mixHash (NOT simRng) keyed on stable per-event values so the
+// world RNG draw order is byte-identical -- only the new behavior, not
+// RNG reordering, may move the golden hash. Which gene travels is thus
+// emergent-but-reproducible.
+function shedOffset(seedA: number, seedB: number, len: number): number {
+  if (len <= 0) return 0;
+  return mixHash(seedA, seedB | 0, len) % len;
+}
 
 // Age the extracellular-DNA carriers and retire the expired ones, then
 // enforce the hard cap (drop oldest first). Same cheap compaction
@@ -4041,6 +4060,21 @@ function digestInnerIntoHost(inner: Creature, host: Creature): void {
   for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
     const v = g[k][ii];
     if (v !== 0) { g[k][hi] += v; g[k][ii] = 0; }
+  }
+  // Intracellular eDNA: the lysing symbiont's genome fragment enters
+  // the host's cytoplasm. Append-only (via the shared primitive),
+  // then trim oldest bytes past the bound. No uptake yet (sub-commit
+  // 3 wires host competence to this buffer) -- inert here, so no
+  // trajectory/golden change.
+  if (inner.genome.length > 0) {
+    const off = shedOffset(inner.id, host.id, inner.genome.length);
+    let buf = appendGenomeBytes(
+      host.eDnaBuffer ?? EMPTY_BYTES, inner.genome, off, GENE_FRAGMENT_CAP,
+    );
+    if (buf.length > EDNA_HOST_BUFFER_MAX) {
+      buf = buf.slice(buf.length - EDNA_HOST_BUFFER_MAX);
+    }
+    host.eDnaBuffer = buf;
   }
 }
 
@@ -5451,6 +5485,24 @@ const DEATH_RELEASE_SCATTER = 1.5; // small in-place jitter (was 6 / 4)
 function releaseChemsAsParticles(c: Creature, world: World): void {
   const ci = c.idx;
   const cols = c.store.chemCols;
+
+  // Lysis sheds a genome fragment into the open water as a free-
+  // floating eDNA carrier (the HGT vector). No uptake yet (sub-commit
+  // 3 adds competence); carriers are inert, carry no mass, and draw no
+  // simRng -- so trajectory and golden are unchanged here. The corpse's
+  // matter still releases fully and unchanged below.
+  if (c.genome.length > 0 && world.eDnaCarriers.length < EDNA_CARRIER_MAX) {
+    const off = shedOffset(c.id, world.t, c.genome.length);
+    const payload = appendGenomeBytes(
+      EMPTY_BYTES, c.genome, off, GENE_FRAGMENT_CAP,
+    );
+    if (payload.length > 0) {
+      world.eDnaCarriers.push({
+        x: c.x, y: c.y, z: c.z, age: 0,
+        payload, srcSpeciesKey: c.speciesKey,
+      });
+    }
+  }
 
   // (1, kept) Catalysts denature back to their substrates (0.5 aa +
   // 0.5 min). Folded into the chem pool so the release loop below
