@@ -125,7 +125,7 @@ hudBar.style.cssText =
 // Live stats shown on the strip. Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
 hudStats.style.cssText = HUD_FONT;
-hudStats.textContent = "pop/engulfed=--  species/engulfed=--  lineages/extinct=--";
+hudStats.textContent = "pop/engulfed=--  species/engulfed=--  lineages/extinct=--  parts=--";
 hudBar.appendChild(hudStats);
 // Stall + error indicator. Hidden by default; shown only when
 // something useful is going on (sim paused / world empty / threw).
@@ -1726,22 +1726,36 @@ function flushTooltip(): void {
     (engulfed > 0 || bonded > 0)
       ? `\nengulfed=${engulfed}  bonded=${bonded}`
       : "";
-  // "One of x/y": this cell is one of x live cells in its species
-  // (same speciesKey) and one of y in its founding lineage (same
-  // lineageRoot). Species nests inside lineage, so x <= y.
+  // Membership: how many live cells share this cell's exact genome
+  // (species) vs its founding lineage (lineageRoot). Species nests in
+  // lineage, so the species count <= the lineage count.
   let sameSpecies = 0;
   let sameLineage = 0;
   for (const o of snapshot.creatures) {
     if (o.speciesKey === c.speciesKey) sameSpecies++;
     if (o.lineageRoot === c.lineageRoot) sameLineage++;
   }
+  const speed = Math.hypot(c.vx, c.vy);
+  // Trophic / structural "kit": the few molecules that signal a cell's
+  // strategy at a glance -- chlorophyll = phototroph, enzyme =
+  // biopolymer digester, high membrane = armored, bondChem = colonial.
+  const kit: string[] = [];
+  if (c.molecules.chlorophyll > 1) kit.push("photo");
+  if (c.molecules.enzyme > 1) kit.push("digest");
+  if (c.molecules.membrane > 50) kit.push("armored");
+  if (c.molecules.bondChem > 1) kit.push("bond");
+  const kitLine = kit.length ? `\n${kit.join(" · ")}` : "";
+  const divLine = c.division
+    ? `\ndividing ${(c.division.progress * 100).toFixed(0)}%`
+    : "";
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
     `ATP=${c.energy.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
-    `One of ${sameSpecies}/${sameLineage}` +
-    assocLine;
+    `r=${c.r.toFixed(1)}  spd=${speed.toFixed(0)}  z=${c.z.toFixed(0)}\n` +
+    `${sameSpecies} in species, ${sameLineage} in lineage` +
+    divLine + kitLine + assocLine;
   tooltip.style.display = "block";
   // Anchor at the cell's projected screen position with edge-flipping
   // so the box never spills off the visible viewport. visualViewport
@@ -3068,7 +3082,8 @@ function updateInspector(): void {
   hudStats.textContent =
     `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
     `species/engulfed=${liveSpecies.size}/${snapshot.engulfedOnlySpeciesCount}  ` +
-    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}`;
+    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}  ` +
+    `parts=${snapshot.particles.length}/${snapshot.particleTarget}`;
   // Bottom HUD: clock / perf / build, fixed order.
   bottomHud.textContent =
     `t=${formatAge(snapshot.t)}  ` +
@@ -3090,7 +3105,7 @@ function updateInspector(): void {
     inspectorProse.style.display = "none";
     disasmBar.style.display = "none";
     disasmBody.style.display = "none";
-    inspector.textContent = `${statsLine()}\npop=0  particles=${snapshot.particles.length}`;
+    inspector.textContent = `${statsLine()}  (click a cell)`;
     return;
   }
   {
@@ -3116,7 +3131,6 @@ function updateInspector(): void {
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   inspector.textContent =
     `${statsLine()}\n` +
-    `pop=${snapshot.creatures.length}  parts=${snapshot.particles.length}/${snapshot.particleTarget}  extinct=${snapshot.extinctionCount}  (click a cell)\n` +
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
@@ -3178,22 +3192,10 @@ function updatePerfStats(simAdvanced: number, renderMs: number, simMs: number): 
 }
 
 function statsLine(): string {
-  // Count only species with currently-living cells (matches the
-  // top-row pop= number). snapshot.species includes the
-  // SPECIES_GRACE_SEC window of dead species, which inflates the
-  // count if used directly.
-  const liveSpeciesKeys = new Set<string>();
-  for (const c of snapshot.creatures) liveSpeciesKeys.add(c.speciesKey);
-  let s = `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  t=${snapshot.t.toFixed(0)}s  species=${liveSpeciesKeys.size}`;
-  const p = snapshot.profile;
-  if (p && p.ticks > 0) {
-    const total =
-      p.bonds + p.forces + p.creatures +
-      p.particleColl + p.creatureColl + p.sedimentColl + p.obstacleColl +
-      p.walls + p.aerate + p.replenish + p.prune;
-    s += `  [prof ${ (total / p.ticks).toFixed(2) }ms/tick over ${p.ticks}t]`;
-  }
-  return s;
+  // Inspector intentionally carries only the sim-rate now; fps / t /
+  // species / profiling / pop / parts / extinct moved off it (top and
+  // bottom HUDs own the global counters).
+  return `sim=${perfSimRate.toFixed(1)}x`;
 }
 
 // Sim and render are fully decoupled: sim runs in simWorker on its own

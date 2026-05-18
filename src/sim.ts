@@ -3691,7 +3691,7 @@ const FOUNDER_TARGET = 50;
 // immediate reseed so a dead world can restart. This makes "stable
 // population" mean genuine self-sufficiency rather than a hidden
 // firehose of fresh genomes.
-const FOUNDER_RESCUE_FLOOR = 8;
+const FOUNDER_RESCUE_FLOOR = 10;
 const FOUNDER_TRICKLE_INTERVAL_SEC = 15;
 // (legacy note) Founder top-up previously refilled the full deficit
 // (founderTarget minus current live lineages) every step it was short.
