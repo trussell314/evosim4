@@ -1509,17 +1509,44 @@ for (const n of ARCH_COUNTS) {
 }
 renderArchCount();
 
+// Placement: scatter = legacy random spread; clump = a tight cluster
+// in the top 25% of the world (all cells land together).
+let archPlacement: "scatter" | "clump" = "scatter";
+const ARCH_PLACEMENTS = ["scatter", "clump"] as const;
+const gArchPlace = mkArchGroup("placement");
+const archPlaceBtns: HTMLButtonElement[] = [];
+function renderArchPlace(): void {
+  for (let i = 0; i < ARCH_PLACEMENTS.length; i++) {
+    setBtn(archPlaceBtns[i], ARCH_PLACEMENTS[i] === archPlacement, T_TEAL);
+  }
+}
+for (const p of ARCH_PLACEMENTS) {
+  const pb = mkBtn(
+    p,
+    p === "scatter"
+      ? "Spread spawns randomly over the world"
+      : "Spawn a tight cluster near the surface (top 25%)",
+  );
+  pb.addEventListener("click", () => {
+    archPlacement = p;
+    renderArchPlace();
+  });
+  archPlaceBtns.push(pb);
+  gArchPlace.appendChild(pb);
+}
+renderArchPlace();
+
 const gArchDirect = mkArchGroup("direct");
 const gArchSeed = mkArchGroup("seed");
 for (const a of ARCHETYPES) {
   const b = mkBtn(a.label, a.desc);
   b.addEventListener("click", () => {
-    for (let i = 0; i < archSpawnCount; i++) {
-      simWorker.postMessage({
-        type: "spawnSpecies",
-        genome: Array.from(a.genome),
-      });
-    }
+    simWorker.postMessage({
+      type: "spawnSpecies",
+      genome: Array.from(a.genome),
+      count: archSpawnCount,
+      placement: archPlacement,
+    });
     const prev = a.label;
     b.textContent = `spawned ${archSpawnCount} ✓`;
     setBtn(b, true, T_GREEN);

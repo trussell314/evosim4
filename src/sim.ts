@@ -2442,6 +2442,30 @@ function makeCreature(
   return c;
 }
 
+// Placement mode for user-triggered spawns. "scatter" = the legacy
+// reject-sampled spread over the central 80%. "clump" = a tight
+// cluster in the top 25% of the world (near the surface), all cells
+// packed around one shared center so an injected batch lands together.
+export interface SpawnPlacement {
+  mode: "scatter" | "clump";
+  // Shared clump center for a batch; computed once by the caller
+  // (pickClumpCenter) so every cell in one click lands together.
+  center?: { x: number; y: number };
+}
+
+// A random non-terrain-blocked point in the top 25% of the world
+// (just below the thin surface band). The clump-batch anchor.
+export function pickClumpCenter(world: World): { x: number; y: number } {
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const cx = world.width * (0.1 + 0.8 * simRng());
+    const cy = world.height * (0.08 + 0.17 * simRng()); // ~top quarter
+    if (!founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) {
+      return { x: cx, y: cy };
+    }
+  }
+  return { x: world.width * 0.5, y: world.height * 0.15 };
+}
+
 // User-triggered spawn of a specific genome (from the Pinned /
 // Notable species lists). Mirrors spawnFounder's placement +
 // species-tracking bookkeeping, but with a caller-supplied genome and
@@ -2452,24 +2476,59 @@ function makeCreature(
 // fixed molecule seed is the forced viability floor and the local
 // particle scoop is the opportunistic resource use. Returns null if
 // the creature cap is full.
-export function spawnSpeciesInstance(world: World, genome: Uint8Array): Creature | null {
+export function spawnSpeciesInstance(
+  world: World,
+  genome: Uint8Array,
+  placement?: SpawnPlacement,
+): Creature | null {
   if (world.creatures.length >= MAX_CREATURES) return null;
   const z = world.depth * 0.5;
-  const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
-  const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
   let x = world.width * 0.5, y = world.height * 0.5;
-  for (let attempt = 0; attempt < 32; attempt++) {
-    const cx = world.width * (0.1 + 0.8 * simRng());
-    const cy = world.height * (0.1 + 0.8 * simRng());
-    if (founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) continue;
-    let okay = true;
-    for (let k = 0; k < world.creatures.length; k++) {
-      const o = world.creatures[k];
-      const dx = o.x - cx, dy = o.y - cy;
-      if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+  if (placement?.mode === "clump") {
+    // Pack tightly around the shared center; relaxed spacing so a
+    // batch forms a real cluster rather than spreading out.
+    const center = placement.center ?? pickClumpCenter(world);
+    const CLUMP_R = MIN_CREATURE_R * 10;
+    const clumpSpacingSq = (MIN_CREATURE_R * 1.5) ** 2;
+    x = center.x;
+    y = center.y;
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const ang = simRng() * Math.PI * 2;
+      const rad = CLUMP_R * Math.sqrt(simRng());
+      const cx = Math.min(
+        world.width * 0.98,
+        Math.max(world.width * 0.02, center.x + Math.cos(ang) * rad),
+      );
+      const cy = Math.min(
+        world.height * 0.27,
+        Math.max(world.height * 0.06, center.y + Math.sin(ang) * rad),
+      );
+      if (founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) continue;
+      let okay = true;
+      for (let k = 0; k < world.creatures.length; k++) {
+        const o = world.creatures[k];
+        const dx = o.x - cx, dy = o.y - cy;
+        if (dx * dx + dy * dy < clumpSpacingSq) { okay = false; break; }
+      }
+      x = cx; y = cy;
+      if (okay) break;
     }
-    x = cx; y = cy;
-    if (okay) break;
+  } else {
+    const FOUNDER_MIN_SPACING = MIN_CREATURE_R * 6;
+    const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const cx = world.width * (0.1 + 0.8 * simRng());
+      const cy = world.height * (0.1 + 0.8 * simRng());
+      if (founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) continue;
+      let okay = true;
+      for (let k = 0; k < world.creatures.length; k++) {
+        const o = world.creatures[k];
+        const dx = o.x - cx, dy = o.y - cy;
+        if (dx * dx + dy * dy < minSpacingSq) { okay = false; break; }
+      }
+      x = cx; y = cy;
+      if (okay) break;
+    }
   }
   const c = makeCreature(world, x, y, z, genome);
   if (c === null) return null; // unreachable with an explicit genome

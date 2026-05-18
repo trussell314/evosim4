@@ -25,9 +25,11 @@ import {
   takeSnapshot,
   setParticleTarget,
   spawnSpeciesInstance,
+  pickClumpCenter,
   CHEM_BASE_DENSITY,
   type ParticleForceParams,
   type RenderSnapshot,
+  type SpawnPlacement,
   type World,
 } from "./sim";
 
@@ -78,7 +80,12 @@ type WorkerInbound =
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
   | { type: "setDensityChem"; chem: number }
-  | { type: "spawnSpecies"; genome: number[] }
+  | {
+      type: "spawnSpecies";
+      genome: number[];
+      count?: number;
+      placement?: "scatter" | "clump";
+    }
   | { type: "particle-pool-message"; index: number; data: unknown }
   | { type: "particle-pool-error"; index: number; message: string };
 
@@ -154,7 +161,14 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "spawnSpecies":
       if (world && m.genome.length > 0) {
-        spawnSpeciesInstance(world, Uint8Array.from(m.genome));
+        const g = Uint8Array.from(m.genome);
+        const n = Math.max(1, Math.min(100, m.count ?? 1));
+        // One shared clump center per click so the batch lands together.
+        const center =
+          m.placement === "clump" ? pickClumpCenter(world) : undefined;
+        const place: SpawnPlacement | undefined =
+          m.placement === "clump" ? { mode: "clump", center } : undefined;
+        for (let i = 0; i < n; i++) spawnSpeciesInstance(world, g, place);
       }
       break;
     case "toggleProfile":
