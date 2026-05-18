@@ -1139,7 +1139,10 @@ describe("creature: predation (cell eats cell)", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
     fillCellChems(p, 200 * 6);
-    const q = makeCreature({ x: 405, y: 300, energy: 20, genome: inert() });
+    // Soft prey: low membrane => cheap to breach (membrane is armor
+    // via the energy cost now), so the prey's energy gift nets out
+    // positive. A heavily-armored prey would instead be net-negative.
+    const q = makeCreature({ x: 405, y: 300, energy: 20, genome: inert(), molecules: { membrane: 1 } });
     fillCellChems(q, 1 * 6);
     w.creatures.push(p, q);
     step(w, 1 / 60);
@@ -1202,13 +1205,18 @@ describe("creature: predation (cell eats cell)", () => {
     const w = quietWorld();
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: predator() });
     fillCellChems(p, 100 * 6);
-    const q = makeCreature({ x: 405, y: 300, energy: 0, genome: inert() });
+    // Soft prey (low membrane) so the variable cost is dominated by
+    // the prey-mass term, which is what this test exercises; the
+    // membrane-armor term is held near zero.
+    const q = makeCreature({ x: 405, y: 300, energy: 0, genome: inert(), molecules: { membrane: 1 } });
     fillCellChems(q, 30 * 6);
     q.molecules.biopolymer = 30;
     w.creatures.push(p, q);
     const e0 = p.energy;
     step(w, 1 / 60);
-    expect(p.energy).toBeLessThan(e0 - 20);
+    // New physical cost ~= 5 + 0.1*preyMass + 0.5*preyMembrane plus
+    // the predator's own per-tick metabolism; band retuned for that.
+    expect(p.energy).toBeLessThan(e0 - 12);
     expect(p.energy).toBeGreaterThan(e0 - 30);
   });
   it("predation refused when can't afford the prey-mass cost", () => {
@@ -1274,8 +1282,11 @@ describe("creature: engulf (swallow whole, membrane intact)", () => {
   });
   it("engulfed prey still counts toward predator mass (vacuole occupies volume)", () => {
     const w = quietWorld();
+    // Predator must be physically larger than the prey (the engulf
+    // gate is now geometric: radius ratio, no abstract mass score),
+    // so give it enough mineral mass to clear the size threshold.
     const p = makeCreature({ x: 400, y: 300, energy: 100, genome: swallower() });
-    p.molecules.minerals = 200;
+    p.molecules.minerals = 2000;
     const q = makeCreature({ x: 405, y: 300, energy: 50, genome: inert() });
     q.molecules.minerals = 50;
     w.creatures.push(p, q);

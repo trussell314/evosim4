@@ -13,7 +13,6 @@ import {
   newOutputs,
   runTick,
   makeRandomViableGenome,
-  viableGenome,
   genomeSynthMask,
   mutateGenome,
   CATALYST_COUNT,
@@ -1486,10 +1485,24 @@ const INGEST_COOLDOWN_SEC = 0.15;
 const INGEST_REF_R = 4;
 const EXCRETE_MIN_AMOUNT = 0.5;
 
-const PREDATION_MASS_RATIO = 1.5;
+// Predation/engulfment is gated by the cells' PHYSICAL nature, not an
+// abstract mass score. The attacker must be physically larger (you
+// can't wrap or rupture a cell wider than you), and the target's
+// structural membrane is armor (you can't breach a cell whose
+// envelope is sturdier than your own). 1.14 ~= the old 1.5 mass
+// ratio expressed in radius (r proportional to mass^(1/3)), so the
+// ecosystem balance is preserved while the criterion becomes
+// physical. Both "grow bigger" and "build a tougher envelope" thus
+// emerge as independent, genome-driven anti-predation strategies
+// without the engine prescribing predator/prey roles.
+const PREDATION_RADIUS_RATIO = 1.14;
 const PREDATION_COOLDOWN_SEC = 0.2;
 const PREDATION_ENERGY_BASE = 5;
 const PREDATION_ENERGY_PER_MASS = 0.1;
+// Breaching a target's membrane costs energy in proportion to how
+// much structural envelope there is to rupture -- armor makes prey
+// expensive (or, combined with the hard gate above, impossible) to eat.
+const PREDATION_ENERGY_PER_MEMBRANE = 0.5;
 
 // Baseline metabolism: a small flat "cost of being alive" plus a per-mass
 // component. Big cells must keep more chemistry running and starve faster
@@ -5623,17 +5636,152 @@ const DIFFUSABLE_CHEM_IDS: number[] = (() => {
   for (let i = 0; i < CHEMICAL_COUNT; i++) if (CHEMICALS[i].permeability > 0) out.push(i);
   return out;
 })();
-function runOrganelleChemistry(
+// Internal division: an endosymbiont that issues REPRODUCE while
+// inside a host fissions into a second inner cell within the SAME
+// host's contents. This is the mechanism by which a heritable
+// organelle population can establish and be co-inherited (the host
+// partitions contents between daughters at its own fission). There is
+// deliberately NO cap on how many inner cells a host may hold -- the
+// only regulators are the same economic ones a free cell faces (ATP
+// attempt cost, membrane/energy split, and autolysis+digestion of
+// nonviable inners). No world placement, no division animation: the
+// child appears in the vacuole immediately.
+function divideInner(inner: Creature, host: Creature, world: World): void {
+  spendATP(
+    inner,
+    REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(inner),
+    ATP_REPRODUCE,
+  );
+  const parentShare = inner.vmOut.reproduceFraction;
+  const childShare = 1 - parentShare;
+  const childMolecules = emptyMolecules();
+  for (const mk of MOLECULE_IDS) {
+    const give = inner.molecules[mk] * childShare;
+    inner.molecules[mk] -= give;
+    childMolecules[mk] = give;
+  }
+  const energyGift = inner.energy * childShare;
+  inner.energy -= energyGift;
+  const childGenome = mutateGenome(inner.genome, simRng);
+  const child = newCreature(world.creatureStore, {
+    x: host.x, y: host.y, z: host.z,
+    r: MIN_CREATURE_R,
+    density: inner.density,
+    energy: energyGift,
+    senseRange: computeSenseRange(childGenome),
+    thrustAccel: computeThrustAccel(childGenome),
+    genome: childGenome,
+    vm: newVMState(),
+    color: genomeColor(childGenome, world.anchorGenome),
+    bornAt: world.t,
+    speciesKey: genomeKey(childGenome),
+    molecules: childMolecules,
+  });
+  // Proportional split of the independent pools (catalysts + generic
+  // chems), mirroring tryReproduce's asexual path.
+  {
+    const pc = inner.store.catalystCols;
+    const cc = child.store.catalystCols;
+    const pi = inner.idx; const ci = child.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = pc[k][pi];
+      const give = v * childShare;
+      pc[k][pi] = v - give;
+      cc[k][ci] = give;
+    }
+  }
+  {
+    const pc = inner.store.genericChemCols;
+    const cc = child.store.genericChemCols;
+    const pi = inner.idx; const ci = child.idx;
+    for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
+      const v = pc[k][pi];
+      const give = v * childShare;
+      pc[k][pi] = v - give;
+      cc[k][ci] = give;
+    }
+  }
+  child.lineageRoot = inner.lineageRoot;
+  child.parentId = inner.id;
+  child.organelleSynthMask = genomeSynthMask(childGenome);
+  // The child is itself an active endosymbiont in the same vacuole.
+  // Not registered in world.creatures / world.species: organelle
+  // lineages live inside hosts, not in the free population.
+  host.contents.push(child);
+  updateCreatureRadius(inner);
+  updateCreatureRadius(child);
+}
+
+// An engulfed cell stays FULLY ALIVE inside the vacuole: its genome
+// VM, sensing, chemistry, maintenance, somatic drift, and internal
+// division all run every tick exactly as a free cell's would. The
+// only things withheld are world-space actions that are physically
+// meaningless inside a host -- self-propelled movement, ingesting
+// world particles, predating/engulfing the outside population, and
+// bonding to free cells. Everything else is the normal cell pipeline.
+function runInnerCell(
   inner: Creature,
   host: Creature,
+  world: World,
   dt: number,
   dtT: number,
   light: number,
 ): void {
-  // Catabolism is now driven by the biopolymer-digest reaction
-  // (REACTIONS[10]) like every other pathway.
-  runGenericReactions(inner, dtT, light, inner.organelleSynthMask);
+  // The organelle experiences the host's location for all spatial
+  // sensing (light at depth, temperature, chem gradients).
+  inner.x = host.x;
+  inner.y = host.y;
+  inner.z = host.z;
+
+  // Sense -> decide. Same activation + sensor snapshot + VM run a free
+  // cell gets. VM_SENSORS/VM_SELF are shared scratch; we populate and
+  // consume them synchronously here before the host loop reuses them.
+  runActivation(inner, world, dt);
+  populateSensors(inner, world);
+  VM_SELF.energy = inner.energy;
+  {
+    let selfMass = 0;
+    const cols = inner.store.chemCols;
+    const ii = inner.idx;
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) selfMass += cols[k][ii];
+    VM_SELF.mass = selfMass;
+  }
+  VM_SELF.membrane = inner.molecules.membrane;
+  runTick(inner.genome, inner.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, inner.vmOut);
+  spendATP(inner, inner.vmOut.instructions * ENERGY_PER_INSTRUCTION, ATP_VM);
+  if (inner.vmOut.spliceMode !== 0 && inner.vmOut.spliceLength > 0) {
+    applyGenomeSplice(inner, inner.vmOut.spliceMode, inner.vmOut.spliceOffset, inner.vmOut.spliceLength);
+  }
+
+  // Somatic drift -- unguarded, identical policy to free cells: an
+  // organelle lineage may metabolically reduce (or break) and lives
+  // with the consequence.
+  const age = world.t - inner.bornAt;
+  let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+  if (inner.repairTicks > 0) { mutP = 0; inner.repairTicks--; }
+  if (age > 0 && simRng() < mutP) inner.genome = somaticMutateOnce(inner.genome, simRng);
+  inner.senseRange = computeSenseRange(inner.genome);
+  inner.thrustAccel = computeThrustAccel(inner.genome);
+  if (inner.store.chemCols[CHEM_REPAIR][inner.idx] >= REPAIR_ACTIVE_THRESH) {
+    inner.repairTicks = Math.max(inner.repairTicks, REPAIR_WINDOW_TICKS);
+  }
+
+  // Chemistry from the LIVE synth mask the VM just produced (not the
+  // frozen organelleSynthMask), plus catalyst synthesis -- exactly
+  // the free-cell metabolic pipeline.
+  runGenericReactions(inner, dtT, light, inner.vmOut.synthMask);
+  const cm = inner.vmOut.catSynthMask;
+  if (cm) {
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      if (cm & (1 << k)) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
+    }
+  }
   maintenanceDecay(inner, dt);
+  toxify(inner, dt);
+
+  // Internal fission. No engulfed-count cap (per design): economics
+  // alone regulate the organelle population.
+  if (inner.vmOut.reproduce) divideInner(inner, host, world);
 
   // Bidirectional diffusion across the inner/host membrane. Net flow
   // toward the lower concentration -- surplus products leak out,
@@ -6626,8 +6774,13 @@ function updateCreatures(world: World, dt: number): void {
     // a vacuole); their biosynthesis runs on the static synthMask
     // captured at engulfment.
     if (c.contents.length > 0) {
-      for (let ic = 0; ic < c.contents.length; ic++) {
-        runOrganelleChemistry(c.contents[ic], c, dt, dtT, ambientLight);
+      // Snapshot the count so an inner cell that divides this tick has
+      // its new daughter processed starting NEXT tick -- exactly how a
+      // free cell's child waits a tick. This is per-tick scheduling,
+      // not a population cap (there is deliberately no cap).
+      const nInnerThisTick = c.contents.length;
+      for (let ic = 0; ic < nInnerThisTick; ic++) {
+        runInnerCell(c.contents[ic], c, world, dt, dtT, ambientLight);
       }
       // An endosymbiont can now die in place: digested into the host,
       // its own engulfed cells exposed (promoted) to the host.
@@ -6675,17 +6828,14 @@ function updateCreatures(world: World, dt: number): void {
     // can choose to invest energy into stability when it matters.
     if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
     if (age > 0 && simRng() < mutP) {
-      // Same viability guard the stillbirth filter uses at fission:
-      // reject in-place edits that would knock out the cell's last
-      // metabolism op or last REPRODUCE. Without this, an aging cell
-      // with no REPAIR slowly self-sterilizes -- the founder is alive
-      // and well, but its lineage quietly dies because its REPRODUCE
-      // byte was mutated away. Non-critical somatic drift still flows
-      // freely; survival-critical bytes are protected.
-      const candidate = somaticMutateOnce(c.genome, simRng);
-      if (viableGenome(candidate)) {
-        c.genome = candidate;
-      }
+      // No viability guard here. viableGenome only exists to bootstrap
+      // the world with viable founder lineages; it must NOT police
+      // somatic drift or inherited mutation. A somatic edit that
+      // knocks out a required op is a real consequence the cell lives
+      // (and its lineage dies) with -- that selection pressure is the
+      // point, and metabolic reduction toward an obligate/organelle
+      // state must be allowed to emerge rather than be forbidden.
+      c.genome = somaticMutateOnce(c.genome, simRng);
       // Sense range tracks the SENSE_AMP count in the live genome
       // and thrust accel tracks THRUST_AMP. Somatic mutations can
       // add or remove either, so recompute both here.
@@ -6847,7 +6997,6 @@ function updateCreatures(world: World, dt: number): void {
       // grid; range of c.r + 32 covers all plausible neighbor radii.
       const scanRange = c.r + 32;
       if (vmOut.engulf) {
-        const myMass = creatureTotalMass(c);
         forCreaturesNear(c.x, c.y, scanRange, (other) => {
           if (other === c || eaten.has(other)) return;
           const dx = other.x - c.x;
@@ -6856,14 +7005,20 @@ function updateCreatures(world: World, dt: number): void {
           const minD = c.r + other.r;
           if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
           // No engine-side recognition gate: the genome decides
-          // (SENSE_KIN / SENSE_NEIGHBOR_HASH) before issuing ENGULF.
+          // (via its sensors) before issuing ENGULF. Whether it can
+          // physically wrap the target is decided by canBreach. Refresh
+          // the target's radius first so the size comparison reflects
+          // its current mass regardless of loop order (deterministic).
+          updateCreatureRadius(other);
+          if (!canBreach(c, other)) return;
           const otherMass = creatureTotalMass(other);
-          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
-          const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
+          const cost = predationCost(other, otherMass);
           if (c.energy < cost) return;
-          // Engulfed cell becomes an endosymbiont: its VM no longer
-          // runs, but its chemistry continues each tick driven by a
-          // static synthMask derived from its genome's SYNTH_* op set.
+          // Engulfed cell becomes an endosymbiont. It stays FULLY
+          // ALIVE inside the vacuole: its genome VM, chemistry,
+          // maintenance, somatic drift, and internal division all run
+          // each tick (see runOrganelleChemistry). organelleSynthMask
+          // is kept as a fallback only.
           other.organelleSynthMask = genomeSynthMask(other.genome);
           c.contents.push(other);
           spendATP(c, cost, ATP_ENGULF);
@@ -6874,7 +7029,6 @@ function updateCreatures(world: World, dt: number): void {
         });
       }
       if (!ingested && vmOut.predate) {
-        const myMass = creatureTotalMass(c);
         forCreaturesNear(c.x, c.y, scanRange, (other) => {
           if (other === c || eaten.has(other)) return;
           const dx = other.x - c.x;
@@ -6882,9 +7036,10 @@ function updateCreatures(world: World, dt: number): void {
           const dz = other.z - c.z;
           const minD = c.r + other.r;
           if (dx * dx + dy * dy + dz * dz >= minD * minD) return;
+          updateCreatureRadius(other);
+          if (!canBreach(c, other)) return;
           const otherMass = creatureTotalMass(other);
-          if (myMass < PREDATION_MASS_RATIO * Math.max(0.0001, otherMass)) return;
-          const cost = PREDATION_ENERGY_BASE + PREDATION_ENERGY_PER_MASS * otherMass;
+          const cost = predationCost(other, otherMass);
           if (c.energy < cost) return;
           // Predator absorbs the prey's full chem pool. Each chem
           // transfers slot-for-slot; ATP separately.
@@ -7420,6 +7575,27 @@ function populateSensors(c: Creature, _world: World): void {
   const i = c.idx;
   const cc = VM_SENSORS.chemConc;
   for (let k = 0; k < CHEMICAL_COUNT; k++) cc[k] = cols[k][i];
+}
+
+// Physical predation gate, shared by ENGULF and PREDATE. The hard
+// gate is geometric: the attacker must be physically wider than the
+// target -- you cannot wrap or rupture a cell broader than you. The
+// target's structural membrane is the OTHER physical defense, but it
+// acts as armor through the energy economics (predationCost scales
+// with target membrane: a thick envelope is expensive, and beyond
+// the attacker's ATP simply impossible, to breach). Membrane is
+// deliberately NOT a second hard inequality here -- doing so keyed
+// success on a sub-tick maintenance-decay ordering artifact and made
+// equal-membrane cells mutually un-eatable. No mass score, no
+// recognition table: predator/prey is whatever the genomes' physical
+// investments (size vs. envelope) make it, emergently.
+function canBreach(attacker: Creature, target: Creature): boolean {
+  return attacker.r >= PREDATION_RADIUS_RATIO * target.r;
+}
+function predationCost(target: Creature, targetMass: number): number {
+  return PREDATION_ENERGY_BASE
+    + PREDATION_ENERGY_PER_MASS * targetMass
+    + PREDATION_ENERGY_PER_MEMBRANE * target.molecules.membrane;
 }
 
 function creatureTotalMass(c: Creature): number {
