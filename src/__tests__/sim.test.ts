@@ -34,6 +34,8 @@ import {
   deserializeRxnStats,
   reactionCatalog,
   NAMED_REACTION_COUNT,
+  chargeGenomeReplication,
+  GENOME_MASS_PER_BYTE,
 } from "../sim";
 import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
 
@@ -2385,6 +2387,51 @@ describe("reaction / ATP accounting", () => {
     const before = sum(rs.curRxn);
     step(w, 1 / 60);
     expect(sum(rs.curRxn)).toBeGreaterThan(before);
+  });
+});
+
+describe("genome replication tax", () => {
+  const totalMol = (c: Creature) => {
+    let m = 0;
+    for (const k of MOLECULE_IDS) m += c.molecules[k];
+    return m;
+  };
+
+  it("converts sensor materials to waste, proportional to genome length, mass-conserving", () => {
+    const c = makeCreature({
+      molecules: { minerals: 100, fattyAcid: 100, glucose: 100, biopolymer: 100, o2: 100, co2: 100, waste: 0 },
+    });
+    const before = totalMol(c);
+    const wasteBefore = c.molecules.waste;
+    const genome = new Uint8Array(600); // 0..5 cycle covers all 6 bins
+    for (let i = 0; i < genome.length; i++) genome[i] = i % 6;
+    chargeGenomeReplication(c, genome);
+    // Mass conserved (useful -> waste, nothing destroyed).
+    expect(totalMol(c)).toBeCloseTo(before, 4);
+    // All 600 bytes funded: waste up by 600 * GENOME_MASS_PER_BYTE.
+    expect(c.molecules.waste - wasteBefore).toBeCloseTo(600 * GENOME_MASS_PER_BYTE, 4);
+  });
+
+  it("longer genome costs strictly more than a shorter one", () => {
+    const mk = () => makeCreature({
+      molecules: { minerals: 100, fattyAcid: 100, glucose: 100, biopolymer: 100, o2: 100, co2: 100, waste: 0 },
+    });
+    const small = mk();
+    const big = mk();
+    const g = (n: number) => { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = i % 6; return a; };
+    chargeGenomeReplication(small, g(100));
+    chargeGenomeReplication(big, g(2000));
+    expect(big.molecules.waste).toBeGreaterThan(small.molecules.waste);
+  });
+
+  it("underfunding is not fatal and never goes negative or loses mass", () => {
+    const c = makeCreature({
+      molecules: { minerals: 1, fattyAcid: 1, glucose: 1, biopolymer: 1, o2: 1, co2: 1, waste: 0 },
+    });
+    const before = totalMol(c);
+    chargeGenomeReplication(c, new Uint8Array(5000).fill(0));
+    expect(totalMol(c)).toBeCloseTo(before, 4);
+    for (const k of MOLECULE_IDS) expect(c.molecules[k]).toBeGreaterThanOrEqual(0);
   });
 });
 

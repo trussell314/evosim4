@@ -15,6 +15,7 @@ import {
   makeRandomViableGenome,
   genomeSynthMask,
   mutateGenome,
+  genomeMaterialCost,
   CATALYST_COUNT,
   N_REACTIONS,
   OP,
@@ -5738,6 +5739,10 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(inner),
     ATP_REPRODUCE,
   );
+  const childGenome = mutateGenome(inner.genome, simRng);
+  // Same genome-replication material tax a free cell pays, charged
+  // before the cytoplasm split.
+  chargeGenomeReplication(inner, childGenome);
   const parentShare = inner.vmOut.reproduceFraction;
   const childShare = 1 - parentShare;
   const childMolecules = emptyMolecules();
@@ -5748,7 +5753,6 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
   }
   const energyGift = inner.energy * childShare;
   inner.energy -= energyGift;
-  const childGenome = mutateGenome(inner.genome, simRng);
   const child = newCreature(world.creatureStore, {
     x: host.x, y: host.y, z: host.z,
     r: MIN_CREATURE_R,
@@ -7582,6 +7586,38 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   }
 }
 
+// Genome replication tax. Copying the child's genome consumes raw
+// building blocks proportional to its length: genomeMaterialCost
+// distributes the demand across the 6 SENSOR_CHEMS by codon (byte%6).
+// Matter is conserved -- whatever the parent can cover is converted to
+// inert waste (useful materials -> waste), so this is a real metabolic
+// cost that scales with genome size and selects against unbounded
+// bloat now that there is no hard length cap. Underfunding is not
+// fatal: the parent pays only what it holds (no stillbirth filter,
+// matching the rest of fission). Transcription/expression are
+// deliberately untouched -- this is purely the replication cost paid
+// once at division, on free-cell fission and endosymbiont internal
+// division alike. GENOME_MASS_PER_BYTE is the tuning knob: a 24..100b
+// founder pays ~0.5..2 mass (negligible), a multi-thousand-byte
+// runaway pays tens-to-hundreds (crippling).
+export const GENOME_MASS_PER_BYTE = 0.02;
+export function chargeGenomeReplication(parent: Creature, childGenome: Uint8Array): void {
+  const cost = genomeMaterialCost(childGenome, GENOME_MASS_PER_BYTE);
+  let consumed = 0;
+  for (let j = 0; j < SENSOR_CHEMS.length; j++) {
+    const key = NAMED_CHEMICALS[SENSOR_CHEMS[j]];
+    const have = parent.molecules[key];
+    const take = Math.min(have, cost[j]);
+    if (take > 0) {
+      parent.molecules[key] = have - take;
+      consumed += take;
+    }
+  }
+  if (consumed > 0) {
+    parent.molecules[NAMED_CHEMICALS[CHEM_WASTE]] += consumed;
+  }
+}
+
 function tryReproduce(parent: Creature, world: World): void {
   // Can't start a new division while one is already in flight.
   if (parent.division) return;
@@ -7604,6 +7640,10 @@ function tryReproduce(parent: Creature, world: World): void {
     parentGenome = crossoverGenomes(parent.genome, partner.genome);
   }
   const childGenome = mutateGenome(parentGenome, simRng);
+  // Pay the genome-replication material tax before partitioning the
+  // cytoplasm, so the child's proportional share is taken from what
+  // the parent has left after copying the DNA.
+  chargeGenomeReplication(parent, childGenome);
   // No engine-side stillbirth filter. If the mutation knocks out a
   // required op, that's the cell's problem -- the resulting daughter
   // will autolyze through the normal death pass (which conserves
