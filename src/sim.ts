@@ -8893,6 +8893,10 @@ export interface InnerCreatureSnapshot {
   id: number;
   color: string;
   r: number;
+  // Engulfed cells can themselves hold engulfed cells (the engine
+  // nests arbitrarily). Present only when this inner cell has its own
+  // vacuole contents, so the common flat case stays allocation-free.
+  contents?: InnerCreatureSnapshot[];
 }
 
 export interface CreatureSnapshot {
@@ -8988,7 +8992,9 @@ export interface RenderSnapshot extends WorldEnv {
 }
 
 function snapshotInner(c: Creature): InnerCreatureSnapshot {
-  return { id: c.id, color: c.color, r: c.r };
+  return c.contents.length > 0
+    ? { id: c.id, color: c.color, r: c.r, contents: c.contents.map(snapshotInner) }
+    : { id: c.id, color: c.color, r: c.r };
 }
 
 function snapshotCreatureLive(c: Creature): CreatureSnapshot {

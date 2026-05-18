@@ -86,6 +86,7 @@ import {
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
+  type InnerCreatureSnapshot,
   type SpeciesSnapshot,
 } from "./sim";
 import { disassemble, walkGenome, OP, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
@@ -3039,22 +3040,36 @@ function drawCreature(c: CreatureSnapshot, selected: boolean, kin = false): void
   // center. Their barrier is intact, so they're drawn with their own color
   // and a thin outline -- visually distinct from absorbed-mass coloring.
   if (c.contents.length > 0) {
-    const innerR = Math.min(c.r * 0.45, 6);
-    for (let i = 0; i < c.contents.length; i++) {
-      const angle = (i / Math.max(1, c.contents.length)) * Math.PI * 2;
-      const offR = c.contents.length === 1 ? 0 : c.r * 0.35;
-      const ix = c.x + Math.cos(angle) * offR;
-      const iy = c.y + Math.sin(angle) * offR;
-      ctx.fillStyle = c.contents[i].color;
-      ctx.beginPath();
-      ctx.arc(ix, iy, innerR, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.55)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
+    drawVacuole(c.contents, c.x, c.y, c.r, 0);
   }
 
+}
+
+// Draw a vacuole's engulfed cells inside a parent circle, recursing
+// into engulfed-within-engulfed nests. Each level shrinks; bottoms out
+// when the dots get sub-pixel or the nesting is implausibly deep, so a
+// pathological chain can't blow the frame budget.
+function drawVacuole(
+  list: InnerCreatureSnapshot[], cx: number, cy: number,
+  parentR: number, depth: number,
+): void {
+  const innerR = Math.min(parentR * 0.45, 6);
+  if (innerR < 0.75 || depth > 4) return;
+  for (let i = 0; i < list.length; i++) {
+    const angle = (i / Math.max(1, list.length)) * Math.PI * 2;
+    const offR = list.length === 1 ? 0 : parentR * 0.35;
+    const ix = cx + Math.cos(angle) * offR;
+    const iy = cy + Math.sin(angle) * offR;
+    ctx.fillStyle = list[i].color;
+    ctx.beginPath();
+    ctx.arc(ix, iy, innerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    const sub = list[i].contents;
+    if (sub && sub.length > 0) drawVacuole(sub, ix, iy, innerR, depth + 1);
+  }
 }
 
 // Trace a wobbly closed path around (cx, cy). Caller is responsible for
