@@ -124,19 +124,8 @@ hudBar.style.cssText =
 // Live stats shown on the strip. Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
 hudStats.style.cssText = HUD_FONT;
-hudStats.textContent = "fps=--  sim=--x  t=0s";
+hudStats.textContent = "pop/engulfed=--  species/engulfed=--  lineages/extinct=--";
 hudBar.appendChild(hudStats);
-// Per-frame render/sim timing, inline beside the stats so the budget
-// is glanceable while iterating.
-const hudTimings = document.createElement("span");
-// Right-aligned on the same flex row as the stats: margin-left:auto
-// pushes it to the far edge so the whole HUD is a single line when
-// the viewport is wide enough, and only wraps (still right-aligned)
-// on narrow screens.
-hudTimings.style.cssText =
-  "opacity:0.8;margin-left:auto;text-align:right;" + HUD_FONT;
-hudTimings.textContent = "r=--ms  s=--ms";
-hudBar.appendChild(hudTimings);
 // Stall + error indicator. Hidden by default; shown only when
 // something useful is going on (sim paused / world empty / threw).
 const hudDiag = document.createElement("div");
@@ -1313,13 +1302,14 @@ leftHeader.addEventListener("click", () => {
 // invisible because the container set no color.
 // ---------------------------------------------------------------------
 let controlsBarH = 40;        // measured each layout
+let bottomHudH = 0;           // measured each layout (bottom status strip)
 // Measured height of the fixed top status strip. The world fit
 // reserves it at the top (mirroring controlsBarH at the bottom) so
 // the world is never drawn behind the HUD -- the bar sits in its own
 // band, outside the world drawing area.
 let hudBarH = 0;
 function topReserveH(): number { return hudBarH; }
-let controlsCollapsed = false;
+let controlsCollapsed = true;
 const CBTN =
   "padding:4px 9px;border:1px solid #1a3340;border-radius:4px;" +
   "background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;white-space:nowrap;" +
@@ -1344,6 +1334,22 @@ ctrlBar.style.cssText =
   "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
   HUD_FONT;
 root.appendChild(ctrlBar);
+
+// One-line status strip docked between the world canvas and the
+// controls bar. Holds the timing/clock/build readouts moved off the
+// top HUD (which now carries only population counts). Positioned and
+// height-measured in positionWorldButtons(); its height is reserved
+// out of the world fit via bottomReserveH() so it never overlaps the
+// canvas. white-space:nowrap keeps it a single line; it sits above
+// ctrlBar at bottom = controlsBarH.
+const bottomHud = document.createElement("div");
+bottomHud.style.cssText =
+  "position:fixed;z-index:10;display:flex;align-items:center;gap:16px;" +
+  "padding:4px 8px;box-sizing:border-box;white-space:nowrap;overflow:hidden;" +
+  "text-overflow:ellipsis;color:#9ee;background:rgba(2,12,18,0.96);" +
+  "border-top:1px solid #1a3340;" + HUD_FONT;
+bottomHud.textContent = "t=0s  fps=--  sim=--x  r=--ms  s=--ms  build=--";
+root.appendChild(bottomHud);
 
 // Collapse handle (always visible, far left of the bar).
 const ctrlHandle = document.createElement("button");
@@ -1553,6 +1559,12 @@ function positionWorldButtons(): void {
   ctrlBar.style.left = `${leftPanelWidth()}px`;
   ctrlBar.style.right = `${panelW}px`;
   controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
+  // Bottom status strip: span the same gutter as ctrlBar, docked
+  // directly above it (bottom = measured controls height).
+  bottomHud.style.left = `${leftPanelWidth()}px`;
+  bottomHud.style.right = `${panelW}px`;
+  bottomHud.style.bottom = `${controlsBarH}px`;
+  bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${leftPanelWidth() + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
@@ -1567,7 +1579,7 @@ new ResizeObserver(() => {
   if (hudBarH !== prev) resize();
 }).observe(hud);
 function bottomReserveH(): number {
-  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH;
+  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + bottomHudH;
 }
 
 
@@ -3051,15 +3063,19 @@ function updateInspector(): void {
     liveLineages.add(c.lineageRoot);
     liveSpecies.add(c.speciesKey);
   }
+  // Top HUD: population-related counts only.
   hudStats.textContent =
-    `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(snapshot.t)}  ` +
     `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
     `species/engulfed=${liveSpecies.size}/${snapshot.engulfedOnlySpeciesCount}  ` +
-    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}  ` +
+    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}`;
+  // Bottom HUD: clock / perf / build, fixed order.
+  bottomHud.textContent =
+    `t=${formatAge(snapshot.t)}  ` +
+    `fps=${perfFps.toFixed(0)}  ` +
+    `sim=${perfSimRate.toFixed(1)}x  ` +
+    `r=${perfRenderMs.toFixed(1)}ms  ` +
+    `s=${perfSimMs.toFixed(1)}ms  ` +
     `build=${__BUILD_TIME__}`;
-  hudTimings.textContent =
-    `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // No auto-fallback: if nothing is selected the inspector shows the
   // population summary and the pin control hides. Selection only
   // changes when the user clicks a cell (or it's cleared on death by
