@@ -4,6 +4,32 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **Death-triggered endosymbiotic gene transfer (EGT).** Today an
+  engulfed cell that dies (`innerIsDead`) is digested via
+  `digestInnerIntoHost` — its *chems* move to the host but none of its
+  *capability*. Add a probabilistic, no-permission transfer on inner
+  death: a chance the host absorbs a fragment of the dead symbiont's
+  genome (substrate-pure: raw bytes spliced into the host genome) or a
+  built capability. Make it a statistical ratchet, not a rule —
+  per-death probability scaled by how many symbionts of that lineage
+  the host carries; reverse transfer allowed but vanishingly rare.
+  This is what lets host takeover of the interface *emerge* via
+  selection on the fused collective rather than be scripted. Touch
+  points: the contents rebuild pass in `updateCreatures`,
+  `digestInnerIntoHost`. See `ENDOSYMBIOSIS_NOTES.md` §5.
+
+- **Dual / contested host↔organelle membrane (model C).** The
+  organelle currently solely controls active transport across its
+  outer membrane. Add a host-side generic transport bias across a
+  specific vacuole (pick chem, push/pull ±, ATP-costed) that composes
+  additively with the organelle's active transport + passive
+  diffusion. No "feed organelle" verb and no organelle sensor — the
+  host must still act on cytoplasmic footprints, keeping recognition
+  emergent. Enables addressed delivery, parasite/mutualist/
+  domestication dynamics, and (with EGT above) control migrating
+  hostward over generations. Touch points: `runInnerCell`, a new
+  host-side transport step. See `ENDOSYMBIOSIS_NOTES.md` §2 / §4.
+
 - **Temperature diffusion / thermal inertia.** Region temperature is
   rebuilt every tick from a model (baseline + drifting sine patch +
   depth gradient + a surface/wave term) with no inertia, so the
