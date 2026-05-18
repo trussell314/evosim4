@@ -39,6 +39,9 @@ import {
   serializeWorld,
   applySavedWorld,
   eDnaUptakePass,
+  runTransportReactions,
+  TRANSPORT_SLOT_BASE,
+  TRANSPORT_CHEM_IDS,
 } from "../sim";
 import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
@@ -2672,5 +2675,59 @@ describe("EGT emergent ratchet (Substrate A, sub-commit 5)", () => {
     const rare = countIntegrations(4000);      // buffer rarely available
     expect(frequent).toBeGreaterThan(rare);
     expect(rare).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("standing transporters (Substrate B, sub-commit 1: cell<->world)", () => {
+  const GLU_N = TRANSPORT_CHEM_IDS.indexOf(2); // CHEM_GLU
+  const SLOT = TRANSPORT_SLOT_BASE + GLU_N;
+  const K = 2; // CHEM_GLU id
+
+  function setAmbient(w: World, chem: number, v: number): void {
+    for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) w.ambient[b + chem] = v;
+  }
+  function ambTotal(w: World, chem: number): number {
+    let s = 0;
+    for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) s += w.ambient[b + chem];
+    return s;
+  }
+
+  it("expressing the transporter catalyst imports down-gradient, mass-exact", () => {
+    const w = quietWorld();
+    const c = makeCreature();
+    w.creatures.push(c);
+    const s = c.store, i = c.idx;
+    s.chemCols[K][i] = 0;
+    s.catalystCols[SLOT][i] = 10; // built the glu transporter
+    setAmbient(w, K, 50);
+    const before = s.chemCols[K][i] + ambTotal(w, K);
+    runTransportReactions(c, w, 1);
+    expect(s.chemCols[K][i]).toBeGreaterThan(0);          // imported
+    const after = s.chemCols[K][i] + ambTotal(w, K);
+    expect(after).toBeCloseTo(before, 6);                 // mass-exact
+  });
+
+  it("no transporter catalyst -> no flux", () => {
+    const w = quietWorld();
+    const c = makeCreature();
+    w.creatures.push(c);
+    const s = c.store, i = c.idx;
+    s.chemCols[K][i] = 0;
+    s.catalystCols[SLOT][i] = 0; // no transporter protein
+    setAmbient(w, K, 50);
+    runTransportReactions(c, w, 1);
+    expect(s.chemCols[K][i]).toBe(0);
+  });
+
+  it("runs the gradient the other way (export) when the cell is richer", () => {
+    const w = quietWorld();
+    const c = makeCreature();
+    w.creatures.push(c);
+    const s = c.store, i = c.idx;
+    s.chemCols[K][i] = 80;
+    s.catalystCols[SLOT][i] = 10;
+    setAmbient(w, K, 0);
+    runTransportReactions(c, w, 1);
+    expect(s.chemCols[K][i]).toBeLessThan(80);            // exported
   });
 });

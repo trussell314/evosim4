@@ -83,7 +83,11 @@ export {
   type ChemPhase, type ChemRole, type ChemicalDef,
   CHEM_BASE_DENSITY, CHEM_COLORS, CHEM_NAMES, CHEM_MOLAR_MASS, CHEM_IDS,
 };
-import { REACTIONS, NAMED_REACTION_COUNT } from "./sim/reactions";
+import {
+  REACTIONS, NAMED_REACTION_COUNT,
+  TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS,
+} from "./sim/reactions";
+export { TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS };
 export { NAMED_REACTION_COUNT };
 import {
   SENSOR_CHEM_LABELS, CHEM_SHORT_LABELS, chemName,
@@ -629,6 +633,9 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
   const KM = KM_DEFAULT;
   for (let slot = 0; slot < N_REACTIONS; slot++) {
     const rxn = REACTIONS[slot];
+    // Transport-flavored slots are not intra-pool reactions; the
+    // cross-compartment applier (runTransportReactions) handles them.
+    if (rxn.transport !== undefined) continue;
     if (rxn.gateMask !== 0 && (synthMask & rxn.gateMask) === 0) continue;
     const pool = s.catalystCols[slot][i];
     if (rxn.uncatRate <= 0 && pool <= 0) continue;
@@ -723,6 +730,49 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
     recordRxn(slot, RX_LOC_CELL, (pool > 0 && rxn.vmax > 0) ? 1 : 0);
     if (atpD < 0) recordAtp(ATP_RXN_ENDO, -atpD * amt, 0);
     else if (atpD > 0) recordAtp(ATP_RXN_EXO, 0, atpD * amt);
+  }
+}
+
+// Standing transporters across the cell's OUTER membrane (cell<->world).
+// A transporter is the existing enzyme machinery: catalystCols[slot]
+// (built by SYNTH CAT param=slot) facilitates movement of one chem
+// across the membrane, MM-saturated on the source side and scaled by
+// the catalyst pool + cell surface -- the same kinetic shape as
+// metabolism, just cross-compartment. v1 is facilitated (down-gradient,
+// no ATP); the Reaction.atpDelta hook is reserved for future active
+// pumping. Mass-exact (chem moves 1:1 between the cell pool and the
+// region ambient field, which is in the mass ledger -- same surface
+// diffuseAmbient uses) and deterministic (no simRng). The vacuolar
+// (host<->organelle) membrane is wired in a following sub-commit.
+export function runTransportReactions(c: Creature, world: World, dt: number): void {
+  const s = c.store; const i = c.idx;
+  const cols = s.chemCols;
+  const cats = s.catalystCols;
+  const ambient = world.ambient;
+  const ab = ambientBaseAt(world, s.x[i], s.y[i]);
+  const surface = s.r[i] / MIN_CREATURE_R;
+  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+    const slot = TRANSPORT_SLOT_BASE + n;
+    const pool = cats[slot][i];
+    if (pool <= 0) continue; // no transporter protein -> no facilitated flux
+    const k = TRANSPORT_CHEM_IDS[n];
+    const ak = ab + k;
+    const inside = cols[k][i];
+    const outside = ambient[ak];
+    const gap = outside - inside; // >0 net import, <0 net export
+    if (gap === 0) continue;
+    // MM-saturate on the SOURCE concentration so a carrier saturates
+    // like a real transporter instead of growing unbounded with the
+    // gradient.
+    const src = gap > 0 ? outside : inside;
+    const sat = src / (src + KM_DEFAULT);
+    let flow = REACTIONS[slot].vmax * (pool / CAT_REF) * surface * sat * gap * dt;
+    // Strict mass conservation: never move more than the source holds.
+    if (flow > 0) { if (flow > outside) flow = outside; }
+    else { if (-flow > inside) flow = -inside; }
+    if (flow === 0) continue;
+    cols[k][i] += flow;
+    ambient[ak] -= flow;
   }
 }
 
@@ -5032,6 +5082,11 @@ function updateCreatures(world: World, dt: number): void {
     // BIO / CHL / ENZ / RIBO ops still gate what gets built.
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
     runGenericReactions(c, dtT, ambientLight, vmOut.synthMask);
+    // Standing transporters across the outer membrane (cell<->world).
+    // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a
+    // transport-flavored reaction slot; selective uptake/excretion of
+    // a chem now emerges from expressing that catalyst.
+    runTransportReactions(c, world, dtT);
 
     // Generic catalyst synthesis. SYNTH_CAT <id> sets a bit per slot;
     // each catalyst built is its own protein.

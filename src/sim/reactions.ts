@@ -12,6 +12,7 @@ import { CHEMICAL_COUNT } from "./chem-ids";
 import {
   CHEM_GLU, CHEM_O2, CHEM_CO2, CHEM_FA, CHEM_AA, CHEM_MIN, CHEM_CHL,
   CHEM_ENZ, CHEM_MRNA, CHEM_MEMBRANE, CHEM_BIOPOLYMER, CHEM_WASTE,
+  CHEM_ADP,
   CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG,
   CHEM_PHOTORECEPTOR_SURFACE, CHEM_CHEMORECEPTOR_BIOPOLYMER,
   CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
@@ -63,6 +64,15 @@ export interface Reaction {
   // biopolymer in its pool, but can't extract glu/aa/fa from it
   // without building enzymes.
   enzScale: boolean;
+  // Transport reaction: when set, this slot does NOT run as an intra-
+  // pool reaction. Instead its catalyst (catalystCols[slot], built by
+  // SYNTH CAT param=slot -- a transporter IS an enzyme) facilitates
+  // movement of this one chem across a membrane the cell owns (outer:
+  // cell<->world; vacuolar: host<->organelle). Handled by the cross-
+  // compartment applier (runTransportReactions), skipped by
+  // runGenericReactions. v1 is facilitated (down-gradient, atpDelta=0);
+  // the atpDelta field is reserved for future active/uphill pumping.
+  transport?: number;
 }
 
 function buildReactionTable(): Reaction[] {
@@ -153,7 +163,41 @@ function buildReactionTable(): Reaction[] {
   // these specific pathways. Subsequent slots remain the generated
   // generics.
   installNamedReactions(out);
+  installTransporters(out);
   return out;
+}
+
+// Standing transporters (Substrate B): the core small-molecule
+// metabolites. A transporter is the existing "enzyme = SYNTH'd
+// catalyst" machinery -- SYNTH CAT param=slot builds the transporter
+// protein for that chem. We REPURPOSE the last band of procedurally-
+// generated generic slots (exactly as installNamedReactions overwrites
+// the head): buildReactionTable's seeded rng has already drawn for all
+// N_REACTIONS slots, so draw order is byte-identical and determinism
+// is preserved; only the (deliberate) loss of those random generics +
+// the new transport behavior moves the golden hash. No table-size /
+// catalyst-count / save-schema change.
+export const TRANSPORT_CHEM_IDS: readonly number[] = [
+  CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA,
+  CHEM_FA, CHEM_MIN, CHEM_ADP, CHEM_WASTE,
+];
+export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_CHEM_IDS.length;
+// Facilitated permeability scaler at full catalyst pool (analogous to
+// a generic reaction's vmax). Net flux also scales with the cross-
+// membrane concentration gap, the catalyst pool, and cell surface.
+const TRANSPORT_VMAX = 0.6;
+function installTransporters(out: Reaction[]): void {
+  const empty = new Uint8Array(0);
+  const emptyF = new Float32Array(0);
+  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+    out[TRANSPORT_SLOT_BASE + n] = {
+      sChem: empty, sCount: emptyF, pChem: empty, pCount: emptyF,
+      atpDelta: 0, lightIn: 0, vmax: TRANSPORT_VMAX, uncatRate: 0,
+      gateMask: 0, surfaceScale: false, atpFloor: false,
+      mrnaScale: false, chlScale: false, enzScale: false,
+      transport: TRANSPORT_CHEM_IDS[n],
+    };
+  }
 }
 
 export const REACTIONS: Reaction[] = buildReactionTable();
