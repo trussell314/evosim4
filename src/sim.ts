@@ -1787,6 +1787,11 @@ export interface ReactionInfo {
   label: string;
   consumes: ReactionTerm[];
   produces: ReactionTerm[];
+  // Signed ATP delta per reaction (>0 exergonic, <0 endergonic, 0 =
+  // not an ATP reaction). Derived uniformly from the ADP term so it's
+  // exact for the 256 table reactions and correct for the synthetic
+  // accounting entries.
+  atpDelta: number;
   // true = an external/spawn input (founder biogenesis), excluded
   // from the production/consumption time-series graph.
   external?: boolean;
@@ -1816,8 +1821,13 @@ export function reactionCatalog(): ReactionInfo[] {
     const named = slot < NAMED_REACTION_COUNT;
     const label = (named ? reactionName(slot) + ": " : `gen#${slot}: `) +
       rxnTermStr(consumes) + " → " + rxnTermStr(produces);
-    out.push({ id: slot, label, consumes, produces });
+    out.push({ id: slot, label, consumes, produces, atpDelta: r.atpDelta });
   }
+  const adpDelta = (cons: ReactionTerm[], prod: ReactionTerm[]): number => {
+    for (const t of cons) if (t.chem === CHEM_ADP) return t.coef;   // exergonic
+    for (const t of prod) if (t.chem === CHEM_ADP) return -t.coef;  // endergonic
+    return 0;
+  };
   const RECEPTORS = [
     CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
     CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
@@ -1825,7 +1835,10 @@ export function reactionCatalog(): ReactionInfo[] {
   ];
   const aaMin: ReactionTerm[] = [{ chem: CHEM_AA, coef: 0.5 }, { chem: CHEM_MIN, coef: 0.5 }];
   const syn = (id: number, name: string, cons: ReactionTerm[], prod: ReactionTerm[]): void => {
-    out.push({ id, label: `${name}: ${rxnTermStr(cons)} → ${rxnTermStr(prod)}`, consumes: cons, produces: prod });
+    out.push({
+      id, label: `${name}: ${rxnTermStr(cons)} → ${rxnTermStr(prod)}`,
+      consumes: cons, produces: prod, atpDelta: adpDelta(cons, prod),
+    });
   };
   syn(RX_MAINT_MEMBRANE, "membrane hydrolysis", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_FA, coef: 0.65 }, { chem: CHEM_AA, coef: 0.35 }]);
   syn(RX_MAINT_ENZ, "maint enzyme", [{ chem: CHEM_ENZ, coef: 1 }], aaMin);
