@@ -2899,15 +2899,15 @@ function formatAge(sec: number): string {
 // Best-effort plain-English summary of a cell, inferred from genome ops it
 function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
-  // fps + sim/wall ratio + elapsed sim time + pop + extinction count +
-  // build time there. pop= shows cells / living species / lineages:
-  //   - cells: free live cells, then "(N)" = engulfed cells living
-  //     inside hosts (recursive through nested vacuoles).
-  //   - species: distinct genomes among free cells, then "(N)" =
-  //     species present ONLY as engulfed members (on no free cell).
-  //   - lineages: distinct founding lineages still alive -- count of
-  //     distinct lineageRoot ids (cells sharing a founder collapse to
-  //     one), so this is "how many separate founder lineages persist".
+  // fps + sim/wall ratio + elapsed sim time + three paired readings +
+  // build time. The three readings:
+  //   - pop/engulfed:     free live cells / engulfed cells inside
+  //                       hosts (recursive through nested vacuoles).
+  //   - species/engulfed: distinct genomes among free cells /
+  //                       species present ONLY as engulfed members.
+  //   - lineages/extinct: distinct founding lineages still alive
+  //                       (distinct lineageRoot ids) / lifetime
+  //                       extinction count.
   // world.species.size would over-count -- it includes extinct
   // species still in the prune grace window.
   const liveLineages = new Set<number>();
@@ -2918,9 +2918,11 @@ function updateInspector(): void {
   }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length} (${snapshot.engulfedCount})/` +
-    `${liveSpecies.size} (${snapshot.engulfedOnlySpeciesCount})/${liveLineages.size}  ` +
-    `extinct=${snapshot.extinctionCount}  build=${__BUILD_TIME__}`;
+    `t=${formatAge(snapshot.t)}  ` +
+    `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
+    `species/engulfed=${liveSpecies.size}/${snapshot.engulfedOnlySpeciesCount}  ` +
+    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}  ` +
+    `build=${__BUILD_TIME__}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // No auto-fallback: if nothing is selected the inspector shows the
