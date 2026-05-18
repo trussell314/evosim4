@@ -75,6 +75,46 @@ Living list of deferred work. Newest/explicit asks at top.
   (`scripts/headless.ts` writes the save JSON) load in one click
   instead of hand-setting the `evosim4:save` localStorage key.
 
+## Engine decomposition (sim.ts split) — paused
+
+Behavior-preserving split of the `sim.ts` monolith. **Paused at a
+clean, fully-green checkpoint** (golden hash, determinism
+byte-identical, mass conservation, `madge --circular` all green;
+pushed to `claude/develop`).
+
+- **Done.** `sim.ts` 9559 → 7444 lines; 12 cycle-free modules under
+  `src/sim/`: `genome-id`, `rxn-ids`, `rxn-stats`, `chem-ids`,
+  `chemistry`, `reactions`, `labels`, `profile`, and the keystone
+  `core` (SoA `ParticleStore`/`CreatureStore`, the
+  `Particle`/`Creature`/`MoleculesView` value classes, worker
+  shared-buffer layouts, and the `World`/`Species`/`SimStats`/
+  `Obstacle`/`FadingGhost` type graph). Two back-edges into `sim.ts`
+  were inverted to keep the dependency one-directional:
+  `setParticleSlotReusedHook` (collision-asleep clear, mirrors the
+  force/collision dispatcher pattern) and `resetCreatureIdCounter()`
+  (imported bindings are read-only).
+
+- **Blocked on one decision.** Every remaining stage has a back-edge
+  into `sim.ts`'s environment / world-construction layer. Pick an
+  approach before continuing:
+  - **(A) Keep chaining cohesive extractions** — pull the environment
+    + world-construction subsystem (`WorldEnv`, `createWorld`,
+    `generateObstacles`, surface/temperature/light) into its own
+    module next; then `snapshot`, `serialize`, `regions`, `step` fall
+    out cleanly.
+  - **(B) Switch the cycle gate to ESLint `import/no-cycle`** —
+    permits lean `import type` back-edges, enabling smaller modules
+    without the chained mega-extractions.
+
+- **Concrete back-edges to resolve:** `snapshot` →
+  `RenderSnapshot extends WorldEnv`; `serialize` → `applySavedWorld`
+  calls `createWorld`/`generateObstacles`; `regions`/`step` →
+  `simRng` + environment helpers.
+
+- **Invariant for every future step:** golden hash + determinism
+  (byte-identical) + mass conservation + `madge --circular` must all
+  stay green; refactor in small individually-green commits.
+
 ## Hygiene / before merge
 
 - **Prune one-off probe scripts.** `scripts/probe_*.ts` are throwaway
