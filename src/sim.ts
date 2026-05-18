@@ -5131,7 +5131,15 @@ const CHEMO_TARGET_ACT_Y: ReadonlyArray<number> = [
   CHEM_ACT_CHEMO_FA_Y, CHEM_ACT_CHEMO_MARKER0_Y,
 ];
 const _ACT_SCRATCH = new Float32Array(2);
-function runActivation(c: Creature, world: World, dt: number): void {
+// `host` is set only for engulfed organelles. The penetrating physical
+// fields (PHOTO/THERMO/MAGNETO/MECH) are identical either way -- they
+// reach the organelle through the host's position. CHEMO differs: a
+// free cell reads a spatial ∇ of the world particle field; an
+// organelle has no spatial gradient inside a host, so it instead
+// senses the host cytoplasm's CONCENTRATION of each target chem
+// (option 1). That value goes in the X activation slot; Y is inert
+// (no direction inside a host).
+function runActivation(c: Creature, world: World, dt: number, host?: Creature): void {
   const s = c.store; const i = c.idx;
   const cols = s.chemCols;
   const k = Math.max(0, 1 - ACT_DECAY * dt);
@@ -5178,6 +5186,15 @@ function runActivation(c: Creature, world: World, dt: number): void {
     if (recR <= 0) {
       cols[ax][i] *= k;
       cols[ay][i] *= k;
+      continue;
+    }
+    if (host) {
+      // Organelle: sense the host cytoplasm's concentration of the
+      // target chem (scalar, X slot). No spatial gradient inside a
+      // host, so Y just decays toward 0.
+      const hostConc = host.store.chemCols[CHEMO_TARGET_CHEMS[t]][host.idx];
+      cols[ax][i] = cols[ax][i] * k + recR * hostConc * dt;
+      cols[ay][i] = cols[ay][i] * k;
       continue;
     }
     chemGradient(c.x, c.y, range, CHEMO_TARGET_CHEMS[t], _ACT_SCRATCH);
@@ -5773,7 +5790,7 @@ function runInnerCell(
   // Sense -> decide. Same activation + sensor snapshot + VM run a free
   // cell gets. VM_SENSORS/VM_SELF are shared scratch; we populate and
   // consume them synchronously here before the host loop reuses them.
-  runActivation(inner, world, dt);
+  runActivation(inner, world, dt, host);
   populateSensors(inner, world);
   VM_SELF.energy = inner.energy;
   {
