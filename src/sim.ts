@@ -1759,6 +1759,7 @@ export function createWorld(
     particles: [],
     particleStore: new ParticleStore(Math.max(256, particleTarget)),
     fadingGhosts: [],
+    eDnaCarriers: [],
     creatures: [],
     creatureStore: new CreatureStore(512),
     particleTarget,
@@ -2898,6 +2899,39 @@ function advanceFadingGhosts(world: World, dt: number): void {
     }
   }
   g.length = w;
+}
+
+// DNase-like degradation: a shed fragment is viable for this long
+// before it is retired. Bounds accumulation and makes shed/uptake
+// timing an evolvable trade-off rather than a free broadcast.
+const EDNA_LIFETIME_SEC = 30;
+// Hard ceiling on simultaneously-live carriers. A burst die-off can't
+// be allowed to balloon the list unbounded; past this the oldest are
+// dropped (they were closest to DNase retirement anyway).
+const EDNA_CARRIER_MAX = 4000;
+
+// Age the extracellular-DNA carriers and retire the expired ones, then
+// enforce the hard cap (drop oldest first). Same cheap compaction
+// pattern as advanceFadingGhosts; the list is empty unless something
+// has shed recently. Fixed position in the step order (right after
+// advanceFadingGhosts) so it never perturbs simRng draw order.
+function advanceEDnaCarriers(world: World, dt: number): void {
+  const cs = world.eDnaCarriers;
+  if (cs.length === 0) return;
+  let w = 0;
+  for (let i = 0; i < cs.length; i++) {
+    cs[i].age += dt;
+    if (cs[i].age < EDNA_LIFETIME_SEC) {
+      if (w !== i) cs[w] = cs[i];
+      w++;
+    }
+  }
+  cs.length = w;
+  if (cs.length > EDNA_CARRIER_MAX) {
+    // Oldest first = front of the list (carriers are appended on shed
+    // and only compacted in place above, so order is shed order).
+    cs.splice(0, cs.length - EDNA_CARRIER_MAX);
+  }
 }
 
 // Per-tick scratch for reservePass's proportional balancing.
@@ -4203,6 +4237,7 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.replenish += n - m; m = n;
     decayParticles(world, dt);
     advanceFadingGhosts(world, dt);
+    advanceEDnaCarriers(world, dt);
     // Decay is currently disabled by const, so the bucket isn't
     // separately tracked. The original code added decay's time to
     // `replenish` again (copy-paste -- same field as the line above),
@@ -4238,6 +4273,7 @@ export function step(world: World, dt: number): void {
     replenishParticles(world, dt);
     decayParticles(world, dt);
     advanceFadingGhosts(world, dt);
+    advanceEDnaCarriers(world, dt);
     pruneSpecies(world);
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
@@ -6684,7 +6720,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:8:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:9:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -6706,6 +6742,9 @@ interface SavedCreature {
   // itself carry contents in real biology, so we snapshot the same
   // structure -- though the sim currently only nests one level deep.
   contents?: SavedCreature[];
+  // Host-scoped extracellular-DNA buffer (intracellular EGT vector).
+  // Absent when the cell holds no buffered fragments (the common case).
+  eDnaBuffer?: number[];
   // ADHERE bond partners as indices into the saved.creatures array.
   // Bonds only exist among top-level world.creatures (engulfed cells
   // don't run VM and can't fire ADHERE), so this is a flat index
@@ -6770,6 +6809,14 @@ interface SavedWorld {
   species: SavedSpecies[];
   particles: SavedParticle[];
   creatures: SavedCreature[];
+  // Free-floating HGT carriers. Absent in older saves -> none restored.
+  eDnaCarriers?: SavedEDnaCarrier[];
+}
+interface SavedEDnaCarrier {
+  x: number; y: number; z: number;
+  age: number;
+  payload: number[];
+  srcSpeciesKey: string;
 }
 
 function snapshotSparseCol(cols: Float32Array[], i: number, n: number): SavedSparse[] {
@@ -6803,6 +6850,8 @@ function snapshotCreature(c: Creature): SavedCreature {
     catalysts: snapshotSparseCol(s.catalystCols, i, CATALYST_COUNT),
     generics: snapshotSparseCol(s.genericChemCols, i, GENERIC_CHEMICAL_COUNT),
     contents: c.contents.length > 0 ? c.contents.map(snapshotCreature) : undefined,
+    eDnaBuffer: c.eDnaBuffer && c.eDnaBuffer.length > 0
+      ? Array.from(c.eDnaBuffer) : undefined,
   };
 }
 
@@ -6883,6 +6932,13 @@ export function serializeWorld(w: World): string {
     species: speciesList,
     particles: w.particles.map(snapshotParticle),
     creatures: w.creatures.map(snapshotCreature),
+    eDnaCarriers: w.eDnaCarriers.length > 0
+      ? w.eDnaCarriers.map((e) => ({
+          x: e.x, y: e.y, z: e.z, age: e.age,
+          payload: Array.from(e.payload),
+          srcSpeciesKey: e.srcSpeciesKey,
+        }))
+      : undefined,
   };
   // Second pass for bonds: now that every creature has an index in
   // saved.creatures, translate each cell's bond partners into those
@@ -6926,6 +6982,9 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
   });
   c.lineageRoot = sc.lineageRoot;
   c.organelleSynthMask = sc.organelleSynthMask;
+  if (sc.eDnaBuffer && sc.eDnaBuffer.length > 0) {
+    c.eDnaBuffer = new Uint8Array(sc.eDnaBuffer);
+  }
   c.vm.pc = sc.vmPc;
   for (const v of sc.vmStack) c.vm.stack.push(v);
   const s = c.store;
@@ -6963,6 +7022,7 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.creatures.length = 0;
   while (world.particles.length > 0) removeParticleAt(world, world.particles.length - 1);
   world.fadingGhosts.length = 0;
+  world.eDnaCarriers.length = 0;
   // A restored world is already populated -- never re-run the one-shot
   // startup ramp or withhold founders on load.
   world.initialSeedDone = true;
@@ -7019,6 +7079,15 @@ export function applySavedWorld(world: World, json: string): boolean {
       for (const { i, v } of saved.reserve) {
         if (i >= 0 && i < rsv.length) rsv[i] = v;
       }
+    }
+  }
+  if (saved.eDnaCarriers) {
+    for (const e of saved.eDnaCarriers) {
+      world.eDnaCarriers.push({
+        x: e.x, y: e.y, z: e.z, age: e.age,
+        payload: new Uint8Array(e.payload),
+        srcSpeciesKey: e.srcSpeciesKey,
+      });
     }
   }
   let maxLane = -1;

@@ -36,6 +36,8 @@ import {
   NAMED_REACTION_COUNT,
   chargeGenomeReplication,
   GENOME_MASS_PER_BYTE,
+  serializeWorld,
+  applySavedWorld,
 } from "../sim";
 import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
 
@@ -111,7 +113,7 @@ function quietWorld(): World {
     // immediately exercise the post-delay code paths (founder
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
-    particles: [], particleStore: new ParticleStore(256), fadingGhosts: [], creatures: [], creatureStore: new CreatureStore(64),
+    particles: [], particleStore: new ParticleStore(256), fadingGhosts: [], eDnaCarriers: [], creatures: [], creatureStore: new CreatureStore(64),
     particleTarget: 550, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveLineageRoots: new Set<number>(), nextLineageRoot: 0, founderTarget: 0, lastFounderTrickleT: -1e9, founderIds: new Set<number>(), founderReproduced: new Set<number>(), founderBirthScore: new Map(), pinnedSpecies: new Set<string>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
@@ -2477,5 +2479,41 @@ describe("reaction energetics: thermodynamic consistency", () => {
     const a = reactionCatalog().map((r) => r.atpDelta);
     const b = reactionCatalog().map((r) => r.atpDelta);
     expect(a).toEqual(b);
+  });
+});
+
+describe("eDNA carrier persistence (Substrate A, sub-commit 1)", () => {
+  it("roundtrips world carriers and a host eDNA buffer through save/load", () => {
+    const w = createWorld(800, 600, { seed: 42 });
+    w.eDnaCarriers.push({
+      x: 12, y: 34, z: 5, age: 1.5,
+      payload: new Uint8Array([1, 2, 3, 250]),
+      srcSpeciesKey: "abc123",
+    });
+    expect(w.creatures.length).toBeGreaterThan(0);
+    w.creatures[0].eDnaBuffer = new Uint8Array([9, 8, 7]);
+
+    const json = serializeWorld(w);
+    const w2 = createWorld(800, 600, { seed: 1 });
+    expect(applySavedWorld(w2, json)).toBe(true);
+
+    expect(w2.eDnaCarriers.length).toBe(1);
+    const c = w2.eDnaCarriers[0];
+    expect([c.x, c.y, c.z, c.age]).toEqual([12, 34, 5, 1.5]);
+    expect(Array.from(c.payload)).toEqual([1, 2, 3, 250]);
+    expect(c.srcSpeciesKey).toBe("abc123");
+    const restored = w2.creatures.find(
+      (cr) => cr.eDnaBuffer && cr.eDnaBuffer.length === 3,
+    );
+    expect(restored).toBeDefined();
+    expect(Array.from(restored!.eDnaBuffer!)).toEqual([9, 8, 7]);
+  });
+
+  it("rejects loads across the bumped SAVE_SCHEMA", () => {
+    const w = createWorld(400, 300, { seed: 7 });
+    const json = serializeWorld(w);
+    const tampered = json.replace(/"schema":"[^"]*"/, '"schema":"evosim4:8:x"');
+    const w2 = createWorld(400, 300, { seed: 7 });
+    expect(applySavedWorld(w2, tampered)).toBe(false);
   });
 });

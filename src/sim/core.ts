@@ -27,6 +27,28 @@ export interface FadingGhost {
   age: number;
 }
 
+// A free-floating extracellular DNA fragment: the physical vector
+// behind horizontal gene transfer (and, intracellularly via the
+// host-scoped buffer, endosymbiotic gene transfer). Shed by lysing
+// cells and by cells actively expressing packaging; taken up by cells
+// expressing competence; integrated append-only via appendGenomeBytes.
+// DNase-like decay (age past a lifetime -> retired) bounds accumulation
+// and makes shed/uptake timing a selection pressure. Unlike FadingGhost
+// this is functional, not render-only, so it IS persisted.
+export interface EDnaCarrier {
+  x: number;
+  y: number;
+  z: number;
+  // Seconds since shed; retired once past the DNase lifetime.
+  age: number;
+  // The shed genome fragment (already clamped to GENE_FRAGMENT_CAP at
+  // shed time). Recipients copy a window of this via appendGenomeBytes.
+  payload: Uint8Array;
+  // Donor species key, for instrumentation only -- never gates uptake
+  // (the substrate must not read identity to decide transfer).
+  srcSpeciesKey: string;
+}
+
 // pushParticle reuses store slots (swap-pop). The collision subsystem
 // (in sim.ts) keeps a parallel asleep-flag array that must be cleared
 // for a reused slot. core has no collision dependency, so sim.ts
@@ -863,6 +885,13 @@ export class Creature {
   division: { progress: number; axis: number; child: Creature } | null = null;
   contents: Creature[] = [];
   bonds: Creature[] = [];
+  // Host-scoped extracellular-DNA buffer: fragments shed by this
+  // cell's own engulfed symbionts when they lyse (digestInnerIntoHost).
+  // The intracellular locality of the same HGT substrate -- this cell's
+  // competence integrates from here, so endosymbiotic gene transfer is
+  // not special-cased: its count-scaled ratchet emerges because more
+  // symbionts -> more deaths -> more buffered fragments. null = empty.
+  eDnaBuffer: Uint8Array | null = null;
   // Cached synthMask used when this cell is an endosymbiont in some
   // host's contents. Its VM doesn't run while engulfed, so its
   // biosynthesis intent is locked to whichever SYNTH_* ops exist in
@@ -1063,6 +1092,10 @@ export interface World {
   // in world.reserve); they exist purely so the renderer can fade the
   // vanishing particle out instead of popping it. Not persisted.
   fadingGhosts: FadingGhost[];
+  // Free-floating extracellular DNA fragments (HGT vector). Functional
+  // (recipients integrate from these), so unlike fadingGhosts this IS
+  // persisted. Aged + retired by advanceEDnaCarriers, hard-capped.
+  eDnaCarriers: EDnaCarrier[];
   creatures: Creature[];
   creatureStore: CreatureStore;
   particleTarget: number;
