@@ -385,16 +385,15 @@ export interface ParticleData {
 // accessors index into the store. molecules and reserves are exposed
 // via two helper classes (MoleculesView, ReservesView) that proxy
 // their named fields into the right column.
-// Fixed preallocated cap for CreatureStore. MAX_CREATURES (400) is
-// the hard ceiling on world.creatures; engulfed prey occupies extra
-// slots inside hosts (and aren't counted by MAX_CREATURES), so peak
-// *simultaneously-allocated* slots can run well above 400 -- under
-// turbo churn + heavy engulfment 768 overflowed (alloc tried to grow
-// 768->1536 and threw, since SAB-backed columns can't grow without
-// invalidating subworker views). 4096 gives ~10x MAX_CREATURES of
-// headroom so growth is never attempted; the larger per-column
-// stride (16 KB) costs some L2 locality in the runGenericReactions
-// sweep, but a hard throw every step is far worse than that.
+// Fixed preallocated cap for CreatureStore. This is THE hard limit on
+// total simultaneously-allocated cells (free + engulfed): the
+// SAB-backed columns can't grow without invalidating subworker views
+// (CreatureStore.grow throws), so allocation must never exceed this.
+// MAX_CREATURES is set equal to it -- there is no separate, smaller
+// "soft" population ceiling; the only cap is the physical store size.
+// The larger per-column stride (16 KB) costs some L2 locality in the
+// runGenericReactions sweep, but that's the price of a single,
+// generous, never-grown allocation.
 const CREATURE_STORE_PREALLOC_CAP = 4096;
 
 // Layout descriptor for CreatureStore. Mirrors ParticleSharedLayout's
@@ -690,6 +689,13 @@ export class CreatureStore {
       `CreatureStore grow ${this.cap} -> ${newCap} would invalidate ` +
       `subworker views; raise CREATURE_STORE_PREALLOC_CAP instead.`,
     );
+  }
+  // True iff alloc() can hand out a slot without hitting the
+  // un-growable ceiling. The single hard population gate -- callers
+  // that create cells (fission, founder spawn, internal organelle
+  // division) check this instead of any soft numeric cap.
+  canAlloc(): boolean {
+    return this.free.length > 0 || this.highWater < this.cap;
   }
   // Returns a fresh slot. Reuses freed slots first; grows on overflow.
   alloc(): number {
@@ -1474,7 +1480,11 @@ export function setParticleTarget(world: World, cap: number): void {
     Math.max(5, c * PARTICLE_SPAWN_RATIO),
   );
 }
-const MAX_CREATURES = 400;
+// No soft population ceiling: the hard limit IS the CreatureStore
+// allocation size. Reproduction/spawn is refused only when the store
+// is physically full (see CreatureStore.canAlloc), not at some lower
+// tuned number.
+const MAX_CREATURES = CREATURE_STORE_PREALLOC_CAP;
 
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.15;
@@ -5633,6 +5643,10 @@ function maintenanceDecay(c: Creature, dt: number): void {
 // surplus ATP / glucose / etc. flows where it's useful. This is the
 // whole "subsumed cell becomes organelle" mechanic.
 const ORGANELLE_DIFFUSE_PER_SEC = 0.5;   // fraction of (inner - host) gap that crosses per sec
+// Max mass of one chem an organelle actively pulls from the host pool
+// per uptake event (gated by ingest cooldown + ATP) -- the analog of
+// a free cell swallowing one food particle.
+const INNER_UPTAKE_MAX = 5;
 // Cached list of chemical ids whose CHEMICALS[id].permeability is nonzero.
 // Built once from the table so the hot loop iterates a tight array.
 // (Replaces the old `diffusable: boolean` -- permeability is the
@@ -5651,8 +5665,11 @@ const DIFFUSABLE_CHEM_IDS: number[] = (() => {
 // only regulators are the same economic ones a free cell faces (ATP
 // attempt cost, membrane/energy split, and autolysis+digestion of
 // nonviable inners). No world placement, no division animation: the
-// child appears in the vacuole immediately.
+// child appears in the vacuole immediately. The only hard limit is
+// the shared CreatureStore's physical capacity (same gate free-cell
+// fission uses) -- there is no soft per-host cap.
 function divideInner(inner: Creature, host: Creature, world: World): void {
+  if (!world.creatureStore.canAlloc()) return;
   spendATP(
     inner,
     REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(inner),
@@ -5718,13 +5735,24 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
   updateCreatureRadius(child);
 }
 
-// An engulfed cell stays FULLY ALIVE inside the vacuole: its genome
-// VM, sensing, chemistry, maintenance, somatic drift, and internal
-// division all run every tick exactly as a free cell's would. The
-// only things withheld are world-space actions that are physically
-// meaningless inside a host -- self-propelled movement, ingesting
-// world particles, predating/engulfing the outside population, and
-// bonding to free cells. Everything else is the normal cell pipeline.
+// An engulfed cell is FULLY ALIVE and its relationship to the host is
+// the exact analog of a free cell's relationship to the outer
+// environment -- the host cytoplasm IS its environment:
+//   - passive exchange of permeable chems with the host pool
+//     (mirrors diffuseAmbient against the dissolved field);
+//   - active uptake of any chem (incl. non-diffusable) from the host
+//     (mirrors INGEST of world particles);
+//   - active + auto excretion of any chem into the host
+//     (mirrors the EXCRETE op + autoExcrete to the world);
+//   - it may engulf/predate sibling organelles in the same host
+//     (mirrors engulf/predate of the free population);
+//   - ATP does NOT free-diffuse to the host (energy is intracellular,
+//     exactly as a free cell's ATP doesn't bleed into the water).
+// The only things that cross the host membrane from the OUTSIDE world
+// are penetrating physical fields -- light, magnetism, temperature,
+// bulk force -- which reach the organelle via the host's position
+// (handled by runActivation). Self-propelled movement has no analog
+// (no fluid medium inside a host) and stays withheld.
 function runInnerCell(
   inner: Creature,
   host: Creature,
@@ -5732,9 +5760,12 @@ function runInnerCell(
   dt: number,
   dtT: number,
   light: number,
+  eatenInner: Set<Creature>,
+  predatedInner: Set<Creature>,
 ): void {
-  // The organelle experiences the host's location for all spatial
-  // sensing (light at depth, temperature, chem gradients).
+  // The organelle experiences the host's location so the penetrating
+  // outside fields (light at depth, temperature, magnetic) reach it
+  // through the host -- the explicit "permeable from outside" case.
   inner.x = host.x;
   inner.y = host.y;
   inner.z = host.z;
@@ -5785,27 +5816,136 @@ function runInnerCell(
   maintenanceDecay(inner, dt);
   toxify(inner, dt);
 
-  // Internal fission. No engulfed-count cap (per design): economics
-  // alone regulate the organelle population.
+  const iCols = inner.store.chemCols;
+  const hCols = host.store.chemCols;
+  const ii = inner.idx, hi = host.idx;
+
+  // Auto-excrete CO2 / waste over threshold into the HOST pool (the
+  // organelle's "environment"), ATP-costed -- the analog of a free
+  // cell venting to the dissolved field.
+  for (const ex of [
+    [CHEM_CO2, CO2_EXCRETE_THRESHOLD] as const,
+    [CHEM_WASTE, WASTE_EXCRETE_THRESHOLD] as const,
+  ]) {
+    const have = iCols[ex[0]][ii];
+    if (have > ex[1]) {
+      const want = have - EXCRETE_FLOOR;
+      const affordable = Math.min(want, inner.energy / EXCRETE_ATP_PER_MASS);
+      if (affordable > 0) {
+        spendATP(inner, affordable * EXCRETE_ATP_PER_MASS, ATP_EXCRETE);
+        iCols[ex[0]][ii] -= affordable;
+        hCols[ex[0]][hi] += affordable;
+      }
+    }
+  }
+
+  // VM-driven EXCRETE: push any requested chem (incl. non-diffusable)
+  // from the organelle into the host pool -- the analog of the
+  // free-cell EXCRETE op (which spawns a world particle).
+  {
+    const exc = inner.vmOut.excrete;
+    for (let chemId = 0; chemId < CHEMICAL_COUNT; chemId++) {
+      const requested = exc[chemId];
+      if (requested <= 0) continue;
+      const amount = Math.min(requested, iCols[chemId][ii]);
+      if (amount < EXCRETE_MIN_AMOUNT) continue;
+      iCols[chemId][ii] -= amount;
+      hCols[chemId][hi] += amount;
+    }
+  }
+
+  if (inner.ingestCooldown > 0) {
+    inner.ingestCooldown = Math.max(0, inner.ingestCooldown - dt);
+  }
+
+  // Active uptake / engulf / predation against the host's interior.
+  // Mirrors the free-cell INGEST/ENGULF/PREDATE block: gated by the
+  // same cooldown + ATP affordability.
+  if (inner.ingestCooldown <= 0 && inner.energy >= INGEST_ENERGY_COST) {
+    let acted = false;
+    // Sibling engulf/predate: same physical gate (canBreach) and
+    // energy economics as the free population, but the "neighbours"
+    // are the other organelles sharing this vacuole. Co-located, so
+    // no distance test. host.contents isn't mutated here -- consumed
+    // siblings are recorded in the shared sets and the host loop's
+    // rebuild pass relocates/frees them.
+    if (inner.vmOut.engulf || inner.vmOut.predate) {
+      const sibs = host.contents;
+      for (let si = 0; si < sibs.length && !acted; si++) {
+        const other = sibs[si];
+        if (other === inner || eatenInner.has(other)) continue;
+        // Don't eat your own nested organelle or an ancestor.
+        if (inner.contents.includes(other) || other.contents.includes(inner)) continue;
+        updateCreatureRadius(other);
+        if (!canBreach(inner, other)) continue;
+        const otherMass = creatureTotalMass(other);
+        const cost = predationCost(other, otherMass);
+        if (inner.energy < cost) continue;
+        if (inner.vmOut.engulf) {
+          other.organelleSynthMask = genomeSynthMask(other.genome);
+          inner.contents.push(other);
+          spendATP(inner, cost, ATP_ENGULF);
+        } else {
+          const oCols = other.store.chemCols;
+          const oi = other.idx;
+          for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) { iCols[k][ii] += oCols[k][oi]; oCols[k][oi] = 0; }
+          const iGC = inner.store.genericChemCols;
+          const oGC = other.store.genericChemCols;
+          for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) { iGC[k][ii] += oGC[k][oi]; oGC[k][oi] = 0; }
+          const iCat = inner.store.catalystCols;
+          const oCat = other.store.catalystCols;
+          for (let k = 0; k < CATALYST_COUNT; k++) {
+            const v = oCat[k][oi];
+            if (v !== 0) { iCat[k][ii] += v; oCat[k][oi] = 0; }
+          }
+          inner.energy += other.energy;
+          for (const sub of other.contents) inner.contents.push(sub);
+          other.contents.length = 0;
+          spendATP(inner, cost, ATP_PREDATE);
+          predatedInner.add(other);
+        }
+        eatenInner.add(other);
+        inner.ingestCooldown = PREDATION_COOLDOWN_SEC;
+        acted = true;
+      }
+    }
+    // Active chemical uptake from the host pool for the materials the
+    // genome opted into (the 6 sensor chems). Works on non-diffusable
+    // chems too -- this is active transport, not passive diffusion.
+    if (!acted) {
+      let took = false;
+      for (let slot = 0; slot < SENSOR_CHEMS.length; slot++) {
+        if (!inner.vmOut.ingestMaterials[slot]) continue;
+        const chem = SENSOR_CHEMS[slot];
+        const grab = Math.min(INNER_UPTAKE_MAX, hCols[chem][hi]);
+        if (grab <= 0) continue;
+        hCols[chem][hi] -= grab;
+        iCols[chem][ii] += grab;
+        took = true;
+      }
+      if (took) {
+        spendATP(inner, INGEST_ENERGY_COST, ATP_INGEST);
+        inner.ingestCooldown = INGEST_COOLDOWN_SEC;
+      }
+    }
+  }
+
+  // Internal fission. No soft cap (per design): the shared store's
+  // physical capacity and the same economics a free cell faces are
+  // the only regulators.
   if (inner.vmOut.reproduce) divideInner(inner, host, world);
 
-  // Bidirectional diffusion across the inner/host membrane. Net flow
-  // toward the lower concentration -- surplus products leak out,
-  // scarce substrates leak in. Diffusable set is driven by the
-  // Chemical table's `diffusable` flag, so adding a new chemical
-  // automatically participates (or doesn't) based on its type.
+  // Passive permeable exchange with the host pool -- the analog of
+  // diffuseAmbient against the dissolved field. ONLY diffusable chems
+  // (driven by the Chemical table's permeability) cross this way;
+  // non-diffusable transfer is the active path above. ATP is NOT in
+  // this set: energy is intracellular and does not free-diffuse to
+  // the host, exactly as a free cell's ATP doesn't bleed to the water.
   const rate = ORGANELLE_DIFFUSE_PER_SEC * dt;
-  // ATP isn't a chemical slot but it does cross the membrane like one.
-  const dAtp = (inner.energy - host.energy) * rate;
-  inner.energy -= dAtp;
-  host.energy += dAtp;
-  const innerCols = inner.store.chemCols;
-  const hostCols = host.store.chemCols;
-  const ii = inner.idx, hi = host.idx;
   for (let j = 0; j < DIFFUSABLE_CHEM_IDS.length; j++) {
     const k = DIFFUSABLE_CHEM_IDS[j];
-    const ic = innerCols[k];
-    const hc = hostCols[k];
+    const ic = iCols[k];
+    const hc = hCols[k];
     const d = (ic[ii] - hc[hi]) * rate;
     ic[ii] -= d;
     hc[hi] += d;
@@ -6774,31 +6914,48 @@ function updateCreatures(world: World, dt: number): void {
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
 
-    // Endosymbionts: run chemistry on each engulfed cell and let
-    // small molecules diffuse between inner and host pools. Inner
-    // cells have no VM (motion / ingest / reproduce make no sense in
-    // a vacuole); their biosynthesis runs on the static synthMask
-    // captured at engulfment.
+    // Endosymbionts: each engulfed cell runs the full inner pipeline
+    // (VM + chemistry + active exchange with the host + sibling
+    // engulf/predate + internal fission).
     if (c.contents.length > 0) {
       // Snapshot the count so an inner cell that divides this tick has
       // its new daughter processed starting NEXT tick -- exactly how a
       // free cell's child waits a tick. This is per-tick scheduling,
       // not a population cap (there is deliberately no cap).
       const nInnerThisTick = c.contents.length;
+      // Siblings consumed by another organelle this tick. predatedInner
+      // is the absorbed subset whose slot is freed; the rest were
+      // engulfed (relocated alive into the predator's contents).
+      const eatenInner = new Set<Creature>();
+      const predatedInner = new Set<Creature>();
       for (let ic = 0; ic < nInnerThisTick; ic++) {
-        runInnerCell(c.contents[ic], c, world, dt, dtT, ambientLight);
+        const inn = c.contents[ic];
+        if (eatenInner.has(inn)) continue; // eaten by an earlier sibling
+        runInnerCell(inn, c, world, dt, dtT, ambientLight, eatenInner, predatedInner);
       }
-      // An endosymbiont can now die in place: digested into the host,
-      // its own engulfed cells exposed (promoted) to the host.
-      let anyDead = false;
-      for (let ic = 0; ic < c.contents.length; ic++) {
-        if (innerIsDead(c.contents[ic])) { anyDead = true; break; }
+      // Rebuild contents if anything died OR was consumed by a sibling.
+      let dirty = eatenInner.size > 0;
+      if (!dirty) {
+        for (let ic = 0; ic < c.contents.length; ic++) {
+          if (innerIsDead(c.contents[ic])) { dirty = true; break; }
+        }
       }
-      if (anyDead) {
+      if (dirty) {
         const survivors: Creature[] = [];
         const promoted: Creature[] = [];
         for (let ic = 0; ic < c.contents.length; ic++) {
           const inner = c.contents[ic];
+          if (eatenInner.has(inner)) {
+            // Consumed by a sibling. Predated => absorbed, free its
+            // slot. Engulfed => already relocated into the predator's
+            // contents (still alive), so just drop it from the host
+            // list without releasing the slot.
+            if (predatedInner.has(inner)) {
+              inner.contents.length = 0;
+              inner.store.release(inner.idx);
+            }
+            continue;
+          }
           if (innerIsDead(inner)) {
             digestInnerIntoHost(inner, c);
             for (const sub of inner.contents) promoted.push(sub);
