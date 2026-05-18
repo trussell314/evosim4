@@ -15,7 +15,6 @@ import {
   makeRandomViableGenome,
   genomeSynthMask,
   mutateGenome,
-  genomeMaterialCost,
   CATALYST_COUNT,
   N_REACTIONS,
   OP,
@@ -7586,36 +7585,31 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
   }
 }
 
-// Genome replication tax. Copying the child's genome consumes raw
-// building blocks proportional to its length: genomeMaterialCost
-// distributes the demand across the 6 SENSOR_CHEMS by codon (byte%6).
-// Matter is conserved -- whatever the parent can cover is converted to
-// inert waste (useful materials -> waste), so this is a real metabolic
-// cost that scales with genome size and selects against unbounded
-// bloat now that there is no hard length cap. Underfunding is not
-// fatal: the parent pays only what it holds (no stillbirth filter,
-// matching the rest of fission). Transcription/expression are
-// deliberately untouched -- this is purely the replication cost paid
-// once at division, on free-cell fission and endosymbiont internal
-// division alike. GENOME_MASS_PER_BYTE is the tuning knob: a 24..100b
-// founder pays ~0.5..2 mass (negligible), a multi-thousand-byte
-// runaway pays tens-to-hundreds (crippling).
+// Genome replication tax. The genome is a nucleic acid, so copying it
+// costs the same substrates the engine already uses to build its
+// nucleic-acid currency -- synth_ribo (mRNA) is aminoAcid + minerals,
+// 50/50 -- scaled by child genome length. Matter is conserved: whatever
+// the parent can cover is converted to inert waste (useful aa/min ->
+// waste), making this a real fitness cost that scales with genome size
+// and selects against unbounded bloat now that the hard length cap is
+// gone. Underfunding is not fatal: the parent pays only what it holds
+// (no stillbirth filter, matching the rest of fission). This is purely
+// the replication cost paid once at division -- free-cell fission and
+// endosymbiont internal division alike -- transcription/expression are
+// deliberately untouched. GENOME_MASS_PER_BYTE is the tuning knob: a
+// 24..100b founder pays ~0.5..2 mass (negligible), a multi-thousand-
+// byte runaway pays tens-to-hundreds (crippling).
 export const GENOME_MASS_PER_BYTE = 0.02;
 export function chargeGenomeReplication(parent: Creature, childGenome: Uint8Array): void {
-  const cost = genomeMaterialCost(childGenome, GENOME_MASS_PER_BYTE);
-  let consumed = 0;
-  for (let j = 0; j < SENSOR_CHEMS.length; j++) {
-    const key = NAMED_CHEMICALS[SENSOR_CHEMS[j]];
-    const have = parent.molecules[key];
-    const take = Math.min(have, cost[j]);
-    if (take > 0) {
-      parent.molecules[key] = have - take;
-      consumed += take;
-    }
-  }
-  if (consumed > 0) {
-    parent.molecules[NAMED_CHEMICALS[CHEM_WASTE]] += consumed;
-  }
+  const halfDemand = 0.5 * GENOME_MASS_PER_BYTE * childGenome.length;
+  const aaKey = NAMED_CHEMICALS[CHEM_AA];
+  const minKey = NAMED_CHEMICALS[CHEM_MIN];
+  const tookAa = Math.min(parent.molecules[aaKey], halfDemand);
+  const tookMin = Math.min(parent.molecules[minKey], halfDemand);
+  if (tookAa > 0) parent.molecules[aaKey] -= tookAa;
+  if (tookMin > 0) parent.molecules[minKey] -= tookMin;
+  const consumed = tookAa + tookMin;
+  if (consumed > 0) parent.molecules[NAMED_CHEMICALS[CHEM_WASTE]] += consumed;
 }
 
 function tryReproduce(parent: Creature, world: World): void {

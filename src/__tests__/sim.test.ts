@@ -2397,41 +2397,50 @@ describe("genome replication tax", () => {
     return m;
   };
 
-  it("converts sensor materials to waste, proportional to genome length, mass-conserving", () => {
-    const c = makeCreature({
-      molecules: { minerals: 100, fattyAcid: 100, glucose: 100, biopolymer: 100, o2: 100, co2: 100, waste: 0 },
-    });
+  it("consumes aa+min 50/50, converts to waste, proportional to length, mass-conserving", () => {
+    const c = makeCreature({ molecules: { aminoAcid: 100, minerals: 100, waste: 0 } });
     const before = totalMol(c);
-    const wasteBefore = c.molecules.waste;
-    const genome = new Uint8Array(600); // 0..5 cycle covers all 6 bins
-    for (let i = 0; i < genome.length; i++) genome[i] = i % 6;
-    chargeGenomeReplication(c, genome);
-    // Mass conserved (useful -> waste, nothing destroyed).
+    chargeGenomeReplication(c, new Uint8Array(600));
+    // Mass conserved (aa/min -> waste, nothing destroyed).
     expect(totalMol(c)).toBeCloseTo(before, 4);
-    // All 600 bytes funded: waste up by 600 * GENOME_MASS_PER_BYTE.
-    expect(c.molecules.waste - wasteBefore).toBeCloseTo(600 * GENOME_MASS_PER_BYTE, 4);
+    // Total cost 600 * GENOME_MASS_PER_BYTE, split evenly aa/min.
+    const half = 0.5 * 600 * GENOME_MASS_PER_BYTE;
+    expect(100 - c.molecules.aminoAcid).toBeCloseTo(half, 4);
+    expect(100 - c.molecules.minerals).toBeCloseTo(half, 4);
+    expect(c.molecules.waste).toBeCloseTo(2 * half, 4);
+  });
+
+  it("only aa+min are touched -- other pools untouched", () => {
+    const c = makeCreature({
+      molecules: { aminoAcid: 100, minerals: 100, glucose: 50, fattyAcid: 40, biopolymer: 30, o2: 20, co2: 10, waste: 0 },
+    });
+    chargeGenomeReplication(c, new Uint8Array(400));
+    expect(c.molecules.glucose).toBe(50);
+    expect(c.molecules.fattyAcid).toBe(40);
+    expect(c.molecules.biopolymer).toBe(30);
+    expect(c.molecules.o2).toBe(20);
+    expect(c.molecules.co2).toBe(10);
   });
 
   it("longer genome costs strictly more than a shorter one", () => {
-    const mk = () => makeCreature({
-      molecules: { minerals: 100, fattyAcid: 100, glucose: 100, biopolymer: 100, o2: 100, co2: 100, waste: 0 },
-    });
+    const mk = () => makeCreature({ molecules: { aminoAcid: 100, minerals: 100, waste: 0 } });
     const small = mk();
     const big = mk();
-    const g = (n: number) => { const a = new Uint8Array(n); for (let i = 0; i < n; i++) a[i] = i % 6; return a; };
-    chargeGenomeReplication(small, g(100));
-    chargeGenomeReplication(big, g(2000));
+    chargeGenomeReplication(small, new Uint8Array(100));
+    chargeGenomeReplication(big, new Uint8Array(2000));
     expect(big.molecules.waste).toBeGreaterThan(small.molecules.waste);
   });
 
   it("underfunding is not fatal and never goes negative or loses mass", () => {
-    const c = makeCreature({
-      molecules: { minerals: 1, fattyAcid: 1, glucose: 1, biopolymer: 1, o2: 1, co2: 1, waste: 0 },
-    });
+    const c = makeCreature({ molecules: { aminoAcid: 1, minerals: 1, waste: 0 } });
     const before = totalMol(c);
-    chargeGenomeReplication(c, new Uint8Array(5000).fill(0));
+    chargeGenomeReplication(c, new Uint8Array(5000));
     expect(totalMol(c)).toBeCloseTo(before, 4);
     for (const k of MOLECULE_IDS) expect(c.molecules[k]).toBeGreaterThanOrEqual(0);
+    // Drained both pools fully (demand >> holdings), nothing more.
+    expect(c.molecules.aminoAcid).toBe(0);
+    expect(c.molecules.minerals).toBe(0);
+    expect(c.molecules.waste).toBeCloseTo(2, 4);
   });
 });
 

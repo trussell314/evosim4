@@ -1109,14 +1109,6 @@ export function makeRandomViableGenome(
   return out;
 }
 
-export function genomeMaterialCost(genome: Uint8Array, massPerByte: number): Float32Array {
-  const cost = new Float32Array(6);
-  for (let i = 0; i < genome.length; i++) {
-    cost[genome[i] % 6] += massPerByte;
-  }
-  return cost;
-}
-
 // Mutation random byte generator. We want the ratio of noop bytes
 // to executable ops in mutated bytes to be roughly 1:2 -- i.e. ~2/3
 // of newly introduced bytes should decode to a real op. Without

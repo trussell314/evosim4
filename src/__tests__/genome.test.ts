@@ -13,7 +13,6 @@ import {
   runTick,
   disassemble,
   mutateGenome,
-  genomeMaterialCost,
   OPERANDS,
   walkGenome,
   genomeSynthMask,
@@ -426,25 +425,6 @@ describe("mutateGenome", () => {
   });
   it("mid-probability rng=0.5 preserves bytes", () => {
     expect(Array.from(mutateGenome(new Uint8Array([9, 8, 7, 6, 5]), () => 0.5))).toEqual([9, 8, 7, 6, 5]);
-  });
-});
-
-describe("genomeMaterialCost", () => {
-  it("distributes by byte % 6", () => {
-    expect(Array.from(genomeMaterialCost(new Uint8Array([0, 1, 2, 3, 4, 5]), 1))).toEqual([1, 1, 1, 1, 1, 1]);
-  });
-  it("scales by massPerByte", () => {
-    expect(Array.from(genomeMaterialCost(new Uint8Array([3, 3, 3]), 4))).toEqual([0, 0, 0, 12, 0, 0]);
-  });
-  it("aggregates duplicates", () => {
-    expect(Array.from(genomeMaterialCost(new Uint8Array([0, 6, 12]), 1))).toEqual([3, 0, 0, 0, 0, 0]);
-  });
-  it("empty -> all zeros", () => {
-    expect(Array.from(genomeMaterialCost(new Uint8Array([]), 5))).toEqual([0, 0, 0, 0, 0, 0]);
-  });
-  it("sum = length * massPerByte", () => {
-    const genome = new Uint8Array(50).map((_, i) => (i * 37 + 11) & 0xFF);
-    expect(Array.from(genomeMaterialCost(genome, 3)).reduce((a, b) => a + b, 0)).toBe(50 * 3);
   });
 });
 
