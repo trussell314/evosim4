@@ -15,6 +15,13 @@ import {
   mutateGenome,
   genomeMaterialCost,
   OPERANDS,
+  walkGenome,
+  genomeSynthMask,
+  viableGenome,
+  SYNTH_KIND,
+  SYNTH_BIT_BIO,
+  SYNTH_BIT_FA,
+  SYNTH_BIT_BOND,
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
@@ -435,6 +442,114 @@ describe("genomeMaterialCost", () => {
   it("sum = length * massPerByte", () => {
     const genome = new Uint8Array(50).map((_, i) => (i * 37 + 11) & 0xFF);
     expect(Array.from(genomeMaterialCost(genome, 3)).reduce((a, b) => a + b, 0)).toBe(50 * 3);
+  });
+});
+
+// Characterization tests: a fixed, hand-built byte sequence must
+// decode to a known, specific effect. Real genomes have surrounding
+// junk that changes alignment/control-flow; these pin only the
+// well-aligned base contract so the decoders can't silently regress.
+describe("genome decoding: known byte sequences", () => {
+  // The SYNTH op is 3 bytes: [SYNTH, kindByte, paramByte]. The live
+  // VM is the source of truth for what a cell actually expresses.
+  describe("dynamic VM (runTick) -- the executed contract", () => {
+    it("[SYNTH, BIO, 0] sets the BIO synth bit", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.BIO, 0]);
+      expect(out.synthMask & (1 << SYNTH_BIT_BIO)).toBeTruthy();
+    });
+    it("[SYNTH, FA, 0] sets the FA synth bit, not BIO", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.FA, 0]);
+      expect(out.synthMask & (1 << SYNTH_BIT_FA)).toBeTruthy();
+      expect(out.synthMask & (1 << SYNTH_BIT_BIO)).toBeFalsy();
+    });
+    it("[SYNTH, BOND, 200] sets BOND bit AND exposes marker 200", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.BOND, 200]);
+      expect(out.synthMask & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+      expect(out.bondMarker).toBe(200);
+    });
+    it("[SYNTH, BOND, 7] -- the param byte is the greenbeard marker", () => {
+      expect(exec([OP.SYNTH, SYNTH_KIND.BOND, 7]).out.bondMarker).toBe(7);
+    });
+    it("no SYNTH BOND -> bondMarker stays -1 (not adhesive)", () => {
+      expect(exec([OP.SYNTH, SYNTH_KIND.BIO, 0]).out.bondMarker).toBe(-1);
+    });
+    it("kindByte is taken mod SYNTH_KIND_COUNT (wraps)", () => {
+      // 14 + BOND == BOND after the mod, so this still expresses bond.
+      const { out } = exec([OP.SYNTH, 14 + SYNTH_KIND.BOND, 99]);
+      expect(out.synthMask & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+      expect(out.bondMarker).toBe(99);
+    });
+  });
+
+  // walkGenome is the shared static iterator. It correctly steps over
+  // operand bytes; what it exposes as `operand` is the contract other
+  // static decoders depend on.
+  describe("walkGenome static iteration", () => {
+    it("visits ops at the right pc and skips operand bytes", () => {
+      const seen: Array<[number, number]> = [];
+      walkGenome(new Uint8Array([OP.PUSH8, 9, OP.THRUST, OP.PUSH8, 1]),
+        (op, pc) => { seen.push([op, pc]); });
+      expect(seen).toEqual([[OP.PUSH8, 0], [OP.THRUST, 2], [OP.PUSH8, 3]]);
+    });
+    it("exposes the operand of a 1-byte-operand op (PUSH8)", () => {
+      let v: number | undefined = -999;
+      walkGenome(new Uint8Array([OP.PUSH8, 42]), (op, _pc, operand) => {
+        if (op === OP.PUSH8) v = operand;
+      });
+      expect(v).toBe(42);
+    });
+    it("exposes the first operand byte (kind) of SYNTH", () => {
+      // Static decoders (genomeSynthMask/viableGenome/trophicMode) all
+      // read this to learn which chem a cell builds. SYNTH has two
+      // operand bytes; the first is the kind.
+      let kindByte: number | undefined = -999;
+      walkGenome(new Uint8Array([OP.SYNTH, SYNTH_KIND.FA, 7]),
+        (op, _pc, operand) => { if (op === OP.SYNTH) kindByte = operand; });
+      expect(kindByte).toBe(SYNTH_KIND.FA);
+    });
+  });
+
+  // genomeSynthMask: static "what could this genome build" used for
+  // engulfed cells whose VM doesn't run, and as the genotype classifier.
+  describe("genomeSynthMask static synth intent", () => {
+    it("[SYNTH BIO][SYNTH FA] -> BIO and FA bits set", () => {
+      const g = new Uint8Array([
+        OP.SYNTH, SYNTH_KIND.BIO, 0,
+        OP.SYNTH, SYNTH_KIND.FA, 0,
+      ]);
+      const m = genomeSynthMask(g);
+      expect(m & (1 << SYNTH_BIT_BIO)).toBeTruthy();
+      expect(m & (1 << SYNTH_BIT_FA)).toBeTruthy();
+    });
+    it("a SYNTH BOND op is detectable in the static mask", () => {
+      const g = new Uint8Array([OP.SYNTH, SYNTH_KIND.BOND, 123]);
+      expect(genomeSynthMask(g) & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+    });
+    it("no SYNTH ops -> empty mask", () => {
+      expect(genomeSynthMask(new Uint8Array([OP.THRUST, OP.REPRODUCE]))).toBe(0);
+    });
+    it("matches the VM's bit for the same well-aligned op", () => {
+      const bytes = [OP.SYNTH, SYNTH_KIND.FA, 0];
+      const dyn = exec(bytes).out.synthMask;
+      const stat = genomeSynthMask(new Uint8Array(bytes));
+      expect(stat & (1 << SYNTH_BIT_FA)).toBe(dyn & (1 << SYNTH_BIT_FA));
+    });
+  });
+
+  // viableGenome: structural gate (must have metabolism + reproduce +
+  // sense + a trophic mode). Pinned at the coarse level only.
+  describe("viableGenome structural gate", () => {
+    it("a bare genome with no metabolism is not viable", () => {
+      expect(viableGenome(new Uint8Array([OP.THRUST]))).toBe(false);
+    });
+    it("makeRandomViableGenome output passes its own viability gate", async () => {
+      const { makeRandomViableGenome } = await import("../genome");
+      for (let i = 0; i < 20; i++) {
+        const g = makeRandomViableGenome(mulberry32(i + 1));
+        expect(g).not.toBeNull();
+        expect(viableGenome(g!)).toBe(true);
+      }
+    });
   });
 });
 

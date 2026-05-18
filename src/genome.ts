@@ -138,10 +138,13 @@ OPERANDS[OP.SENSE_CHEMICAL] = 1;
 OPERANDS[OP.SYNTH] = 2;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
-// executable op position. `operand` is `undefined` if the op takes
-// no operand. Centralizes the iteration pattern that used to be
-// repeated (with subtle differences) in viableGenome / disassemble /
-// summarizeGenome / describeGenomeProse / observedOpBias.
+// executable op position. `operand` is the FIRST operand byte for any
+// op that takes >=1 operand (e.g. SYNTH's kind byte; its second
+// operand/param is read separately by callers that need it), and
+// `undefined` for zero-operand ops. Centralizes the iteration pattern
+// that used to be repeated (with subtle differences) in viableGenome
+// / disassemble / summarizeGenome / describeGenomeProse /
+// observedOpBias.
 export function walkGenome(
   genome: Uint8Array,
   visit: (op: number, pc: number, operand: number | undefined) => void | "break",
@@ -150,7 +153,7 @@ export function walkGenome(
   while (i < genome.length) {
     const op = genome[i];
     const operandLen = OPERANDS[op];
-    const operand = operandLen === 1 && i + 1 < genome.length ? genome[i + 1] : undefined;
+    const operand = operandLen >= 1 && i + 1 < genome.length ? genome[i + 1] : undefined;
     if (visit(op, i, operand) === "break") return;
     i += 1 + operandLen;
   }
