@@ -128,7 +128,12 @@ hudBar.appendChild(hudStats);
 // Per-frame render/sim timing, inline beside the stats so the budget
 // is glanceable while iterating.
 const hudTimings = document.createElement("span");
-hudTimings.style.cssText = "opacity:0.8;" + HUD_FONT;
+// Right-aligned on the same flex row as the stats: margin-left:auto
+// pushes it to the far edge so the whole HUD is a single line when
+// the viewport is wide enough, and only wraps (still right-aligned)
+// on narrow screens.
+hudTimings.style.cssText =
+  "opacity:0.8;margin-left:auto;text-align:right;" + HUD_FONT;
 hudTimings.textContent = "r=--ms  s=--ms";
 hudBar.appendChild(hudTimings);
 // Stall + error indicator. Hidden by default; shown only when
@@ -156,7 +161,6 @@ disasmBody.style.cssText =
 // The selected-cell inspector, pin control and disasm moved into the
 // Inspector tab of the right-side organisms drawer.
 hud.appendChild(hudBar);
-hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
 root.appendChild(hud);
 
@@ -678,7 +682,9 @@ analysisPanel.style.cssText =
   "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-left:1px solid #1a3340;" +
   `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
-  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
+  // z-index above the top HUD / bottom control bar (both z-index:10)
+  // so this slideout draws over them, not under.
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:20;";
 const analysisHeader = document.createElement("div");
 analysisHeader.style.cssText =
   "display:flex;align-items:center;justify-content:center;gap:6px;" +
@@ -810,7 +816,9 @@ leftPanel.style.cssText =
   "position:fixed;top:0;left:0;bottom:0;width:" + LEFT_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-right:1px solid #1a3340;" +
   `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
-  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
+  // z-index above the top HUD / bottom control bar (both z-index:10)
+  // so this slideout draws over them, not under.
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:20;";
 const leftHeader = document.createElement("div");
 leftHeader.style.cssText =
   "display:flex;align-items:center;justify-content:center;gap:6px;" +
