@@ -8999,6 +8999,14 @@ export interface RenderSnapshot extends WorldEnv {
   // live cells whose root isn't in this set has lost its founder and
   // is being carried by descendants only.
   livingFounderLineages: number[];
+  // HUD aggregates for engulfed cells (not in world.creatures, so the
+  // flat creatures[] / species[] arrays miss them). engulfedCount is
+  // every cell living inside any host, counted recursively through
+  // nested vacuoles. engulfedOnlySpeciesCount is the number of
+  // distinct species that appear ONLY as engulfed members (their
+  // speciesKey is on no free/world cell).
+  engulfedCount: number;
+  engulfedOnlySpeciesCount: number;
   // Static across the run, but we ship it once so the renderer can
   // bake the terrain bitmap on the first snapshot it sees.
   obstacles: Obstacle[];
@@ -9214,6 +9222,25 @@ export function takeSnapshot(world: World): RenderSnapshot {
       }
     }
   }
+  // Engulfed-cell aggregates for the HUD. Computed here on the live
+  // Creature graph because snapshots flatten inner cells (no
+  // speciesKey / nested contents on InnerCreatureSnapshot).
+  let engulfedCount = 0;
+  const freeSpeciesKeys = new Set<string>();
+  const engulfedSpeciesKeys = new Set<string>();
+  for (const c of world.creatures) freeSpeciesKeys.add(c.speciesKey);
+  const walkInner = (cell: Creature): void => {
+    for (const inner of cell.contents) {
+      engulfedCount++;
+      engulfedSpeciesKeys.add(inner.speciesKey);
+      walkInner(inner);
+    }
+  };
+  for (const c of world.creatures) walkInner(c);
+  let engulfedOnlySpeciesCount = 0;
+  for (const k of engulfedSpeciesKeys) {
+    if (!freeSpeciesKeys.has(k)) engulfedOnlySpeciesCount++;
+  }
   return {
     width: world.width,
     height: world.height,
@@ -9236,6 +9263,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     dayPhase: world.dayPhase,
     particleTarget: world.particleTarget,
     extinctionCount: world.extinctionCount,
+    engulfedCount,
+    engulfedOnlySpeciesCount,
     // Lineage roots that still have a founder cell alive. Computed by
     // walking creatures: a creature whose id is in world.founderIds
     // contributes its lineageRoot. Set -> array for structured-clone.

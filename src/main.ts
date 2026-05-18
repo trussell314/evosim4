@@ -2901,8 +2901,10 @@ function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
   // fps + sim/wall ratio + elapsed sim time + pop + extinction count +
   // build time there. pop= shows cells / living species / lineages:
-  //   - cells: total live cells.
-  //   - species: distinct genomes among currently-alive cells.
+  //   - cells: free live cells, then "(N)" = engulfed cells living
+  //     inside hosts (recursive through nested vacuoles).
+  //   - species: distinct genomes among free cells, then "(N)" =
+  //     species present ONLY as engulfed members (on no free cell).
   //   - lineages: distinct founding lineages still alive -- count of
   //     distinct lineageRoot ids (cells sharing a founder collapse to
   //     one), so this is "how many separate founder lineages persist".
@@ -2916,7 +2918,8 @@ function updateInspector(): void {
   }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
+    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length} (${snapshot.engulfedCount})/` +
+    `${liveSpecies.size} (${snapshot.engulfedOnlySpeciesCount})/${liveLineages.size}  ` +
     `extinct=${snapshot.extinctionCount}  build=${__BUILD_TIME__}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
