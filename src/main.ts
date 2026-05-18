@@ -648,6 +648,11 @@ refreshActiveDisasm();
 // bottom wall sits PHYLO_STRIP_H pixels above the canvas bottom so cells
 // never overlap the timeline.
 const PHYLO_STRIP_H = 70;
+// Master visibility switch for the phylogeny strip (and its legend
+// text line). Hidden for now: when false the strip isn't drawn and
+// its vertical band is reclaimed so the world extends to the controls
+// bar (see bottomReserveH / drawPhylogeny).
+const PHYLO_VISIBLE = false;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
@@ -1444,7 +1449,9 @@ new ResizeObserver(() => {
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
   if (hudBarH !== prev) resize();
 }).observe(hud);
-function bottomReserveH(): number { return PHYLO_STRIP_H + controlsBarH; }
+function bottomReserveH(): number {
+  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH;
+}
 
 
 function resize(): void {
@@ -2381,6 +2388,7 @@ function drawGenomeStats(): void {
 }
 
 function drawPhylogeny(): void {
+  if (!PHYLO_VISIBLE) return; // hidden for now (strip + legend line)
   const stripH = PHYLO_STRIP_H;
   // Strip sits at the bottom of the CANVAS (in CSS pixels). The render
   // path resets the transform to DPR-only before calling us so screen
