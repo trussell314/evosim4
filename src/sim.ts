@@ -47,8 +47,16 @@ import {
   NREACT, RX_LOC_CELL, RX_LOC_FIELD, rxIdx,
   ATP_IDLE, ATP_VM, ATP_THRUST, ATP_EXCRETE, ATP_INGEST, ATP_ENGULF,
   ATP_PREDATE, ATP_REPRODUCE, ATP_RXN_ENDO, ATP_RXN_EXO, ATP_OTHER,
-  ATP_LABEL_COUNT,
 } from "./sim/rxn-ids";
+import type { RxnWindow } from "./sim/rxn-stats";
+import {
+  type RxnStats, type SavedRxnStats, newRxnStats,
+  serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
+} from "./sim/rxn-stats";
+export {
+  type RxnStats, type SavedRxnStats,
+  serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
+};
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1638,23 +1646,9 @@ const CAT_DECAY_PER_SEC = 0.005;
 // buckets. Persisted with the save.
 // Reaction-id space + ATP-ledger labels live in ./sim/rxn-ids
 // (imported at the top of this file).
-interface RxnWindow { t0: number; rxn: Int32Array; atp: Float64Array; }
-export interface RxnStats {
-  windowStart: number;
-  curRxn: Int32Array;   // NREACT*2*2
-  curAtp: Float64Array; // ATP_LABEL_COUNT*2 (k0 consumed, k1 produced)
-  fine: RxnWindow[];    // 60s windows, < 1h old
-  coarse: RxnWindow[];  // 300s aggregates, >= 1h old
-}
-function newRxnStats(): RxnStats {
-  return {
-    windowStart: 0,
-    curRxn: new Int32Array(NREACT * 4),
-    curAtp: new Float64Array(ATP_LABEL_COUNT * 2),
-    fine: [],
-    coarse: [],
-  };
-}
+// RxnStats data model + (de)serialization live in ./sim/rxn-stats
+// (imported at the top of this file). Only the World-coupled recording
+// hot path stays here.
 // Set once per step() (chemistry is single-threaded in the sim worker)
 // so the deep reaction/decay/spendATP paths can record without
 // threading `world` through five hot signatures.
@@ -1693,63 +1687,6 @@ function rollReactionWindow(world: World): void {
       rs.coarse.push({ t0: bucket, rxn: w.rxn, atp: w.atp });
     }
   }
-}
-// Sparse (idx,value) encoding so the save stays small -- most generic
-// reaction slots never fire.
-type RxnSparse = [number, number][];
-interface SavedRxnWindow { t0: number; r: RxnSparse; a: RxnSparse; }
-export interface SavedRxnStats {
-  windowStart: number;
-  cur: SavedRxnWindow;
-  fine: SavedRxnWindow[];
-  coarse: SavedRxnWindow[];
-}
-function sparseInt(a: Int32Array): RxnSparse {
-  const o: RxnSparse = [];
-  for (let i = 0; i < a.length; i++) if (a[i] !== 0) o.push([i, a[i]]);
-  return o;
-}
-function sparseFloat(a: Float64Array): RxnSparse {
-  const o: RxnSparse = [];
-  for (let i = 0; i < a.length; i++) if (a[i] !== 0) o.push([i, a[i]]);
-  return o;
-}
-function denseInt(len: number, p: RxnSparse | undefined): Int32Array {
-  const a = new Int32Array(len);
-  if (p) for (const [i, v] of p) if (i >= 0 && i < len) a[i] = v;
-  return a;
-}
-function denseFloat(len: number, p: RxnSparse | undefined): Float64Array {
-  const a = new Float64Array(len);
-  if (p) for (const [i, v] of p) if (i >= 0 && i < len) a[i] = v;
-  return a;
-}
-function snapToSaved(w: RxnWindow): SavedRxnWindow {
-  return { t0: w.t0, r: sparseInt(w.rxn), a: sparseFloat(w.atp) };
-}
-function savedToSnap(s: SavedRxnWindow): RxnWindow {
-  return {
-    t0: s.t0,
-    rxn: denseInt(NREACT * 4, s.r),
-    atp: denseFloat(ATP_LABEL_COUNT * 2, s.a),
-  };
-}
-export function serializeRxnStats(rs: RxnStats): SavedRxnStats {
-  return {
-    windowStart: rs.windowStart,
-    cur: { t0: rs.windowStart, r: sparseInt(rs.curRxn), a: sparseFloat(rs.curAtp) },
-    fine: rs.fine.map(snapToSaved),
-    coarse: rs.coarse.map(snapToSaved),
-  };
-}
-export function deserializeRxnStats(s: SavedRxnStats): RxnStats {
-  return {
-    windowStart: s.windowStart,
-    curRxn: denseInt(NREACT * 4, s.cur && s.cur.r),
-    curAtp: denseFloat(ATP_LABEL_COUNT * 2, s.cur && s.cur.a),
-    fine: (s.fine || []).map(savedToSnap),
-    coarse: (s.coarse || []).map(savedToSnap),
-  };
 }
 // --- Reaction catalog: stable per-reaction metadata (what each
 // reaction consumes/produces + a human label) so the UI can show,
@@ -1829,23 +1766,6 @@ export function reactionCatalog(): ReactionInfo[] {
      { chem: CHEM_GLU, coef: 10 }, { chem: CHEM_AA, coef: 0.5 }]);
   out[out.length - 1].external = true; // spawn input, excluded from the graph
   REACTION_CATALOG = out;
-  return out;
-}
-// Per-window reaction counts (id -> total executions in that window,
-// loc+catalyzed summed), ordered oldest..newest (coarse, fine, then
-// the in-progress window). Drives the reaction-detail time graph.
-export function reactionWindowSeries(s: SavedRxnStats): { t0: number; counts: Int32Array }[] {
-  const mk = (w: SavedRxnWindow): { t0: number; counts: Int32Array } => {
-    const dense = denseInt(NREACT * 4, w.r);
-    const counts = new Int32Array(NREACT);
-    for (let id = 0; id < NREACT; id++) {
-      const b = id * 4;
-      counts[id] = dense[b] + dense[b + 1] + dense[b + 2] + dense[b + 3];
-    }
-    return { t0: w.t0, counts };
-  };
-  const out = [...(s.coarse || []), ...(s.fine || [])].map(mk);
-  if (s.cur) out.push(mk(s.cur));
   return out;
 }
 // Total executions to date per reaction id (cur + all windows, both
