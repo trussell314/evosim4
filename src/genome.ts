@@ -98,8 +98,15 @@ export const SYNTH_KIND = {
   // uptake/integration is physical (see eDnaUptakePass); this op only
   // marks the cell competent this tick, like every other SYNTH gate.
   COMPETENCE: 14,
+  // Active packaging: expressed on a tick to encapsulate a fragment of
+  // the cell's OWN genome and shed it as a free-floating carrier (the
+  // donor-side virus/plasmid/conjugation strategy). Modeled like an
+  // ATP-costed secretion -- emphatically not a targeted "inject"
+  // verb: the donor cannot address a recipient. Who, if anyone, takes
+  // it up is decided by the physical carrier + recipient competence.
+  PACKAGE: 15,
 } as const;
-export const SYNTH_KIND_COUNT = 15;
+export const SYNTH_KIND_COUNT = 16;
 // synthMask bit positions. Per-kind bits 0..5 + 13..17 use one bit
 // each; PHOTO occupies bits 6..8 (one per band), CHEMO occupies
 // bits 9..12 (one per target). 18 bits total.
@@ -117,6 +124,7 @@ export const SYNTH_BIT_MAGNETO = 15;
 export const SYNTH_BIT_BOND = 16;
 export const SYNTH_BIT_REPAIR = 17;
 export const SYNTH_BIT_COMPETENCE = 18;
+export const SYNTH_BIT_PACKAGE = 19;
 
 // Number of catalyst slots. Kept in genome.ts (not sim.ts) because
 // the VM dispatch mods the operand by this -- it's part of the
@@ -444,6 +452,7 @@ export function runTick(
           case SYNTH_KIND.REPAIR: out.synthMask |= 1 << SYNTH_BIT_REPAIR; break;
           case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
           case SYNTH_KIND.COMPETENCE: out.synthMask |= 1 << SYNTH_BIT_COMPETENCE; break;
+          case SYNTH_KIND.PACKAGE: out.synthMask |= 1 << SYNTH_BIT_PACKAGE; break;
         }
         break;
       }
@@ -955,6 +964,7 @@ export function genomeSynthMask(genome: Uint8Array): number {
       case SYNTH_KIND.BOND:    mask |= 1 << SYNTH_BIT_BOND; break;
       case SYNTH_KIND.REPAIR:  mask |= 1 << SYNTH_BIT_REPAIR; break;
       case SYNTH_KIND.COMPETENCE: mask |= 1 << SYNTH_BIT_COMPETENCE; break;
+      case SYNTH_KIND.PACKAGE: mask |= 1 << SYNTH_BIT_PACKAGE; break;
     }
   });
   return mask;

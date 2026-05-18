@@ -23,6 +23,7 @@ import {
   SYNTH_KIND_COUNT,
   SYNTH_BIT_BOND,
   SYNTH_BIT_COMPETENCE,
+  SYNTH_BIT_PACKAGE,
   appendGenomeBytes,
   GENE_FRAGMENT_CAP,
 } from "./genome";
@@ -2961,6 +2962,15 @@ function advanceEDnaCarriers(world: World, dt: number): void {
 // cell sitting in a fragment-rich region doesn't bloat every tick.
 const EDNA_UPTAKE_RATE = 0.01;
 
+// Active packaging (SYNTH PACKAGE): per-expressing-tick probability of
+// actually shedding a self-fragment, and the ATP charged per shed
+// event. The cadence gate keeps a cell that holds PACKAGE high from
+// emitting one carrier every tick; ATP makes the donor strategy a real
+// metabolic investment (so virus/plasmid behavior must pay its way),
+// not a free broadcast. Physical constants, not a scripted strategy.
+const EDNA_PACKAGE_RATE = 0.05;
+const EDNA_PACKAGE_ATP = 0.4;
+
 // Competent cells integrate a fragment from the shared free-water eDNA
 // pool (region-local carriers, which PERSIST -- natural transformation
 // from a shared pool, retired only by DNase decay) and from their own
@@ -5194,6 +5204,34 @@ function updateCreatures(world: World, dt: number): void {
     // that gates BOND behind control flow keeps its identity; -1 until
     // first expressed.
     if ((vmOut.synthMask & (1 << SYNTH_BIT_BOND)) !== 0) c.bondMarker = vmOut.bondMarker;
+
+    // Active packaging: a cell expressing SYNTH PACKAGE encapsulates a
+    // window of its OWN genome and sheds it as a free-floating carrier
+    // (donor-side virus/plasmid/conjugation -- the donor cannot address
+    // a recipient; uptake is the recipient's competence + the physical
+    // carrier). ATP-costed like a secretion. Deterministic: cadence
+    // gate + source offset from the landed hashUnit/mixHash (never
+    // simRng), so RNG draw order is byte-identical. Genome bytes are
+    // not matter -> mass conservation untouched.
+    if ((vmOut.synthMask & (1 << SYNTH_BIT_PACKAGE)) !== 0
+        && c.genome.length > 0
+        && c.energy >= EDNA_PACKAGE_ATP
+        && world.eDnaCarriers.length < EDNA_CARRIER_MAX) {
+      const tSeed = Math.round(world.t * 1000) | 0;
+      if (hashUnit(c.id, tSeed, 0x504b4731) < EDNA_PACKAGE_RATE) {
+        const off = shedOffset(c.id, tSeed, c.genome.length);
+        const payload = appendGenomeBytes(
+          EMPTY_BYTES, c.genome, off, GENE_FRAGMENT_CAP,
+        );
+        if (payload.length > 0) {
+          spendATP(c, EDNA_PACKAGE_ATP, ATP_EXCRETE);
+          world.eDnaCarriers.push({
+            x: c.x, y: c.y, z: c.z, age: 0,
+            payload, srcSpeciesKey: c.speciesKey,
+          });
+        }
+      }
+    }
 
     // K-5: passive bond formation, greenbeard-gated. Both this cell and
     // the nearest neighbor must hold CHEM_BOND above

@@ -2600,3 +2600,37 @@ describe("eDNA competence uptake (Substrate A, sub-commit 3)", () => {
     expect(c.eDnaBuffer).not.toBeNull();
   });
 });
+
+describe("eDNA active packaging (Substrate A, sub-commit 4)", () => {
+  it("a cell expressing SYNTH PACKAGE sheds free-water carriers", () => {
+    const w = quietWorld();
+    const c = makeCreature({
+      genome: new Uint8Array([OP.SYNTH, SYNTH_KIND.PACKAGE, 0]),
+      energy: 1e6,
+      molecules: { membrane: 500, mrna: 50, aminoAcid: 50, enzyme: 1 },
+    });
+    w.creatures.push(c);
+    let shed = false;
+    for (let i = 0; i < 2000 && !shed; i++) {
+      step(w, 1 / 60);
+      if (w.eDnaCarriers.length > 0) shed = true;
+    }
+    expect(shed).toBe(true);
+    for (const e of w.eDnaCarriers) {
+      expect(e.payload.length).toBeGreaterThan(0);
+      expect(e.payload.length).toBeLessThanOrEqual(GENE_FRAGMENT_CAP);
+    }
+  });
+
+  it("a cell not expressing PACKAGE sheds nothing", () => {
+    const w = quietWorld();
+    const c = makeCreature({
+      genome: new Uint8Array([0x00]), // NOP only
+      energy: 1e6,
+      molecules: { membrane: 500, mrna: 50, aminoAcid: 50, enzyme: 1 },
+    });
+    w.creatures.push(c);
+    for (let i = 0; i < 1500; i++) step(w, 1 / 60);
+    expect(w.eDnaCarriers.length).toBe(0);
+  });
+});

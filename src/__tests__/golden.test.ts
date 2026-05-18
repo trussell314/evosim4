@@ -65,7 +65,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: SYNTH_KIND.COMPETENCE added (SYNTH_KIND_COUNT
     // 14 -> 15 shifts the kindByte modulo) and competent cells now
     // take up eDNA fragments -- both intended behavior changes.
-    const GOLDEN = "fb7bc74b";
+    // Bumped again: SYNTH_KIND.PACKAGE added (SYNTH_KIND_COUNT
+    // 15 -> 16) and cells expressing it now actively shed self
+    // fragments -- both intended behavior changes.
+    const GOLDEN = "c50314cd";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
