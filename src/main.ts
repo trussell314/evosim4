@@ -1487,17 +1487,41 @@ function mkArchGroup(name: string): HTMLDivElement {
   archWrap.appendChild(g);
   return g;
 }
+// Spawn-count selector: a clicked archetype injects this many cells
+// (each its own ordinary lineage via spawnSpecies). Default 1.
+let archSpawnCount = 1;
+const ARCH_COUNTS = [1, 5, 25, 100] as const;
+const gArchCount = mkArchGroup("count");
+const archCountBtns: HTMLButtonElement[] = [];
+function renderArchCount(): void {
+  for (let i = 0; i < ARCH_COUNTS.length; i++) {
+    setBtn(archCountBtns[i], ARCH_COUNTS[i] === archSpawnCount, T_TEAL);
+  }
+}
+for (const n of ARCH_COUNTS) {
+  const cb = mkBtn(String(n), `Spawn ${n} cell${n === 1 ? "" : "s"} per archetype click`);
+  cb.addEventListener("click", () => {
+    archSpawnCount = n;
+    renderArchCount();
+  });
+  archCountBtns.push(cb);
+  gArchCount.appendChild(cb);
+}
+renderArchCount();
+
 const gArchDirect = mkArchGroup("direct");
 const gArchSeed = mkArchGroup("seed");
 for (const a of ARCHETYPES) {
   const b = mkBtn(a.label, a.desc);
   b.addEventListener("click", () => {
-    simWorker.postMessage({
-      type: "spawnSpecies",
-      genome: Array.from(a.genome),
-    });
+    for (let i = 0; i < archSpawnCount; i++) {
+      simWorker.postMessage({
+        type: "spawnSpecies",
+        genome: Array.from(a.genome),
+      });
+    }
     const prev = a.label;
-    b.textContent = "spawned ✓";
+    b.textContent = `spawned ${archSpawnCount} ✓`;
     setBtn(b, true, T_GREEN);
     setTimeout(() => {
       b.textContent = prev;
