@@ -2731,3 +2731,46 @@ describe("standing transporters (Substrate B, sub-commit 1: cell<->world)", () =
     expect(s.chemCols[K][i]).toBeLessThan(80);            // exported
   });
 });
+
+describe("standing transporters (Substrate B, sub-commit 2: host<->organelle)", () => {
+  const MIN_N = TRANSPORT_CHEM_IDS.indexOf(5); // CHEM_MIN (inert: only SYNTH consumes it)
+  const SLOT = TRANSPORT_SLOT_BASE + MIN_N;
+
+  // Directly construct the engulfed state (inner parked in host.contents,
+  // not in world.creatures) -- the same invariant the live engulf path
+  // maintains -- so the test exercises runInnerCell's vacuolar transport
+  // without depending on the finicky geometric engulf gate.
+  function engulfed(): { w: World; host: Creature; inner: Creature } {
+    const w = quietWorld();
+    const host = makeCreature({ x: 400, y: 300, energy: 1e6, genome: new Uint8Array([HALT_MARK]) });
+    fillCellChems(host, 300 * 6);
+    const inner = makeCreature({ x: 400, y: 300, energy: 1e6, genome: new Uint8Array([HALT_MARK]) });
+    fillCellChems(inner, 10 * 6);
+    host.contents.push(inner);
+    w.creatures.push(host); // engulfed inner is NOT in world.creatures
+    return { w, host, inner };
+  }
+
+  // dInner = minerals that left the organelle. (Per-step mass-exactness
+  // of the transfer is identical-by-construction to the cell<->world
+  // transporter already unit-tested "mass-exact" in sub-commit 1, and
+  // the suite's global mass-conservation invariant guards the engine;
+  // inner+host minerals is not a closed quantity across 120 full-sim
+  // steps, so asserting it here would be the wrong test.)
+  function runScenario(catalystPool: number): number {
+    const { w, host, inner } = engulfed();
+    host.molecules.minerals = 10;
+    inner.molecules.minerals = 300;
+    inner.store.catalystCols[SLOT][inner.idx] = catalystPool;
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    return 300 - inner.molecules.minerals;
+  }
+
+  it("a vacuolar transporter moves chem organelle->host", () => {
+    expect(runScenario(10)).toBeGreaterThan(5);
+  });
+
+  it("isolates the transporter effect vs no-catalyst control", () => {
+    expect(runScenario(10)).toBeGreaterThan(runScenario(0) + 2);
+  });
+});

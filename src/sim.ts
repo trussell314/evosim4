@@ -4157,6 +4157,40 @@ function runInnerCell(
     ic[ii] -= d;
     hc[hi] += d;
   }
+
+  // Standing transporters across the shared VACUOLAR membrane
+  // (host<->organelle) -- the same substrate as the outer membrane,
+  // just a different "other side". Both the organelle's OWN transporter
+  // catalyst AND the host's transporter catalyst for chem k act on this
+  // membrane, summed: the organelle controls its exchange with the host
+  // cytoplasm, and the host can farm/starve by expressing transporter-k
+  // (which acts equally across EVERY organelle it carries -- no
+  // addressed delivery; control stays footprint-driven). Mass-exact
+  // (1:1 inner<->host) and deterministic. Facilitated v1 (atpDelta
+  // hook reserved for active pumping), matching the outer membrane.
+  const iCat = inner.store.catalystCols;
+  const hCat = host.store.catalystCols;
+  const surf = inner.store.r[ii] / MIN_CREATURE_R;
+  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+    const slot = TRANSPORT_SLOT_BASE + n;
+    const pool = iCat[slot][ii] + hCat[slot][hi];
+    if (pool <= 0) continue;
+    const k = TRANSPORT_CHEM_IDS[n];
+    const ic = iCols[k];
+    const hc = hCols[k];
+    const inside = ic[ii];
+    const outside = hc[hi];
+    const gap = outside - inside; // >0 import into organelle, <0 export
+    if (gap === 0) continue;
+    const src = gap > 0 ? outside : inside;
+    const sat = src / (src + KM_DEFAULT);
+    let flow = REACTIONS[slot].vmax * (pool / CAT_REF) * surf * sat * gap * dt;
+    if (flow > 0) { if (flow > outside) flow = outside; }
+    else { if (-flow > inside) flow = -inside; }
+    if (flow === 0) continue;
+    ic[ii] += flow;
+    hc[hi] -= flow;
+  }
 }
 
 // An engulfed cell that decays to a husk (lost structural membrane, or
