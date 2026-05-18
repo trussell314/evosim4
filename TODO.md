@@ -4,19 +4,23 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
-- **Death-triggered endosymbiotic gene transfer (EGT).** Today an
-  engulfed cell that dies (`innerIsDead`) is digested via
-  `digestInnerIntoHost` — its *chems* move to the host but none of its
-  *capability*. Add a probabilistic, no-permission transfer on inner
-  death: a chance the host absorbs a fragment of the dead symbiont's
-  genome (substrate-pure: raw bytes spliced into the host genome) or a
-  built capability. Make it a statistical ratchet, not a rule —
-  per-death probability scaled by how many symbionts of that lineage
-  the host carries; reverse transfer allowed but vanishingly rare.
-  This is what lets host takeover of the interface *emerge* via
-  selection on the fused collective rather than be scripted. Touch
-  points: the contents rebuild pass in `updateCreatures`,
-  `digestInnerIntoHost`. See `ENDOSYMBIOSIS_NOTES.md` §5.
+- **DONE — Horizontal gene transfer + death-triggered EGT (unified
+  eDNA substrate).** Resolved not as a special-cased per-death
+  probability but as one physical substrate: lysing cells (and cells
+  expressing `SYNTH PACKAGE`) shed genome fragments as decaying
+  extracellular-DNA carriers; cells expressing `SYNTH COMPETENCE`
+  integrate a fragment append-only via `appendGenomeBytes`. EGT is the
+  same substrate at the intracellular locality — a dead symbiont sheds
+  into the host's `eDnaBuffer` in `digestInnerIntoHost`, and the host's
+  own competence integrates from it. The count-scaled ratchet *emerges*
+  (more symbionts → more deaths → fuller buffer → more integration
+  opportunities) with **no `1-(1-p0)^k` formula anywhere**. Virus /
+  plasmid / conjugation are evolvable strategies over the shared
+  substrate, none scripted. All stochastic choices use the
+  deterministic `hashUnit`/`mixHash` (never the world RNG), so
+  determinism stays byte-identical. Touch points: `releaseChemsAsParticles`,
+  `digestInnerIntoHost`, `eDnaUptakePass`, `EDnaCarrier`. (No `INJECT`
+  op was added — a donor cannot address a recipient.)
 
 - **Dual / contested host↔organelle membrane (model C).** The
   organelle currently solely controls active transport across its
@@ -29,6 +33,13 @@ Living list of deferred work. Newest/explicit asks at top.
   domestication dynamics, and (with EGT above) control migrating
   hostward over generations. Touch points: `runInnerCell`, a new
   host-side transport step. See `ENDOSYMBIOSIS_NOTES.md` §2 / §4.
+  NOTE: superseded by the planned **Substrate B** (transporter-as-
+  membrane-reaction): rather than a bespoke host-side "transport bias"
+  step, a SYNTH'd transporter is a cross-compartment MM reaction
+  applied at *every* membrane the cell owns — outer (cell↔world) and
+  vacuolar (host↔organelle). Host farming/starving then emerges from
+  footprint-driven expression, no addressed verb. This unifies the
+  dual-membrane item with the standing-transporter work.
 
 - **Temperature diffusion / thermal inertia.** Region temperature is
   rebuilt every tick from a model (baseline + drifting sine patch +

@@ -2634,3 +2634,43 @@ describe("eDNA active packaging (Substrate A, sub-commit 4)", () => {
     expect(w.eDnaCarriers.length).toBe(0);
   });
 });
+
+describe("EGT emergent ratchet (Substrate A, sub-commit 5)", () => {
+  // Gap 2 closed WITHOUT a hard-coded p = 1-(1-p0)^k formula: the
+  // count-scaled ratchet emerges purely because more symbiont deaths
+  // refresh the host buffer more often, so a competent host has more
+  // integration opportunities. This test demonstrates that emergence:
+  // a host whose buffer is refreshed often (frequent symbiont death)
+  // integrates strictly more than one refreshed rarely, with zero
+  // EGT-specific probability code in the engine.
+  function competentHost(): Creature {
+    const c = makeCreature({ genome: new Uint8Array([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]) });
+    return c;
+  }
+  function countIntegrations(refreshEvery: number): number {
+    const w = quietWorld();
+    const c = competentHost();
+    w.creatures.push(c);
+    let prevLen = c.genome.length;
+    let events = 0;
+    for (let i = 0; i < 12000; i++) {
+      // Recurrent symbiont death refreshing the host-scoped buffer
+      // (what digestInnerIntoHost does on each inner death).
+      if (i % refreshEvery === 0 && !c.eDnaBuffer) {
+        c.eDnaBuffer = new Uint8Array([42, 43, 44, 45, 46, 47]);
+      }
+      c.vmOut.synthMask |= 1 << SYNTH_BIT_COMPETENCE; // competent each tick
+      w.t += 0.016;
+      eDnaUptakePass(w);
+      if (c.genome.length > prevLen) { events++; prevLen = c.genome.length; }
+    }
+    return events;
+  }
+
+  it("integration frequency scales with symbiont-death frequency (no formula)", () => {
+    const frequent = countIntegrations(20);    // buffer almost always full
+    const rare = countIntegrations(4000);      // buffer rarely available
+    expect(frequent).toBeGreaterThan(rare);
+    expect(rare).toBeGreaterThanOrEqual(0);
+  });
+});
