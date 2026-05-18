@@ -1082,15 +1082,25 @@ describe("creature: reproduction", () => {
     expect(w.creatures[1].genome).not.toBe(c.genome);
     expect(Math.abs(w.creatures[1].genome.length - c.genome.length)).toBeLessThanOrEqual(5);
   });
-  it("respects MAX_CREATURES cap", () => {
+  it("no soft 400 cap: reproduction past 400 is allowed (limited only by store)", () => {
+    // 405 ready-to-fission cells -- over the OLD MAX_CREATURES=400
+    // soft ceiling. Under the old cap, tryReproduce bailed at
+    // length>=400 before creating any division. Now the only limit is
+    // the CreatureStore's physical capacity, so divisions are set up
+    // even above 400.
     const w = quietWorld();
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 405; i++) {
       const c = makeCreature({ x: 100 + (i % 80) * 5, y: 100 + Math.floor(i / 80) * 5, energy: 200 });
       fillCellChems(c, 3000); readyToFission(c); readyToFission(c);
       w.creatures.push(c);
     }
-    step(w, 1 / 60);
-    expect(w.creatures.length).toBe(400);
+    // Under the old soft cap the population could never exceed 400.
+    // Run long enough for division waves to commit and confirm it
+    // climbs PAST 405, while staying finite and bounded by the store.
+    for (let i = 0; i < 150; i++) step(w, 1 / 60);
+    expect(w.creatures.length).toBeGreaterThan(405);
+    expect(w.creatures.length).toBeLessThanOrEqual(4096);
+    expect(Number.isFinite(w.creatures.length)).toBe(true);
   });
 });
 
