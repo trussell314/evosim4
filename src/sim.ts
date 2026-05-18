@@ -1440,7 +1440,7 @@ const INITIAL_PARTICLE_TARGET = 2500;
 // Bounds + step for runtime cap adjustment. Max stays well under
 // PARTICLE_STORE_PREALLOC_CAP so the over-cap headroom never overflows
 // the preallocated store.
-const PARTICLE_TARGET_MIN = 500;
+export const PARTICLE_TARGET_MIN = 500;
 const PARTICLE_TARGET_MAX = 50000;
 export const PARTICLE_TARGET_STEP = 500;
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
@@ -4982,9 +4982,12 @@ const RESERVE_CHEMCOUNT = new Uint32Array(CHEMICAL_COUNT); // visible count / ch
 const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve equiv / chem
 const RESERVE_WANT = new Int32Array(CHEMICAL_COUNT);       // desired visible / chem
 const RESERVE_SURPLUS = new Int32Array(CHEMICAL_COUNT);    // visible - want (positive)
-// No single material may occupy more than this fraction of the visible
-// particle budget; the rest of that chem stays in reserve. Stops one
-// abundant byproduct (e.g. minerals) from crowding the whole field.
+const RESERVE_ORDER = new Uint8Array(CHEMICAL_COUNT);      // chem ids, sorted by tot desc
+// In the greedy allocation each chem may claim at most this fraction
+// of the particle cap STILL UNALLOCATED when its turn comes (descending
+// by abundance). The draw-down bounds rarer chems by a shrinking pool
+// and stops one abundant byproduct (e.g. minerals) from crowding the
+// field; leftover capacity is intentionally left unused.
 const PARTICLE_PER_CHEM_FRAC = 0.20;
 function reservePass(world: World): void {
   // Reserve demote/promote + the visible cap run from t=0, including
@@ -4993,7 +4996,6 @@ function reservePass(world: World): void {
   // reservePass just moves that surplus into reserve instead of
   // leaving it visible -- there's no reason to pause recirculation.)
   const target = world.particleTarget;
-  const maxPerChem = Math.floor(PARTICLE_PER_CHEM_FRAC * target);
   const store = world.particleStore;
   const res = world.reserve;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
@@ -5015,7 +5017,6 @@ function reservePass(world: World): void {
     visN[store.chemId[i]]++;
   }
   const tot = RESERVE_TOT; // visible + reserve-equivalent count / chem
-  let grand = 0;
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
     const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
     // reserve stores AMOUNT; a PRECIP particle is density*volPer of
@@ -5024,33 +5025,44 @@ function reservePass(world: World): void {
     let rmass = 0;
     for (let ri = 0; ri < nReg; ri++) rmass += res[ri * AMBIENT_STRIDE + k];
     const resEquiv = amountPer > 0 ? rmass / amountPer : 0;
-    const t = visN[k] + resEquiv;
-    tot[k] = t;
-    grand += t;
+    tot[k] = visN[k] + resEquiv;
   }
-  const budget = Math.max(0, target - payloadN);
-  const visibleWanted = Math.min(budget, Math.round(grand));
-  // proportional desired visible count / chem; floor then hand out
-  // the remainder by largest fractional shortfall (deterministic,
-  // keeps sum(want) == visibleWanted).
+  // "Ideal" visible allocation. Two rules, in order:
+  //  1. Presence guarantee: any chem whose total (visible+reserve)
+  //     rounds to exactly one particle-equivalent always gets a
+  //     visible slot, so a lone unit never disappears into reserve.
+  //  2. Greedy descending 20%-of-remaining: process chems from most
+  //     to least abundant (by total). `remaining` starts at the global
+  //     particle cap less identity-carrying payload (payload can't be
+  //     demoted, so it's reserved off the top; with no payload this is
+  //     exactly world.particleTarget, e.g. 2500). Each chem may claim
+  //     at most floor(20% * remaining) -- and never more than it
+  //     actually has -- then that much is drawn down from `remaining`.
+  //     Rarer chems are bounded by a shrinking pool; any leftover
+  //     capacity is intentionally NOT reallocated.
   const want = RESERVE_WANT;
-  let sumWant = 0;
+  for (let k = 0; k < AMBIENT_STRIDE; k++) want[k] = 0;
+  let remaining = Math.max(0, target - payloadN);
+  // Rule 1.
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
-    let w = grand > 0 ? Math.floor(visibleWanted * tot[k] / grand) : 0;
-    if (w > maxPerChem) w = maxPerChem; // per-material visible ceiling
-    want[k] = w;
-    sumWant += w;
-  }
-  let rem = visibleWanted - sumWant;
-  while (rem > 0) {
-    let bk = -1, bf = -1;
-    for (let k = 0; k < AMBIENT_STRIDE; k++) {
-      if (tot[k] <= 0 || want[k] >= maxPerChem) continue;
-      const frac = (visibleWanted * tot[k] / grand) - want[k];
-      if (frac > bf) { bf = frac; bk = k; }
+    if (Math.round(tot[k]) === 1) {
+      want[k] = 1;
+      if (remaining > 0) remaining--;
     }
-    if (bk < 0) break; // everything at its ceiling -> rest stays in reserve
-    want[bk]++; rem--;
+  }
+  // Rule 2: descending by total.
+  const order = RESERVE_ORDER.subarray(0, AMBIENT_STRIDE);
+  for (let k = 0; k < AMBIENT_STRIDE; k++) order[k] = k;
+  order.sort((a, b) => tot[b] - tot[a]);
+  for (let oi = 0; oi < AMBIENT_STRIDE; oi++) {
+    const k = order[oi];
+    if (want[k] === 1 && Math.round(tot[k]) === 1) continue; // singleton (rule 1)
+    const desired = Math.round(tot[k]);
+    if (desired <= 0) { want[k] = 0; continue; }
+    const stepCap = Math.floor(PARTICLE_PER_CHEM_FRAC * remaining);
+    const give = desired < stepCap ? desired : stepCap;
+    want[k] = give;
+    remaining -= give;
   }
 
   // --- Demote per-chem surplus (visN[k] > want[k]) into local

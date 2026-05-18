@@ -82,6 +82,7 @@ import {
   type ReactionInfo,
   genomeTag,
   PARTICLE_TARGET_STEP,
+  PARTICLE_TARGET_MIN,
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
@@ -1473,7 +1474,7 @@ capMinus.style.cssText = CBTN + "padding:1px 9px;";
 capPlus.style.cssText = CBTN + "padding:1px 9px;";
 function renderCapLabel(): void { capValue.textContent = String(particleCap); }
 function nudgeCap(delta: number): void {
-  particleCap = Math.max(PARTICLE_TARGET_STEP, particleCap + delta);
+  particleCap = Math.max(PARTICLE_TARGET_MIN, particleCap + delta);
   renderCapLabel();
   simWorker.postMessage({ type: "setParticleCap", cap: particleCap });
 }
