@@ -1,9 +1,18 @@
 # Endosymbiosis / host↔organelle membrane notes
 
-Exploration doc (no committed design decision yet). Captures the
-conceptual analysis of the host↔organelle relationship and the
-"transporter" question, for further iteration. Nothing here is
-implemented unless it also appears in code.
+Exploration doc. Captures the conceptual analysis of the host↔organelle
+relationship and the "transporter" question, for further iteration.
+Nothing here is implemented unless it also appears in code.
+
+> **RESOLVED (transporter-as-reaction substrate).** The "transporter
+> question" (§3) and the control fork (§2) are now implemented as one
+> substrate: a transporter is a SYNTH'd catalyst on a reaction slot,
+> applied by a cross-compartment MM applier at *every* membrane the
+> cell owns — outer (cell↔world) and vacuolar (host↔organelle, with
+> both the organelle's and the host's catalysts acting). Model "C+"
+> (both sides act, summed; facilitated v1, ATP/uphill hook reserved).
+> See TODO.md "Standing transporters + dual/contested membrane (DONE)".
+> The sections below are kept as the original design reasoning.
 
 ## 1. Current model (as implemented)
 

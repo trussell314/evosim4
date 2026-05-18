@@ -39,24 +39,35 @@ Living list of deferred work. Newest/explicit asks at top.
   `digestInnerIntoHost`, `eDnaUptakePass`, `EDnaCarrier`. (No `INJECT`
   op was added — a donor cannot address a recipient.)
 
-- **Dual / contested host↔organelle membrane (model C).** The
-  organelle currently solely controls active transport across its
-  outer membrane. Add a host-side generic transport bias across a
-  specific vacuole (pick chem, push/pull ±, ATP-costed) that composes
-  additively with the organelle's active transport + passive
-  diffusion. No "feed organelle" verb and no organelle sensor — the
-  host must still act on cytoplasmic footprints, keeping recognition
-  emergent. Enables addressed delivery, parasite/mutualist/
-  domestication dynamics, and (with EGT above) control migrating
-  hostward over generations. Touch points: `runInnerCell`, a new
-  host-side transport step. See `ENDOSYMBIOSIS_NOTES.md` §2 / §4.
-  NOTE: superseded by the planned **Substrate B** (transporter-as-
-  membrane-reaction): rather than a bespoke host-side "transport bias"
-  step, a SYNTH'd transporter is a cross-compartment MM reaction
-  applied at *every* membrane the cell owns — outer (cell↔world) and
-  vacuolar (host↔organelle). Host farming/starving then emerges from
-  footprint-driven expression, no addressed verb. This unifies the
-  dual-membrane item with the standing-transporter work.
+- **DONE — Standing transporters + dual/contested host↔organelle
+  membrane (unified transporter-as-reaction substrate).** Gaps 5 and 4,
+  resolved as one substrate rather than a bespoke "host-side transport
+  bias" verb. Key realization: `N_REACTIONS === CATALYST_COUNT` and
+  reaction slot k is catalyzed by `catalystCols[k]`, so a transporter
+  *is* the existing enzyme machinery — `SYNTH CAT param=slot` builds
+  the transporter protein. The last band of procedurally-generated
+  generic slots is repurposed as transporters for the core small-
+  molecule metabolites (O2, CO2, glu, aa, fa, min, ADP, waste);
+  `buildReactionTable`'s seeded rng still draws for every slot so
+  determinism is byte-identical. A cross-compartment applier
+  (`runTransportReactions`) moves the chem with the same MM kinetics as
+  metabolism across **every membrane the cell owns**: the outer
+  membrane (cell↔world, via the region-ambient surface) and the
+  vacuolar membrane (host↔organelle — both the organelle's *and* the
+  host's transporter catalysts act, summed). Host farming/starving and
+  domestication/parasitism become reachable because the host's
+  transporter-k acts equally across *every* organelle it carries (no
+  addressed delivery; control stays footprint-driven). v1 is
+  facilitated (down-gradient); `Reaction.atpDelta` is the reserved hook
+  for future active/uphill pumping. No new opcode, no new SYNTH kind,
+  no new persisted field, **zero `SAVE_SCHEMA` bump**. Mass-exact (1:1
+  across the membrane, both sides in the ledger) and deterministic (no
+  `simRng`). The substrate is evolutionarily latent in short runs (a
+  genome must evolve a high catalyst slot) — correct "opens a door"
+  behavior; correctness is guarded by unit tests. Touch points:
+  `sim/reactions.ts` (transport `Reaction` flavor + band install),
+  `runGenericReactions` (skips transport slots),
+  `runTransportReactions`, `runInnerCell` (vacuolar wiring).
 
 - **Temperature diffusion / thermal inertia.** Region temperature is
   rebuilt every tick from a model (baseline + drifting sine patch +
