@@ -90,6 +90,7 @@ import {
   type SpeciesSnapshot,
 } from "./sim";
 import { disassemble, walkGenome, OP, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
+import { ARCHETYPES } from "./genome-archetypes";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -1319,6 +1320,7 @@ leftHeader.addEventListener("click", () => {
 let controlsBarH = 40;        // measured each layout
 let bottomHudH = 0;           // measured each layout (bottom status strip)
 let overlayPanelH = 0;        // measured each layout (overlay panel)
+let archPanelH = 0;           // measured each layout (archetypes panel)
 // Measured height of the fixed top status strip. The world fit
 // reserves it at the top (mirroring controlsBarH at the bottom) so
 // the world is never drawn behind the HUD -- the bar sits in its own
@@ -1439,6 +1441,74 @@ overlayHandle.addEventListener("click", () => {
 });
 overlayPanel.append(overlayHandle, overlayWrap);
 root.appendChild(overlayPanel);
+
+// Archetypes panel: a collapsible, bottom-left tab (mirrors the
+// overlay panel, left-anchored) holding one spawn button per
+// GENOME_ARCHETYPES founder. Substrate stance: these are *seeds*, not
+// engine rules -- clicking injects one cell of an authored genome via
+// the existing spawnSpecies path; it gets no special treatment and
+// must survive selection on its own. Collapsed by default so it's
+// just a "▸ archetypes" tab until opened.
+let archCollapsed = true;
+const archPanel = document.createElement("div");
+archPanel.style.cssText =
+  "position:fixed;z-index:11;bottom:0;display:flex;flex-direction:column;" +
+  "align-items:flex-start;gap:6px;padding:5px 8px;box-sizing:border-box;" +
+  "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
+  "border-right:1px solid #1a3340;" + HUD_FONT;
+const archHandle = document.createElement("button");
+archHandle.style.cssText = CBTN + "padding:4px 8px;";
+const archWrap = document.createElement("div");
+archWrap.style.cssText =
+  "display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px 12px;" +
+  "max-width:100%;";
+function renderArchCollapsed(): void {
+  archHandle.textContent = archCollapsed ? "▸ archetypes" : "▾ archetypes";
+  archWrap.style.display = archCollapsed ? "none" : "flex";
+}
+archHandle.addEventListener("click", () => {
+  archCollapsed = !archCollapsed;
+  renderArchCollapsed();
+  // Toggling changes the panel height; the world fit reserves the
+  // whole bottom stack, so re-measure + re-fit (mirrors overlay).
+  positionWorldButtons();
+  resize();
+});
+function mkArchGroup(name: string): HTMLDivElement {
+  const g = document.createElement("div");
+  g.style.cssText =
+    "display:flex;flex-wrap:wrap;align-items:center;gap:6px;" +
+    "min-width:0;max-width:100%;";
+  const lab = document.createElement("span");
+  lab.textContent = name;
+  lab.style.cssText =
+    "opacity:0.55;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;";
+  g.appendChild(lab);
+  archWrap.appendChild(g);
+  return g;
+}
+const gArchDirect = mkArchGroup("direct");
+const gArchSeed = mkArchGroup("seed");
+for (const a of ARCHETYPES) {
+  const b = mkBtn(a.label, a.desc);
+  b.addEventListener("click", () => {
+    simWorker.postMessage({
+      type: "spawnSpecies",
+      genome: Array.from(a.genome),
+    });
+    const prev = a.label;
+    b.textContent = "spawned ✓";
+    setBtn(b, true, T_GREEN);
+    setTimeout(() => {
+      b.textContent = prev;
+      setBtn(b, false, T_GREEN);
+    }, 1100);
+  });
+  (a.cls === "seed" ? gArchSeed : gArchDirect).appendChild(b);
+}
+renderArchCollapsed();
+archPanel.append(archHandle, archWrap);
+root.appendChild(archPanel);
 
 // ---- run: reset / turbo / profile / export ----
 const resetBtn = mkBtn("reset", "Clear saved world and start fresh");
@@ -1621,6 +1691,13 @@ function positionWorldButtons(): void {
   bottomHud.style.right = `${panelW}px`;
   bottomHud.style.bottom = `${controlsBarH + overlayPanelH}px`;
   bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
+  // Archetypes panel: bottom-left, left edge tracking the left
+  // slide-out, stacked directly above the status strip so the bottom
+  // run is [arch panel][bottom HUD][overlay panel/ctrlBar].
+  archPanel.style.left = `${leftPanelWidth()}px`;
+  archPanel.style.right = `${panelW}px`;
+  archPanel.style.bottom = `${controlsBarH + overlayPanelH + bottomHudH}px`;
+  archPanelH = Math.ceil(archPanel.getBoundingClientRect().height) || 0;
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${leftPanelWidth() + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
@@ -1635,7 +1712,7 @@ new ResizeObserver(() => {
   if (hudBarH !== prev) resize();
 }).observe(hud);
 function bottomReserveH(): number {
-  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + overlayPanelH + bottomHudH;
+  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + overlayPanelH + bottomHudH + archPanelH;
 }
 
 
