@@ -452,8 +452,21 @@ function hardReset(): void {
 // reliable cross-browser signal for "we may not run again".
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") forceSave();
+  // Coming back from screen-lock / app-switch: mobile browsers
+  // frequently do NOT fire resize / visualViewport.resize on resume,
+  // so the canvas keeps its stale (pre-background) backing size and
+  // the world-fit transform is never recomputed -> clipped canvas +
+  // misaligned HUD. Re-measure on resume. Deferred too, because the
+  // visual viewport settles a few hundred ms after resume (URL bar
+  // animating back) so a single immediate measure can read mid-anim.
+  else scheduleResize();
 });
 window.addEventListener("pagehide", forceSave);
+// bfcache restore / app-switch resume can deliver pageshow without a
+// resize event; orientationchange's final size also lands a frame
+// late on mobile. Both funnel through the same deferred re-measure.
+window.addEventListener("pageshow", () => scheduleResize());
+window.addEventListener("orientationchange", () => scheduleResize());
 
 // ---------------------------------------------------------------------
 // Sim worker. Owns the live World and runs step() flat-out on a
@@ -1660,6 +1673,14 @@ function resize(): void {
   viewScale = Math.min(sx, sy);
   viewOffsetX = (availW - WORLD_SIZE.w * viewScale) / 2;
   viewOffsetY = top + (availH - WORLD_SIZE.h * viewScale) / 2;
+}
+// Re-measure now, next frame, and after the mobile viewport settles
+// (URL bar finishing its show/hide animation post-resume). resize()
+// is cheap + idempotent, so the extra calls are harmless.
+function scheduleResize(): void {
+  resize();
+  requestAnimationFrame(resize);
+  setTimeout(resize, 300);
 }
 resize();
 window.addEventListener("resize", resize);
