@@ -1172,7 +1172,6 @@ const P_INSERT = 0.0005;
 // nothing to absorb the loss -- bias against deletion at the mutation
 // level instead.
 const P_DELETE = 0.0003;
-export const MAX_GENOME_BYTES = 1024;
 
 export function mutateGenome(
   genome: Uint8Array,
@@ -1191,14 +1190,14 @@ export function mutateGenome(
   const out: number[] = [];
   for (let i = 0; i < genome.length; i++) {
     if (rng() < P_DELETE) continue;
-    if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
+    if (rng() < P_INSERT) {
       out.push(randMutByte(rng, opBias));
     }
     let b = genome[i];
     if (rng() < P_POINT) b = randMutByte(rng, opBias);
-    if (out.length < MAX_GENOME_BYTES) out.push(b);
+    out.push(b);
   }
-  if (rng() < P_INSERT && out.length < MAX_GENOME_BYTES) {
+  if (rng() < P_INSERT) {
     out.push(randMutByte(rng, opBias));
   }
   // Every byte happened to delete: keep the genome non-empty with a
@@ -1226,7 +1225,7 @@ export function somaticMutateOnce(
     out[idx] = randMutByte(rng, opBias);
     return out;
   }
-  if (r < 0.85 && genome.length < MAX_GENOME_BYTES) {
+  if (r < 0.85) {
     const idx = Math.floor(rng() * (genome.length + 1));
     const out = new Uint8Array(genome.length + 1);
     out.set(genome.subarray(0, idx), 0);

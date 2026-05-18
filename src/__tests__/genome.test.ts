@@ -421,8 +421,8 @@ describe("mutateGenome", () => {
     const input = new Uint8Array(64).fill(0xAA);
     expect(Array.from(mutateGenome(input, mulberry32(1)))).not.toEqual(Array.from(mutateGenome(input, mulberry32(2))));
   });
-  it("output stays at or below MAX_GENOME_BYTES (1024)", () => {
-    expect(mutateGenome(new Uint8Array(1100).fill(0), () => 0.001).length).toBeLessThanOrEqual(1024);
+  it("no upper length cap: high insert rate grows past the old 1024 limit", () => {
+    expect(mutateGenome(new Uint8Array(1100).fill(0), () => 0.001).length).toBeGreaterThan(1024);
   });
   it("mid-probability rng=0.5 preserves bytes", () => {
     expect(Array.from(mutateGenome(new Uint8Array([9, 8, 7, 6, 5]), () => 0.5))).toEqual([9, 8, 7, 6, 5]);

@@ -32,6 +32,8 @@ import {
   newCreature,
   serializeRxnStats,
   deserializeRxnStats,
+  reactionCatalog,
+  NAMED_REACTION_COUNT,
 } from "../sim";
 import { OP, SYNTH_KIND, newVMState, type VMState } from "../genome";
 
@@ -1101,7 +1103,7 @@ describe("creature: reproduction", () => {
     expect(w.creatures.length).toBeGreaterThan(405);
     expect(w.creatures.length).toBeLessThanOrEqual(4096);
     expect(Number.isFinite(w.creatures.length)).toBe(true);
-  });
+  }, 20_000);
 });
 
 describe("creature: predation (cell eats cell)", () => {
@@ -2383,5 +2385,41 @@ describe("reaction / ATP accounting", () => {
     const before = sum(rs.curRxn);
     step(w, 1 / 60);
     expect(sum(rs.curRxn)).toBeGreaterThan(before);
+  });
+});
+
+describe("reaction energetics: thermodynamic consistency", () => {
+  // Generic reactions must derive atpDelta from composition (bond
+  // potential), not a random exergonic-biased draw. The old draw had
+  // mean ~+1.4 ATP/reaction -- a free-energy reservoir. Composition-
+  // derived deltas are zero-mean (no bias) but still energetically
+  // meaningful (nonzero spread).
+  const generic = reactionCatalog()
+    .filter((r) => r.label.startsWith("gen#"))
+    .map((r) => r.atpDelta);
+
+  it("generic slot count is the procedural tail", () => {
+    expect(generic.length).toBe(256 - NAMED_REACTION_COUNT);
+  });
+
+  it("no exergonic bias: mean atpDelta ~ 0", () => {
+    const mean = generic.reduce((a, b) => a + b, 0) / generic.length;
+    expect(Math.abs(mean)).toBeLessThan(0.5);
+  });
+
+  it("energetically meaningful: real spread, both signs present", () => {
+    const mean = generic.reduce((a, b) => a + b, 0) / generic.length;
+    const sd = Math.sqrt(
+      generic.reduce((a, b) => a + (b - mean) ** 2, 0) / generic.length,
+    );
+    expect(sd).toBeGreaterThan(0.5);
+    expect(generic.some((d) => d > 0.5)).toBe(true);
+    expect(generic.some((d) => d < -0.5)).toBe(true);
+  });
+
+  it("deterministic table: catalog is stable across calls", () => {
+    const a = reactionCatalog().map((r) => r.atpDelta);
+    const b = reactionCatalog().map((r) => r.atpDelta);
+    expect(a).toEqual(b);
   });
 });

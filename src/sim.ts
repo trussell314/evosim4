@@ -21,7 +21,6 @@ import {
   somaticMutateOnce,
   computeSenseRange,
   computeThrustAccel,
-  MAX_GENOME_BYTES,
   SYNTH_KIND,
   SYNTH_KIND_COUNT,
   SYNTH_BIT_BIO,
@@ -1163,7 +1162,8 @@ export interface Species {
   // species (a member's c.genome can drift somatically; this one
   // stays the canonical species signature).
   genome: Uint8Array;
-  // Per-position VM execution counter (length = MAX_GENOME_BYTES).
+  // Per-position VM execution counter (length = the species' captured
+  // genome length; PCs past it from somatic growth go untraced).
   // Every tick that any cell of this species runs its VM, each PC
   // the VM lands on increments the slot at that position. Hot
   // positions = code that actually runs; zero slots = dead code or
@@ -2066,9 +2066,13 @@ interface ChemicalDef {
   // machinery molecules that can't cross. Replaces the old
   // `diffusable: boolean` -- nonzero permeability == "diffusable".
   permeability: number;
-  // Stored chemical potential per unit mass. Informational for the
-  // procedural reaction generator (substrates with high bondEnergy
-  // tend to yield more ATP when broken down). Phase H uses it.
+  // Stored chemical potential per unit mass. This is the thermodynamic
+  // ground truth: every generic reaction's atpDelta is derived from it
+  // (atpDelta = Σ substrate potential − Σ product potential via
+  // CHEM_BOND_POTENTIAL), so breaking high-bondEnergy substrates into
+  // low-energy products yields ATP and the system can't mint free
+  // energy. Named reactions keep hand-authored atpDelta (their tuned
+  // trophic web; light is their external energy input).
   bondEnergy: number;
   // Role flag for built-in machinery / identity semantics. Most
   // chemicals are "none".
@@ -2173,6 +2177,20 @@ for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_BASE_DENSITY[i] = CHEMICALS[i].den
 // the boundary (named chems are all 1.0; generics roll 0.5..5.0).
 const CHEM_MM = new Float32Array(CHEMICAL_COUNT);
 for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_MM[i] = CHEMICALS[i].molarMass;
+// Stored chemical potential of one count-unit of each chem, in ATP
+// units. bondEnergy is "potential per unit mass"; a count-unit carries
+// molarMass of substance, so its stored energy is mass * bondEnergy,
+// rescaled into the ATP currency by BOND_ENERGY_TO_ATP. This is the
+// thermodynamic ground truth used to derive every generic reaction's
+// atpDelta as a conservative function of composition (see
+// buildReactionTable): atpDelta = Σ substrate potential − Σ product
+// potential, so a reaction and its exact reverse have equal-and-
+// opposite atpDelta and no cycle of generics can mint net energy.
+const BOND_ENERGY_TO_ATP = 0.012;
+const CHEM_BOND_POTENTIAL = new Float32Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) {
+  CHEM_BOND_POTENTIAL[i] = CHEMICALS[i].molarMass * CHEMICALS[i].bondEnergy * BOND_ENERGY_TO_ATP;
+}
 // Exported color LUT, indexed by chem id. Used by the renderer in
 // main.ts to color free-floating particles by their chemical identity.
 export const CHEM_COLORS: ReadonlyArray<string> = CHEMICALS.map((c) => c.color);
@@ -2439,9 +2457,24 @@ function buildReactionTable(): Reaction[] {
     const scale = sMass / pMassRaw;
     const pCount = new Float32Array(nP);
     for (let j = 0; j < nP; j++) pCount[j] = pCountRaw[j] * scale;
-    // ATP delta: roughly bell-shaped around 0, slight exergonic bias
-    // so on average reactions release a little energy. Range ~[-6, +8].
-    const atpDelta = ((rng() + rng() + rng()) / 3 - 0.4) * 14;
+    // ATP delta: NOT a free draw. Energy released = bond potential
+    // liberated = (Σ substrate potential) − (Σ product potential).
+    // Mass is already balanced above, so this is conservative by
+    // construction: the exact reverse reaction has the negated
+    // atpDelta, and any closed cycle of generics telescopes to zero
+    // net ATP -- no perpetual-motion reservoir, no exergonic bias.
+    // Sign follows composition: a reaction that breaks high-bond-
+    // energy substrates into low-energy products is exergonic
+    // (yields ATP); building energy-rich products costs ATP.
+    // The three rng() draws that formerly *were* atpDelta are still
+    // consumed (and discarded) so every other generated field --
+    // here and in all later slots -- stays bit-identical to before.
+    rng(); rng(); rng();
+    let sBondE = 0;
+    for (let j = 0; j < nS; j++) sBondE += sCount[j] * CHEM_BOND_POTENTIAL[sChem[j]];
+    let pBondE = 0;
+    for (let j = 0; j < nP; j++) pBondE += pCount[j] * CHEM_BOND_POTENTIAL[pChem[j]];
+    const atpDelta = sBondE - pBondE;
     // Light: ~15% of reactions are light-driven, requiring 0.2..1.5
     // units of ambient light to proceed (caps the rate).
     const lightIn = rng() < 0.15 ? 0.2 + rng() * 1.3 : 0;
@@ -4487,7 +4520,7 @@ function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefi
       parents: new Set<string>(),
       lane: world.nextSpeciesLane++,
       genome: new Uint8Array(c.genome),
-      execCounts: new Uint32Array(MAX_GENOME_BYTES),
+      execCounts: new Uint32Array(c.genome.length),
       vmTicks: 0,
       peakBiomass: 0,
     };
@@ -6094,8 +6127,9 @@ function spawnExcretedParticle(
 // back to a's tail. k is uniformly random.
 // Apply a SPLICE_DUP / SPLICE_DEL request to a cell's live genome.
 // mode 1 = duplicate the [off, off+len) region in place; mode 2 = delete
-// it. Genome length is clamped to [1, MAX_GENOME_BYTES]. PC is taken
-// mod the new length so the next tick resumes somewhere valid.
+// it. Genome length has no upper bound; the lower bound is 1 (SPLICE_DEL
+// can't empty it). PC is taken mod the new length so the next tick
+// resumes somewhere valid.
 function applyGenomeSplice(c: Creature, mode: number, off: number, len: number): void {
   const g = c.genome;
   const L = g.length;
@@ -6107,17 +6141,10 @@ function applyGenomeSplice(c: Creature, mode: number, off: number, len: number):
   if (mode === 1) {
     // Duplicate: [0..L) -> [0..b) + [a..b) (the duplicated region) + [b..L)
     const dupLen = b - a;
-    const newLen = Math.min(MAX_GENOME_BYTES, L + dupLen);
-    next = new Uint8Array(newLen);
-    next.set(g.subarray(0, Math.min(b, newLen)), 0);
-    // Copy the duplicate region after the original; cap to newLen.
-    const dupStart = b;
-    const dupEnd = Math.min(newLen, dupStart + dupLen);
-    if (dupEnd > dupStart) next.set(g.subarray(a, a + (dupEnd - dupStart)), dupStart);
-    // Tail (originally [b..L))
-    const tailStart = dupEnd;
-    const tailLen = Math.min(L - b, newLen - tailStart);
-    if (tailLen > 0) next.set(g.subarray(b, b + tailLen), tailStart);
+    next = new Uint8Array(L + dupLen);
+    next.set(g.subarray(0, b), 0);
+    next.set(g.subarray(a, b), b);
+    next.set(g.subarray(b, L), b + dupLen);
   } else if (mode === 2) {
     // Delete: keep [0..a) and [b..L).
     const newLen = Math.max(1, L - (b - a));
@@ -8685,7 +8712,7 @@ function applyWalls(world: World): void {
 // minute so a mobile tab that gets reaped doesn't lose progress.
 //
 // The schema string bakes in ABI-affecting constants -- bumping any of
-// them (CATALYST_COUNT, CHEMICAL_COUNT, MAX_GENOME_BYTES) invalidates
+// them (CATALYST_COUNT, CHEMICAL_COUNT) invalidates
 // older saves automatically. main.ts treats schema mismatch as
 // "fresh world", matching the user's preference for hard-reset over
 // migration.
@@ -8699,7 +8726,7 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:7:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}:${MAX_GENOME_BYTES}`;
+export const SAVE_SCHEMA = `evosim4:8:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -9045,7 +9072,7 @@ export function applySavedWorld(world: World, json: string): boolean {
       alive: ss.alive, lane: ss.lane, vmTicks: ss.vmTicks,
       parents: new Set(ss.parents),
       genome: new Uint8Array(ss.genome),
-      execCounts: new Uint32Array(MAX_GENOME_BYTES),
+      execCounts: new Uint32Array(ss.genome.length),
       peakBiomass: ss.peakBiomass ?? 0,
     });
   }
