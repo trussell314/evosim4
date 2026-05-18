@@ -14,6 +14,26 @@ npm test           # runs the simulation test suite (vitest)
 npm run build      # production build into dist/
 ```
 
+## Design philosophy
+
+The point of this sim is to be a *substrate*, not a script. It provides
+only the basic environment (a water column with light, temperature,
+gas exchange, currents, a procedural reaction network) and a small set
+of primitive tools cells can invoke from their genome (sense a
+chemical, synthesize a product, thrust, ingest, predate, engulf, bond,
+splice DNA, reproduce). Nothing above that is hand-coded.
+
+In particular, **organelles, multicellularity, signaling,
+specialization, and any metabolic/behavioral strategy are not
+implemented features** &mdash; they are outcomes the framework should
+*permit* but never prescribe or steer. When a mechanism is added, the
+test is "does this open a door?" not "does this make X happen?".
+Behaviors that emerge need not mirror biology; the only bar is that
+they arise from selection over the genome, not from engine rules that
+assume them. Where the engine currently *forces* a behavior that
+should instead be evolvable, that is a known gap (see `COLONY_GAPS.md`
+and the review notes), not a feature.
+
 ## End goal
 
 Run this for long enough to observe at least one successful, roughly
