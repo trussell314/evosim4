@@ -43,7 +43,7 @@ describe("genome archetypes", () => {
   // predicate. The "seed" parasite/virus are deliberately minimal and
   // exempt (they bank on a host / carrier, not solo viability).
   it("self-sufficient archetypes satisfy viableGenome", () => {
-    const exempt = new Set(["endoparasite", "virus", "mitochondria"]);
+    const exempt = new Set(["endoparasite", "virus"]);
     for (const a of ARCHETYPES) {
       if (exempt.has(a.id)) continue;
       expect(viableGenome(a.genome), `${a.id} should be viable`).toBe(true);

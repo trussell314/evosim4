@@ -20,8 +20,6 @@ import {
   CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_CHEMO_BIOPOLYMER_X,
   CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-  CHEM_ACT_CHEMO_MARKER0_X,
-  CHEM_ACT_CHEMO_MARKER0_Y,
   CHEM_ACT_THERMO,
   CHEM_ACT_MAG_X,
   CHEM_ACT_MAG_Y,
@@ -37,6 +35,16 @@ import {
 const ING_BIOPOLYMER = 1;
 const ING_O2 = 3;
 const ING_GLU = 5;
+
+// Inert trailing cassette. stress-amp's SPLICE_DUP/DEL must target a
+// non-essential region (offset 0 corrupts the SYNTH kit and shifts
+// all downstream op alignment every tick). Appended after the
+// reproduce gate so duplications/deletions only ever touch NOPs and
+// the functional head keeps fixed addresses.
+const NOP_CASSETTE: Instr[] = Array.from(
+  { length: 32 },
+  () => ["NOP"] as Instr,
+);
 
 // Universal heterotroph build kit (see viableGenome): membrane,
 // mRNA, fatty acid, digestive enzyme, amino-acid synthesis.
@@ -160,14 +168,14 @@ function build(): Archetype[] {
       id: "predator",
       label: "size-bully",
       cls: "direct",
-      desc: "Roaming predator: homes on cell markers, ingests bulk organic to bulk up past the predation size gate, and PREDATEs on contact.",
+      desc: "Roaming predator: climbs the bulk-organic gradient into food/prey-dense regions (prey don't emit a marker to home on), ingests to bulk up past the predation size gate, and PREDATEs on contact.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 3], // target 3 = marker0 (other cells)
+        ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
         ["INGEST", ING_BIOPOLYMER],
         ...climbGradient(
-          CHEM_ACT_CHEMO_MARKER0_X,
-          CHEM_ACT_CHEMO_MARKER0_Y,
+          CHEM_ACT_CHEMO_BIOPOLYMER_X,
+          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           40,
         ),
         ["PREDATE"],
@@ -217,12 +225,19 @@ function build(): Archetype[] {
       id: "chloroplast",
       label: "chloroplast",
       cls: "seed",
-      desc: "Seed: a small photoautotroph that leaks glucose every tick. Engulfed, it can become a farmable mutualist organelle.",
+      desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle.",
       prog: [
         ...AUTO_SYNTH,
         ["SYNTH", "PHOTO", 0],
-        ["PUSH8", 8],
-        ["EXCRETE", CHEM_GLU], // bleed fixed carbon into the shared pool
+        // Only shed glucose when structurally healthy -- an
+        // unconditional leak self-starves a slow autotroph.
+        ["SELF_MEMBRANE"],
+        ["PUSH8", 10],
+        ["GT"],
+        ["JZ", "noLeak"],
+        ["PUSH8", 6],
+        ["EXCRETE", CHEM_GLU], // bleed surplus fixed carbon to the pool
+        ["LABEL", "noLeak"],
         ...reproduceWhenGrown(36, "np"),
       ],
     },
@@ -230,14 +245,14 @@ function build(): Archetype[] {
       id: "farmer",
       label: "farmer host",
       cls: "seed",
-      desc: "Seed: heterotroph that ENGULFs neighbours and relies on internal division of its captives. Farming emerges from the shared cytoplasm.",
+      desc: "Seed: heterotroph that climbs into organic/prey-dense regions, ENGULFs neighbours, and relies on internal division of its captives. Farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 3],
+        ["SYNTH", "CHEMO", 0],
         ["INGEST", ING_BIOPOLYMER],
         ...climbGradient(
-          CHEM_ACT_CHEMO_MARKER0_X,
-          CHEM_ACT_CHEMO_MARKER0_Y,
+          CHEM_ACT_CHEMO_BIOPOLYMER_X,
+          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           35,
         ),
         ["ENGULF"],
@@ -248,7 +263,7 @@ function build(): Archetype[] {
       id: "endoparasite",
       label: "endoparasite",
       cls: "seed",
-      desc: "Seed: minimal soma, leaks a marker0 lure, low membrane (cheap to engulf), reproduces hard. Wants to be eaten, then blooms inside the host.",
+      desc: "Seed: minimal soma, leaks a marker0 lure, low membrane (cheap to engulf). Wants to be eaten, then blooms inside the host (engulfed internal division is uncapped). Reproduces aggressively but gated on a low membrane floor so it doesn't self-lyse before a host takes it up.",
       prog: [
         ["SYNTH", "BIO", 0],
         ["SYNTH", "MRNA", 0],
@@ -259,25 +274,24 @@ function build(): Archetype[] {
         ["THRUST"],
         ["PUSH8", 6],
         ["EXCRETE", CHEM_MARKER0], // bait
-        ["SELF_ENERGY"],
-        ["PUSH8", 2],
-        ["GT"],
-        ["JZ", "np"],
-        ["REPRODUCE"], // near-unconditional internal bloom
-        ["LABEL", "np"],
+        // Low membrane floor: still blooms hard, but won't divide
+        // itself below the viable structural reserve in open water.
+        ...reproduceWhenGrown(10, "np"),
       ],
     },
     {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure; ingests glucose + O2 and returns CO2. No digester -- specialised on aerobic respiration, not biopolymer. Honest framing: its product (ATP) does NOT cross the host membrane; any host benefit is emergent gas/substrate cycling via the shared pool, never a scripted ATP hand-off.",
+      desc: "Seed: respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure; ingests glucose + O2 and returns CO2. Carries a digestive-enzyme + biopolymer bootstrap so it can actually feed free-living (free glucose isn't seeded into open water) before a host takes it up. Honest framing: its product (ATP) does NOT cross the host membrane; any host benefit is emergent gas/substrate cycling via the shared pool, never a scripted ATP hand-off.",
       prog: [
         ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
         ["SYNTH", "MRNA", 0],
         ["SYNTH", "FA", 0],
+        ["SYNTH", "ENZ", 0], // free-living bootstrap: digest organic
         ["SYNTH", "AA", 0],
-        ["INGEST", ING_GLU], // respiratory fuel
+        ["INGEST", ING_BIOPOLYMER], // free-living fuel via digestion
+        ["INGEST", ING_GLU], // respiratory fuel inside a glucose-rich host
         ["INGEST", ING_O2], // electron acceptor
         ["THRUST"], // drift to substrate before engulfment
         ["PUSH8", 8],
@@ -291,7 +305,7 @@ function build(): Archetype[] {
       id: "stress-amp",
       label: "stress amplifier",
       cls: "direct",
-      desc: "Heritable size plasticity: SPLICE_DUP the genome when ATP is low (amplify), SPLICE_DEL when fat (streamline).",
+      desc: "Heritable size plasticity: SPLICE_DUP an inert trailing cassette when ATP is low (amplify), SPLICE_DEL it when fat (streamline). Splices only ever touch the appended NOP cassette, never the functional head.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
@@ -301,23 +315,27 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           30,
         ),
+        // Splice offset = CASSETTE_OFF, the start of the trailing NOP
+        // cassette (must stay >= the end of the reproduce gate; tracks
+        // genome layout -- recompute if the head changes).
         ["SELF_ENERGY"],
         ["PUSH8", 10],
         ["LT"], // ATP < 10 -> starving
         ["JZ", "notLow"],
-        ["PUSH8", 0], // splice offset
-        ["PUSH8", 8], // splice length
+        ["PUSH8", 60], // splice offset -> into the NOP cassette
+        ["PUSH8", 6], // splice length
         ["SPLICE_DUP"],
         ["LABEL", "notLow"],
         ["SELF_ENERGY"],
         ["PUSH8", 60],
         ["GT"], // ATP > 60 -> fat
         ["JZ", "notFat"],
-        ["PUSH8", 0],
-        ["PUSH8", 8],
+        ["PUSH8", 60],
+        ["PUSH8", 6],
         ["SPLICE_DEL"],
         ["LABEL", "notFat"],
         ...reproduceWhenGrown(34, "np"),
+        ...NOP_CASSETTE,
       ],
     },
     {
