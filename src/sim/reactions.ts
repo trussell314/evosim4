@@ -1,0 +1,280 @@
+// The 256-slot reaction table: procedurally-generated mass-balanced
+// generics (atpDelta derived from bond potential -- conservative, no
+// free energy) with the 26 hand-authored named reactions overwriting
+// the head. Built once at import from fixed seeds. Pure: depends only
+// on rng + chem-ids + chemistry + genome's reaction/synth constants,
+// so no value cycle back through sim.ts. The hot per-cell driver
+// (runGenericReactions) and the UI catalog stay in sim.ts since they
+// touch Creature state / the rxn-stats recorder.
+
+import { mulberry32 } from "../rng";
+import { CHEMICAL_COUNT } from "./chem-ids";
+import {
+  CHEM_GLU, CHEM_O2, CHEM_CO2, CHEM_FA, CHEM_AA, CHEM_MIN, CHEM_CHL,
+  CHEM_ENZ, CHEM_MRNA, CHEM_MEMBRANE, CHEM_BIOPOLYMER, CHEM_WASTE,
+  CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG,
+  CHEM_PHOTORECEPTOR_SURFACE, CHEM_CHEMORECEPTOR_BIOPOLYMER,
+  CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
+  CHEM_CHEMORECEPTOR_MARKER0, CHEM_MECHANORECEPTOR,
+  CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR, CHEM_BOND, CHEM_REPAIR,
+} from "./chem-ids";
+import { CHEMICALS, CHEM_BOND_POTENTIAL } from "./chemistry";
+import {
+  N_REACTIONS,
+  SYNTH_BIT_AA, SYNTH_BIT_FA, SYNTH_BIT_CHL, SYNTH_BIT_ENZ,
+  SYNTH_BIT_MRNA, SYNTH_BIT_BIO, SYNTH_BIT_MECH, SYNTH_BIT_THERMO,
+  SYNTH_BIT_MAGNETO, SYNTH_BIT_BOND, SYNTH_BIT_REPAIR,
+  SYNTH_BIT_PHOTO_BASE, SYNTH_BIT_CHEMO_BASE,
+} from "../genome";
+
+export interface Reaction {
+  sChem: Uint8Array;    // length 1..3, substrate chem ids
+  sCount: Float32Array; // parallel, mass-units per unit reaction
+  pChem: Uint8Array;    // length 1..3, product chem ids
+  pCount: Float32Array; // parallel
+  atpDelta: number;     // signed energy delta per unit reaction (>0 = exergonic)
+  lightIn: number;      // 0 if not light-driven; else units of light per unit
+  vmax: number;         // boost rate added on top of uncatRate per (pool/CAT_REF)
+  // Baseline rate when catalyst pool is 0. Named reactions set this > 0
+  // (the bootstrap chemistry every cell gets free); generic reactions
+  // leave it 0 -- they only fire when a cell has built the catalyst.
+  uncatRate: number;
+  // Optional synthMask bit: reaction only runs if (VM_OUT.synthMask & gateMask).
+  // 0 = no gate (always eligible). Biosynth reactions use this so the
+  // SYNTH_AA / SYNTH_FA / SYNTH_BIO ops still gate what gets built.
+  gateMask: number;
+  // If true, rate also scales with cell surface area (r / MIN_R) -- only
+  // photosynth uses this today, modeling pigment membrane area.
+  surfaceScale: boolean;
+  // Apply BIOSYNTH_ATP_FLOOR when this reaction consumes ATP. True for
+  // biosynth slots so newborns don't burn their starting ATP on growth.
+  atpFloor: boolean;
+  // Rate multiplied by chemCols[CHEM_MRNA][i] / MRNA_REF. Set on
+  // every biosynth reaction (real mRNA drive protein synthesis).
+  // Mandatory -- zero mRNA means zero biosynth.
+  mrnaScale: boolean;
+  // Rate multiplied by chemCols[CHEM_CHL][i] / CHL_REF. Set only on
+  // photosynth (real chlorophyll absorbs the photon). Mandatory --
+  // zero chlorophyll means no carbon fixation.
+  chlScale: boolean;
+  // Rate multiplied by chemCols[CHEM_ENZ][i] / ENZ_REF. Set only on
+  // biopolymer digestion (catabolism replacement). Mandatory -- zero
+  // enzyme means no biopolymer breakdown. The cell can still hold
+  // biopolymer in its pool, but can't extract glu/aa/fa from it
+  // without building enzymes.
+  enzScale: boolean;
+}
+
+function buildReactionTable(): Reaction[] {
+  const rng = mulberry32(0xE2C4_BEEF);
+  const COUNT_POOL = [1, 1, 1, 1, 2, 2, 3, 5, 10];
+  const pickInt = (n: number): number => Math.floor(rng() * n);
+  const pickFrom = <T>(arr: ReadonlyArray<T>): T => arr[pickInt(arr.length)];
+  const out: Reaction[] = [];
+  for (let i = 0; i < N_REACTIONS; i++) {
+    const nS = 1 + pickInt(3); // 1..3
+    const nP = 1 + pickInt(3);
+    // Substrates: unique chem ids
+    const sChem = new Uint8Array(nS);
+    {
+      const used = new Set<number>();
+      for (let j = 0; j < nS; j++) {
+        let id: number;
+        do { id = pickInt(CHEMICAL_COUNT); } while (used.has(id));
+        used.add(id); sChem[j] = id;
+      }
+    }
+    // Products: unique chem ids, disjoint from substrates (no A -> A)
+    const pChem = new Uint8Array(nP);
+    {
+      const used = new Set<number>(Array.from(sChem));
+      for (let j = 0; j < nP; j++) {
+        let id: number;
+        do { id = pickInt(CHEMICAL_COUNT); } while (used.has(id));
+        used.add(id); pChem[j] = id;
+      }
+    }
+    // Substrate counts (raw small integers)
+    const sCount = new Float32Array(nS);
+    let sMass = 0;
+    for (let j = 0; j < nS; j++) {
+      const c = pickFrom(COUNT_POOL);
+      sCount[j] = c;
+      sMass += c * CHEMICALS[sChem[j]].molarMass;
+    }
+    // Product counts: pick raw integers, then scale so total product
+    // mass equals total substrate mass (mass conservation). The scale
+    // factor pushes counts away from integer values; that's fine --
+    // chemistry runs on floats anyway.
+    const pCountRaw = new Float32Array(nP);
+    let pMassRaw = 0;
+    for (let j = 0; j < nP; j++) {
+      const c = pickFrom(COUNT_POOL);
+      pCountRaw[j] = c;
+      pMassRaw += c * CHEMICALS[pChem[j]].molarMass;
+    }
+    const scale = sMass / pMassRaw;
+    const pCount = new Float32Array(nP);
+    for (let j = 0; j < nP; j++) pCount[j] = pCountRaw[j] * scale;
+    // ATP delta: NOT a free draw. Energy released = bond potential
+    // liberated = (Σ substrate potential) − (Σ product potential).
+    // Mass is already balanced above, so this is conservative by
+    // construction: the exact reverse reaction has the negated
+    // atpDelta, and any closed cycle of generics telescopes to zero
+    // net ATP -- no perpetual-motion reservoir, no exergonic bias.
+    // Sign follows composition: a reaction that breaks high-bond-
+    // energy substrates into low-energy products is exergonic
+    // (yields ATP); building energy-rich products costs ATP.
+    // The three rng() draws that formerly *were* atpDelta are still
+    // consumed (and discarded) so every other generated field --
+    // here and in all later slots -- stays bit-identical to before.
+    rng(); rng(); rng();
+    let sBondE = 0;
+    for (let j = 0; j < nS; j++) sBondE += sCount[j] * CHEM_BOND_POTENTIAL[sChem[j]];
+    let pBondE = 0;
+    for (let j = 0; j < nP; j++) pBondE += pCount[j] * CHEM_BOND_POTENTIAL[pChem[j]];
+    const atpDelta = sBondE - pBondE;
+    // Light: ~15% of reactions are light-driven, requiring 0.2..1.5
+    // units of ambient light to proceed (caps the rate).
+    const lightIn = rng() < 0.15 ? 0.2 + rng() * 1.3 : 0;
+    // VMAX: log-uniform 0.05 .. 1.5, so a few reactions are fast,
+    // most are middling. Cells that build the right catalyst can
+    // make the slow ones useful too.
+    const vmax = Math.exp(Math.log(0.05) + rng() * (Math.log(1.5) - Math.log(0.05)));
+    out.push({
+      sChem, sCount, pChem, pCount, atpDelta, lightIn, vmax,
+      uncatRate: 0, gateMask: 0, surfaceScale: false, atpFloor: false,
+      mrnaScale: false, chlScale: false, enzScale: false,
+    });
+  }
+  // Overwrite the first NAMED_REACTION_COUNT generated entries with the
+  // named reactions. Catalyst slots 0..N-1 correspond to the named
+  // reactions, so a cell that builds catalyst[k] is boosting one of
+  // these specific pathways. Subsequent slots remain the generated
+  // generics.
+  installNamedReactions(out);
+  return out;
+}
+
+export const REACTIONS: Reaction[] = buildReactionTable();
+// Number of named reactions installed at the head of REACTIONS. Phase
+// D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
+// H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
+// disassembler can label catalyst slots by their bootstrap pathway.
+export const NAMED_REACTION_COUNT = 26;
+
+// Stoichiometric coefficients mirror the previously hand-coded reaction
+// functions. Mass conservation is handled implicitly: substrates +
+// products + (atpDelta worth of ADP <-> ATP conversion) sum to zero,
+// because the engine deducts |atpDelta| ADP and credits |atpDelta|
+// ATP (energy) on every exergonic reaction (and vice versa).
+function installNamedReactions(out: Reaction[]): void {
+  const mk = (
+    sChem: number[], sCount: number[],
+    pChem: number[], pCount: number[],
+    atpDelta: number,
+    rate: number,
+    opts: {
+      lightIn?: number; gateMask?: number;
+      surfaceScale?: boolean; atpFloor?: boolean;
+      mrnaScale?: boolean; chlScale?: boolean; enzScale?: boolean;
+    } = {},
+  ): Reaction => ({
+    sChem: new Uint8Array(sChem),
+    sCount: new Float32Array(sCount),
+    pChem: new Uint8Array(pChem),
+    pCount: new Float32Array(pCount),
+    atpDelta,
+    lightIn: opts.lightIn ?? 0,
+    vmax: rate,             // catalyst boost: another `rate` at full pool
+    uncatRate: rate,         // bootstrap rate every cell gets free
+    gateMask: opts.gateMask ?? 0,
+    surfaceScale: opts.surfaceScale ?? false,
+    atpFloor: opts.atpFloor ?? false,
+    mrnaScale: opts.mrnaScale ?? false,
+    chlScale: opts.chlScale ?? false,
+    enzScale: opts.enzScale ?? false,
+  });
+  // Slot index in NAMED_CHEMICALS: o2=0 co2=1 glu=2 aa=3 fa=4 min=5
+  // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11 biop=12 memb=13.
+  // Energy reactions: no mrnaScale (these aren't protein synthesis).
+  out[0] = mk([CHEM_GLU, CHEM_O2], [1, 1], [CHEM_CO2], [2], +10, 16);                          // aerobic: glu+o2 -> 2 co2 + 10 atp
+  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
+  out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
+  // Photosynth: requires chlorophyll molecule (mandatory multiplier).
+  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
+  // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
+  // with mrna / mRNA count (mandatory) -- this is the cell's
+  // protein synthesis machinery, and zero mRNA means zero growth.
+  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << SYNTH_BIT_AA, atpFloor: true, mrnaScale: true }); // synth_aa
+  // synth_fa: lipogenesis from photosynthate. Cheapened (-6 -> -3 ATP)
+  // and sped up (0.2 -> 0.6, ~in line with membrane synth that
+  // consumes fa) so living autotrophs/mixotrophs top up fatty acid
+  // from abundant glucose instead of relying on necromass recycling.
+  // synth_fa rate 0.6 -> 1.5: with light-driven ATP (out[25]) an
+  // autotroph can finally afford this, and it is the ONLY renewable
+  // fa source (photosynthesis makes glu, not fa). Membrane synth
+  // (out[9]=0.8, out[11]=0.6) consumes fa faster than 0.6 could
+  // supply, so phototrophs strip-mined the finite fa seed and died
+  // of mass membrane failure when it ran out. 1.5 gives renewable
+  // headroom for the CO2->glu->fa->membrane primary-production chain.
+  out[5] = mk([CHEM_GLU, CHEM_MIN], [0.9, 0.1], [CHEM_FA], [1], -3, 1.5, { gateMask: 1 << SYNTH_BIT_FA, atpFloor: true, mrnaScale: true });
+  out[6] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHL], [1], -8, 0.2, { gateMask: 1 << SYNTH_BIT_CHL, atpFloor: true, mrnaScale: true }); // synth_chl
+  out[7] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ENZ], [1], -4, 0.4, { gateMask: 1 << SYNTH_BIT_ENZ, atpFloor: true, mrnaScale: true }); // synth_enz
+  out[8] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MRNA], [1], -10, 0.15, { gateMask: 1 << SYNTH_BIT_MRNA, atpFloor: true, mrnaScale: true }); // synth_ribo
+  // synth_membrane via the SYNTH_BIO bit: aa + fa -> membrane lipid.
+  // Replaces the retired synth_biomass; SYNTH_BIO now triggers
+  // membrane growth instead of generic structural biomass.
+  out[9] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_MEMBRANE], [1], -1, 0.8, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true });
+  // Biopolymer digestion. Mass-balanced split mirroring the old
+  // CATAB_FRACTIONS for "organic": 0.5 glu + 0.3 aa + 0.2 fa per
+  // biopolymer unit. Slightly exergonic (+1 ATP) to model the small
+  // payoff a heterotroph gets from breaking polysaccharides /
+  // proteins. Gated on enzyme: no enz, no digestion.
+  out[10] = mk([CHEM_BIOPOLYMER], [1], [CHEM_GLU, CHEM_AA, CHEM_FA], [0.5, 0.3, 0.2], +1, 6, { enzScale: true });
+  // Membrane biosynth. fa -> membrane lipid, endergonic, mRNA-gated.
+  // Driven by the same SYNTH bits as synth_biomass so a cell that
+  // biosynths a body also lays down membrane. Cheaper than chl/ribo
+  // so a growing cell can afford it.
+  out[11] = mk([CHEM_FA], [1], [CHEM_MEMBRANE], [1], -2, 0.6, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true }); // synth_memb
+  // Receptor biosynth, K-4 unified-SYNTH layout. Each receptor variant
+  // gates on its own bit so genome op param picks exactly which
+  // chemoreceptor / photoreceptor / etc the cell builds. All cost
+  // aa+min, are mRNA-gated, and decay (handled in K-3 activation /
+  // base metabolism). Sense modality emerges from which receptor
+  // chems the cell carries -- no hardcoded modality table.
+  out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_VISIBLE], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 0), atpFloor: true, mrnaScale: true });
+  out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_LONG], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 1), atpFloor: true, mrnaScale: true });
+  out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_SURFACE], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_PHOTO_BASE + 2), atpFloor: true, mrnaScale: true });
+  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 0), atpFloor: true, mrnaScale: true });
+  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MINERALS], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 1), atpFloor: true, mrnaScale: true });
+  out[17] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_FA], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 2), atpFloor: true, mrnaScale: true });
+  out[18] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MARKER0], [1], -3, 0.15, { gateMask: 1 << (SYNTH_BIT_CHEMO_BASE + 3), atpFloor: true, mrnaScale: true });
+  out[19] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_MECH, atpFloor: true, mrnaScale: true });
+  out[20] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_THERMO, atpFloor: true, mrnaScale: true });
+  out[21] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MAGNETORECEPTOR], [1], -3, 0.15, { gateMask: 1 << SYNTH_BIT_MAGNETO, atpFloor: true, mrnaScale: true });
+  // Bond and repair chems: products of dedicated SYNTH kinds. K-5
+  // wires these into emergent adhesion + somatic-mutation control.
+  out[22] = mk([CHEM_AA, CHEM_FA], [0.5, 0.5], [CHEM_BOND], [1], -2, 0.3, { gateMask: 1 << SYNTH_BIT_BOND, atpFloor: true, mrnaScale: true });
+  out[23] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_REPAIR], [1], -3, 0.2, { gateMask: 1 << SYNTH_BIT_REPAIR, atpFloor: true, mrnaScale: true });
+  // Primary-production link (3a): fix glucose into the bulk-food
+  // storage polymer. This is what lets autotrophs feed the web --
+  // photosynthesis makes glu, this turns surplus glu into biopolymer
+  // that heterotrophs ingest + digest (out[10]) back to glu/aa/fa,
+  // closing the biopolymer/fa loop. Endergonic (storage costs a
+  // little ATP), SYNTH_BIO-gated, mRNA-scaled like other biosynth.
+  out[24] = mk([CHEM_GLU], [1], [CHEM_BIOPOLYMER], [1], -2, 0.5, { gateMask: 1 << SYNTH_BIT_BIO, atpFloor: true, mrnaScale: true });
+  // Photophosphorylation (the "light reaction"). Pure light-driven
+  // ADP -> ATP, no matter substrate/product: chlorophyll harvests
+  // light to regenerate the cell's ATP pool. The engine's exergonic
+  // path conserves the ADP<->ATP swap (needs ADP available). This is
+  // the autotroph's energy source -- previously photosynthesis only
+  // had carbon FIXATION (out[3], endergonic -1 ATP) with no light
+  // energy input, so a phototroph was a net energy sink and could
+  // never escape the chl-synthesis chicken-and-egg. Now light->ATP
+  // funds chl synthesis (-8) and fixation (-1), and scales with the
+  // chl pool (chlScale) for an autocatalytic takeoff. Gated only on
+  // carrying chlorophyll (gateMask 0), exactly like out[3], so
+  // autotrophy stays emergent from the genome's SYNTH_CHL.
+  out[25] = mk([], [], [], [], +6, 4, { lightIn: 1, chlScale: true, surfaceScale: true });
+}
