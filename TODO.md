@@ -127,6 +127,15 @@ Living list of deferred work. Newest/explicit asks at top.
   live visual feedback. Shared style tokens / `mkDockBtn`-style
   factory could extend to the side panels for visual coherence.
 
+- **Spawn ×N for social archetypes.** The archetypes panel spawns
+  one cell per click. The "seed"-class founders whose payoff is
+  multi-cell (greenbeard colony, chloroplast/farmer endosymbiosis,
+  virus spread) need a population to show their point — repeated
+  clicking works but is tedious. Consider a small count selector or a
+  "spawn ×5/×10" affordance. Deliberately out of scope for the
+  initial archetypes feature. Touch points: the `archPanel` block in
+  `main.ts`, `spawnSpeciesInstance` (already supports repeated calls).
+
 - **In-app "import save from file"** button so headless-run results
   (`scripts/headless.ts` writes the save JSON) load in one click
   instead of hand-setting the `evosim4:save` localStorage key.

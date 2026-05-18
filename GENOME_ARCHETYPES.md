@@ -6,8 +6,18 @@ key ops/SYNTH, behavior loop, what it probes, and feasibility. The
 **substrate gaps** section at the end is the actionable part: each gap
 names the single primitive that would unlock a whole branch of life.
 
-Status: design reference. Nothing here is a committed founder genome
-or implementation; it informs backlog priorities.
+Status: **shipped as injectable seeds.** All 15 archetypes below are
+now hand-authored founder genomes (`src/genome-archetypes.ts`, built
+via the `src/genome-asm.ts` assembler) and spawnable from the
+collapsible "archetypes" UI panel. Substrate stance is preserved: a
+founder genome is a *seed / hypothesis*, not an engine rule — a
+clicked archetype injects one ordinary cell via the existing
+`spawnSpeciesInstance` path, gets no special treatment, and must
+survive selection on its own. The "seed"-class entries (colony,
+chloroplast, farmer, endoparasite, virus) ship a deliberately modest
+founder whose payoff is an emergent multi-generation / multi-cell
+outcome — one click is one cell. This doc still also informs backlog
+priorities.
 
 ## Toolkit recap
 
@@ -183,7 +193,11 @@ means" note matters. Kept here as the rationale + the exact means.
   selectivity not built; only the 8 small-molecule metabolites
   (generic-chem transporters deferred — `TODO.md`).
 
-_Status: archetypes are design reference (no committed founder
-genomes). The five substrate gaps above are implemented; see `TODO.md`
-/ `ENDOSYMBIOSIS_NOTES.md` / `COLONY_GAPS.md` for specifics and the
+_Status: all 15 archetypes are shipped as injectable founder seeds
+(`src/genome-archetypes.ts` + the `src/genome-asm.ts` assembler +
+the "archetypes" UI panel), authored to the author + sanity-spawn
+bar (assemble well-formed, disassemble clean, spawn + step without
+error; the 13 self-sufficient ones also pass `viableGenome`). The
+five substrate gaps above are implemented; see `TODO.md` /
+`ENDOSYMBIOSIS_NOTES.md` / `COLONY_GAPS.md` for specifics and the
 remaining open colony gaps (#2/#4/#5)._
