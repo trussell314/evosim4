@@ -23,6 +23,7 @@ import {
   CHEM_MEMBRANE,
   CHEM_MIN,
   CHEM_AA,
+  CHEM_ACT_PHOTO_VISIBLE,
 } from "../src/sim/chem-ids";
 
 type Cre = {
@@ -99,6 +100,44 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_AA, 30);
     },
   },
+
+  phototaxis: {
+    id: "phototaxis",
+    count: 30,
+    coStock: [],
+    describe:
+      "Metabolically a photoautotroph (AUTO_SYNTH, no INGEST) PLUS " +
+      "two extra aa-sinks (PHOTO+MAGNETO receptor synth) and a " +
+      "conditional THRUST. Same proven recipe as photoautotroph: " +
+      "near-surface (max light), permanent midday, CO2=50/MIN=50/" +
+      "AA=30 chemostat, cells primed CO2=20 ADP=30 MIN=30 AA=5. No " +
+      "co-stock. Founders off. Defining behavior is the genome's " +
+      "'act_photo_visible < 6 -> climb magnetic axis' branch; we " +
+      "MEASURE how many cells are in that dark/migrating branch " +
+      "(nDark) rather than assume.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      setAmbientAll(w, CHEM_AA, 30);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = surfaceY + 5 + (k % 6) * 3;
+        c.x = w.width * (0.06 + 0.88 * ((k + 0.5) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+        c.store.chemCols[CHEM_AA][c.idx] = 5;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      setAmbientAll(w, CHEM_AA, 30);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -161,6 +200,14 @@ function nAboveMembrane(thresh: number): number {
   for (const c of w.creatures) if (c.store.chemCols[CHEM_MEMBRANE][c.idx] > thresh) n++;
   return n;
 }
+// Cells whose sensed visible light is below the phototaxis genome's
+// threshold of 6 -- i.e. in the "dark, swim the magnetic axis"
+// branch. Measured, not assumed.
+function nDark(): number {
+  let n = 0;
+  for (const c of w.creatures) if (c.store.chemCols[CHEM_ACT_PHOTO_VISIBLE][c.idx] < 6) n++;
+  return n;
+}
 
 console.log(`# scenario: ${id}  (x${focal.length} spawned${sc.coStock.length ? ", co-stock " + sc.coStock.map(c => c.id + ":" + c.count).join(",") : ", no co-stock"})`);
 console.log(`# ${sc.describe}`);
@@ -202,6 +249,8 @@ while (w.t < endT) {
     console.log(
       `t=${String(Math.round(w.t)).padStart(3)}s pop=${String(w.creatures.length).padStart(4)} ` +
         `nMem>40=${String(nAboveMembrane(40)).padStart(3)} ` +
+        `nDark=${String(nDark()).padStart(3)} ` +
+        `mActPh=${meanCell(CHEM_ACT_PHOTO_VISIBLE).toFixed(1).padStart(5)} ` +
         `mMem=${meanCell(CHEM_MEMBRANE).toFixed(2).padStart(6)} ` +
         `mATP=${meanEnergy().toFixed(1).padStart(7)} ` +
         `mCHL=${meanCell(CHEM_CHL).toFixed(2).padStart(6)} ` +
