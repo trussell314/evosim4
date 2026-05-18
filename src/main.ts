@@ -1305,6 +1305,7 @@ leftHeader.addEventListener("click", () => {
 // ---------------------------------------------------------------------
 let controlsBarH = 40;        // measured each layout
 let bottomHudH = 0;           // measured each layout (bottom status strip)
+let overlayPanelH = 0;        // measured each layout (overlay panel)
 // Measured height of the fixed top status strip. The world fit
 // reserves it at the top (mirroring controlsBarH at the bottom) so
 // the world is never drawn behind the HUD -- the bar sits in its own
@@ -1417,6 +1418,11 @@ function renderOverlayCollapsed(): void {
 overlayHandle.addEventListener("click", () => {
   overlayCollapsed = !overlayCollapsed;
   renderOverlayCollapsed();
+  // Expanding/collapsing changes the overlay panel's height; the
+  // bottom HUD sits on top of it and the world fit reserves the
+  // whole stack, so re-measure + re-fit (mirrors the controls handle).
+  positionWorldButtons();
+  resize();
 });
 overlayPanel.append(overlayHandle, overlayWrap);
 root.appendChild(overlayPanel);
@@ -1590,17 +1596,18 @@ function positionWorldButtons(): void {
   ctrlBar.style.left = `${leftPanelWidth()}px`;
   ctrlBar.style.right = `${panelW}px`;
   controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
-  // Bottom status strip: span the same gutter as ctrlBar, docked
-  // directly above it (bottom = measured controls height).
+  // Overlay panel (now the lower of the two): bottom-right, right edge
+  // tracking the right slide-out, docked directly above ctrlBar.
+  overlayPanel.style.right = `${panelW}px`;
+  overlayPanel.style.bottom = `${controlsBarH}px`;
+  overlayPanelH = Math.ceil(overlayPanel.getBoundingClientRect().height) || 0;
+  // Bottom status strip: span the same gutter as ctrlBar, docked above
+  // the overlay panel so the two are stacked (HUD on top, overlay
+  // below) and neither overlaps ctrlBar.
   bottomHud.style.left = `${leftPanelWidth()}px`;
   bottomHud.style.right = `${panelW}px`;
-  bottomHud.style.bottom = `${controlsBarH}px`;
+  bottomHud.style.bottom = `${controlsBarH + overlayPanelH}px`;
   bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
-  // Overlay panel: bottom-right, right edge tracking the right
-  // slide-out, docked just above the bottom status strip so it never
-  // overlaps ctrlBar or bottomHud.
-  overlayPanel.style.right = `${panelW}px`;
-  overlayPanel.style.bottom = `${controlsBarH + bottomHudH}px`;
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${leftPanelWidth() + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
@@ -1615,7 +1622,7 @@ new ResizeObserver(() => {
   if (hudBarH !== prev) resize();
 }).observe(hud);
 function bottomReserveH(): number {
-  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + bottomHudH;
+  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + overlayPanelH + bottomHudH;
 }
 
 
