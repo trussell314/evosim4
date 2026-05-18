@@ -78,6 +78,7 @@ import {
   NAMED_CHEMICALS,
   NAMED_CHEMICAL_COUNT,
   reactionWindowSeries,
+  CHEM_SHORT_LABELS,
   type ReactionInfo,
   genomeTag,
   PARTICLE_TARGET_STEP,
@@ -838,7 +839,7 @@ leftHeader.appendChild(leftToggle);
 leftHeader.appendChild(leftTitle);
 
 // Tab bar -- same chrome as the organisms drawer (styleTab reused).
-type ChemTab = "ledger" | "detail";
+type ChemTab = "ledger" | "detail" | "reactions";
 let chemTab: ChemTab = "ledger";
 const chemTabs = document.createElement("div");
 chemTabs.style.cssText =
@@ -846,6 +847,7 @@ chemTabs.style.cssText =
 const CHEM_TAB_DEFS: { id: ChemTab; label: string }[] = [
   { id: "ledger", label: "Ledger" },
   { id: "detail", label: "Detail" },
+  { id: "reactions", label: "Reactions" },
 ];
 const chemTabBtns = new Map<ChemTab, HTMLSpanElement>();
 
@@ -873,11 +875,46 @@ detailPane.style.cssText =
   "max-height:calc(100vh - 72px);overflow-wrap:anywhere;word-break:break-word;" +
   `font:${UI_FONT_PX}px/1.45 ${UI_FONT_FAMILY};`;
 
+// Reactions pane: filterable table of every tracked reaction.
+const reactionsPane = document.createElement("div");
+reactionsPane.style.cssText =
+  "padding:8px 10px;overflow:auto;display:none;max-height:calc(100vh - 72px);";
+const rxnControls = document.createElement("div");
+rxnControls.style.cssText =
+  "display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-bottom:8px;";
+const rxnNonzero = document.createElement("input");
+rxnNonzero.type = "checkbox";
+rxnNonzero.checked = true; // default: only reactions that have occurred
+rxnNonzero.id = "rxnNonzero";
+const rxnNonzeroLabel = document.createElement("label");
+rxnNonzeroLabel.htmlFor = "rxnNonzero";
+rxnNonzeroLabel.textContent = " nonzero counts only";
+rxnNonzeroLabel.style.cssText = `color:#9ee;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};cursor:pointer;`;
+const rxnNonzeroWrap = document.createElement("span");
+rxnNonzeroWrap.style.cssText = "display:inline-flex;align-items:center;";
+rxnNonzeroWrap.append(rxnNonzero, rxnNonzeroLabel);
+const rxnSearch = document.createElement("input");
+rxnSearch.type = "text";
+rxnSearch.placeholder = "search reactions…";
+rxnSearch.style.cssText =
+  "flex:1;min-width:120px;box-sizing:border-box;padding:4px 6px;" +
+  "background:rgba(0,0,0,.4);border:1px solid #1a3340;border-radius:4px;" +
+  `color:#9ee;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};`;
+rxnControls.append(rxnNonzeroWrap, rxnSearch);
+const rxnTable = document.createElement("table");
+rxnTable.style.cssText =
+  "border-collapse:collapse;width:100%;font-size:" + UI_FONT_PX + "px;";
+reactionsPane.appendChild(rxnControls);
+reactionsPane.appendChild(rxnTable);
+rxnNonzero.addEventListener("change", () => renderReactions());
+rxnSearch.addEventListener("input", () => renderReactions());
+
 const leftBody = document.createElement("div");
 leftBody.style.cssText = "display:none;";
 leftBody.appendChild(chemTabs);
 leftBody.appendChild(ledgerPane);
 leftBody.appendChild(detailPane);
+leftBody.appendChild(reactionsPane);
 leftPanel.appendChild(leftHeader);
 leftPanel.appendChild(leftBody);
 root.appendChild(leftPanel);
@@ -890,6 +927,7 @@ function applyChemTab(): void {
   chemTabs.style.display = open ? "flex" : "none";
   ledgerPane.style.display = open && chemTab === "ledger" ? "" : "none";
   detailPane.style.display = open && chemTab === "detail" ? "" : "none";
+  reactionsPane.style.display = open && chemTab === "reactions" ? "" : "none";
   for (const [id, b] of chemTabBtns) styleTab(b, id === chemTab);
 }
 for (const def of CHEM_TAB_DEFS) {
@@ -900,6 +938,7 @@ for (const def of CHEM_TAB_DEFS) {
     chemTab = def.id;
     applyChemTab();
     if (chemTab === "detail") renderChemDetail();
+    else if (chemTab === "reactions") renderReactions();
   });
   chemTabBtns.set(def.id, btn);
   chemTabs.appendChild(btn);
@@ -1144,6 +1183,83 @@ function applyLedgerView(): void {
 }
 chemFilter.addEventListener("input", applyLedgerView);
 
+function renderReactions(): void {
+  if (!RXN_CATALOG) RXN_CATALOG = reactionCatalog();
+  const cat = RXN_CATALOG;
+  const totals = snapshot.reactionTotals;
+  const cnt = (id: number): number => (totals ? (totals[id] ?? 0) : 0);
+
+  // Newest window t0 in which each reaction fired (for "last seen").
+  const hist = snapshot.rxnStatsHistory;
+  const lastT0 = new Float64Array(cat.length + 280).fill(-1);
+  if (hist) {
+    for (const w of reactionWindowSeries(hist)) {
+      for (let id = 0; id < w.counts.length && id < lastT0.length; id++) {
+        if (w.counts[id] > 0) lastT0[id] = w.t0; // later windows overwrite
+      }
+    }
+  }
+  const tNow = snapshot.t;
+  const esc = (s: string): string =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const termStr = (terms: { chem: number; coef: number }[]): string => {
+    if (terms.length === 0) return "∅";
+    return terms.map((t) => {
+      const c = Math.round(t.coef * 100) / 100;
+      const nm = t.chem < CHEM_SHORT_LABELS.length ? CHEM_SHORT_LABELS[t.chem] : `c${t.chem}`;
+      return (c === 1 ? "" : c + " ") + nm;
+    }).join(" + ");
+  };
+  const ago = (id: number): string => {
+    const t0 = lastT0[id];
+    if (t0 < 0 || cnt(id) === 0) return "—";
+    const a = Math.max(0, tNow - t0);
+    if (a < 90) return `~${Math.round(a)}s`;
+    if (a < 3600) return `~${Math.round(a / 60)}m`;
+    const h = Math.floor(a / 3600);
+    return `~${h}h${Math.round((a - h * 3600) / 60)}m`;
+  };
+
+  const onlyNonzero = rxnNonzero.checked;
+  const q = rxnSearch.value.trim().toLowerCase();
+  type Row = { r: ReactionInfo; cons: string; prod: string; n: number };
+  const rows: Row[] = [];
+  for (const r of cat) {
+    const n = cnt(r.id);
+    const isGeneric = r.label.startsWith("gen#");
+    // Scope: named + synthetic always; generics only if ever fired.
+    if (isGeneric && n === 0) continue;
+    if (onlyNonzero && n === 0) continue;
+    const cons = termStr(r.consumes);
+    const prod = termStr(r.produces);
+    if (q && !(`${r.label} ${cons} ${prod}`.toLowerCase().includes(q))) continue;
+    rows.push({ r, cons, prod, n });
+  }
+  rows.sort((a, b) => (b.n - a.n) || (a.r.id - b.r.id));
+
+  const dE = (v: number): string =>
+    v === 0 ? "0" : (v > 0 ? "+" : "") + (Math.round(v * 10) / 10);
+  const head =
+    `<tr style="text-align:left;border-bottom:1px solid #1a3340;color:#7fb8c8;">` +
+    `<th style="padding:2px 6px 4px 0;">Reactants</th>` +
+    `<th style="padding:2px 6px 4px 0;">Products</th>` +
+    `<th style="padding:2px 6px 4px 0;text-align:right;">ΔATP</th>` +
+    `<th style="padding:2px 6px 4px 0;text-align:right;">Times</th>` +
+    `<th style="padding:2px 0 4px 0;text-align:right;">Last</th></tr>`;
+  const body = rows.length === 0
+    ? `<tr><td colspan="5" style="opacity:0.6;padding:6px 0;">no reactions match</td></tr>`
+    : rows.map((x) => {
+      const eColor = x.r.atpDelta > 0 ? "#9efba8" : x.r.atpDelta < 0 ? "#f7b39a" : "#9ee";
+      return `<tr style="border-bottom:1px solid rgba(26,51,64,0.4);">` +
+        `<td style="padding:2px 6px 2px 0;overflow-wrap:anywhere;">${esc(x.cons)}</td>` +
+        `<td style="padding:2px 6px 2px 0;overflow-wrap:anywhere;">${esc(x.prod)}</td>` +
+        `<td style="padding:2px 6px 2px 0;text-align:right;color:${eColor};white-space:nowrap;">${dE(x.r.atpDelta)}</td>` +
+        `<td style="padding:2px 6px 2px 0;text-align:right;white-space:nowrap;">${x.n.toLocaleString()}</td>` +
+        `<td style="padding:2px 0 2px 0;text-align:right;white-space:nowrap;opacity:0.8;">${ago(x.r.id)}</td></tr>`;
+    }).join("");
+  rxnTable.innerHTML = head + body;
+}
+
 let lastChemPanelMs = 0;
 function updateChemPanel(): void {
   if (leftMinimized) return;
@@ -1172,6 +1288,7 @@ function updateChemPanel(): void {
   }
   applyLedgerView();
   if (chemTab === "detail" && chemDetailId != null) renderChemDetail();
+  else if (chemTab === "reactions") renderReactions();
 }
 leftHeader.addEventListener("click", () => {
   leftMinimized = !leftMinimized;
