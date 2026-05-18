@@ -83,6 +83,14 @@ export {
 };
 import { REACTIONS, NAMED_REACTION_COUNT } from "./sim/reactions";
 export { NAMED_REACTION_COUNT };
+import {
+  SENSOR_CHEM_LABELS, CHEM_SHORT_LABELS, chemName,
+  NAMED_REACTION_NAMES, reactionName,
+} from "./sim/labels";
+export {
+  SENSOR_CHEM_LABELS, CHEM_SHORT_LABELS, chemName,
+  NAMED_REACTION_NAMES, reactionName,
+};
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1016,55 +1024,8 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
   return c;
 }
 
-// Chem labels for the 6 sensor-bin slots in SENSE_GRAD / DENSITY ops.
-// Used by the disassembler and HUD to pretty-print the operand. Index
-// matches SENSOR_CHEMS slot order.
-export const SENSOR_CHEM_LABELS: ReadonlyArray<string> = [
-  "min", "biop", "fa", "o2", "co2", "glu",
-];
-
-// Short HUD-friendly labels for every named chem id 0..44. Distinct
-// from CHEM_NAMES (which mirrors the verbose Molecules-key names);
-// these are the abbreviations the genome describer + inspector use
-// to keep prose lines tight.
-export const CHEM_SHORT_LABELS: ReadonlyArray<string> = [
-  "o2", "co2", "glu", "aa", "fa", "min", "adp", "waste",
-  "chl", "enz", "mrna", "biop", "memb",
-  "photoR-V", "photoR-L", "photoR-S",
-  "actPhoto-V", "actPhoto-L", "actPhoto-S",
-  "chemoR-B", "chemoR-M", "chemoR-F", "chemoR-0",
-  "actChemo-Bx", "actChemo-By",
-  "actChemo-Mx", "actChemo-My",
-  "actChemo-Fx", "actChemo-Fy",
-  "actChemo-0x", "actChemo-0y",
-  "mechR", "actMech-x", "actMech-y",
-  "thermoR", "actThermo",
-  "magR", "actMag-x", "actMag-y",
-  "bond", "repair",
-  "marker0", "marker1", "marker2", "marker3",
-];
-export function chemName(id: number): string {
-  if (id < 0 || id >= CHEMICAL_COUNT) return `chem${id}`;
-  return id < CHEM_SHORT_LABELS.length ? CHEM_SHORT_LABELS[id] : `chem${id}`;
-}
-
-// Short labels for the first NAMED_REACTION_COUNT reaction slots
-// installed by installNamedReactions(). Index matches the slot.
-// Anything beyond is a procedural / generic reaction and the
-// describer falls back to "rxnN".
-export const NAMED_REACTION_NAMES: ReadonlyArray<string> = [
-  "aerobic", "ferment", "betaOx", "photosynth",
-  "synthAA", "synthFA", "synthCHL", "synthENZ", "synthMRNA",
-  "synthMEMB(aa+fa)", "digestBiop", "synthMEMB(fa)",
-  "synthPhoto-V", "synthPhoto-L", "synthPhoto-S",
-  "synthChemo-B", "synthChemo-M", "synthChemo-F", "synthChemo-0",
-  "synthMech", "synthThermo", "synthMag",
-  "synthBond", "synthRepair", "synthBiop",
-  "lightRxn",
-];
-export function reactionName(slot: number): string {
-  return slot < NAMED_REACTION_NAMES.length ? NAMED_REACTION_NAMES[slot] : `rxn${slot}`;
-}
+// Chem / reaction display labels live in ./sim/labels (imported +
+// re-exported at the top of this file).
 
 // 32-bit FNV-1a hash of a genome, rendered as a 6-char base36 tag
 // for use as a stable, content-derived species label. Replaces the
