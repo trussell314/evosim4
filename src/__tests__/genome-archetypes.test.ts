@@ -12,9 +12,9 @@ import { createWorld, spawnSpeciesInstance, step } from "../sim";
 
 describe("genome archetypes", () => {
   it("the catalogue has unique ids/labels and both classes", () => {
-    expect(ARCHETYPES.length).toBe(15);
-    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(15);
-    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(15);
+    expect(ARCHETYPES.length).toBe(16);
+    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(16);
+    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(16);
     expect(ARCHETYPES.some((a) => a.cls === "direct")).toBe(true);
     expect(ARCHETYPES.some((a) => a.cls === "seed")).toBe(true);
   });
@@ -43,7 +43,7 @@ describe("genome archetypes", () => {
   // predicate. The "seed" parasite/virus are deliberately minimal and
   // exempt (they bank on a host / carrier, not solo viability).
   it("self-sufficient archetypes satisfy viableGenome", () => {
-    const exempt = new Set(["endoparasite", "virus"]);
+    const exempt = new Set(["endoparasite", "virus", "mitochondria"]);
     for (const a of ARCHETYPES) {
       if (exempt.has(a.id)) continue;
       expect(viableGenome(a.genome), `${a.id} should be viable`).toBe(true);

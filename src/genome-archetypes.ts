@@ -35,6 +35,8 @@ import {
 // [minerals, biopolymer, fa, o2, co2, glu]; bulk organic / generic
 // debris (the staple heterotroph food) rides slot 1.
 const ING_BIOPOLYMER = 1;
+const ING_O2 = 3;
+const ING_GLU = 5;
 
 // Universal heterotroph build kit (see viableGenome): membrane,
 // mRNA, fatty acid, digestive enzyme, amino-acid synthesis.
@@ -263,6 +265,26 @@ function build(): Archetype[] {
         ["JZ", "np"],
         ["REPRODUCE"], // near-unconditional internal bloom
         ["LABEL", "np"],
+      ],
+    },
+    {
+      id: "mitochondria",
+      label: "mitochondria",
+      cls: "seed",
+      desc: "Seed: respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure; ingests glucose + O2 and returns CO2. No digester -- specialised on aerobic respiration, not biopolymer. Honest framing: its product (ATP) does NOT cross the host membrane; any host benefit is emergent gas/substrate cycling via the shared pool, never a scripted ATP hand-off.",
+      prog: [
+        ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
+        ["SYNTH", "MRNA", 0],
+        ["SYNTH", "FA", 0],
+        ["SYNTH", "AA", 0],
+        ["INGEST", ING_GLU], // respiratory fuel
+        ["INGEST", ING_O2], // electron acceptor
+        ["THRUST"], // drift to substrate before engulfment
+        ["PUSH8", 8],
+        ["EXCRETE", CHEM_CO2], // respiration product back to shared pool
+        ["PUSH8", 5],
+        ["EXCRETE", CHEM_MARKER0], // engulf bait
+        ...reproduceWhenGrown(18, "np"), // fission inside host is uncapped
       ],
     },
     {
