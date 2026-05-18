@@ -1503,6 +1503,12 @@ const PREDATION_ENERGY_PER_MASS = 0.1;
 // much structural envelope there is to rupture -- armor makes prey
 // expensive (or, combined with the hard gate above, impossible) to eat.
 const PREDATION_ENERGY_PER_MEMBRANE = 0.5;
+// Extra ATP per unit of target cohesion (its CHEM_BOND pool x its
+// intact bond count) to tear it out of a colony. Tunable: high enough
+// that a lineage investing heavily in SYNTH BOND meaningfully
+// protects its members, low enough not to shut predation down in the
+// smoke ecosystem.
+const PREDATION_ENERGY_PER_COHESION = 3;
 
 // Baseline metabolism: a small flat "cost of being alive" plus a per-mass
 // component. Big cells must keep more chemistry running and starve faster
@@ -7593,9 +7599,19 @@ function canBreach(attacker: Creature, target: Creature): boolean {
   return attacker.r >= PREDATION_RADIUS_RATIO * target.r;
 }
 function predationCost(target: Creature, targetMass: number): number {
+  // Cohesion penalty: ripping a cell out of a colony costs extra ATP
+  // on top of the size/membrane economics. The strength scalar is the
+  // target's genome-purchased CHEM_BOND pool (produced by SYNTH BOND
+  // chemistry) multiplied by how many intact bonds anchor it -- more
+  // adhesive investment and more partners => harder to extract. A
+  // solitary cell (zero bonds) pays nothing extra, so colony defense
+  // EMERGES from how much a lineage invests in bonding rather than
+  // being a hardcoded "colonies are protected" rule.
+  const cohesion = target.store.chemCols[CHEM_BOND][target.idx] * target.bonds.length;
   return PREDATION_ENERGY_BASE
     + PREDATION_ENERGY_PER_MASS * targetMass
-    + PREDATION_ENERGY_PER_MEMBRANE * target.molecules.membrane;
+    + PREDATION_ENERGY_PER_MEMBRANE * target.molecules.membrane
+    + PREDATION_ENERGY_PER_COHESION * cohesion;
 }
 
 function creatureTotalMass(c: Creature): number {

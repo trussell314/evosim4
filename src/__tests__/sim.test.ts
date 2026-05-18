@@ -1231,6 +1231,43 @@ describe("creature: predation (cell eats cell)", () => {
     step(w, 1 / 60);
     expect(w.creatures.length).toBe(2);
   });
+  it("cohesion (bondChem x bond count) makes a colony member costlier to predate", () => {
+    // Control: a solitary, soft, low-mass prey (energy 30 so it does
+    // not starve this tick) is affordable for a predator with 20 ATP
+    // -> it gets eaten.
+    {
+      const w = quietWorld();
+      const p = makeCreature({ x: 400, y: 300, energy: 20, genome: predator() });
+      fillCellChems(p, 100 * 6); // large radius so the size gate passes
+      const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert(), molecules: { membrane: 5 } });
+      w.creatures.push(p, q);
+      step(w, 1 / 60);
+      expect(w.creatures.length).toBe(1); // solitary prey eaten
+    }
+    // Same predator + prey, but the prey is now a cohesive colony
+    // member (bondChem 4, three intact bonds). The added cohesion cost
+    // (PREDATION_ENERGY_PER_COHESION * bondChem * bondCount) pushes the
+    // total above the predator's 20 ATP, so it cannot pick it off --
+    // nor any equally-cohesive partner.
+    {
+      const w = quietWorld();
+      const p = makeCreature({ x: 400, y: 300, energy: 20, genome: predator() });
+      fillCellChems(p, 100 * 6);
+      const q = makeCreature({ x: 405, y: 300, energy: 30, genome: inert(), molecules: { membrane: 5, bondChem: 4 } });
+      const partners = [0, 1, 2].map(() =>
+        makeCreature({ x: 405, y: 300, energy: 30, genome: inert(), molecules: { bondChem: 4 } }),
+      );
+      // Mutually bond q with three partners. Kept stable for the tick:
+      // all sit coincident (no overstretch) and hold bondChem above
+      // the formation threshold so applyBondSprings won't sever them.
+      for (const pr of partners) { q.bonds.push(pr); pr.bonds.push(q); }
+      w.creatures.push(p, q, ...partners);
+      step(w, 1 / 60);
+      // q + every partner are cohesive (and partners also carry the
+      // default membrane armor), so none is affordable: no predation.
+      expect(w.creatures.length).toBe(5);
+    }
+  });
   it("engulfing does NOT spawn death particles", () => {
     const w = quietWorld();
     for (let i = 0; i < 550; i++) pushParticle(w, { x: 50+(i%700), y: 10+(i%50), z: 12, vx: 0, vy: 0, vz: 0, r: 2, chemId: CHEM_IDS.minerals, density: 1.9 });
