@@ -1390,7 +1390,35 @@ function mkGroup(name: string): HTMLDivElement {
 }
 const gRun = mkGroup("run");
 const gWorld = mkGroup("world");
-const gView = mkGroup("view");
+
+// Overlay controls live in their own collapsible panel docked at the
+// bottom-right (separate from the main controls bar, and hidden by
+// default -- just a "▸ overlay" tab until expanded). Mirrors the
+// ctrlBar collapse pattern. Right edge tracks the right slide-out via
+// positionWorldButtons(); z-index sits above ctrlBar.
+let overlayCollapsed = true;
+const overlayPanel = document.createElement("div");
+overlayPanel.style.cssText =
+  "position:fixed;z-index:11;bottom:0;display:flex;flex-direction:column;" +
+  "align-items:flex-end;gap:6px;padding:5px 8px;box-sizing:border-box;" +
+  "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
+  "border-left:1px solid #1a3340;" + HUD_FONT;
+const overlayHandle = document.createElement("button");
+overlayHandle.style.cssText = CBTN + "padding:4px 8px;";
+const overlayWrap = document.createElement("div");
+overlayWrap.style.cssText =
+  "display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;" +
+  "gap:6px 10px;max-width:100%;";
+function renderOverlayCollapsed(): void {
+  overlayHandle.textContent = overlayCollapsed ? "▸ overlay" : "▾ overlay";
+  overlayWrap.style.display = overlayCollapsed ? "none" : "flex";
+}
+overlayHandle.addEventListener("click", () => {
+  overlayCollapsed = !overlayCollapsed;
+  renderOverlayCollapsed();
+});
+overlayPanel.append(overlayHandle, overlayWrap);
+root.appendChild(overlayPanel);
 
 // ---- run: reset / turbo / profile / export ----
 const resetBtn = mkBtn("reset", "Clear saved world and start fresh");
@@ -1549,9 +1577,10 @@ gridBtn.addEventListener("click", () => {
   gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
   setBtn(gridBtn, gridLinesOn, T_TEAL);
 });
-gView.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn);
+overlayWrap.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn);
 
 renderCtrlCollapsed();
+renderOverlayCollapsed();
 
 // Geometry: span between the side panels, anchored to screen bottom;
 // measure real height so the world fit can reserve exactly that.
@@ -1566,6 +1595,11 @@ function positionWorldButtons(): void {
   bottomHud.style.right = `${panelW}px`;
   bottomHud.style.bottom = `${controlsBarH}px`;
   bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
+  // Overlay panel: bottom-right, right edge tracking the right
+  // slide-out, docked just above the bottom status strip so it never
+  // overlaps ctrlBar or bottomHud.
+  overlayPanel.style.right = `${panelW}px`;
+  overlayPanel.style.bottom = `${controlsBarH + bottomHudH}px`;
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${leftPanelWidth() + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
