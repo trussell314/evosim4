@@ -39,6 +39,7 @@ import {
   SYNTH_BIT_BOND,
   SYNTH_BIT_REPAIR,
 } from "./genome";
+import { mulberry32 } from "./rng";
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1202,6 +1203,11 @@ export interface World {
   // Whether the founder top-up spawns new lineages. Optional: absent
   // (older saves / test literals) means enabled. Persisted.
   foundersEnabled?: boolean;
+  // Simulation RNG, installed by createWorld. Optional so hand-built
+  // test World literals don't need it -- the module falls back to its
+  // own simRng for internal draws regardless. Exposed for callers that
+  // want the world's reproducible stream. Transient; not persisted.
+  rng?: () => number;
   // UI focus chem for the density overlay (-1 / absent = all chems).
   // Transient; not persisted.
   densityChem?: number;
@@ -2710,19 +2716,6 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
   }
 }
 
-// Small deterministic RNG. Keep reaction tables reproducible across
-// runs / renderer reloads / future workers.
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // Maintenance: structural molecules turn over even when the cell isn't
 // reproducing. Each tick a small fraction of biomass / enzyme / chloro
 // / mrna degrades back into the substrates it was synthesized
@@ -3009,10 +3002,10 @@ function advanceDisturbance(world: World, dt: number): void {
     world.disturbanceIntensity = 0;
   }
   if (world.disturbanceUntil === 0 && t >= world.nextDisturbanceAt) {
-    const duration = 8 + Math.random() * 10;
+    const duration = 8 + simRng() * 10;
     world.disturbanceStartedAt = t;
     world.disturbanceUntil = t + duration;
-    world.nextDisturbanceAt = world.disturbanceUntil + 60 + Math.random() * 1140;
+    world.nextDisturbanceAt = world.disturbanceUntil + 60 + simRng() * 1140;
   }
   if (world.disturbanceUntil > 0) {
     const duration = world.disturbanceUntil - world.disturbanceStartedAt;
@@ -3093,7 +3086,7 @@ export function generateObstacles(world: World): void {
   // generated in different orders won't match. That's fine; this is a
   // fresh-world feature, not a save-state-restorable one.
   const heightmap = new Float32Array(W);
-  const noiseSeed = Math.random() * 1e6;
+  const noiseSeed = simRng() * 1e6;
   const octaveCount = 4;
   for (let x = 0; x < W; x++) {
     let amp = 1;
@@ -3115,16 +3108,16 @@ export function generateObstacles(world: World): void {
   // chamber interior so the seafloor polygon strip skips those x
   // columns (they become part of the chamber floor/ceiling/back-wall
   // obstacles instead).
-  const caveOnLeft = Math.random() < 0.5;
-  const caveWidth = 120 + Math.random() * 60;  // 120..180
+  const caveOnLeft = simRng() < 0.5;
+  const caveWidth = 120 + simRng() * 60;  // 120..180
   // Larger mouth so the opening is visually obvious. Previous 25..40
   // tall / 30..50 deep slot read as "a faint scratch in the wall"
   // even when the geometry was correct -- and combined with lobe
   // overhang from the lip polygons it pinched closed for cells. The
   // bigger mouth costs some "refuge" privacy but is unambiguously a
   // doorway from across the world.
-  const mouthHeight = 45 + Math.random() * 20; // 45..65
-  const mouthDepth = 60 + Math.random() * 30;  // 60..90
+  const mouthHeight = 45 + simRng() * 20; // 45..65
+  const mouthDepth = 60 + simRng() * 30;  // 60..90
   // Horizontal extent. Outer edge against the wall; inner edge faces
   // the chamber mouth. Anchor flush at x=0/W (was +/-4) so there's no
   // sliver of seafloor between the cave back wall and the world edge.
@@ -3155,7 +3148,7 @@ export function generateObstacles(world: World): void {
   // mouth slot can poke through the chamber's floor or ceiling and
   // the lip polygons go inside-out.
   const mouthHeightClamped = Math.min(mouthHeight, caveHeight * 0.6);
-  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * Math.random());
+  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * simRng());
   const mouthTopY = mouthCenterY - mouthHeightClamped / 2;
   const mouthBottomY = mouthCenterY + mouthHeightClamped / 2;
   // Mark heightmap columns inside the cave footprint so the seafloor
@@ -3275,7 +3268,7 @@ export function generateObstacles(world: World): void {
   for (const [spanStart, spanEnd] of spans) {
     let xStart = spanStart;
     while (xStart < spanEnd) {
-      const target = CHUNK_W_MIN + Math.random() * (CHUNK_W_MAX - CHUNK_W_MIN);
+      const target = CHUNK_W_MIN + simRng() * (CHUNK_W_MAX - CHUNK_W_MIN);
       let xEnd = Math.min(spanEnd, xStart + target);
       // Snap last chunk to the span end -- avoids a tiny tail chunk.
       if (spanEnd - xEnd < CHUNK_W_MIN * 0.6) xEnd = spanEnd;
@@ -3291,12 +3284,12 @@ export function generateObstacles(world: World): void {
   // below them. Random side per outcropping. We pick a y-band roughly
   // in the middle vertical third of the water column so they don't
   // collide with the cave (cave hugs the floor) or with surface waves.
-  const outcropCount = 1 + Math.floor(Math.random() * 2); // 1..2
+  const outcropCount = 1 + Math.floor(simRng() * 2); // 1..2
   for (let oc = 0; oc < outcropCount; oc++) {
-    const onLeft = Math.random() < 0.5;
-    const protrusion = 80 + Math.random() * 70; // 80..150
-    const thickness = 30 + Math.random() * 30;  // 30..60 at wall
-    const yCenter = H * (0.35 + Math.random() * 0.3); // 35-65% of height
+    const onLeft = simRng() < 0.5;
+    const protrusion = 80 + simRng() * 70; // 80..150
+    const thickness = 30 + simRng() * 30;  // 30..60 at wall
+    const yCenter = H * (0.35 + simRng() * 0.3); // 35-65% of height
     // Anchor flush against the world wall (x=0 or x=W). Previous
     // version started at +/-4 to feel "embedded", but that left a
     // visible gap between the wedge and the side -- the rock has to
@@ -3309,9 +3302,9 @@ export function generateObstacles(world: World): void {
     const top1 = yCenter - thickness * 0.55;
     const bot1 = yCenter + thickness * 0.55;
     const midX = onLeft ? baseX + protrusion * 0.5 : baseX - protrusion * 0.5;
-    const top2 = yCenter - thickness * 0.32 + (Math.random() - 0.5) * 6;
-    const bot2 = yCenter + thickness * 0.30 + (Math.random() - 0.5) * 6;
-    const tipY = yCenter + (Math.random() - 0.5) * thickness * 0.2;
+    const top2 = yCenter - thickness * 0.32 + (simRng() - 0.5) * 6;
+    const bot2 = yCenter + thickness * 0.30 + (simRng() - 0.5) * 6;
+    const tipY = yCenter + (simRng() - 0.5) * thickness * 0.2;
     const poly: { x: number; y: number }[] = onLeft
       ? [
         { x: baseX, y: top1 },
@@ -3732,11 +3725,26 @@ function tempMult(T: number): number {
   return Math.max(TEMP_MULT_MIN, Math.min(TEMP_MULT_MAX, m));
 }
 
+// Live simulation RNG. Every nondeterministic draw in the stepping
+// path and in world setup goes through this so a world can be made
+// fully reproducible by passing a seed to createWorld. Defaults to
+// Math.random (nondeterministic) when no seed is given, which also
+// keeps existing callers/tests that stub Math.random working
+// unchanged. NOTE: particle.worker.ts imports applyParticleForcesRange
+// but never calls createWorld, so in the worker realm this stays
+// Math.random -- the opt-in parallel-particle path (>=4000 particles)
+// trades determinism of sub-pixel brownian jitter for throughput.
+let simRng: () => number = Math.random;
+
 export function createWorld(
   width: number,
   height: number,
-  opts?: { delayedSpawn?: boolean },
+  opts?: { delayedSpawn?: boolean; seed?: number },
 ): World {
+  // Install the seeded generator before ANY random draw below (the
+  // world literal's nextDisturbanceAt, generateObstacles, founder
+  // spawn all consume it).
+  simRng = opts?.seed != null ? mulberry32(opts.seed >>> 0) : Math.random;
   const particleTarget = INITIAL_PARTICLE_TARGET;
   const world: World = {
     width, height,
@@ -3810,10 +3818,11 @@ export function createWorld(
     disturbanceIntensity: 0,
     disturbanceStartedAt: 0,
     disturbanceUntil: 0,
-    nextDisturbanceAt: 60 + Math.random() * 240,
+    nextDisturbanceAt: 60 + simRng() * 240,
     currentAmp: CURRENT_AMP,
     vmInstrBudget: DEFAULT_VM_INSTR_BUDGET,
     obstacles: [],
+    rng: simRng,
   };
   // Reset module-level caches that aren't on the world object. These
   // are process-globals indexed by particle/creature slot or by sim
@@ -3846,7 +3855,7 @@ export function createWorld(
     world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
     // 60-100% of FOUNDER_TARGET seeded immediately; the top-up loop
     // fills the rest in step().
-    const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + Math.random() * 0.4));
+    const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + simRng() * 0.4));
     for (let i = 0; i < initialFounders; i++) {
       const f = spawnFounder(world);
       if (f && i === 0) {
@@ -3956,7 +3965,7 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
   const nReg = regionCols(world) * regionRows(world);
   if (nReg <= 0) return;
   const localBase = regionIndexAt(world, x, y) * AMBIENT_STRIDE;
-  const randBase = (Math.min(nReg - 1, (Math.random() * nReg) | 0)) * AMBIENT_STRIDE;
+  const randBase = (Math.min(nReg - 1, (simRng() * nReg) | 0)) * AMBIENT_STRIDE;
   const cs = c.store; const ci = c.idx;
   const CAP = FOUNDER_RESERVE_DRAW_PER_CHEM;
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
@@ -4049,10 +4058,10 @@ function spawnFounder(world: World): Creature | null {
   const creatures = world.creatures;
   const nc = creatures.length;
   for (let attempt = 0; attempt < 32; attempt++) {
-    x = world.width * (0.1 + 0.8 * Math.random());
+    x = world.width * (0.1 + 0.8 * simRng());
     // Y range covers most of the water column (10%..90% of height),
     // skipping just the surface band and the rocky terrain at the floor.
-    y = world.height * (0.1 + 0.8 * Math.random());
+    y = world.height * (0.1 + 0.8 * simRng());
     let okay = true;
     // Terrain avoidance: refuse to place a founder at-or-below the
     // topmost rock surface in this column. topTerrainYAtColumn handles
@@ -4107,10 +4116,10 @@ function spawnFounder(world: World): Creature | null {
 
 function seedInitialParticles(world: World): void {
   const spawnOne = (spec: SpawnChemSpec): void => {
-    const r = 1 + Math.random() * 1.5;
+    const r = 1 + simRng() * 1.5;
     pushParticle(world, {
       ...randomWaterPos(world, r),
-      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
       r,
       chemId: spec.chemId,
       density: rollChemDensity(spec),
@@ -4172,7 +4181,7 @@ function seedRamp(world: World, dt: number): void {
       const r = spawnRadius(spec.chemId);
       pushParticle(world, {
         ...randomWaterPos(world, r),
-        vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+        vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
         r,
         chemId: spec.chemId,
         density: rollChemDensity(spec),
@@ -4191,9 +4200,9 @@ function randomWaterPos(
   world: World, r: number,
 ): { x: number; y: number; z: number } {
   return {
-    x: Math.random() * world.width,
-    y: world.surfaceY + Math.random() * (world.height - world.surfaceY),
-    z: r + Math.random() * (world.depth - 2 * r),
+    x: simRng() * world.width,
+    y: world.surfaceY + simRng() * (world.height - world.surfaceY),
+    z: r + simRng() * (world.depth - 2 * r),
   };
 }
 
@@ -4203,7 +4212,7 @@ function randomWaterPos(
 // "pebble" mineral grain that drove a procedural sand floor; the
 // floor is now static rock terrain, so the branch is dead.)
 function spawnRadius(_chemId: number): number {
-  return 1 + Math.random() * 1.5;
+  return 1 + simRng() * 1.5;
 }
 
 export function seedParticles(world: World, n: number): void {
@@ -4214,7 +4223,7 @@ export function seedParticles(world: World, n: number): void {
     const r = spawnRadius(spec.chemId);
     pushParticle(world, {
       ...randomWaterPos(world, r),
-      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
       r,
       chemId: spec.chemId,
       density: rollChemDensity(spec),
@@ -4231,7 +4240,7 @@ function rollChemDensity(spec: SpawnChemSpec): number | undefined {
   // Triangular distribution around the midpoint -- recovers the
   // varied-density "look" of the old rock/sand/clay split that's now
   // collapsed into a single mineral chem.
-  const tri = Math.random() + Math.random() - 1; // -1..1
+  const tri = simRng() + simRng() - 1; // -1..1
   const mid = (lo + hi) / 2;
   const half = (hi - lo) / 2;
   return mid + tri * half;
@@ -4240,7 +4249,7 @@ function rollChemDensity(spec: SpawnChemSpec): number | undefined {
 function pickSpawnSpec(): SpawnChemSpec {
   let total = 0;
   for (const s of SPAWN_CHEM_SPECS) total += s.weight;
-  let pick = Math.random() * total;
+  let pick = simRng() * total;
   for (const s of SPAWN_CHEM_SPECS) {
     pick -= s.weight;
     if (pick <= 0) return s;
@@ -4272,7 +4281,7 @@ function makeCreature(
   // top is the "use available resources if present" part.
   const rolled = genomeOverride
     ? new Uint8Array(genomeOverride)
-    : makeRandomViableGenome();
+    : makeRandomViableGenome(simRng);
   if (rolled === null) {
     console.warn(
       "makeRandomViableGenome: no viable genome in MAX_REROLLS -- skipping founder",
@@ -4346,7 +4355,7 @@ function makeCreature(
   // adds to the cell's generic-chem pool. Each absorbed particle is
   // removed from the world. An empty patch means a very lean cell
   // that probably won't survive long; that's the luck of biogenesis.
-  const scoopR = FOUNDER_SCOOP_R_MIN + Math.random() * (FOUNDER_SCOOP_R_MAX - FOUNDER_SCOOP_R_MIN);
+  const scoopR = FOUNDER_SCOOP_R_MIN + simRng() * (FOUNDER_SCOOP_R_MAX - FOUNDER_SCOOP_R_MIN);
   const rSq = scoopR * scoopR;
   const ps = world.particles;
   const cstore = c.store; const cidx = c.idx;
@@ -4389,8 +4398,8 @@ export function spawnSpeciesInstance(world: World, genome: Uint8Array): Creature
   const minSpacingSq = FOUNDER_MIN_SPACING * FOUNDER_MIN_SPACING;
   let x = world.width * 0.5, y = world.height * 0.5;
   for (let attempt = 0; attempt < 32; attempt++) {
-    const cx = world.width * (0.1 + 0.8 * Math.random());
-    const cy = world.height * (0.1 + 0.8 * Math.random());
+    const cx = world.width * (0.1 + 0.8 * simRng());
+    const cy = world.height * (0.1 + 0.8 * simRng());
     if (founderTerrainBlocked(world, cx, cy, MIN_CREATURE_R)) continue;
     let okay = true;
     for (let k = 0; k < world.creatures.length; k++) {
@@ -4841,12 +4850,12 @@ function precipitateRegions(world: World): void {
       // Spawn within this region's px box, below the surface.
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
       for (let s = 0; s < count; s++) {
-        const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
-        let py = y0 + Math.random() * REGION_PX;
+        const px = Math.min(world.width - 1, x0 + simRng() * REGION_PX);
+        let py = y0 + simRng() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
         py = Math.min(world.height - PRECIP_R, py);
         pushParticle(world, {
-          x: px, y: py, z: PRECIP_R + Math.random() * (world.depth - 2 * PRECIP_R),
+          x: px, y: py, z: PRECIP_R + simRng() * (world.depth - 2 * PRECIP_R),
           vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
         });
       }
@@ -5015,12 +5024,12 @@ function reservePass(world: World): void {
       const rx = ri % cols, ry = (ri / cols) | 0;
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
       while (avail >= amountPer && need > 0) {
-        const px = Math.min(world.width - 1, x0 + Math.random() * REGION_PX);
-        let py = y0 + Math.random() * REGION_PX;
+        const px = Math.min(world.width - 1, x0 + simRng() * REGION_PX);
+        let py = y0 + simRng() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
         py = Math.min(world.height - PRECIP_R, py);
         pushParticle(world, {
-          x: px, y: py, z: PRECIP_R + Math.random() * (world.depth - 2 * PRECIP_R),
+          x: px, y: py, z: PRECIP_R + simRng() * (world.depth - 2 * PRECIP_R),
           vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
         });
         avail -= amountPer;
@@ -5730,7 +5739,7 @@ function spawnExcretedParticle(
   const density = CHEM_BASE_DENSITY[chemId];
   // m is chemical AMOUNT; the spawned particle carries PHYSICAL MASS.
   const pr = Math.max(1.5, radiusForMass(m * CHEM_MM[chemId], density));
-  const angle = Math.random() * Math.PI * 2;
+  const angle = simRng() * Math.PI * 2;
   const ejectV = 25;
   // Clamp the spawn position so a wall-hugging cell can't drop a
   // particle right at (or outside) the wall, where the wall clamp
@@ -5745,7 +5754,7 @@ function spawnExcretedParticle(
     z: Math.min(world.depth - pr, Math.max(pr, c.z)),
     vx: Math.cos(angle) * ejectV,
     vy: Math.sin(angle) * ejectV,
-    vz: (Math.random() - 0.5) * 10,
+    vz: (simRng() - 0.5) * 10,
     r: pr,
     chemId,
     molecules,
@@ -5802,7 +5811,7 @@ function crossoverGenomes(a: Uint8Array, b: Uint8Array): Uint8Array {
   const len = a.length;
   if (len === 0) return new Uint8Array(b);
   const out = new Uint8Array(len);
-  const k = Math.floor(Math.random() * (len + 1));
+  const k = Math.floor(simRng() * (len + 1));
   for (let i = 0; i < k; i++) out[i] = a[i];
   for (let i = k; i < len; i++) out[i] = i < b.length ? b[i] : a[i];
   return out;
@@ -6057,13 +6066,13 @@ function replenishParticles(world: World, dt: number): void {
   if (world.particles.length >= world.particleTarget) return;
   const expected = world.particleSpawnRate * dt;
   let toSpawn = Math.floor(expected);
-  if (Math.random() < expected - toSpawn) toSpawn++;
+  if (simRng() < expected - toSpawn) toSpawn++;
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
     pushParticle(world, {
       ...randomWaterPos(world, r),
-      vx: 0, vy: 0, vz: (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
       r,
       chemId: spec.chemId,
       density: rollChemDensity(spec),
@@ -6090,7 +6099,7 @@ function aerate(world: World, dt: number): void {
   const act = surfaceActivity(world);
   const expected = world.aerationRate * dt * (0.5 + act);
   let n = Math.floor(expected);
-  if (Math.random() < expected - n) n++;
+  if (simRng() < expected - n) n++;
   // Compute current atmospheric composition (mole fractions). Bubbles
   // pick up the same fractions, scaled to AERATION_MASS_PER_BUBBLE
   // total. If the atmosphere is depleted (zero total), aeration
@@ -6100,7 +6109,7 @@ function aerate(world: World, dt: number): void {
   for (const k of MOLECULE_IDS) totalAtm += atm[k];
   if (totalAtm <= 0) return;
   for (let i = 0; i < n && world.particles.length < pCap; i++) {
-    const r = 1 + Math.random() * 0.8;
+    const r = 1 + simRng() * 0.8;
     // Pull at most what's available; bubble may be smaller than the
     // nominal mass when the atmosphere is thin.
     const want = Math.min(AERATION_MASS_PER_BUBBLE, totalAtm);
@@ -6122,7 +6131,7 @@ function aerate(world: World, dt: number): void {
     // a clean shot at rising back up to the surface.
     const insetMin = Math.min(AERATION_WALL_INSET, world.width * 0.25);
     const insetMax = Math.max(world.width - insetMin, insetMin + r * 2);
-    const spawnX = insetMin + Math.random() * Math.max(0, insetMax - insetMin);
+    const spawnX = insetMin + simRng() * Math.max(0, insetMax - insetMin);
     pushParticle(world, {
       x: spawnX,
       // Just below the *wavy* surface at this x so the wall-escape pass
@@ -6130,10 +6139,10 @@ function aerate(world: World, dt: number): void {
       // world.surfaceY here made every fresh bubble appear on one
       // horizontal line, ignoring the wave it should be sitting under.
       y: surfaceYAt(world, spawnX) + r + 1,
-      z: r + Math.random() * (world.depth - 2 * r),
-      vx: (Math.random() - 0.5) * 4,
+      z: r + simRng() * (world.depth - 2 * r),
+      vx: (simRng() - 0.5) * 4,
       vy: AERATION_BUBBLE_DROP_SPEED,
-      vz: (Math.random() - 0.5) * 4,
+      vz: (simRng() - 0.5) * 4,
       r,
       // Bubbles carry their atmospheric mix as a molecule payload;
       // chemId is the dominant gas (O2) for buoyancy/visual classification.
@@ -6317,8 +6326,8 @@ export function applyParticleForcesRange(
     // Decay constant sits between surfaceDecay (fast) and swellDecay
     // (slow) so mid-water still mixes but the floor calms.
     const noiseEnv = Math.exp(-depth / 200);
-    const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
-    const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
+    const noiseX = bAmp * noiseEnv * (simRng() - 0.5) * 2;
+    const noiseY = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
@@ -6489,8 +6498,8 @@ function applyForces(world: World, dt: number): void {
     // Decay constant sits between surfaceDecay (fast) and swellDecay
     // (slow) so mid-water still mixes but the floor calms.
     const noiseEnv = Math.exp(-depth / 200);
-    const noiseX = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
-    const noiseY = bAmp * noiseEnv * (Math.random() - 0.5) * 2;
+    const noiseX = bAmp * noiseEnv * (simRng() - 0.5) * 2;
+    const noiseY = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
     const ayTot = ay + splash + updraft + noiseY;
     const dragScale = ri / DRAG_REF_R;
@@ -6665,7 +6674,7 @@ function updateCreatures(world: World, dt: number): void {
     // Each REPAIR execution spends ATP and refreshes the window so a cell
     // can choose to invest energy into stability when it matters.
     if (c.repairTicks > 0) { mutP = 0; c.repairTicks--; }
-    if (age > 0 && Math.random() < mutP) {
+    if (age > 0 && simRng() < mutP) {
       // Same viability guard the stillbirth filter uses at fission:
       // reject in-place edits that would knock out the cell's last
       // metabolism op or last REPRODUCE. Without this, an aging cell
@@ -6673,7 +6682,7 @@ function updateCreatures(world: World, dt: number): void {
       // and well, but its lineage quietly dies because its REPRODUCE
       // byte was mutated away. Non-critical somatic drift still flows
       // freely; survival-critical bytes are protected.
-      const candidate = somaticMutateOnce(c.genome);
+      const candidate = somaticMutateOnce(c.genome, simRng);
       if (viableGenome(candidate)) {
         c.genome = candidate;
       }
@@ -7046,8 +7055,8 @@ function updateCreatures(world: World, dt: number): void {
     for (const c of world.creatures) {
       if (spillSet.has(c) || eaten.has(c)) {
         for (const inner of c.contents) {
-          inner.x = c.x + (Math.random() - 0.5) * Math.max(2, c.r);
-          inner.y = c.y + (Math.random() - 0.5) * Math.max(2, c.r);
+          inner.x = c.x + (simRng() - 0.5) * Math.max(2, c.r);
+          inner.y = c.y + (simRng() - 0.5) * Math.max(2, c.r);
           inner.z = c.z;
           released.push(inner);
         }
@@ -7166,7 +7175,7 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
       return;
     }
     const r = rTrue;
-    const jit = (): number => (Math.random() - 0.5) * DEATH_RELEASE_SCATTER;
+    const jit = (): number => (simRng() - 0.5) * DEATH_RELEASE_SCATTER;
     const z = world.depth > 2 * r
       ? Math.min(world.depth - r, Math.max(r, c.z + jit()))
       : world.depth / 2;
@@ -7216,10 +7225,10 @@ function tryReproduce(parent: Creature, world: World): void {
   // there are no bonds.
   let parentGenome = parent.genome;
   if (parent.bonds.length > 0) {
-    const partner = parent.bonds[Math.floor(Math.random() * parent.bonds.length)];
+    const partner = parent.bonds[Math.floor(simRng() * parent.bonds.length)];
     parentGenome = crossoverGenomes(parent.genome, partner.genome);
   }
-  const childGenome = mutateGenome(parentGenome);
+  const childGenome = mutateGenome(parentGenome, simRng);
   // No engine-side stillbirth filter. If the mutation knocks out a
   // required op, that's the cell's problem -- the resulting daughter
   // will autolyze through the normal death pass (which conserves
@@ -7276,7 +7285,7 @@ function tryReproduce(parent: Creature, world: World): void {
 
   updateCreatureRadius(parent);
 
-  const angle = Math.random() * Math.PI * 2;
+  const angle = simRng() * Math.PI * 2;
   let childMassEstimate = energyGift;
   for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
   const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));

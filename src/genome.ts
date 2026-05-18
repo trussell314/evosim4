@@ -854,7 +854,6 @@ export function computeSenseRange(genome: Uint8Array): number {
 // THRUST ops at the cost of ATP per fire. Acceleration is a flat
 // constant -- evolution tunes effective speed via THRUST cadence.
 export const THRUST_BASE = 70;
-export const THRUST_PER_AMP = 25;
 export function computeThrustAccel(_genome: Uint8Array): number {
   return THRUST_BASE;
 }
