@@ -11,6 +11,12 @@ const crossOriginIsolationHeaders = {
 
 export default defineConfig({
   base: "/evosim4/",
+  // Build timestamp (ISO 8601, UTC) baked in at build/dev-server
+  // start. Surfaced in the HUD stats line so a deployed page makes
+  // clear which build it is.
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   build: {
     // Sourcemaps emit alongside the bundle (foo.js.map). Browsers fetch
     // them on demand from devtools; pages without devtools open pay
