@@ -1,7 +1,9 @@
 # Coloniality Gaps — Tracking Note
 
-Status: **gaps recorded, not scheduled**. Captured so they aren't lost
-while colony testing continues. No code written.
+Status: **gaps recorded**. Captured so they aren't lost while colony
+testing continues. Update: the #1 differentiation *substrate* has
+since landed (`PARTITION`, see that entry); GAP #3 and #2/#4/#5 remain
+as recorded.
 
 Context: the sim's adhesion system models "stick together" (greenbeard
 marker match → physical spring bond, inherited at division), not "be
@@ -61,6 +63,15 @@ Listed for completeness; do not treat as confirmed.
 - **#1 No cell differentiation.** Every cell is an identical clone
   running the same VM/state — no role specialization, so no true
   multicellularity is expressible. Suspected biggest unlock.
+  **Substrate added (not yet validated):** `PARTITION <chem>` now
+  biases the per-chem mother/daughter split at division, so
+  genetically identical clones can emerge with divergent cytoplasm and
+  read it via `SENSE_CHEMICAL` — differentiation is now *evolvable*
+  and the engine no longer forces identical state. The "biggest
+  unlock" hypothesis itself is unchanged and unconfirmed. The
+  asymmetry is blind (no injected positional/division-count ID), and
+  #2 below is still open, so a sterile-helper ↔ reproductive division
+  of labor still lacks a dedicated transfer channel.
 - **#2 No directed inter-cell transfer along bonds.** Sharing is
   leaky-diffusion only; a sterile helper has no channel to feed a
   reproductive cell, so division of labor can't evolve.

@@ -25,6 +25,27 @@ mass + membrane (armor) + cohesion (bondChem × bond count). Engulf →
 the prey runs its full VM as an endosymbiont (internal division
 uncapped); predate → absorb pools.
 
+Substrate additions (this round — see the gaps section, all now
+resolved):
+
+- **`PARTITION <chem>`** — pop a bias; skews that chem's mother/
+  daughter split at the next division. Genetically identical daughters
+  emerge with different cytoplasm; differentiation is now *evolvable*
+  (the asymmetry is "blind" — a lineage must also evolve to read its
+  own divergent pools via `SENSE_CHEMICAL`).
+- **`SYNTH PACKAGE` / `SYNTH COMPETENCE` + eDNA carriers** — lysing or
+  packaging cells shed a genome fragment as a decaying extracellular
+  carrier; a competent cell integrates one append-only. The physical
+  HGT / virus / plasmid / EGT vector (no addressed "inject" — a donor
+  cannot target a recipient).
+- **Standing transporters** — `SYNTH CAT param=slot` for a slot in the
+  transport band builds a carrier protein that moves one core
+  metabolite (O₂/CO₂/glu/aa/fa/min/ADP/waste) across a membrane by
+  facilitated, MM-saturated, gradient-driven flux — at *both* the
+  outer membrane (cell↔world) and the vacuolar membrane
+  (host↔organelle, host's + organelle's catalysts summed). Replaces
+  nothing; composes with `INGEST`/`EXCRETE` pulses and diffusion.
+
 ## Autotrophs
 
 1. **Complete photoautotroph (sessile primary producer).**
@@ -56,10 +77,15 @@ uncapped); predate → absorb pools.
    Exercises the emergent grow-big-vs-grow-armor axis. **Fully
    expressible.**
 7. **Greenbeard colony.** `SYNTH BOND <markerM>`; clones bond, gaining
-   crossover at reproduction + cohesion predation-resistance. **Partly
-   expressible** — bonded cells are genetically identical and run the
-   same VM, so true division of labor can't emerge yet (see
-   COLONY_GAPS).
+   crossover at reproduction + cohesion predation-resistance. **Now
+   expressible (substrate complete).** The differentiation gap is
+   closed by other means: `PARTITION` gives genetically identical
+   bonded clones divergent cytoplasm at division, which they read via
+   `SENSE_CHEMICAL` — so true division of labor is *evolvable*. Caveat:
+   the asymmetry is blind (a colony must evolve to act on its own
+   divergent pools; it isn't an injected positional ID), and directed
+   bond-channel transfer between roles is still leaky-diffusion only
+   (COLONY_GAPS #2).
 
 ## Endosymbiosis candidates
 
@@ -72,13 +98,28 @@ uncapped); predate → absorb pools.
    relies on internal division + fission partitioning to keep a
    symbiont population. Farming emerges from the indirect cytoplasm
    lever — no "feed organelle" op. **Fully expressible** (the headline
-   payoff of the organelle work).
+   payoff of the organelle work). Now *also* expressible by a direct
+   means: the host can `SYNTH CAT` vacuolar transporter catalysts to
+   actively bias metabolite flux to/from every organelle it carries
+   (farm or starve), still footprint-driven, still no addressed verb.
 10. **Endoparasite / "Trojan".** Tiny cell that *wants* to be eaten:
     minimal soma, `EXCRETE marker0` bait, low membrane (cheap to
     engulf). Inside: `REPRODUCE` hard (uncapped internal division) and
     `INGEST` from the host pool until the host autolyzes and releases
-    the brood. Closest thing to a "virus" the engine supports. **Fully
-    expressible.**
+    the brood. **Fully expressible.** (No longer the *closest* thing to
+    a virus — see #15, now a literal one.)
+
+15. **True virus / mobile genetic element.** `SYNTH PACKAGE` to shed
+    fragments of its own genome as decaying eDNA carriers; victims that
+    express `SYNTH COMPETENCE` integrate the fragment append-only. No
+    soma required for the genome itself to spread — infection is the
+    physical carrier + recipient competence, not a targeted op. A
+    lysing carrier-rich cell is also a passive transformation source;
+    a dead engulfed symbiont seeds its host's buffer (EGT). Spans
+    lytic-virus, plasmid, and conjugation-like strategies depending on
+    where/when shedding and competence are expressed. **Fully
+    expressible** — the branch the gaps section called the
+    highest-leverage missing one.
 
 ## Self-modifiers (exotic, fully expressible)
 
@@ -102,25 +143,47 @@ uncapped); predate → absorb pools.
 
 ## Substrate gaps → what each unlocks (the guide)
 
-- **Horizontal genome injection.** No op transfers genome bytes into
-  *another* live cell (`POKE`/`SPLICE` are self-only; `PREDATE` moves
-  pools not code). A single "inject" primitive opens the entire
-  virus / plasmid / HGT design space. Highest-leverage missing branch.
-- **Death-triggered EGT (already backlogged).** Host acquires a dead
-  symbiont's genome fragment/capability — the no-permission ratchet
-  that lets host takeover of organelles emerge. See
-  `ENDOSYMBIOSIS_NOTES.md` §5, `TODO.md`.
-- **Cell differentiation substrate.** A heritable per-cell state set
-  at division (position-in-colony / division count the VM can read)
-  so genetically identical bonded cells can express differently —
-  the prerequisite for true multicellular division of labor
-  (COLONY_GAPS).
-- **Dual/contested host↔organelle membrane (backlogged).** Host-side
-  transport so addressed delivery and parasite/mutualist/domestication
-  dynamics are reachable. `ENDOSYMBIOSIS_NOTES.md` §2/§4.
-- **Standing transporters.** Continuous gradient-driven flux gated by
-  chem id or signature, vs. the current imperative INGEST/EXCRETE
-  pulses — the keystone for organelle integration and selective
-  exchange. `ENDOSYMBIOSIS_NOTES.md` §3.
+**All five gaps below are now RESOLVED** — each closed via a substrate
+primitive rather than the originally-sketched op, so the "via other
+means" note matters. Kept here as the rationale + the exact means.
 
-_Status: design reference only. Not scheduled, not implemented._
+- **Horizontal genome injection.** *Resolved — via a physical vector,
+  not an "inject" op.* `SYNTH PACKAGE` sheds a self-genome fragment as
+  a decaying eDNA carrier; `SYNTH COMPETENCE` integrates a nearby one
+  append-only. A donor *cannot* address a recipient — spread is the
+  carrier + competence, so virus/plasmid/conjugation are evolvable
+  strategies, not a scripted transfer. (`TODO.md` "HGT/EGT DONE".)
+- **Death-triggered EGT.** *Resolved — same substrate, intracellular
+  locality.* A dead engulfed symbiont sheds into the host's eDNA
+  buffer; the host's own `COMPETENCE` integrates it. The count-scaled
+  ratchet *emerges* from death frequency (more symbionts → more deaths
+  → fuller buffer) — no per-death probability formula.
+- **Cell differentiation substrate.** *Resolved — but reframed.* Not
+  an injected positional/division-count ID; instead `PARTITION <chem>`
+  biases the per-chem mother/daughter split so identical genomes get
+  divergent cytoplasm, which they read through the existing
+  `SENSE_CHEMICAL`. Opens the same door (division of labor is now
+  evolvable); caveat: the asymmetry is *blind* — a lineage must evolve
+  to act on its own pools. (COLONY_GAPS #1; #2 directed bond transfer
+  still open.)
+- **Dual/contested host↔organelle membrane.** *Resolved — via the
+  transporter substrate, no host-side "transport bias" verb.* Vacuolar
+  transporters: the host's *and* the organelle's transporter catalysts
+  act across the shared membrane (summed). Host farm/starve and
+  parasite/mutualist/domestication dynamics are reachable; control
+  stays footprint-driven (the host's transporter-k acts equally across
+  every organelle, no addressed delivery). (`ENDOSYMBIOSIS_NOTES.md`
+  RESOLVED banner.)
+- **Standing transporters.** *Resolved — chem-id-gated, facilitated.*
+  `SYNTH CAT` on a transport-band slot builds a carrier protein giving
+  continuous, MM-saturated, gradient-driven flux of one core
+  metabolite at the outer + vacuolar membranes, composing with
+  `INGEST`/`EXCRETE` and diffusion. Scope lines: facilitated only
+  (active/uphill `atpDelta` pumping reserved); *signature-gated*
+  selectivity not built; only the 8 small-molecule metabolites
+  (generic-chem transporters deferred — `TODO.md`).
+
+_Status: archetypes are design reference (no committed founder
+genomes). The five substrate gaps above are implemented; see `TODO.md`
+/ `ENDOSYMBIOSIS_NOTES.md` / `COLONY_GAPS.md` for specifics and the
+remaining open colony gaps (#2/#4/#5)._
