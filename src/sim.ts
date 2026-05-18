@@ -38,6 +38,8 @@ import {
   SYNTH_BIT_REPAIR,
 } from "./genome";
 import { mulberry32 } from "./rng";
+import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
+export { genomeTag, genomeKey, genomeDistance, genomeColor };
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1032,16 +1034,6 @@ export function reactionName(slot: number): string {
 // previous `sp.key.slice(0, 6)` (first 3 bytes of the genome) which
 // post-K-4/K-5 collided for every cell back when founders shared a
 // fixed curated-genome prefix (since removed -- founders are random).
-export function genomeTag(genome: Uint8Array): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < genome.length; i++) {
-    h ^= genome[i];
-    h = Math.imul(h, 0x01000193);
-  }
-  // Force unsigned, base36, pad to 6 chars by trimming or zero-padding.
-  const s = (h >>> 0).toString(36);
-  return (s.length >= 6 ? s.slice(0, 6) : s.padStart(6, "0")).toUpperCase();
-}
 
 // Per-cell molecular pool. ATP itself lives on the Creature as `energy`
 // (so existing code that talks about energy is talking about ATP); every
@@ -4494,14 +4486,6 @@ export function spawnSpeciesInstance(world: World, genome: Uint8Array): Creature
   return c;
 }
 
-export function genomeKey(genome: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < genome.length; i++) {
-    const b = genome[i];
-    s += (b < 16 ? "0" : "") + b.toString(16);
-  }
-  return s;
-}
 
 const PHYLO_EVENT_CAP = 2000;
 
@@ -6183,45 +6167,6 @@ function crossoverGenomes(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
-export function genomeDistance(a: Uint8Array, b: Uint8Array): number {
-  const m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  const prev = new Int32Array(n + 1);
-  const cur = new Int32Array(n + 1);
-  for (let j = 0; j <= n; j++) prev[j] = j;
-  for (let i = 1; i <= m; i++) {
-    cur[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const sub = a[i - 1] === b[j - 1] ? 0 : 1;
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + sub);
-    }
-    prev.set(cur);
-  }
-  return prev[n];
-}
-
-// Cell color. With no anchor, uses a deterministic hash-based hue at fixed
-// saturation/lightness. With an anchor, an exact-match genome paints white
-// and the color fades toward the hash hue as edit distance grows.
-const COLOR_SAT_FULL = 60;
-const COLOR_LIGHT_FULL = 62;
-const COLOR_DIST_FULL = 24;
-
-export function genomeColor(genome: Uint8Array, anchor?: Uint8Array): string {
-  let h = 5381 >>> 0;
-  for (let i = 0; i < genome.length; i++) {
-    h = ((h * 33) ^ genome[i]) >>> 0;
-  }
-  const hue = h % 360;
-  if (!anchor) {
-    return `hsl(${hue}, ${COLOR_SAT_FULL}%, ${COLOR_LIGHT_FULL}%)`;
-  }
-  const d = Math.min(1, genomeDistance(genome, anchor) / COLOR_DIST_FULL);
-  const sat = COLOR_SAT_FULL * d;
-  const light = 100 - (100 - COLOR_LIGHT_FULL) * d;
-  return `hsl(${hue}, ${sat.toFixed(1)}%, ${light.toFixed(1)}%)`;
-}
 
 // Particle mass = density * (4/3) * pi * r^3. Particles are spheres; the
 // circle we render is the equatorial cross-section. Same convention as cells.
