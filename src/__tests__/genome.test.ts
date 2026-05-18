@@ -19,9 +19,21 @@ import {
   genomeSynthMask,
   viableGenome,
   SYNTH_KIND,
+  SYNTH_KIND_COUNT,
+  CATALYST_COUNT,
   SYNTH_BIT_BIO,
+  SYNTH_BIT_AA,
   SYNTH_BIT_FA,
+  SYNTH_BIT_ENZ,
+  SYNTH_BIT_CHL,
+  SYNTH_BIT_MRNA,
+  SYNTH_BIT_PHOTO_BASE,
+  SYNTH_BIT_CHEMO_BASE,
+  SYNTH_BIT_MECH,
+  SYNTH_BIT_THERMO,
+  SYNTH_BIT_MAGNETO,
   SYNTH_BIT_BOND,
+  SYNTH_BIT_REPAIR,
 } from "../genome";
 
 function makeSensors(overrides: Partial<{
@@ -549,6 +561,160 @@ describe("genome decoding: known byte sequences", () => {
         expect(g).not.toBeNull();
         expect(viableGenome(g!)).toBe(true);
       }
+    });
+  });
+});
+
+// Every defined VM op must have its documented behavior pinned. The
+// blocks above cover the common ops; this block fills the remainder so
+// no defined opcode is unverified.
+describe("VM op coverage: every defined op", () => {
+  describe("stack ops (remaining)", () => {
+    it("NOP does nothing and execution continues", () => {
+      expect(exec([OP.NOP, OP.PUSH8, 5, OP.NOP, HALT_MARK]).state.stack).toEqual([5]);
+    });
+    it("OVER copies the second item to the top: [a,b] -> [a,b,a]", () => {
+      expect(exec([OP.PUSH8, 1, OP.PUSH8, 2, OP.OVER, HALT_MARK]).state.stack).toEqual([1, 2, 1]);
+    });
+    it("ROT rotates top three: [a,b,c] -> [b,c,a]", () => {
+      expect(exec([OP.PUSH8, 1, OP.PUSH8, 2, OP.PUSH8, 3, OP.ROT, HALT_MARK]).state.stack)
+        .toEqual([2, 3, 1]);
+    });
+  });
+
+  describe("arithmetic (remaining)", () => {
+    it("MOD is floored modulo: 17 mod 5 = 2", () => {
+      expect(exec([OP.PUSH8, 17, OP.PUSH8, 5, OP.MOD, HALT_MARK]).state.stack).toEqual([2]);
+    });
+    it("MOD with negative dividend stays floored: -7 mod 3 = 2", () => {
+      // 249 -> i8 -7. -7 - floor(-7/3)*3 = -7 - (-3*3) = 2.
+      expect(exec([OP.PUSH8, 249, OP.PUSH8, 3, OP.MOD, HALT_MARK]).state.stack).toEqual([2]);
+    });
+    it("MOD by zero pushes 0", () => {
+      expect(exec([OP.PUSH8, 17, OP.PUSH8, 0, OP.MOD, HALT_MARK]).state.stack).toEqual([0]);
+    });
+    it("SIGN: positive -> 1, negative -> -1, zero -> 0", () => {
+      expect(exec([OP.PUSH8, 9, OP.SIGN, HALT_MARK]).state.stack).toEqual([1]);
+      expect(exec([OP.PUSH8, 249, OP.SIGN, HALT_MARK]).state.stack).toEqual([-1]);
+      expect(exec([OP.PUSH8, 0, OP.SIGN, HALT_MARK]).state.stack).toEqual([0]);
+    });
+  });
+
+  describe("logical ops", () => {
+    it("NOT: 0 -> 1, nonzero -> 0", () => {
+      expect(exec([OP.PUSH8, 0, OP.NOT, HALT_MARK]).state.stack).toEqual([1]);
+      expect(exec([OP.PUSH8, 5, OP.NOT, HALT_MARK]).state.stack).toEqual([0]);
+    });
+    it("AND is logical (truthiness, not bitwise)", () => {
+      expect(exec([OP.PUSH8, 5, OP.PUSH8, 9, OP.AND, HALT_MARK]).state.stack).toEqual([1]);
+      expect(exec([OP.PUSH8, 5, OP.PUSH8, 0, OP.AND, HALT_MARK]).state.stack).toEqual([0]);
+    });
+    it("OR is logical (truthiness, not bitwise)", () => {
+      expect(exec([OP.PUSH8, 0, OP.PUSH8, 0, OP.OR, HALT_MARK]).state.stack).toEqual([0]);
+      expect(exec([OP.PUSH8, 0, OP.PUSH8, 4, OP.OR, HALT_MARK]).state.stack).toEqual([1]);
+    });
+  });
+
+  describe("actuators (remaining)", () => {
+    it("ENGULF sets the engulf flag (default false)", () => {
+      expect(exec([OP.NOP, HALT_MARK]).out.engulf).toBe(false);
+      expect(exec([OP.ENGULF, HALT_MARK]).out.engulf).toBe(true);
+    });
+    it("REPRODUCE fraction: in-range value is used verbatim", () => {
+      // 1 / 4 = 0.25, within [0.1, 0.9].
+      const { out } = exec([OP.PUSH8, 1, OP.PUSH8, 4, OP.DIV, OP.REPRODUCE, HALT_MARK]);
+      expect(out.reproduce).toBe(true);
+      expect(out.reproduceFraction).toBeCloseTo(0.25, 6);
+    });
+    it("REPRODUCE fraction: out-of-range collapses to symmetric 0.5", () => {
+      const { out } = exec([OP.PUSH8, 5, OP.REPRODUCE, HALT_MARK]);
+      expect(out.reproduceFraction).toBe(0.5);
+    });
+    it("SENSE_AMP is an inert marker (no stack/output effect)", () => {
+      const { out, state } = exec([OP.SENSE_AMP, HALT_MARK]);
+      expect(state.stack).toEqual([]);
+      expect(out.thrustX).toBe(0);
+      expect(out.synthMask).toBe(0);
+    });
+  });
+
+  describe("genome self-modification", () => {
+    function run(bytes: number[], budget: number): Uint8Array {
+      const g = new Uint8Array(bytes);
+      runTick(g, newVMState(), { chemConc: new Float32Array(96) },
+        { energy: 100, mass: 0, membrane: 0 }, budget, newOutputs());
+      return g;
+    }
+    it("POKE_BYTE writes value to genome[idx] in place (pops idx then val)", () => {
+      // stack order: push val, push idx; POKE pops idx (top) then val.
+      // Writes 42 into genome[0].
+      const g = run([OP.PUSH8, 42, OP.PUSH8, 0, OP.POKE_BYTE], 3);
+      expect(g[0]).toBe(42);
+    });
+    it("POKE_BYTE masks value to 8 bits and wraps idx mod length", () => {
+      const g = run([OP.PUSH8, 1, OP.PUSH8, 100, OP.POKE_BYTE], 3);
+      // idx 100 mod 5 = 0; value 1 & 0xff = 1.
+      expect(g[0]).toBe(1);
+    });
+    it("SPLICE_DUP requests a duplicate (mode 1), length capped at 32", () => {
+      const out = newOutputs();
+      // push offset(2) then length(100); SPLICE pops length then offset.
+      runTick(new Uint8Array([OP.PUSH8, 2, OP.PUSH8, 100, OP.SPLICE_DUP]),
+        newVMState(), { chemConc: new Float32Array(96) },
+        { energy: 100, mass: 0, membrane: 0 }, 3, out);
+      expect(out.spliceMode).toBe(1);
+      expect(out.spliceLength).toBe(32);
+      expect(out.spliceOffset).toBe(2 % 5);
+    });
+    it("SPLICE_DEL requests a deletion (mode 2)", () => {
+      const out = newOutputs();
+      runTick(new Uint8Array([OP.PUSH8, 1, OP.PUSH8, 3, OP.SPLICE_DEL]),
+        newVMState(), { chemConc: new Float32Array(96) },
+        { energy: 100, mass: 0, membrane: 0 }, 3, out);
+      expect(out.spliceMode).toBe(2);
+      expect(out.spliceLength).toBe(3);
+    });
+  });
+
+  describe("SYNTH: every kind sets its documented bit", () => {
+    const bitOf: Array<[number, number]> = [
+      [SYNTH_KIND.BIO, SYNTH_BIT_BIO],
+      [SYNTH_KIND.AA, SYNTH_BIT_AA],
+      [SYNTH_KIND.FA, SYNTH_BIT_FA],
+      [SYNTH_KIND.ENZ, SYNTH_BIT_ENZ],
+      [SYNTH_KIND.CHL, SYNTH_BIT_CHL],
+      [SYNTH_KIND.MRNA, SYNTH_BIT_MRNA],
+      [SYNTH_KIND.MECH, SYNTH_BIT_MECH],
+      [SYNTH_KIND.THERMO, SYNTH_BIT_THERMO],
+      [SYNTH_KIND.MAGNETO, SYNTH_BIT_MAGNETO],
+      [SYNTH_KIND.BOND, SYNTH_BIT_BOND],
+      [SYNTH_KIND.REPAIR, SYNTH_BIT_REPAIR],
+    ];
+    for (const [kind, bit] of bitOf) {
+      it(`kind ${kind} -> synthMask bit ${bit}`, () => {
+        expect(exec([OP.SYNTH, kind, 0, HALT_MARK]).out.synthMask).toBe(1 << bit);
+      });
+    }
+    it("PHOTO param selects the band bit (param % 3)", () => {
+      for (let p = 0; p < 5; p++) {
+        expect(exec([OP.SYNTH, SYNTH_KIND.PHOTO, p, HALT_MARK]).out.synthMask)
+          .toBe(1 << (SYNTH_BIT_PHOTO_BASE + (p % 3)));
+      }
+    });
+    it("CHEMO param selects the target bit (param % 4)", () => {
+      for (let p = 0; p < 6; p++) {
+        expect(exec([OP.SYNTH, SYNTH_KIND.CHEMO, p, HALT_MARK]).out.synthMask)
+          .toBe(1 << (SYNTH_BIT_CHEMO_BASE + (p % 4)));
+      }
+    });
+    it("CAT routes to catSynthMask, not synthMask (param = slot)", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 3, HALT_MARK]);
+      expect(out.synthMask).toBe(0);
+      expect(out.catSynthMask).toBe(1 << (3 % CATALYST_COUNT));
+    });
+    it("kindByte wraps mod SYNTH_KIND_COUNT", () => {
+      expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.AA, 0, HALT_MARK]).out.synthMask)
+        .toBe(1 << SYNTH_BIT_AA);
     });
   });
 });
