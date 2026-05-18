@@ -178,3 +178,7 @@ export const MRNA_REF = 5;
 export const CHL_REF = 5;
 export const ENZ_REF = 5;
 export const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
+
+// CHEM_NAMED_MOL_IDX[k] = molCols index of the named chemical at
+// chemCols[k]. Resolved against MOLECULE_INDEX (populated above).
+export const CHEM_NAMED_MOL_IDX: number[] = NAMED_CHEMICALS.map((n) => MOLECULE_INDEX[n]);
