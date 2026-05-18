@@ -38,8 +38,9 @@ import {
   GENOME_MASS_PER_BYTE,
   serializeWorld,
   applySavedWorld,
+  eDnaUptakePass,
 } from "../sim";
-import { OP, SYNTH_KIND, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
+import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
 // Local viable-heterotroph genome for test creatures. Mirrors the
 // production curated default that used to exist before founders went
@@ -2532,5 +2533,70 @@ describe("eDNA lysis shedding (Substrate A, sub-commit 2)", () => {
       expect(c.payload.length).toBeLessThanOrEqual(GENE_FRAGMENT_CAP);
       expect(c.age).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("eDNA competence uptake (Substrate A, sub-commit 3)", () => {
+  function competentCreature(): Creature {
+    const c = makeCreature({ genome: new Uint8Array([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]) });
+    // Mark competent this tick (the VM would set this via SYNTH
+    // COMPETENCE; set directly so the test doesn't depend on stepping).
+    c.vmOut.synthMask |= 1 << SYNTH_BIT_COMPETENCE;
+    return c;
+  }
+
+  it("integrates the host buffer append-only, then consumes it (EGT)", () => {
+    const w = quietWorld();
+    const c = competentCreature();
+    w.creatures.push(c);
+    const original = Array.from(c.genome);
+    c.eDnaBuffer = new Uint8Array([111, 122, 133, 144]);
+
+    let grew = false;
+    for (let i = 0; i < 5000 && !grew; i++) {
+      w.t += 0.016;
+      eDnaUptakePass(w);
+      if (c.genome.length > original.length) grew = true;
+    }
+    expect(grew).toBe(true);
+    // Append-only: original prefix preserved.
+    expect(Array.from(c.genome.subarray(0, original.length))).toEqual(original);
+    // Host buffer consumed on integration.
+    expect(c.eDnaBuffer).toBeNull();
+  });
+
+  it("free-water carrier persists after uptake (shared pool)", () => {
+    const w = quietWorld();
+    const c = competentCreature();
+    w.creatures.push(c);
+    const original = Array.from(c.genome);
+    w.eDnaCarriers.push({
+      x: c.x, y: c.y, z: c.z, age: 0,
+      payload: new Uint8Array([7, 8, 9, 10, 11]),
+      srcSpeciesKey: "donor",
+    });
+
+    let grew = false;
+    for (let i = 0; i < 5000 && !grew; i++) {
+      w.t += 0.016;
+      eDnaUptakePass(w);
+      if (c.genome.length > original.length) grew = true;
+    }
+    expect(grew).toBe(true);
+    expect(Array.from(c.genome.subarray(0, original.length))).toEqual(original);
+    // Persists: still available for other cells until DNase decay.
+    expect(w.eDnaCarriers.length).toBe(1);
+  });
+
+  it("non-competent cells never take up eDNA", () => {
+    const w = quietWorld();
+    const c = makeCreature({ genome: new Uint8Array([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]) });
+    // No competence bit set.
+    w.creatures.push(c);
+    c.eDnaBuffer = new Uint8Array([1, 2, 3, 4]);
+    const len0 = c.genome.length;
+    for (let i = 0; i < 3000; i++) { w.t += 0.016; eDnaUptakePass(w); }
+    expect(c.genome.length).toBe(len0);
+    expect(c.eDnaBuffer).not.toBeNull();
   });
 });

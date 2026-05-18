@@ -459,8 +459,8 @@ describe("genome decoding: known byte sequences", () => {
       expect(exec([OP.SYNTH, SYNTH_KIND.BIO, 0]).out.bondMarker).toBe(-1);
     });
     it("kindByte is taken mod SYNTH_KIND_COUNT (wraps)", () => {
-      // 14 + BOND == BOND after the mod, so this still expresses bond.
-      const { out } = exec([OP.SYNTH, 14 + SYNTH_KIND.BOND, 99]);
+      // SYNTH_KIND_COUNT + BOND == BOND after the mod, still bond.
+      const { out } = exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.BOND, 99]);
       expect(out.synthMask & (1 << SYNTH_BIT_BOND)).toBeTruthy();
       expect(out.bondMarker).toBe(99);
     });

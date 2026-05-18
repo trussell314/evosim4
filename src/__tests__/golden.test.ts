@@ -62,7 +62,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped: PARTITION op (0x68) is now a reachable opcode, so random
     // genomes that previously NOP'd on that byte now register an
     // asymmetric-division bias -- an intended behavior change.
-    const GOLDEN = "73f7aa7c";
+    // Bumped again: SYNTH_KIND.COMPETENCE added (SYNTH_KIND_COUNT
+    // 14 -> 15 shifts the kindByte modulo) and competent cells now
+    // take up eDNA fragments -- both intended behavior changes.
+    const GOLDEN = "fb7bc74b";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

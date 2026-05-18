@@ -22,10 +22,11 @@ import {
   SYNTH_KIND,
   SYNTH_KIND_COUNT,
   SYNTH_BIT_BOND,
+  SYNTH_BIT_COMPETENCE,
   appendGenomeBytes,
   GENE_FRAGMENT_CAP,
 } from "./genome";
-import { mulberry32, mixHash } from "./rng";
+import { mulberry32, mixHash, hashUnit } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
 export { genomeTag, genomeKey, genomeDistance, genomeColor };
 import {
@@ -107,7 +108,7 @@ export { type WorldProfile, makeProfile, resetProfile };
 export * from "./sim/core";
 import {
   type ObstacleLobe, type Obstacle,
-  type Species, type PhylogenyEvent, type World,
+  type Species, type PhylogenyEvent, type World, type EDnaCarrier,
   ParticleStore, Particle, CreatureStore, Creature,
   pushParticle, removeParticleAt, newCreature,
   resetCreatureIdCounter, setParticleSlotReusedHook,
@@ -2953,6 +2954,74 @@ function advanceEDnaCarriers(world: World, dt: number): void {
   }
 }
 
+// Per-competent-tick probability that a competent cell actually
+// integrates an available fragment. Transformation is a rare event;
+// this is a physical uptake-efficiency constant (like a reaction
+// VMAX), not a hard-coded strategy -- it bounds genome growth so a
+// cell sitting in a fragment-rich region doesn't bloat every tick.
+const EDNA_UPTAKE_RATE = 0.01;
+
+// Competent cells integrate a fragment from the shared free-water eDNA
+// pool (region-local carriers, which PERSIST -- natural transformation
+// from a shared pool, retired only by DNase decay) and from their own
+// host-scoped buffer (intracellular EGT, CONSUMED on integration: the
+// one host processes it). Determinism: stable creature order, region-
+// local lookup, and the rare-event gate + recombination offset come
+// from the landed hashUnit/mixHash keyed on stable ids (never simRng),
+// so the world RNG draw order stays byte-identical -- only the new
+// behavior (and the SYNTH_KIND_COUNT modulo shift) moves golden.
+// Integration is append-only, so every PC stays valid (no clamp), and
+// genome bytes are not matter, so mass conservation is untouched.
+export function eDnaUptakePass(world: World): void {
+  const cs = world.eDnaCarriers;
+  let byRegion: Map<number, EDnaCarrier[]> | null = null;
+  if (cs.length > 0) {
+    byRegion = new Map();
+    for (const e of cs) {
+      const ri = regionIndexAt(world, e.x, e.y);
+      let b = byRegion.get(ri);
+      if (!b) { b = []; byRegion.set(ri, b); }
+      b.push(e);
+    }
+  }
+  // ms-resolution time seed: world.t advances by dt deterministically,
+  // so this is reproducible and varies every tick (unlike world.t|0,
+  // which is constant for ~60 consecutive ticks).
+  const tSeed = Math.round(world.t * 1000) | 0;
+  for (const c of world.creatures) {
+    if ((c.vmOut.synthMask & (1 << SYNTH_BIT_COMPETENCE)) === 0) continue;
+    let changed = false;
+    const buf = c.eDnaBuffer;
+    if (buf && buf.length > 0
+        && hashUnit(c.id, tSeed, 0x45475431) < EDNA_UPTAKE_RATE) {
+      const off = mixHash(c.id, tSeed, buf.length) % buf.length;
+      c.genome = appendGenomeBytes(c.genome, buf, off, GENE_FRAGMENT_CAP);
+      c.eDnaBuffer = null;
+      changed = true;
+    }
+    if (byRegion) {
+      const bucket = byRegion.get(regionIndexAt(world, c.x, c.y));
+      if (bucket && bucket.length > 0
+          && hashUnit(c.id, tSeed, 0x48475431) < EDNA_UPTAKE_RATE) {
+        const e = bucket[0]; // deterministic: first in stable order
+        if (e.payload.length > 0) {
+          const off = mixHash(c.id, tSeed, e.payload.length) % e.payload.length;
+          c.genome = appendGenomeBytes(
+            c.genome, e.payload, off, GENE_FRAGMENT_CAP,
+          );
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      // A transferred fragment may carry SENSE_AMP / THRUST_AMP bytes;
+      // recompute derived traits exactly as the splice path does.
+      c.senseRange = computeSenseRange(c.genome);
+      c.thrustAccel = computeThrustAccel(c.genome);
+    }
+  }
+}
+
 // Per-tick scratch for reservePass's proportional balancing.
 const RESERVE_CHEMCOUNT = new Uint32Array(CHEMICAL_COUNT); // visible count / chem
 const RESERVE_TOT = new Float64Array(CHEMICAL_COUNT);      // visible+reserve equiv / chem
@@ -4235,6 +4304,7 @@ export function step(world: World, dt: number): void {
     applyForces(world, dt);
     n = performance.now(); p.forces += n - m; m = n;
     updateCreatures(world, dt);
+    eDnaUptakePass(world);
     n = performance.now(); p.creatures += n - m; m = n;
     // Mirror the non-profile hot path: creature-vs-creature collisions
     // overlap with the parallel particle-collision phase as a hook.
@@ -4285,6 +4355,7 @@ export function step(world: World, dt: number): void {
     applyBondSprings(world, dt);
     applyForces(world, dt);
     updateCreatures(world, dt);
+    eDnaUptakePass(world);
     resolveCollisions(
       world,
       () => resolveCreatureCollisions(world),
