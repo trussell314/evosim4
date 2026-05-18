@@ -4,6 +4,23 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **WATCH — unbounded genome growth (pre-existing, latent).** Long
+  headless runs grow a pathological lineage's genome into the tens–
+  hundreds of KB while the population median stays ~40 bytes. Measured
+  via `scripts/instrument20.ts` at 15 sim-min: pre-HGT baseline
+  (`c6910f8`) max genome **322,647** B (median 39, mean 17,396);
+  post-Substrate-A max **84,411** B (median 36) — i.e. the bloat is
+  **pre-existing and orthogonal to the eDNA/PARTITION work** (HGT did
+  not cause or worsen it). Root cause is almost certainly `SPLICE_DUP`
+  / mutation having no *total* genome-length cap — `GENE_FRAGMENT_CAP`
+  only bounds per-event size, not cumulative length. Risk: memory/perf
+  in long runs, and a single lineage distorting ecology. Not fixing
+  now (it predates this work and a cap is a behavior change needing
+  its own golden re-baseline + design call on where to clamp). Revisit
+  if long-run perf/memory becomes a concern. Touch points:
+  `applyGenomeSplice`, `mutateGenome`, `eDnaUptakePass` (all share the
+  append-only growth path).
+
 - **DONE — Horizontal gene transfer + death-triggered EGT (unified
   eDNA substrate).** Resolved not as a special-cased per-death
   probability but as one physical substrate: lysing cells (and cells
