@@ -692,6 +692,27 @@ describe("VM op coverage: every defined op", () => {
   });
 });
 
+describe("PARTITION op (asymmetric-division bias)", () => {
+  it("records (chemId, bias) for the next division", () => {
+    const { out } = exec([OP.PUSH8, 5, OP.PARTITION, 3]);
+    expect(out.partitionCount).toBe(1);
+    expect(out.partitionChem[0]).toBe(3);
+    expect(out.partitionBias[0]).toBe(5);
+  });
+
+  it("last bias for a given chem wins (dedupes, no count growth)", () => {
+    const { out } = exec([OP.PUSH8, 2, OP.PARTITION, 3, OP.PUSH8, 7, OP.PARTITION, 3]);
+    expect(out.partitionCount).toBe(1);
+    expect(out.partitionBias[0]).toBe(7);
+  });
+
+  it("tracks distinct chems separately", () => {
+    const { out } = exec([OP.PUSH8, 1, OP.PARTITION, 3, OP.PUSH8, 9, OP.PARTITION, 4]);
+    expect(out.partitionCount).toBe(2);
+    expect(Array.from(out.partitionChem.subarray(0, 2)).sort()).toEqual([3, 4]);
+  });
+});
+
 describe("appendGenomeBytes (shared HGT / EGT primitive)", () => {
   const G = () => new Uint8Array([1, 2, 3]);
   const S = () => new Uint8Array([10, 11, 12, 13]);

@@ -59,7 +59,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     for (let i = 0; i < TICKS; i++) step(w, 1 / 60);
     const fp = fingerprint(w);
     // Recompute & update only when a behavior change is intended.
-    const GOLDEN = "3e3470c9";
+    // Bumped: PARTITION op (0x68) is now a reachable opcode, so random
+    // genomes that previously NOP'd on that byte now register an
+    // asymmetric-division bias -- an intended behavior change.
+    const GOLDEN = "73f7aa7c";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

@@ -59,6 +59,11 @@ export const OP = {
   POKE_BYTE:     0x65,
   SPLICE_DUP:    0x66,
   SPLICE_DEL:    0x67,
+  // PARTITION <chemId>: pop a bias; skew this chem's mother/daughter
+  // split at the next division away from the uniform reproduce share.
+  // The substrate primitive for asymmetric determinant segregation --
+  // genetically identical daughters emerge with different cytoplasm.
+  PARTITION:     0x68,
   // 0x69 SYNTH -- unified biosynthesis op (kind, param).
   SYNTH:         0x69,
 
@@ -128,6 +133,12 @@ export const CHEMICAL_COUNT = 96;
 // `32` -- keep it 32 so existing seeded runs stay byte-identical.
 export const GENE_FRAGMENT_CAP = 32;
 
+// Max distinct per-chem partition biases a cell can register in one
+// tick (PARTITION op). Bounds the VMOutputs scratch and keeps the
+// per-tick reset O(1); a cell biasing more chems than this in a single
+// tick just has the surplus dropped.
+export const PARTITION_CAP = 16;
+
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
 // in a separate walker introduces drift bugs where the VM and the
@@ -143,6 +154,7 @@ OPERANDS[OP.INGEST] = 1;
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
 OPERANDS[OP.SENSE_CHEMICAL] = 1;
+OPERANDS[OP.PARTITION] = 1;
 OPERANDS[OP.SYNTH] = 2;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
@@ -273,6 +285,14 @@ export interface VMOutputs {
   spliceMode: number;
   spliceOffset: number;
   spliceLength: number;
+  // Per-chem asymmetric-division bias requested this tick by PARTITION.
+  // A capped (chemId, bias) list so the per-tick reset is O(1)
+  // (partitionCount = 0) instead of a CHEMICAL_COUNT-wide memset on
+  // every VM run. At apply time the last entry for a given chem wins;
+  // entries past PARTITION_CAP this tick are dropped.
+  partitionChem: Int16Array;
+  partitionBias: Float32Array;
+  partitionCount: number;
   instructions: number;
 }
 
@@ -289,6 +309,9 @@ export function newOutputs(): VMOutputs {
     bondMarker: -1,
     catSynthMask: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
+    partitionChem: new Int16Array(PARTITION_CAP),
+    partitionBias: new Float32Array(PARTITION_CAP),
+    partitionCount: 0,
     instructions: 0,
   };
 }
@@ -326,6 +349,7 @@ export function runTick(
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
+  out.partitionCount = 0;
   out.instructions = 0;
   const L = genome.length;
   if (L === 0) return;
@@ -445,6 +469,26 @@ export function runTick(
         out.spliceMode = 2;
         out.spliceOffset = (((offRaw | 0) % L) + L) % L;
         out.spliceLength = Math.max(0, Math.min(GENE_FRAGMENT_CAP, lenRaw | 0));
+        break;
+      }
+
+      case OP.PARTITION: {
+        // Operand picks the chem (mod CHEMICAL_COUNT) whose
+        // mother/daughter split to skew at the next division; pop the
+        // raw bias. The squash + clamp to a valid [0,1] fraction is
+        // applied where the split happens, so any popped value is
+        // mass-safe. Last bias for a given chem this tick wins.
+        const idx = genome[state.pc % L] % CHEMICAL_COUNT; state.pc++;
+        const bias = vmPop(stack);
+        let slot = -1;
+        for (let q = 0; q < out.partitionCount; q++) {
+          if (out.partitionChem[q] === idx) { slot = q; break; }
+        }
+        if (slot < 0 && out.partitionCount < PARTITION_CAP) {
+          slot = out.partitionCount++;
+          out.partitionChem[slot] = idx;
+        }
+        if (slot >= 0) out.partitionBias[slot] = bias;
         break;
       }
 

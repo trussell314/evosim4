@@ -7,6 +7,7 @@
 import {
   type VMSensors,
   type VMSelf,
+  type VMOutputs,
   newVMState,
   runTick,
   makeRandomViableGenome,
@@ -43,7 +44,7 @@ export {
   serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
 };
 import {
-  type Molecules, MOLECULE_IDS, emptyMolecules,
+  type Molecules, MOLECULE_IDS, MOLECULE_INDEX, emptyMolecules,
   CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
   NAMED_CHEMICALS,
   CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA, CHEM_FA, CHEM_MIN, CHEM_ADP,
@@ -3665,6 +3666,27 @@ const DIFFUSABLE_CHEM_IDS: number[] = (() => {
 // child appears in the vacuole immediately. The only hard limit is
 // the shared CreatureStore's physical capacity (same gate free-cell
 // fission uses) -- there is no soft per-host cap.
+// Per-chem child share for asymmetric division. A PARTITION-registered
+// bias for `chemId` skews that chem's split away from the uniform
+// `base` reproduce share; the raw bias is squashed to a bounded offset
+// and the result clamped to a valid [0,1] fraction, so the
+// mother/daughter transfer is always exactly mass-conserving regardless
+// of what the genome popped. No bias for this chem -> uniform `base`.
+// The substrate primitive for asymmetric determinant segregation:
+// identical genomes can diverge into different cytoplasm at division,
+// which the existing SENSE_CHEMICAL machinery then lets them act on.
+function partitionFrac(out: VMOutputs, base: number, chemId: number): number {
+  const n = out.partitionCount;
+  for (let q = 0; q < n; q++) {
+    if (out.partitionChem[q] === chemId) {
+      const v = out.partitionBias[q];
+      const f = base + v / (1 + Math.abs(v)); // squash to (-1, 1), shift
+      return f < 0 ? 0 : f > 1 ? 1 : f;
+    }
+  }
+  return base;
+}
+
 function divideInner(inner: Creature, host: Creature, world: World): void {
   if (!world.creatureStore.canAlloc()) return;
   spendATP(
@@ -3680,10 +3702,13 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
   const childShare = 1 - parentShare;
   const childMolecules = emptyMolecules();
   for (const mk of MOLECULE_IDS) {
-    const give = inner.molecules[mk] * childShare;
+    const give = inner.molecules[mk]
+      * partitionFrac(inner.vmOut, childShare, MOLECULE_INDEX[mk]);
     inner.molecules[mk] -= give;
     childMolecules[mk] = give;
   }
+  // Energy and catalyst slots keep the uniform share: energy is not a
+  // determinant and catalyst slots aren't chem-addressable by PARTITION.
   const energyGift = inner.energy * childShare;
   inner.energy -= energyGift;
   const child = newCreature(world.creatureStore, {
@@ -3719,7 +3744,7 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     const pi = inner.idx; const ci = child.idx;
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       const v = pc[k][pi];
-      const give = v * childShare;
+      const give = v * partitionFrac(inner.vmOut, childShare, NAMED_CHEMICAL_COUNT + k);
       pc[k][pi] = v - give;
       cc[k][ci] = give;
     }
@@ -5547,7 +5572,8 @@ function tryReproduce(parent: Creature, world: World): void {
   // environment. Bad timing has real consequences now.
   const childMolecules = emptyMolecules();
   for (const mk of MOLECULE_IDS) {
-    const give = parent.molecules[mk] * childShare;
+    const give = parent.molecules[mk]
+      * partitionFrac(parent.vmOut, childShare, MOLECULE_INDEX[mk]);
     parent.molecules[mk] -= give;
     childMolecules[mk] = give;
   }
@@ -5572,7 +5598,7 @@ function tryReproduce(parent: Creature, world: World): void {
     const pi = parent.idx;
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       const v = cols[k][pi];
-      const give = v * childShare;
+      const give = v * partitionFrac(parent.vmOut, childShare, NAMED_CHEMICAL_COUNT + k);
       cols[k][pi] = v - give;
       childGenericChem[k] = give;
     }
