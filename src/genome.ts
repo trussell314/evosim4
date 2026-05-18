@@ -120,6 +120,14 @@ export const N_REACTIONS = CATALYST_COUNT;
 // SENSE_CHEMICAL's operand by it -- part of the genome ABI.
 export const CHEMICAL_COUNT = 96;
 
+// Max bytes any single genome-editing event may copy in one tick:
+// the SPLICE_DUP/SPLICE_DEL payload cap, and (reused) the per-event
+// cap for horizontal injection and death-triggered EGT fragment
+// transfer. Single-sourced so all byte-copy paths share one bound on
+// per-tick genome growth. Value is unchanged from the original inline
+// `32` -- keep it 32 so existing seeded runs stay byte-identical.
+export const GENE_FRAGMENT_CAP = 32;
+
 // Single source of truth for operand widths. Every code path that
 // walks a genome MUST consult this table -- duplicating an op list
 // in a separate walker introduces drift bugs where the VM and the
@@ -428,7 +436,7 @@ export function runTick(
         const offRaw = vmPop(stack);
         out.spliceMode = 1;
         out.spliceOffset = (((offRaw | 0) % L) + L) % L;
-        out.spliceLength = Math.max(0, Math.min(32, lenRaw | 0));
+        out.spliceLength = Math.max(0, Math.min(GENE_FRAGMENT_CAP, lenRaw | 0));
         break;
       }
       case OP.SPLICE_DEL: {
@@ -436,7 +444,7 @@ export function runTick(
         const offRaw = vmPop(stack);
         out.spliceMode = 2;
         out.spliceOffset = (((offRaw | 0) % L) + L) % L;
-        out.spliceLength = Math.max(0, Math.min(32, lenRaw | 0));
+        out.spliceLength = Math.max(0, Math.min(GENE_FRAGMENT_CAP, lenRaw | 0));
         break;
       }
 
@@ -1233,4 +1241,35 @@ export function somaticMutateOnce(
     return out;
   }
   return genome;
+}
+
+// Append-only genome byte transfer: returns a new genome with up to
+// GENE_FRAGMENT_CAP bytes copied from `src[srcOff .. )` onto the end of
+// `genome`. The shared primitive behind horizontal injection (donor ->
+// recipient) and death-triggered EGT (dead symbiont -> host).
+//
+// Append-only on purpose: existing code offsets never move, so the
+// recipient's program counter stays valid (length only grows) and the
+// transferred payload is dormant until reached by a JMP or PC wrap --
+// the latency is emergent, not scripted. The source window is clamped
+// to src bounds (no wrap, mirroring SPLICE's truncate-at-end). A no-op
+// (empty/zero/out-of-range request) returns the original array
+// unchanged so callers can assign unconditionally.
+export function appendGenomeBytes(
+  genome: Uint8Array,
+  src: Uint8Array,
+  srcOff: number,
+  srcLen: number,
+): Uint8Array {
+  if (src.length === 0) return genome;
+  const cap = Math.max(0, Math.min(GENE_FRAGMENT_CAP, srcLen | 0));
+  if (cap === 0) return genome;
+  const a = (((srcOff | 0) % src.length) + src.length) % src.length;
+  const b = Math.min(src.length, a + cap);
+  const n = b - a;
+  if (n <= 0) return genome;
+  const out = new Uint8Array(genome.length + n);
+  out.set(genome, 0);
+  out.set(src.subarray(a, b), genome.length);
+  return out;
 }

@@ -33,6 +33,8 @@ import {
   SYNTH_BIT_MAGNETO,
   SYNTH_BIT_BOND,
   SYNTH_BIT_REPAIR,
+  GENE_FRAGMENT_CAP,
+  appendGenomeBytes,
 } from "../genome";
 import { mulberry32 } from "../rng";
 
@@ -687,6 +689,47 @@ describe("VM op coverage: every defined op", () => {
       expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.AA, 0, HALT_MARK]).out.synthMask)
         .toBe(1 << SYNTH_BIT_AA);
     });
+  });
+});
+
+describe("appendGenomeBytes (shared HGT / EGT primitive)", () => {
+  const G = () => new Uint8Array([1, 2, 3]);
+  const S = () => new Uint8Array([10, 11, 12, 13]);
+
+  it("appends the requested window onto the end", () => {
+    const out = appendGenomeBytes(G(), S(), 1, 2);
+    expect(Array.from(out)).toEqual([1, 2, 3, 11, 12]);
+  });
+
+  it("is append-only: original genome bytes are unchanged and not aliased", () => {
+    const g = G();
+    const out = appendGenomeBytes(g, S(), 0, 4);
+    expect(Array.from(g)).toEqual([1, 2, 3]); // input not mutated
+    expect(Array.from(out.subarray(0, 3))).toEqual([1, 2, 3]);
+    expect(out.length).toBeGreaterThan(g.length); // length only grows -> PC stays valid
+  });
+
+  it("clamps the copied length to GENE_FRAGMENT_CAP", () => {
+    const src = new Uint8Array(100).map((_, i) => i & 0xff);
+    const out = appendGenomeBytes(new Uint8Array([0]), src, 0, 1000);
+    expect(out.length).toBe(1 + GENE_FRAGMENT_CAP);
+  });
+
+  it("returns the original array unchanged for no-op requests", () => {
+    const g = G();
+    expect(appendGenomeBytes(g, S(), 0, 0)).toBe(g); // zero length
+    expect(appendGenomeBytes(g, S(), 0, -5)).toBe(g); // negative length
+    expect(appendGenomeBytes(g, new Uint8Array(0), 0, 4)).toBe(g); // empty source
+  });
+
+  it("wraps a negative/large source offset into bounds", () => {
+    expect(Array.from(appendGenomeBytes(G(), S(), -1, 1))).toEqual([1, 2, 3, 13]);
+    expect(Array.from(appendGenomeBytes(G(), S(), 4, 1))).toEqual([1, 2, 3, 10]);
+  });
+
+  it("truncates the window at the source end (no wrap mid-copy)", () => {
+    // offset 3 of a 4-byte src, asking for 32 -> only the last byte.
+    expect(Array.from(appendGenomeBytes(G(), S(), 3, 32))).toEqual([1, 2, 3, 13]);
   });
 });
 
