@@ -1713,11 +1713,21 @@ function flushTooltip(): void {
     (engulfed > 0 || bonded > 0)
       ? `\nengulfed=${engulfed}  bonded=${bonded}`
       : "";
+  // "One of x/y": this cell is one of x live cells in its species
+  // (same speciesKey) and one of y in its founding lineage (same
+  // lineageRoot). Species nests inside lineage, so x <= y.
+  let sameSpecies = 0;
+  let sameLineage = 0;
+  for (const o of snapshot.creatures) {
+    if (o.speciesKey === c.speciesKey) sameSpecies++;
+    if (o.lineageRoot === c.lineageRoot) sameLineage++;
+  }
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
-    `ATP=${c.energy.toFixed(0)}  memb=${c.molecules.membrane.toFixed(0)}  mass=${mass.toFixed(0)}` +
+    `ATP=${c.energy.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
+    `One of ${sameSpecies}/${sameLineage}` +
     assocLine;
   tooltip.style.display = "block";
   // Anchor at the cell's projected screen position with edge-flipping
