@@ -57,6 +57,32 @@ export {
   type RxnStats, type SavedRxnStats,
   serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
 };
+import {
+  type Molecules, MOLECULE_IDS, emptyMolecules, MOLECULE_INDEX,
+  CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
+  NAMED_CHEMICALS,
+  CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA, CHEM_FA, CHEM_MIN, CHEM_ADP,
+  CHEM_WASTE, CHEM_CHL, CHEM_ENZ, CHEM_MRNA, CHEM_BIOPOLYMER,
+  CHEM_MEMBRANE,
+  CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG,
+  CHEM_PHOTORECEPTOR_SURFACE, CHEM_ACT_PHOTO_VISIBLE,
+  CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
+  CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS,
+  CHEM_CHEMORECEPTOR_FA, CHEM_CHEMORECEPTOR_MARKER0,
+  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_BIOPOLYMER_Y,
+  CHEM_ACT_CHEMO_MINERALS_X, CHEM_ACT_CHEMO_MINERALS_Y,
+  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_FA_Y,
+  CHEM_ACT_CHEMO_MARKER0_X, CHEM_ACT_CHEMO_MARKER0_Y,
+  CHEM_MECHANORECEPTOR, CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
+  CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
+  CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
+  CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
+  MRNA_REF, CHL_REF, ENZ_REF,
+} from "./sim/chem-ids";
+export {
+  type Molecules, MOLECULE_IDS, emptyMolecules,
+  NAMED_CHEMICAL_COUNT, NAMED_CHEMICALS,
+};
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1052,105 +1078,9 @@ export function reactionName(slot: number): string {
 // post-K-4/K-5 collided for every cell back when founders shared a
 // fixed curated-genome prefix (since removed -- founders are random).
 
-// Per-cell molecular pool. ATP itself lives on the Creature as `energy`
-// (so existing code that talks about energy is talking about ATP); every
-// other named species in the chemistry lives here. All quantities are in
-// the same mass units as reserves, so reactions are mass-conserving and
-// cell volume is total mass.
-//
-// Reactions are catalyzed (cell-built) where biology requires it
-// (chlorophyll for carbon fixation; enzymes broadly); pathways gate on
-// substrate availability via Michaelis-Menten kinetics so they slow down
-// rather than cut off when reactants run low. Waste / CO2 build-up that
-// the cell can't process get auto-excreted as world particles.
-export interface Molecules {
-  adp: number;          // ATP's discharged form
-  glucose: number;
-  fattyAcid: number;
-  aminoAcid: number;
-  chlorophyll: number;
-  enzyme: number;
-  o2: number;
-  co2: number;
-  minerals: number;
-  waste: number;
-  mrna: number;
-  biopolymer: number;
-  membrane: number;
-  // Photoreceptor band variants (visible / long-penetrating / depth-
-  // invariant surface). Cells choose bands to invest in via the
-  // unified SYNTH op; each band has its own activated chem.
-  photoreceptorVisible: number;
-  photoreceptorLong: number;
-  photoreceptorSurface: number;
-  activatedPhotoVisible: number;
-  activatedPhotoLong: number;
-  activatedPhotoSurface: number;
-  // Per-target chemoreceptor variants. Each target chem the cell
-  // invests in gets its own receptor + activated x/y pair.
-  chemoreceptorBiopolymer: number;
-  chemoreceptorMinerals: number;
-  chemoreceptorFa: number;
-  chemoreceptorMarker0: number;
-  activatedChemoBiopolymerX: number;
-  activatedChemoBiopolymerY: number;
-  activatedChemoMineralsX: number;
-  activatedChemoMineralsY: number;
-  activatedChemoFaX: number;
-  activatedChemoFaY: number;
-  activatedChemoMarker0X: number;
-  activatedChemoMarker0Y: number;
-  // Mechano / thermo / magneto.
-  mechanoreceptor: number;
-  activatedMechX: number;
-  activatedMechY: number;
-  thermoreceptor: number;
-  activatedThermo: number;
-  magnetoreceptor: number;
-  activatedMagX: number;
-  activatedMagY: number;
-  // Phase K ADHERE / REPAIR rework: chemistry-mediated bonding and
-  // somatic-mutation suppression.
-  bondChem: number;
-  repairChem: number;
-  // Identity markers (last so additions above don't shift their ids).
-  marker0: number;
-  marker1: number;
-  marker2: number;
-  marker3: number;
-}
-
-export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
-  "adp", "glucose", "fattyAcid", "aminoAcid", "chlorophyll", "enzyme",
-  "o2", "co2", "minerals", "waste", "mrna",
-  "biopolymer", "membrane",
-  "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
-  "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
-  "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
-  "activatedChemoMineralsX", "activatedChemoMineralsY",
-  "activatedChemoFaX", "activatedChemoFaY",
-  "activatedChemoMarker0X", "activatedChemoMarker0Y",
-  "mechanoreceptor", "activatedMechX", "activatedMechY",
-  "thermoreceptor", "activatedThermo",
-  "magnetoreceptor", "activatedMagX", "activatedMagY",
-  "bondChem", "repairChem",
-  "marker0", "marker1", "marker2", "marker3",
-];
-
-// Per-byte genome cost (BUILD_KEYS, genomeMoleculeCost,
-// MASS_PER_GENOME_BYTE) retired with the build-block sufficiency gate
-// in tryReproduce. Fission now splits whatever the parent has; if
-// the daughter can't survive she autolyzes via the normal death pass.
-
-export function emptyMolecules(): Molecules {
-  // Build from MOLECULE_IDS so adding a new entry above auto-zero-
-  // initializes here. Cheap (one allocation per call); used mostly
-  // by snapshots / death release / test scaffolds.
-  const m = {} as Molecules;
-  for (const k of MOLECULE_IDS) (m as unknown as Record<string, number>)[k] = 0;
-  return m;
-}
+// Molecules / MOLECULE_IDS / emptyMolecules / MOLECULE_INDEX and the
+// CHEM_* id space live in ./sim/chem-ids (imported + re-exported at
+// the top of this file).
 
 // Phylogeny: a "species" is a unique exact genome. We track when each first
 // appeared, when its population last changed, who its parents (other genome
@@ -1601,8 +1531,6 @@ const DENSITY_CEIL = 1.15;
 
 // String key -> index in MOLECULE_IDS array. Used to map between named
 // chem ids and Molecules field positions.
-const MOLECULE_INDEX: Record<keyof Molecules, number> = {} as Record<keyof Molecules, number>;
-for (let i = 0; i < MOLECULE_IDS.length; i++) MOLECULE_INDEX[MOLECULE_IDS[i]] = i;
 
 // Reaction kinetics. Each reaction uses Michaelis-Menten saturation so it
 // runs at most VMAX per second and gracefully slows as substrates deplete.
@@ -1795,99 +1723,10 @@ export function chemAmountToParticles(chem: number, amount: number): number {
   return amountPer > 0 ? amount / amountPer : 0;
 }
 // ===================================================================
-const CHEMICAL_COUNT = 96;
-export const NAMED_CHEMICAL_COUNT = 45;
-// Order matches chemical slot 0..13. Each entry is a key of Molecules
-// and the chemCols[k] Float32Array aliases molCols[MOLECULE_INDEX[k]].
-// Slots 12 (biopolymer) and 13 (membrane) joined in phase C of the
-// chemistry overhaul; biopolymer is the bulk-food substrate that
-// replaces the old "organic" material, and membrane is the structural
-// lipid bilayer required for fission.
-// Order maps to chemCols[0..NAMED_CHEMICAL_COUNT-1]. Constants below
-// (CHEM_*) MUST match this order; see the table in CHEMISTRY_OVERHAUL.md
-// phase K for the locked layout.
-export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
-  "o2", "co2", "glucose", "aminoAcid", "fattyAcid", "minerals", "adp",
-  "waste", "chlorophyll", "enzyme", "mrna",
-  "biopolymer", "membrane",
-  // Phase K sense rework starts at slot 13:
-  "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
-  "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
-  "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
-  "activatedChemoMineralsX", "activatedChemoMineralsY",
-  "activatedChemoFaX", "activatedChemoFaY",
-  "activatedChemoMarker0X", "activatedChemoMarker0Y",
-  "mechanoreceptor", "activatedMechX", "activatedMechY",
-  "thermoreceptor", "activatedThermo",
-  "magnetoreceptor", "activatedMagX", "activatedMagY",
-  "bondChem", "repairChem",
-  "marker0", "marker1", "marker2", "marker3",
-];
-// Slot indices for special handling (engine-managed ATP/ADP, etc.).
-// Stable across the migration; phase E renumbers ATP to 0 and shifts these.
-const CHEM_O2 = 0;
-const CHEM_CO2 = 1;
-const CHEM_GLU = 2;
-const CHEM_AA = 3;
-const CHEM_FA = 4;
-const CHEM_MIN = 5;
-const CHEM_ADP = 6;
-const CHEM_WASTE = 7;
-// chlorophyll, enzyme, mrna have specific roles as rate multipliers:
-//   chl   -> photosynth (mandatory: no chl -> no photosynth)
-//   ribo  -> all biosynth reactions (mandatory: no ribo -> no biosynth)
-//   enz   -> catabolize (mandatory: no enz -> no digestion of biopolymer)
-// Real biology has matching analogs: pigment for carbon fixation, the
-// ribosomal machinery for protein synthesis, digestive enzymes for
-// breaking down ingested food.
-const CHEM_CHL = 8;
-const CHEM_ENZ = 9;
-const CHEM_MRNA = 10;
-const CHEM_BIOPOLYMER = 11;
-const CHEM_MEMBRANE = 12;
-// Phase K-1 layout: receptors split into band / per-target variants,
-// each with paired activated chems. Constants laid out to match
-// NAMED_CHEMICALS order exactly; see CHEMISTRY_OVERHAUL.md phase K
-// for the locked table.
-const CHEM_PHOTORECEPTOR_VISIBLE = 13;
-const CHEM_PHOTORECEPTOR_LONG = 14;
-const CHEM_PHOTORECEPTOR_SURFACE = 15;
-const CHEM_ACT_PHOTO_VISIBLE = 16;
-const CHEM_ACT_PHOTO_LONG = 17;
-const CHEM_ACT_PHOTO_SURFACE = 18;
-const CHEM_CHEMORECEPTOR_BIOPOLYMER = 19;
-const CHEM_CHEMORECEPTOR_MINERALS = 20;
-const CHEM_CHEMORECEPTOR_FA = 21;
-const CHEM_CHEMORECEPTOR_MARKER0 = 22;
-const CHEM_ACT_CHEMO_BIOPOLYMER_X = 23;
-const CHEM_ACT_CHEMO_BIOPOLYMER_Y = 24;
-const CHEM_ACT_CHEMO_MINERALS_X = 25;
-const CHEM_ACT_CHEMO_MINERALS_Y = 26;
-const CHEM_ACT_CHEMO_FA_X = 27;
-const CHEM_ACT_CHEMO_FA_Y = 28;
-const CHEM_ACT_CHEMO_MARKER0_X = 29;
-const CHEM_ACT_CHEMO_MARKER0_Y = 30;
-const CHEM_MECHANORECEPTOR = 31;
-const CHEM_ACT_MECH_X = 32;
-const CHEM_ACT_MECH_Y = 33;
-const CHEM_THERMORECEPTOR = 34;
-const CHEM_ACT_THERMO = 35;
-const CHEM_MAGNETORECEPTOR = 36;
-const CHEM_ACT_MAG_X = 37;
-const CHEM_ACT_MAG_Y = 38;
-const CHEM_BOND = 39;
-const CHEM_REPAIR = 40;
-const CHEM_MARKER0 = 41;
-// Markers occupy 41..44; marker0 has a constant since the
-// chemoreceptor system targets it specifically.
-// K-3 activation pass uses CHEM_ACT_*, CHEM_MAGNETORECEPTOR.
-// K-4 wires CHEM_BOND / CHEM_REPAIR as biosynthesis products of the
-// unified SYNTH op (gateMask SYNTH_BIT_BOND / SYNTH_BIT_REPAIR).
-const MRNA_REF = 5;
-const CHL_REF = 5;
-const ENZ_REF = 5;
-const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
+// CHEMICAL_COUNT / NAMED_CHEMICAL_COUNT / NAMED_CHEMICALS, the CHEM_*
+// slot ids, MRNA/CHL/ENZ_REF and GENERIC_CHEMICAL_COUNT live in
+// ./sim/chem-ids (imported at the top of this file). The CHEMICALS
+// table + LUTs below still build here.
 
 // Deterministic spawn-rarity ranking for the generic chems, shared
 // by BOTH the spawn-weight curve and the particle color. Rank 0 =
