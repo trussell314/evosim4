@@ -1,5 +1,9 @@
 import "./style.css";
 
+// Injected by Vite's `define` (see vite.config.ts): the ISO-8601 UTC
+// timestamp of when this bundle/dev-server was built.
+declare const __BUILD_TIME__: string;
+
 // Register the COI service worker before anything else. On a host
 // that doesn't send COOP/COEP (e.g. GitHub Pages), the SW intercepts
 // our own fetches and tacks the headers on, which is enough to flip
@@ -124,7 +128,12 @@ hudBar.appendChild(hudStats);
 // Per-frame render/sim timing, inline beside the stats so the budget
 // is glanceable while iterating.
 const hudTimings = document.createElement("span");
-hudTimings.style.cssText = "opacity:0.8;" + HUD_FONT;
+// Right-aligned on the same flex row as the stats: margin-left:auto
+// pushes it to the far edge so the whole HUD is a single line when
+// the viewport is wide enough, and only wraps (still right-aligned)
+// on narrow screens.
+hudTimings.style.cssText =
+  "opacity:0.8;margin-left:auto;text-align:right;" + HUD_FONT;
 hudTimings.textContent = "r=--ms  s=--ms";
 hudBar.appendChild(hudTimings);
 // Stall + error indicator. Hidden by default; shown only when
@@ -152,7 +161,6 @@ disasmBody.style.cssText =
 // The selected-cell inspector, pin control and disasm moved into the
 // Inspector tab of the right-side organisms drawer.
 hud.appendChild(hudBar);
-hud.appendChild(hudTimings);
 hud.appendChild(hudDiag);
 root.appendChild(hud);
 
@@ -674,7 +682,9 @@ analysisPanel.style.cssText =
   "position:fixed;top:0;right:0;bottom:0;width:" + ANALYSIS_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-left:1px solid #1a3340;" +
   `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
-  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
+  // z-index above the top HUD / bottom control bar (both z-index:10)
+  // so this slideout draws over them, not under.
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:20;";
 const analysisHeader = document.createElement("div");
 analysisHeader.style.cssText =
   "display:flex;align-items:center;justify-content:center;gap:6px;" +
@@ -806,7 +816,9 @@ leftPanel.style.cssText =
   "position:fixed;top:0;left:0;bottom:0;width:" + LEFT_PANEL_W_MIN + "px;" +
   "background:rgba(4,16,24,0.92);color:#9ee;border-right:1px solid #1a3340;" +
   `font:${UI_FONT_PX}px/1.4 ${UI_FONT_FAMILY};` +
-  "overflow:hidden;padding:0;box-sizing:border-box;z-index:10;";
+  // z-index above the top HUD / bottom control bar (both z-index:10)
+  // so this slideout draws over them, not under.
+  "overflow:hidden;padding:0;box-sizing:border-box;z-index:20;";
 const leftHeader = document.createElement("div");
 leftHeader.style.cssText =
   "display:flex;align-items:center;justify-content:center;gap:6px;" +
@@ -2887,15 +2899,13 @@ function formatAge(sec: number): string {
 // Best-effort plain-English summary of a cell, inferred from genome ops it
 function updateInspector(): void {
   // Bar stays visible whether the HUD body is open or collapsed; show
-  // fps + sim/wall ratio + elapsed sim time + pop (species) +
-  // extinction count there. pop= shows cells / living species /
-  // lineages / post-founder-cull-survivors:
+  // fps + sim/wall ratio + elapsed sim time + pop + extinction count +
+  // build time there. pop= shows cells / living species / lineages:
   //   - cells: total live cells.
   //   - species: distinct genomes among currently-alive cells.
-  //   - lineages: distinct founding lineages (lineageRoot ids).
-  //   - survivors: lineages whose founder has been culled (or
-  //     starved/etc) but whose descendants are still alive --
-  //     a real measure of "lineages that managed to reproduce".
+  //   - lineages: distinct founding lineages still alive -- count of
+  //     distinct lineageRoot ids (cells sharing a founder collapse to
+  //     one), so this is "how many separate founder lineages persist".
   // world.species.size would over-count -- it includes extinct
   // species still in the prune grace window.
   const liveLineages = new Set<number>();
@@ -2904,15 +2914,10 @@ function updateInspector(): void {
     liveLineages.add(c.lineageRoot);
     liveSpecies.add(c.speciesKey);
   }
-  const livingFounderSet = new Set(snapshot.livingFounderLineages ?? []);
-  let founderCullSurvivors = 0;
-  for (const root of liveLineages) {
-    if (!livingFounderSet.has(root)) founderCullSurvivors++;
-  }
   hudStats.textContent =
     `fps=${perfFps.toFixed(0)}  sim=${perfSimRate.toFixed(1)}x  ` +
-    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}/${founderCullSurvivors}  ` +
-    `extinct=${snapshot.extinctionCount}`;
+    `t=${formatAge(snapshot.t)}  pop=${snapshot.creatures.length}/${liveSpecies.size}/${liveLineages.size}  ` +
+    `extinct=${snapshot.extinctionCount}  build=${__BUILD_TIME__}`;
   hudTimings.textContent =
     `r=${perfRenderMs.toFixed(1)}ms  s=${perfSimMs.toFixed(1)}ms`;
   // No auto-fallback: if nothing is selected the inspector shows the
