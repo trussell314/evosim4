@@ -40,6 +40,15 @@ import {
 import { mulberry32 } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
 export { genomeTag, genomeKey, genomeDistance, genomeColor };
+import {
+  RX_MAINT_MEMBRANE, RX_MAINT_ENZ, RX_MAINT_CHL, RX_MAINT_MRNA,
+  RX_MAINT_RECEPTOR, RX_MAINT_CATALYST, RX_TOXIFY, RX_DEATH_CATDENATURE,
+  RX_DENATURE_WASTE, RX_SYNTH_CATALYST, RX_BIOGENESIS,
+  NREACT, RX_LOC_CELL, RX_LOC_FIELD, rxIdx,
+  ATP_IDLE, ATP_VM, ATP_THRUST, ATP_EXCRETE, ATP_INGEST, ATP_ENGULF,
+  ATP_PREDATE, ATP_REPRODUCE, ATP_RXN_ENDO, ATP_RXN_EXO, ATP_OTHER,
+  ATP_LABEL_COUNT,
+} from "./sim/rxn-ids";
 
 // Phase D of the chemistry overhaul: free-floating particles carry a
 // single chem id (uint8 into the chemical table) instead of a string
@@ -1627,35 +1636,8 @@ const CAT_DECAY_PER_SEC = 0.005;
 // ledger: how much ATP each source consumed/produced. Bucketed into
 // 60-second windows; windows older than 1h compact to 5-minute
 // buckets. Persisted with the save.
-const RX_BASE = N_REACTIONS;
-const RX_MAINT_MEMBRANE = RX_BASE + 0;
-const RX_MAINT_ENZ = RX_BASE + 1;
-const RX_MAINT_CHL = RX_BASE + 2;
-const RX_MAINT_MRNA = RX_BASE + 3;
-const RX_MAINT_RECEPTOR = RX_BASE + 4;
-const RX_MAINT_CATALYST = RX_BASE + 5;
-const RX_TOXIFY = RX_BASE + 6;
-const RX_DEATH_CATDENATURE = RX_BASE + 7;
-const RX_DENATURE_WASTE = RX_BASE + 8;
-const RX_SYNTH_CATALYST = RX_BASE + 9;
-// Founder biogenesis: a new cell's fixed seed (membrane/adp/mrna/glu/
-// aa + its ATP) is matter. We debit the world reserve to pay for it
-// (mass-conserving); only the part the reserve couldn't cover is a
-// genuine external input -- recorded here so ATP/materials are never
-// silently conjured.
-const RX_BIOGENESIS = RX_BASE + 10;
-const RX_SYNTH_COUNT = 11;
-const NREACT = N_REACTIONS + RX_SYNTH_COUNT;
-// rxn buckets: [id][loc 0=cell 1=field][cat 0=uncat 1=catalyzed]
-const RX_LOC_CELL = 0, RX_LOC_FIELD = 1;
-function rxIdx(id: number, loc: number, cat: number): number {
-  return (id * 2 + loc) * 2 + cat;
-}
-// ATP ledger labels (consumed/produced amounts).
-const ATP_IDLE = 0, ATP_VM = 1, ATP_THRUST = 2, ATP_EXCRETE = 3,
-  ATP_INGEST = 4, ATP_ENGULF = 5, ATP_PREDATE = 6, ATP_REPRODUCE = 7,
-  ATP_RXN_ENDO = 8, ATP_RXN_EXO = 9, ATP_OTHER = 10;
-const ATP_LABEL_COUNT = 11;
+// Reaction-id space + ATP-ledger labels live in ./sim/rxn-ids
+// (imported at the top of this file).
 interface RxnWindow { t0: number; rxn: Int32Array; atp: Float64Array; }
 export interface RxnStats {
   windowStart: number;
