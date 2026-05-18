@@ -21,9 +21,18 @@ import {
   CHEM_GLU,
   CHEM_CHL,
   CHEM_MEMBRANE,
+  CHEM_MIN,
+  CHEM_AA,
 } from "../src/sim/chem-ids";
 
-type Cre = { x: number; y: number; energy: number; idx: number; store: { chemCols: Float32Array[] } };
+type Cre = {
+  id: number;
+  x: number;
+  y: number;
+  energy: number;
+  idx: number;
+  store: { chemCols: Float32Array[] };
+};
 
 interface Scenario {
   id: string;
@@ -31,6 +40,9 @@ interface Scenario {
   describe: string;
   // mutate world + freshly spawned cells before the run
   setup: (w: World, cells: Cre[]) => void;
+  // optional per-sample top-up (a chemostat: "perfect" = a
+  // non-depleting nutrient-replete medium). Reported in the header.
+  replenish?: (w: World) => void;
   coStock: { id: string; count: number }[];
 }
 
@@ -52,15 +64,19 @@ const SCENARIOS: Record<string, Scenario> = {
     count: 30,
     coStock: [],
     describe:
-      "Near-surface placement (max light: exp(-y/250)), permanent " +
-      "midday (dayPhase=0.25, dayPeriod=1e9 so solarLight stays 1, no " +
-      "night), ambient CO2 seeded to 50/region, cells primed CO2=20 " +
-      "ADP=30. No predators/competitors (pure primary producer gains " +
-      "nothing from co-stocking). Founder spawns off.",
+      "Near-surface (max light exp(-y/250)), permanent midday " +
+      "(dayPhase=0.25, dayPeriod=1e9, no night). MINERAL-REPLETE: " +
+      "every autotroph biosynth step (aa/fa/chl/mrna) is min-gated " +
+      "and a no-INGEST cell only gets min via slow ambient diffusion " +
+      "(perm 0.1), so ambient CO2+MIN seeded to 50/region and re-" +
+      "topped every sample (chemostat); cells primed CO2=20 ADP=30 " +
+      "MIN=30 AA=5. No co-stock (a primary producer gains nothing). " +
+      "Founder spawns off.",
     setup: (w, cells) => {
       w.dayPhase = 0.25;
       w.dayPeriod = 1e9;
       setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
       const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
       for (let k = 0; k < cells.length; k++) {
         const c = cells[k];
@@ -69,6 +85,20 @@ const SCENARIOS: Record<string, Scenario> = {
         c.x = w.width * (0.06 + 0.88 * ((k + 0.5) / cells.length));
         c.store.chemCols[CHEM_CO2][c.idx] = 20;
         c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+        c.store.chemCols[CHEM_AA][c.idx] = 5;
+      }
+    },
+    replenish: (w) => {
+      // Keep the medium nutrient-replete (non-depleting): re-top
+      // ambient CO2 + minerals, and floor each live cell's mineral
+      // pool so slow min-diffusion (perm 0.1) never bottlenecks aa.
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      for (const c of (w as unknown as { creatures: Cre[] }).creatures) {
+        if (c.store.chemCols[CHEM_MIN][c.idx] < 15) {
+          c.store.chemCols[CHEM_MIN][c.idx] = 15;
+        }
       }
     },
   },
@@ -143,27 +173,59 @@ const t0 = Date.now();
 let nextSample = SAMPLE;
 let peak = w.creatures.length;
 const endT = OBSERVE_T;
+
+// Exact, mechanism-agnostic accounting by creature id (c.id is stable
+// and never recycled): a new id = a birth, a vanished id = a death.
+// Independent of the SimStats counters, so start + births - deaths
+// closes by construction and any divergence from SimStats is visible.
+let live = new Set<number>();
+for (const c of w.creatures) live.add(c.id);
+let idBirths = 0;
+let idDeaths = 0;
+console.log(`# replenish: ${sc.replenish ? "yes (chemostat, every sample)" : "none"}`);
+
 while (w.t < endT) {
   step(w, DT);
   if (w.creatures.length > peak) peak = w.creatures.length;
+  const now = new Set<number>();
+  for (const c of w.creatures) {
+    now.add(c.id);
+    if (!live.has(c.id)) idBirths++;
+  }
+  for (const oldId of live) if (!now.has(oldId)) idDeaths++;
+  live = now;
   if (w.t >= nextSample) {
     nextSample += SAMPLE;
+    if (sc.replenish) sc.replenish(w);
     console.log(
       `t=${String(Math.round(w.t)).padStart(3)}s pop=${String(w.creatures.length).padStart(4)} ` +
         `mMem=${meanCell(CHEM_MEMBRANE).toFixed(2).padStart(6)} ` +
         `mATP=${meanEnergy().toFixed(1).padStart(7)} ` +
         `mCHL=${meanCell(CHEM_CHL).toFixed(2).padStart(6)} ` +
+        `mAA=${meanCell(CHEM_AA).toFixed(2).padStart(6)} ` +
         `mGLU=${meanCell(CHEM_GLU).toFixed(2).padStart(6)} ` +
-        `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1).padStart(6)}`,
+        `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1).padStart(5)} ` +
+        `ambMIN=${ambientMean(w, CHEM_MIN).toFixed(1).padStart(5)}`,
     );
   }
 }
 const e = snap();
+const idClose = focal.length + idBirths - idDeaths;
 console.log(
-  `# END  pop=${w.creatures.length} peak=${peak} ` +
-    `births=${e.births - base.births} ` +
+  `# END  pop=${w.creatures.length} peak=${peak}`,
+);
+console.log(
+  `# id-accounting (exact): spawned=${focal.length} births=${idBirths} ` +
+    `deaths=${idDeaths} -> expected=${idClose} actual=${w.creatures.length} ` +
+    `(closes: ${idClose === w.creatures.length})`,
+);
+console.log(
+  `# SimStats deltas: births=${e.births - base.births} ` +
     `deaths{starve=${e.dStarve - base.dStarve} mem=${e.dMembrane - base.dMembrane} ` +
     `aa=${e.dAa - base.dAa} mrna=${e.dMrna - base.dMrna} old=${e.dOld - base.dOld}} ` +
-    `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1)}`,
+    `(sum=${(e.dStarve - base.dStarve) + (e.dMembrane - base.dMembrane) + (e.dAa - base.dAa) + (e.dMrna - base.dMrna) + (e.dOld - base.dOld)})`,
+);
+console.log(
+  `# ambient end: CO2=${ambientMean(w, CHEM_CO2).toFixed(1)} MIN=${ambientMean(w, CHEM_MIN).toFixed(1)}`,
 );
 console.log(`# done in ${((Date.now() - t0) / 1000).toFixed(0)}s wall`);
