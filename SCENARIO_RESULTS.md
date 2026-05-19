@@ -303,3 +303,31 @@ membrane-specific benefit the collapse masks. Candidate
 COLONY_GAPS / substrate note: predation resistance currently
 collapses onto body size (the 1.14x gate), so a dedicated "armor"
 axis is not separately selectable from "grow big / divide late".
+
+## #16 benthic detritivore -- ideal conditions (VALIDATED)
+
+Scenario `benthic` (focal benthic-detritivore x40, no co-stock,
+biopolymer chemostat ~1500, O2=30/MIN=50, founders off; cells spawn
+spread through the column, NOT pre-placed at the floor).
+
+Measured (10 min, seed 4242):
+- Sustains and grows: pop 40 -> peak 222 -> stable ~120-130 band
+  from t360 to end (122 at t600). 2363 births / 2281 deaths,
+  id-accounting closes. NOT a boom-bust: overshoots the chemostat
+  carrying capacity then relaxes to a food-limited equilibrium
+  (deaths dominated by membrane-recycling 2106, starve only 24).
+- Benthic position EMERGES with no scripted descent: focal mean y
+  462(30s) -> 552 -> 584 -> 590(120s), then holds ~576-587 for the
+  rest (floor y=600). The cell only climbs the detritus gradient;
+  because biopolymer is denser than water and sinks, it ends up on
+  the floor. Pure food-tropism, no "go down" op.
+- CO2 emission works: ambient CO2 95 -> peak 171(150s) -> settles
+  ~103-110; free CO2 particles saturate ~399-400. The niche-
+  defining benthic chemocline seed is real and persistent.
+
+Verdict: first untested archetype that is actually viable as a
+population (contrast #6 armored, which went extinct in every
+config). The substrate-not-script intent holds: benthic-ness is an
+emergent outcome of detritus-tropism, not an engine rule. The CO2
+output is in place for a future #17 cross-feeder once GAP #6 (no
+non-photic energy path) is addressed.
