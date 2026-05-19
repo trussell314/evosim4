@@ -57,8 +57,6 @@ import {
   CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG,
   CHEM_PHOTORECEPTOR_SURFACE, CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
-  CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS,
-  CHEM_CHEMORECEPTOR_FA, CHEM_CHEMORECEPTOR_MARKER0,
   CHEM_MECHANORECEPTOR, CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
   CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
@@ -442,10 +440,13 @@ export function reactionCatalog(): ReactionInfo[] {
     for (const t of prod) if (t.chem === CHEM_ADP) return -t.coef;  // endergonic
     return 0;
   };
+  // Phase 5 cleanup: CHEM_CHEMORECEPTOR_* removed from the receptor
+  // maintenance list (they are no longer produced -- chemo synth
+  // slots inertized in reactions.ts -- so there is nothing to
+  // maintain).
   const RECEPTORS = [
     CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
-    CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
-    CHEM_CHEMORECEPTOR_MARKER0, CHEM_MECHANORECEPTOR, CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR,
+    CHEM_MECHANORECEPTOR, CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR,
   ];
   const aaMin: ReactionTerm[] = [{ chem: CHEM_AA, coef: 0.5 }, { chem: CHEM_MIN, coef: 0.5 }];
   const syn = (id: number, name: string, cons: ReactionTerm[], prod: ReactionTerm[]): void => {
@@ -7220,7 +7221,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:18:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:19:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

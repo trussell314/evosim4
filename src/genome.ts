@@ -140,7 +140,8 @@ export const SYNTH_BIT_ENZ = 3;
 export const SYNTH_BIT_CHL = 4;
 export const SYNTH_BIT_MRNA = 5;
 export const SYNTH_BIT_PHOTO_BASE = 6;     // +0..+2
-export const SYNTH_BIT_CHEMO_BASE = 9;     // +0..+3
+// SYNTH_BIT_CHEMO_BASE retired (Phase 5): chemo activation collapsed
+// onto SENSE_OUT, SYNTH CHEMO is a no-op. Bits 9-12 are unallocated.
 export const SYNTH_BIT_MECH = 13;
 export const SYNTH_BIT_THERMO = 14;
 export const SYNTH_BIT_MAGNETO = 15;

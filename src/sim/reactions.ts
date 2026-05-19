@@ -323,10 +323,14 @@ function installNamedReactions(out: Reaction[]): void {
   out[12] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_VISIBLE], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_LONG], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_SURFACE], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
-  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
-  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MINERALS], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
-  out[17] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_FA], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
-  out[18] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MARKER0], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
+  // Phase 5 cleanup: chemoreceptor synth slots inertized (rate 0).
+  // The receptor chems were inputs to the now-retired chemo branch
+  // of runActivation; producing them is pure waste. Slots kept (not
+  // deleted) to preserve named-slot indices for everything past 18.
+  out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_BIOPOLYMER], [1], -3, 0, { atpFloor: true, mrnaScale: true });
+  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MINERALS], [1], -3, 0, { atpFloor: true, mrnaScale: true });
+  out[17] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_FA], [1], -3, 0, { atpFloor: true, mrnaScale: true });
+  out[18] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MARKER0], [1], -3, 0, { atpFloor: true, mrnaScale: true });
   out[19] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[20] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_THERMORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[21] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MAGNETORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });

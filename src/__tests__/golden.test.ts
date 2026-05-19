@@ -100,7 +100,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
     // unchanged. Determinism (same-seed-identical) still green;
     // mass-conservation green; SAVE_SCHEMA bumped 11->12.
-    // Bumped (Phase 5, op redesign): chemo activation branch retired
+    // Bumped (Phase 5 cleanup): the 4 chemoreceptor-synth bootstrap
+    // reactions (slots 15-18) inertized (rate set to 0) -- the chems
+    // they produced were inputs to the retired chemo activation
+    // branch, so making them was pure waste of AA+MIN every tick.
+    // Slot indices kept stable; uncatRate now 0; named labels
+    // preserved for disasm/inspector clarity.
+    // (prev) Bumped (Phase 5, op redesign): chemo activation branch retired
     // (CHEMO receptor + activated-chemo signal chems no longer
     // written by runActivation; SYNTH CHEMO is a no-op kept for
     // SYNTH_KIND_COUNT stability). Archetypes' SYNTH CHEMO +
@@ -116,7 +122,7 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // become no-ops (their synthMask bits are no longer consulted
     // by the reaction loop). Intended behavior change; SAVE_SCHEMA
     // 15->16; mass-conservation green.
-    const GOLDEN = "b434c6c9";
+    const GOLDEN = "d510f4c1";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
