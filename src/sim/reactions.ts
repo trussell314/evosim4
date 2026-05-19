@@ -246,7 +246,18 @@ function installNamedReactions(out: Reaction[]): void {
   out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
   out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
   // Photosynth: requires chlorophyll molecule (mandatory multiplier).
-  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 1.2, { lightIn: 1, surfaceScale: true, chlScale: true });
+  // vmax 1.2 -> 5.0, DERIVED (not guessed) from the glu mass balance:
+  // a growing autotroph's glu sinks at vmax are synth_aa 0.7*1.2=0.84
+  // + synth_fa 0.9*1.5=1.35 + glu->biopolymer 1.0*0.5=0.50 ~= 2.69
+  // glu/s. Photosynth yields 0.5 glu per reaction unit, so the rate
+  // needed to cover that is 2.69/0.5 ~= 5.4; 5.0 is a touch under (the
+  // sinks are rarely all at vmax at once) and well above the old 1.2,
+  // which made carbon fixation the binding constraint once synth_aa
+  // was relieved (measured: mGLU pinned ~0 in every autotroph run,
+  // weak growth even aa-replete). Validated empirically by the
+  // unfed photoautotroph/phototaxis controlled runs. Global,
+  // intended behavior change; golden re-baselined.
+  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 5.0, { lightIn: 1, surfaceScale: true, chlScale: true });
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
   // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.

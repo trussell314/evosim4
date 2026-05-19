@@ -315,9 +315,14 @@ function nAboveMembrane(thresh: number): number {
 // Cells whose sensed visible light is below the phototaxis genome's
 // threshold of 6 -- i.e. in the "dark, swim the magnetic axis"
 // branch. Measured, not assumed.
+// Cells whose sensed visible light is below the phototaxis genome's
+// migrate threshold (KEEP IN SYNC with the PUSH8 constant in the
+// phototaxis archetype -- currently 2). Below it the genome runs the
+// "dark, swim the magnetic axis" branch. Measured, not assumed.
+const PHOTOTAXIS_DARK_THRESH = 2;
 function nDark(): number {
   let n = 0;
-  for (const c of w.creatures) if (c.store.chemCols[CHEM_ACT_PHOTO_VISIBLE][c.idx] < 6) n++;
+  for (const c of w.creatures) if (c.store.chemCols[CHEM_ACT_PHOTO_VISIBLE][c.idx] < PHOTOTAXIS_DARK_THRESH) n++;
   return n;
 }
 function meanY(): number {

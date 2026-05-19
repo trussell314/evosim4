@@ -74,7 +74,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // de-novo aa synthesis is not a growth bottleneck in real
     // primary producers). Global, intended behavior change;
     // determinism + mass-conservation re-verified green.
-    const GOLDEN = "3f43094f";
+    // Bumped again: photosynth reaction vmax 1.2 -> 5.0 (reactions.ts
+    // out[3]), derived from the glu mass balance (sink sum ~2.69 /
+    // 0.5 glu-per-unit ~= 5.4) -- carbon fixation was the binding
+    // constraint once synth_aa was relieved (mGLU pinned ~0 in every
+    // autotroph run). Global, intended; determinism + mass green.
+    const GOLDEN = "a11f6a54";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
