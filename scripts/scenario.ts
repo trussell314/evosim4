@@ -16,6 +16,7 @@ import {
 } from "../src/sim";
 import { ARCHETYPES } from "../src/genome-archetypes";
 import { pushParticle } from "../src/sim/core";
+import { genomeSynthMask } from "../src/genome";
 import {
   CHEM_CO2,
   CHEM_ADP,
@@ -44,8 +45,15 @@ interface Scenario {
   id: string;
   count: number;
   describe: string;
-  // mutate world + freshly spawned cells before the run
-  setup: (w: World, cells: Cre[]) => void;
+  // mutate world + freshly spawned cells before the run. `cells` =
+  // focal archetype instances; `coStock` = the co-stocked creatures
+  // (in spawn order) for scenarios that need to pair them (e.g.
+  // pre-engulfing a symbiont into a host).
+  setup: (w: World, cells: Cre[], coStock: Cre[]) => void;
+  // optional extra per-sample / END columns (scenario-specific
+  // measurements, e.g. endosymbiosis counts that must recurse into
+  // host.contents since engulfed cells leave world.creatures).
+  report?: (w: World) => string;
   // optional per-SAMPLE top-up (ambient chems: don't deplete fast,
   // so 30s cadence is fine). "perfect" = non-depleting medium.
   replenish?: (w: World) => void;
@@ -443,6 +451,81 @@ const SCENARIOS: Record<string, Scenario> = {
       topUpBiopolymer(w, 1800);
     },
   },
+
+  // #11 mitochondria, scenario A: SEPARATE entities. Mito (focal) +
+  // farmer hosts (the ENGULF archetype) co-stocked free; food
+  // chemostat lets hosts bulk past the 1.14x breach gate and engulf
+  // the small low-membrane mito. Watches engulfment + endosymbiosis
+  // + tandem (eng:host ratio) arise on their own.
+  "mito-symbiosis": {
+    id: "mitochondria",
+    count: 60,
+    coStock: [{ id: "farmer", count: 40 }],
+    describe:
+      "SEPARATE: 60 free mito + 40 farmer hosts (ENGULF archetype), " +
+      "biopolymer chemostat ~1500 + ambient O2=30/MIN=50. Hosts bulk " +
+      "on food, engulf small mito. report: hosts / freeMito / " +
+      "engMito(recursed) / hosts-carrying / eng:host ratio.",
+    setup: (w) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    report: () => mitoReport(),
+  },
+
+  // #11 mitochondria, scenario B: PRE-ENGULFED. Each host starts with
+  // 2 mitos already in its contents (replicating the engine's engulf
+  // invariant: pushed to host.contents, organelleSynthMask set,
+  // removed from world.creatures). Tests whether an already-formed
+  // symbiosis persists + reproduces in tandem (host fission
+  // partitions contents to daughters; mito internal division).
+  "mito-engulfed": {
+    id: "mitochondria",
+    count: 80,
+    coStock: [{ id: "farmer", count: 40 }],
+    describe:
+      "PRE-ENGULFED: 40 farmer hosts each pre-loaded with 2 mito in " +
+      "contents (engine engulf invariant). biopolymer chemostat " +
+      "~1500 + ambient O2=30/MIN=50. Tests persistence + tandem " +
+      "reproduction of an existing symbiosis.",
+    setup: (w, mito, hosts) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      const creatures = (w as unknown as { creatures: unknown[] }).creatures;
+      let mi = 0;
+      for (const h of hosts) {
+        const host = h as unknown as { contents: unknown[] };
+        for (let j = 0; j < 2 && mi < mito.length; j++, mi++) {
+          const m = mito[mi] as unknown as {
+            genome: Uint8Array; organelleSynthMask: number;
+          };
+          // engine engulf invariant: alive in host.contents, masked,
+          // and NOT in the free world.creatures list.
+          m.organelleSynthMask = genomeSynthMask(m.genome);
+          host.contents.push(m);
+          const idx = creatures.indexOf(mito[mi]);
+          if (idx >= 0) creatures.splice(idx, 1);
+        }
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    report: () => mitoReport(),
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -467,16 +550,21 @@ const w = createWorld(800, 600, { delayedSpawn: true, seed: 4242 }) as any;
 w.foundersEnabled = false;
 
 // co-stock first (so the focal archetype's setup can see them)
+const coStockCres: Cre[] = [];
 for (const cs of sc.coStock) {
   const g = ARCHETYPES.find((a) => a.id === cs.id)!.genome;
-  for (let i = 0; i < cs.count; i++) spawnSpeciesInstance(w, g);
+  for (let i = 0; i < cs.count; i++) {
+    const c = spawnSpeciesInstance(w, g);
+    if (c) coStockCres.push(c as unknown as Cre);
+  }
 }
+const coStockRoots = new Set<number>(coStockCres.map((c) => c.lineageRoot));
 const focal: Cre[] = [];
 for (let i = 0; i < sc.count; i++) {
   const c = spawnSpeciesInstance(w, arch.genome);
   if (c) focal.push(c as unknown as Cre);
 }
-sc.setup(w, focal);
+sc.setup(w, focal, coStockCres);
 
 // Focal-lineage attribution: spawnSpeciesInstance assigns a fresh
 // lineageRoot per spawn, inherited by descendants. With co-stocked
@@ -489,6 +577,69 @@ function nFocal(): number {
     if (focalRoots.has((c as unknown as Cre).lineageRoot)) n++;
   }
   return n;
+}
+
+// Endosymbiosis-aware counters: engulfed cells live in host.contents
+// (recursively), NOT world.creatures, so plain counts miss them.
+type WithContents = Cre & { contents: WithContents[] };
+function rootOf(c: unknown): number {
+  return (c as Cre).lineageRoot;
+}
+// free = top-level world.creatures only.
+function nFree(roots: Set<number>): number {
+  let n = 0;
+  for (const c of w.creatures) if (roots.has(rootOf(c))) n++;
+  return n;
+}
+// engulfed = anywhere inside some host's contents tree.
+function nEngulfed(roots: Set<number>): number {
+  let n = 0;
+  const walk = (list: WithContents[]): void => {
+    for (const inner of list) {
+      if (roots.has(rootOf(inner))) n++;
+      if (inner.contents && inner.contents.length) walk(inner.contents);
+    }
+  };
+  for (const c of w.creatures) {
+    walk((c as unknown as WithContents).contents ?? []);
+  }
+  return n;
+}
+// hosts (free, lineage in hostRoots) that carry >=1 symbiont
+// (lineage in symRoots) anywhere in their contents tree.
+function nHostsCarrying(hostRoots: Set<number>, symRoots: Set<number>): number {
+  let n = 0;
+  const has = (list: WithContents[]): boolean => {
+    for (const inner of list) {
+      if (symRoots.has(rootOf(inner))) return true;
+      if (inner.contents && inner.contents.length && has(inner.contents)) return true;
+    }
+    return false;
+  };
+  for (const c of w.creatures) {
+    if (!hostRoots.has(rootOf(c))) continue;
+    if (has((c as unknown as WithContents).contents ?? [])) n++;
+  }
+  return n;
+}
+
+// Endosymbiosis report: hosts (free farmer lineages), free mito,
+// engulfed mito (recursed), hosts carrying >=1 mito, and the
+// engulfed-mito : host ratio (the "tandem" indicator -- stable/
+// growing ratio = symbiosis persisting + co-reproducing).
+function mitoReport(): string {
+  const hosts = nFree(coStockRoots);
+  const freeM = nFree(focalRoots);
+  const engM = nEngulfed(focalRoots);
+  const hostsW = nHostsCarrying(coStockRoots, focalRoots);
+  const ratio = hosts > 0 ? (engM / hosts).toFixed(2) : "-";
+  return (
+    `hosts=${String(hosts).padStart(3)} ` +
+    `freeMito=${String(freeM).padStart(4)} ` +
+    `engMito=${String(engM).padStart(4)} ` +
+    `hostsW/Mito=${String(hostsW).padStart(3)} ` +
+    `eng:host=${ratio}`
+  );
 }
 
 interface St { births: number; dStarve: number; dMembrane: number; dAa: number; dMrna: number; dOld: number }
@@ -611,20 +762,23 @@ while (w.t < endT) {
         `mAA=${meanCell(CHEM_AA).toFixed(2).padStart(6)} ` +
         `mGLU=${meanCell(CHEM_GLU).toFixed(2).padStart(6)} ` +
         `ambAA=${ambientMean(w, CHEM_AA).toFixed(1).padStart(5)} ` +
-        `ambMIN=${ambientMean(w, CHEM_MIN).toFixed(1).padStart(5)}`,
+        `ambMIN=${ambientMean(w, CHEM_MIN).toFixed(1).padStart(5)}` +
+        (sc.report ? "  " + sc.report(w) : ""),
     );
   }
 }
 const e = snap();
 const idClose = startTotal + idBirths - idDeaths;
 console.log(
-  `# END  pop=${w.creatures.length} focal=${nFocal()} peak=${peak}`,
+  `# END  pop=${w.creatures.length} focal=${nFocal()} peak=${peak}` +
+    (sc.report ? "  " + sc.report(w) : ""),
 );
 console.log(
-  `# id-accounting (exact): start=${startTotal} (focal ${focal.length}` +
-    `${sc.coStock.length ? " + costock " + (startTotal - focal.length) : ""}) ` +
-    `births=${idBirths} ` +
-    `deaths=${idDeaths} -> expected=${idClose} actual=${w.creatures.length} ` +
+  `# id-accounting (exact, FREE creatures only -- engulfed cells ` +
+    `live in host.contents and are tracked by the scenario report): ` +
+    `start=${startTotal} free (spawned: focal ${focal.length}, ` +
+    `coStock ${coStockCres.length}) births=${idBirths} deaths=${idDeaths} ` +
+    `-> expected=${idClose} actual=${w.creatures.length} ` +
     `(closes: ${idClose === w.creatures.length})`,
 );
 console.log(
