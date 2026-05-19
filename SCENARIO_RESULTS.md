@@ -145,3 +145,25 @@ that dies on its own; the ATP subsidy showed no rescue because the
 host failure is unrelated to ATP supply. NEXT: fix farmer standalone
 viability (diagnose farmer-vs-forager; conditional ENGULF reduced
 but didn't eliminate the self-harm) -- not more ATP/mito work.
+
+## #9 farmer + #11 mito -- rarity-gated ENGULF (reg0%64), post Path1/2
+
+Diagnosis confirmed: SELF_ENERGY gate ineffective (ATP ~165-250 >> any
+threshold); kin-only ENGULF = self-cannibalising population sink
+(farmer == forager metabolically; forager 30->110 has no engulf).
+Fix: reg0-counter, ENGULF only when reg0%64==0 (~1/64 passes,
+ATP-independent). Genome-only.
+
+Result (controlled vs prior collapse):
+- farmer-solo: 30 -> peak 73, sustains 25-48 ~480s, late decline ->11
+  (was 30->9 monotonic). Major improvement; viable most of the run.
+- mito-symbiosis: pop 77->23, hosts 37->12, engMito sustained 4-11
+  (ALL inHost), eng:host ~0.2-0.7 stable ~400s, host+symbiont
+  co-reproduce (was pop 77->4, hosts 37->3). (a) sustained
+  endosymbiosis SUBSTANTIALLY met; (b) tandem met for ~400s window.
+- mito-engulfed: hosts 0 by t90 (still fails -- pre-engulfed host
+  starts already-burdened before it can establish; inherently hard).
+
+Residual: slow LATE decline (~t480+) in BOTH farmer-solo and the
+tandem -- same root, 1/64 engulf still a marginal net drain over
+10min. Next single-variable: rarity period 64->128.

@@ -251,7 +251,7 @@ function build(): Archetype[] {
       id: "farmer",
       label: "farmer host",
       cls: "seed",
-      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and engulfs RARELY (a persistent register counter gates ENGULF to ~1/64 VM passes). SELF_ENERGY gating was ineffective -- realized ATP (~165-250) is far above any sane threshold, so engulf fired unconditionally and the lineage cannibalised itself to collapse (farmer-solo 30->9 vs near-identical engulf-less forager 30->110). A rarity gate caps the kin-cannibalism rate below the reproduction rate so the host self-sustains, while engulf/farming still occurs (tandem). Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
+      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and engulfs RARELY (a persistent register counter gates ENGULF to ~1/127 VM passes). SELF_ENERGY gating was ineffective -- realized ATP (~165-250) is far above any sane threshold, so engulf fired unconditionally and the lineage cannibalised itself to collapse (farmer-solo 30->9 vs near-identical engulf-less forager 30->110). A rarity gate caps the kin-cannibalism rate below the reproduction rate so the host self-sustains, while engulf/farming still occurs (tandem). Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
@@ -263,7 +263,7 @@ function build(): Archetype[] {
         ),
         // Rarity-gated ENGULF (register oscillator, bet-hedger
         // pattern). reg0 persists across ticks; engulf only when
-        // reg0 % 64 == 0 -> ~1/64 of passes, regardless of ATP. This
+        // reg0 % 127 == 0 -> ~1/127 of passes, regardless of ATP. This
         // caps the kin-cannibalism rate (every engulf converts a free
         // reproducing farmer into a captive + burdens the host) below
         // the reproduction rate so the lineage doesn't sink itself,
@@ -274,9 +274,9 @@ function build(): Archetype[] {
         ["ADD"],
         ["STORE", 0], // reg0++ (free-running counter)
         ["LOAD", 0],
-        ["PUSH8", 64],
-        ["MOD"], // reg0 % 64
-        ["JNZ", "noEngulf"], // != 0 -> skip; engulf only 1/64 passes
+        ["PUSH8", 127],
+        ["MOD"], // reg0 % 127
+        ["JNZ", "noEngulf"], // != 0 -> skip; engulf only ~1/127 passes
         ["ENGULF"],
         ["LABEL", "noEngulf"],
         // 40 -> 28: forager (near-identical genome) only self-sustains
