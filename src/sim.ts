@@ -77,7 +77,7 @@ import {
   type ChemPhase, type ChemRole, type ChemicalDef,
   GENERIC_SPAWN_ORDER, CHEMICALS, CHEM_BASE_DENSITY, CHEM_MM,
   CHEM_COLORS, CHEM_NAMES, CHEM_MOLAR_MASS,
-  CHEM_IDS, SENSOR_CHEMS, SENSOR_BIN_BY_CHEM,
+  CHEM_IDS, SENSOR_CHEMS, CHEM_BOND_POTENTIAL,
 } from "./sim/chemistry";
 export {
   type ChemPhase, type ChemRole, type ChemicalDef,
@@ -555,11 +555,6 @@ const SPAWN_CHEM_SPECS: SpawnChemSpec[] = (() => {
   }
   return specs;
 })();
-
-// Generic chems have no sensor slot of their own; for INGEST gating
-// they ride the biopolymer ("bulk organic") slot, the same gate that
-// used to eat the old aggregated generic corpse particle.
-const BIOPOLYMER_SENSOR_SLOT = SENSOR_BIN_BY_CHEM[CHEM_BIOPOLYMER];
 
 
 // The reaction table (Reaction type, buildReactionTable,
@@ -4216,14 +4211,15 @@ function runInnerCell(
         acted = true;
       }
     }
-    // Active chemical uptake from the host pool for the materials the
-    // genome opted into (the 6 sensor chems). Works on non-diffusable
+    // Active chemical uptake from the host pool: the symbiont grabs
+    // the bootstrap metabolites whose bond potential clears its
+    // INGEST bond-energy threshold this tick. Works on non-diffusable
     // chems too -- this is active transport, not passive diffusion.
     if (!acted) {
       let took = false;
       for (let slot = 0; slot < SENSOR_CHEMS.length; slot++) {
-        if (!inner.vmOut.ingestMaterials[slot]) continue;
         const chem = SENSOR_CHEMS[slot];
+        if (CHEM_BOND_POTENTIAL[chem] < inner.vmOut.ingestThreshold) continue;
         const grab = Math.min(INNER_UPTAKE_MAX, hCols[chem][hi]);
         if (grab <= 0) continue;
         hCols[chem][hi] -= grab;
@@ -5683,19 +5679,16 @@ function updateCreatures(world: World, dt: number): void {
         for (let i = world.particles.length - 1; i >= 0; i--) {
           const p = world.particles[i];
           const chemId = p.chemId;
-          // The legacy 6-slot INGEST gating still applies: cells opt
-          // into eating each "sensor chem" (o2/co2/glu/biop/fa/min).
-          // Generic-chem particles (per-chem death debris) and waste
-          // particles have no sensor slot of their own, so they're
-          // eaten under the biopolymer ("bulk organic") gate -- this
-          // is the evolvable detritivore niche (waste is low-value
-          // fuel; bondEnergy 2).
-          let sensorSlot = SENSOR_BIN_BY_CHEM[chemId];
-          if (sensorSlot < 0
-            && (chemId >= NAMED_CHEMICAL_COUNT || chemId === CHEM_WASTE)) {
-            sensorSlot = BIOPOLYMER_SENSOR_SLOT;
-          }
-          if (sensorSlot < 0 || !vmOut.ingestMaterials[sensorSlot]) continue;
+          // Bond-energy-threshold engulf: the cell eats any contacted
+          // particle whose chemical bond potential clears the
+          // threshold INGEST popped this tick. Detritus (low
+          // threshold) eats the open generic set; rock/inorganics
+          // (CHEM_BOND_POTENTIAL 0) fall out for any threshold > 0;
+          // a picky cell sets a high threshold. No sensor bins, no
+          // curated lists -- selectivity is an evolvable scalar and
+          // species-specificity is handled post-ingestion by
+          // chem-id-addressed metabolism.
+          if (CHEM_BOND_POTENTIAL[chemId] < vmOut.ingestThreshold) continue;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
@@ -7149,7 +7142,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:13:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:14:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

@@ -30,11 +30,16 @@ import {
 } from "./sim/chem-ids";
 import { TRANSPORT_ATP_SLOT } from "./sim/reactions";
 
-// INGEST material slots are the 6 legacy sensor bins, order
-// [minerals, biopolymer, fa, o2, co2, glu]; bulk organic / generic
-// debris (the staple heterotroph food) rides slot 1.
-const ING_BIOPOLYMER = 1;
-const ING_O2 = 3;
+// INGEST now pops a bond-energy threshold off the stack (engulf any
+// contacted particle with CHEM_BOND_POTENTIAL >= threshold *
+// INGEST_TH_SCALE). These are the PUSH8 bytes a prog pushes before
+// INGEST. ING_DETRITUS=1 -> ~0.02: eats biopolymer/glu/fa/aa/waste
+// and energy-bearing generics, but excludes zero-bond inorganics
+// (MIN/O2/CO2) -- the staple heterotroph/detritivore diet.
+// ING_ANY=0 -> threshold 0: engulfs anything, including the
+// zero-bond O2 particles a mitochondrion grabs as electron acceptor.
+const ING_DETRITUS = 1;
+const ING_ANY = 0;
 
 // Inert trailing cassette. stress-amp's SPLICE_DUP/DEL must target a
 // non-essential region (offset 0 corrupts the SYNTH kit and shifts
@@ -170,7 +175,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -187,7 +192,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -210,7 +215,7 @@ function build(): Archetype[] {
         ["SYNTH", "BIO", 0],
         ["SYNTH", "BIO", 0],
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -228,7 +233,7 @@ function build(): Archetype[] {
         ...HET_SYNTH,
         ["SYNTH", "BOND", 7], // marker tag 7, inherited by the clone
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -269,7 +274,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -312,7 +317,7 @@ function build(): Archetype[] {
         ["SYNTH", "FA", 0],
         ["SYNTH", "ENZ", 0],
         ["SYNTH", "AA", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ["THRUST"],
         ["PUSH8", 6],
         ["EXCRETE", CHEM_MARKER0], // bait
@@ -333,8 +338,8 @@ function build(): Archetype[] {
         ["SYNTH", "ENZ", 0], // digests host-pool biopolymer -> glu
         ["SYNTH", "AA", 0],
         ["SYNTH", "CAT", TRANSPORT_ATP_SLOT], // build the ATP translocase (ANT)
-        ["INGEST", ING_BIOPOLYMER], // substrate from the host pool
-        ["INGEST", ING_O2], // electron acceptor (respiration)
+        ["PUSH8", ING_DETRITUS], ["INGEST"], // substrate from the host pool
+        ["PUSH8", ING_ANY], ["INGEST"], // electron acceptor (respiration)
         ["THRUST"], // drift to a host during the free-living phase
         ["PUSH8", 8],
         ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool
@@ -355,7 +360,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -392,7 +397,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -418,7 +423,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -439,7 +444,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
@@ -462,7 +467,7 @@ function build(): Archetype[] {
         ["SYNTH", "ENZ", 0],
         ["SYNTH", "AA", 0],
         ["SYNTH", "PACKAGE", 0], // shed self-genome carriers
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ["THRUST"],
         ...reproduceWhenGrown(28, "np"),
       ],
@@ -482,7 +487,7 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
-        ["INGEST", ING_BIOPOLYMER],
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbGradient(
           CHEM_ACT_CHEMO_BIOPOLYMER_X,
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,

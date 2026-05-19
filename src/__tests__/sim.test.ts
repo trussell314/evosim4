@@ -955,19 +955,29 @@ describe("creature: ingestion (basic)", () => {
     step(w, 0.001);
     expect(c.molecules.minerals).toBeCloseTo(2.6 * (4 / 3) * Math.PI * 27, 5);
   });
-  it("INGEST is material-selective: rock genome ignores lipid", () => {
+  it("INGEST is bond-energy selective: high threshold skips low-energy food", () => {
+    // PUSH8 60 -> threshold 60*0.02 = 1.2, above fatty-acid's bond
+    // potential (~0.96): the particle is left uneaten.
     const w = quietWorld();
-    // INGEST 0 -> minerals slot only.
-    const c = makeCreature({ energy: 50, genome: new Uint8Array([OP.INGEST, 0, HALT_MARK]) });
+    const c = makeCreature({
+      energy: 50,
+      genome: new Uint8Array([OP.PUSH8, 60, OP.INGEST, HALT_MARK]),
+    });
     w.creatures.push(c);
     const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
-    const faBefore = c.molecules.fattyAcid;
     step(w, 0.001);
-    expect(w.particles.includes(target)).toBe(true);
-    // The cell did not target fa with INGEST, so the particle's mass
-    // (~10 units) should not enter the cell's fa pool. Maintenance
-    // decay can dribble trace fa in (biomass -> aa+fa); bound the gain.
-    expect(c.molecules.fattyAcid - faBefore).toBeLessThan(1);
+    expect(w.particles.includes(target)).toBe(true); // skipped
+  });
+  it("INGEST eats the same particle at a low threshold", () => {
+    const w = quietWorld();
+    const c = makeCreature({
+      energy: 50,
+      genome: new Uint8Array([OP.PUSH8, 1, OP.INGEST, HALT_MARK]),
+    });
+    w.creatures.push(c);
+    const target = pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: CHEM_IDS.fattyAcid, density: 0.9 });
+    step(w, 0.001);
+    expect(w.particles.includes(target)).toBe(false); // eaten
   });
 });
 

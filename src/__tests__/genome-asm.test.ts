@@ -103,8 +103,8 @@ describe("genome assembler", () => {
       ["SYNTH", "CHEMO", 0],
       ["SENSE_CHEMICAL", 23],
       ["THRUST"],
-      ["INGEST", 0],
       ["PUSH8", 1],
+      ["INGEST"],
       ["REPRODUCE"],
     ]);
     expect(disassemble(g)).not.toMatch(/db 0x/);

@@ -226,7 +226,11 @@ free/facilitated; up-gradient pumps but costs
 `TRANSPORT_PUMP_ATP·ln(1+C_dest/C_src)`, affordability-limited;
 down-leg yields no ATP so no cycle can mint energy; SAVE_SCHEMA
 12→13; golden unchanged; +1 no-free-energy A-vs-B test) ·
-2b INGEST → bond-energy-threshold engulf (migrate archetypes)
+**2b INGEST → bond-energy-threshold engulf — DONE** (zero-operand;
+pops a stack threshold ×INGEST_TH_SCALE=0.02; sensor bins +
+biopolymer generic-catch fallback deleted; all archetypes + scenario
+probes migrated to `PUSH8;INGEST`; SAVE_SCHEMA 13→14; golden
+22e020e8→880fc7e9; forager/benthic/vent viability re-verified)
 · 3 `SENSE_OUT` (gradient-vector
 primitive) · 4 retire the `synthMask` enable-gate path; `CATALYST`
 becomes the sole paid lever; ONE decision: keep or drop the

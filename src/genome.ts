@@ -172,7 +172,13 @@ OPERANDS[OP.JZ] = 1;
 OPERANDS[OP.JNZ] = 1;
 OPERANDS[OP.EXCRETE] = 1;
 OPERANDS[OP.TRANSPORT] = 1;
-OPERANDS[OP.INGEST] = 1;
+// INGEST is zero-operand: it pops a bond-energy threshold off the
+// stack (INGEST_TH_SCALE-scaled) rather than naming a material.
+// Maps a stack value (PUSH8 byte 0..255, or any computed value)
+// onto bond-potential units: 255 -> ~5.1 covers the richest chem;
+// a small pushed value -> ~0 eats everything organic but excludes
+// zero-bond inorganics (MIN/O2/CO2). Selection tunes the value.
+const INGEST_TH_SCALE = 0.02;
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
 OPERANDS[OP.SENSE_CHEMICAL] = 1;
@@ -211,7 +217,7 @@ for (const [k, v] of Object.entries(OP)) NAME_BY_OP[v as number] = k;
 // disassembler keeps labeling its operand against the low-slot
 // mnemonics for readability.
 const MATERIAL_OPERAND = new Set<number>([
-  OP.EXCRETE, OP.INGEST,
+  OP.EXCRETE,
 ]);
 
 const STACK_MAX = 32;
@@ -281,10 +287,12 @@ export interface VMOutputs {
   reproduceFraction: number;
   predate: boolean;
   engulf: boolean;
-  // Per-material ingest mask. The genome calls INGEST <material>; the
-  // matching index is set to 1 each tick. Multiple INGEST ops in one
-  // tick accumulate (cell can choose to eat either of several types).
-  ingestMaterials: Uint8Array;
+  // Bond-energy ingest threshold this tick. INGEST pops a value off
+  // the stack (scaled to bond-potential units); the cell engulfs any
+  // contacted particle whose CHEM_BOND_POTENTIAL >= this. Infinity =
+  // no INGEST ran this tick (ingest nothing). Multiple INGEST ops
+  // take the MOST permissive (lowest) threshold.
+  ingestThreshold: number;
   // Bit flags for biosynthesis gates this tick. Bit positions:
   //   0 biomass, 1 aa, 2 fa, 3 enzyme, 4 chlorophyll.
   // updateCreatures() runs biosynthesize() for product k iff the
@@ -330,7 +338,7 @@ export function newOutputs(): VMOutputs {
     transport: new Float32Array(CHEMICAL_COUNT),
     reproduce: false, reproduceFraction: 0.4,
     predate: false, engulf: false,
-    ingestMaterials: new Uint8Array(6),
+    ingestThreshold: Infinity,
     synthMask: 0,
     bondMarker: -1,
     catSynthMask: 0,
@@ -369,7 +377,7 @@ export function runTick(
   out.reproduceFraction = 0.4;
   out.predate = false;
   out.engulf = false;
-  out.ingestMaterials.fill(0);
+  out.ingestThreshold = Infinity;
   out.synthMask = 0;
   out.bondMarker = -1;
   out.catSynthMask = 0;
@@ -552,7 +560,7 @@ export function runTick(
       }
       case OP.PREDATE:    out.predate    = true; break;
       case OP.ENGULF:     out.engulf     = true; break;
-      case OP.INGEST:     { const idx = m6(genome[state.pc % L]); state.pc++; out.ingestMaterials[idx] = 1; break; }
+      case OP.INGEST:     { const t = Math.max(0, vmPop(stack)) * INGEST_TH_SCALE; if (t < out.ingestThreshold) out.ingestThreshold = t; break; }
       case OP.TURN:       out.turn      += vmPop(stack); break;
       // HALT (0xFF) is retired -- it was a programmer's escape hatch
       // with no biological analog. Old genomes carrying the byte now
@@ -579,7 +587,7 @@ export interface GenomeSummary {
   conditional: boolean;
   thrust: boolean;
   turn: boolean;
-  ingestMaterials: number[];
+  ingests: boolean;
   excreteMaterials: number[];
   reproduce: boolean;
   predate: boolean;
@@ -611,7 +619,7 @@ export function summarizeGenome(
   materialNames?: ReadonlyArray<string>,
   opts?: { instrBudget?: number; atpPerInstr?: number },
 ): GenomeSummary {
-  const ingestMaterials: number[] = [];
+  let ingests = false;
   const excreteMaterials: number[] = [];
   const sensors: string[] = [];
   const seenSensor = new Set<string>();
@@ -644,11 +652,9 @@ export function summarizeGenome(
       case OP.POKE_BYTE:
       case OP.SPLICE_DUP:
       case OP.SPLICE_DEL: selfModifies = true; break;
-      case OP.INGEST: {
-        const mat = m6(operand);
-        if (!ingestMaterials.includes(mat)) ingestMaterials.push(mat);
+      case OP.INGEST:
+        ingests = true;
         break;
-      }
       case OP.EXCRETE: {
         const mat = m6(operand);
         if (!excreteMaterials.includes(mat)) excreteMaterials.push(mat);
@@ -695,8 +701,8 @@ export function summarizeGenome(
   const matName = (idx: number) => materialNames ? materialNames[idx] : String(idx);
   const capabilities: string[] = [];
   if (thrust || turn) capabilities.push("moves");
-  if (ingestMaterials.length > 0) {
-    capabilities.push("eats " + ingestMaterials.map(matName).join("/"));
+  if (ingests) {
+    capabilities.push("ingests particles (bond-energy threshold)");
   }
   if (reproduce) capabilities.push(conditional ? "reproduces (gated)" : "reproduces (every tick)");
   if (predate || engulf) capabilities.push("preys on cells");
@@ -716,8 +722,8 @@ export function summarizeGenome(
   const bullets: string[] = [];
   const gateNote = conditional ? "" : " (unconditional -- no JZ/JNZ + comparison gates it)";
 
-  bullets.push("- Ingest food? " + (ingestMaterials.length > 0
-    ? `Yes, opts in to ${ingestMaterials.map(matName).join(", ")}.${gateNote}`
+  bullets.push("- Ingest food? " + (ingests
+    ? `Yes -- engulfs particles above its bond-energy threshold.${gateNote}`
     : "Never. No INGEST op is present."));
 
   bullets.push("- Reproduce? " + (reproduce
@@ -740,7 +746,7 @@ export function summarizeGenome(
     ? otherActs.join("; ") + "."
     : "None of the corresponding ops are present."));
 
-  const anyAction = thrust || turn || reproduce || ingestMaterials.length > 0
+  const anyAction = thrust || turn || reproduce || ingests
     || predate || engulf || excreteMaterials.length > 0;
   bullets.push("- React to anything it senses? " + (sensors.length === 0
     ? "No sensor reads at all."
@@ -755,10 +761,10 @@ export function summarizeGenome(
   if (!anyAction) netClass = "An inert blob.";
   else if (synthChl && synthBio && reproduce) netClass = "A photoautotroph that builds biomass from light and divides.";
   else if (predate || engulf) netClass = "A predator.";
-  else if (thrust && ingestMaterials.length > 0 && reproduce) netClass = "A complete loop: senses, swims, eats, divides.";
-  else if (ingestMaterials.length > 0 && reproduce) netClass = "A passive eater that divides -- doesn't steer toward food.";
-  else if (thrust && ingestMaterials.length > 0) netClass = "A forager: swims and eats, but never divides.";
-  else if (ingestMaterials.length > 0) netClass = "A passive eater -- waits for food to drift in.";
+  else if (thrust && ingests && reproduce) netClass = "A complete loop: senses, swims, eats, divides.";
+  else if (ingests && reproduce) netClass = "A passive eater that divides -- doesn't steer toward food.";
+  else if (thrust && ingests) netClass = "A forager: swims and eats, but never divides.";
+  else if (ingests) netClass = "A passive eater -- waits for food to drift in.";
   else if (thrust) netClass = "A wanderer -- swims around but never eats.";
   else if (reproduce) netClass = "Tries to divide but can't sustain itself (no eat path).";
   else netClass = "Has actions, but no eat path.";
@@ -767,7 +773,7 @@ export function summarizeGenome(
   // doesn't simulate runtime so a SYNTH_* op buried after a never-
   // taken branch still "counts" -- intentional, we want to surface
   // anything the genome could in principle do.
-  const isHetero = ingestMaterials.length > 0 || predate || engulf;
+  const isHetero = ingests || predate || engulf;
   let metabolism: string;
   if (synthChl && isHetero) {
     metabolism = "predatory autotroph (photosynth + extracts from prey)";
@@ -775,11 +781,11 @@ export function summarizeGenome(
     metabolism = synthAA && synthFA
       ? "complete photoautotroph"
       : "incomplete photoautotroph (missing aa/fa synthesis)";
-  } else if ((predate || engulf) && ingestMaterials.length === 0) {
+  } else if ((predate || engulf) && !ingests) {
     metabolism = "obligate predator";
   } else if (predate || engulf) {
     metabolism = "predator-grazer hybrid";
-  } else if (ingestMaterials.length > 0) {
+  } else if (ingests) {
     metabolism = synthEnz
       ? "heterotroph (digests reserves into molecules)"
       : "molecule-grazer (no SYNTH_ENZ -- can only consume tagged corpse particles, not raw substrate)";
@@ -825,7 +831,7 @@ export function summarizeGenome(
   }
 
   let fate: string;
-  if (ingestMaterials.length === 0 && !predate && !engulf) {
+  if (!ingests && !predate && !engulf) {
     fate = `Pays the per-instruction ATP cost (~${opsPerTick} ops × ${atpPerInstr.toFixed(3)} = ~${estAtpPerTick.toFixed(2)} ATP/tick) plus baseline maintenance, takes in nothing, so biomass and reserves trickle down. Will autolyze once biomass falls below MIN_VIABLE_BIOMASS (0.5).`;
   } else if (!reproduce) {
     fate = `Can sustain itself if food is plentiful, but the lineage dies with this cell -- no REPRODUCE.`;
@@ -842,9 +848,9 @@ export function summarizeGenome(
     ? "inert"
     : predate || engulf
     ? "preys"
-    : thrust && ingestMaterials.length > 0
+    : thrust && ingests
     ? "swims and eats"
-    : ingestMaterials.length > 0
+    : ingests
     ? "grazes passively"
     : thrust
     ? "wanders"
@@ -863,7 +869,7 @@ export function summarizeGenome(
   return {
     totalBytes: genome.length, executableOps, unknownBytes,
     estAtpPerTick, hasJump, hasComparison: hasCmp, conditional,
-    thrust, turn, ingestMaterials, excreteMaterials,
+    thrust, turn, ingests, excreteMaterials,
     reproduce, predate, engulf, selfModifies,
     sensors, capabilities,
     synthBio, synthAA, synthFA, synthEnz, synthChl, synthRibo,
@@ -1143,7 +1149,7 @@ export function makeRandomViableGenome(
   // bio/mrna/fa/enz/aa. Operands randomized for diversity.
   const tokens: number[][] = [
     [repSensor, OP.PUSH8, repThresh, OP.GT, OP.JZ, 1, OP.REPRODUCE],
-    [OP.INGEST, Math.floor(rng() * 6)],          // a sensor material
+    [OP.PUSH8, 4, OP.INGEST],                    // low bond-energy threshold -> eats detritus
     [OP.THRUST],
     [OP.SENSE_CHEMICAL, Math.floor(rng() * CHEMICAL_COUNT)],
     [OP.SYNTH, SYNTH_KIND.BIO, b()],

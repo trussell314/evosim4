@@ -114,7 +114,7 @@ const ventProbeGenome = asm([
   ["SYNTH", "AA", 0],
   ["SYNTH", "CAT", VENT.energy], // abiotic-fuel -> ATP (energy module)
   ["SYNTH", "CAT", VENT.carbon], // acquirable -> GLU (carbon-fix module)
-  ["INGEST", 1], // generic chems (the whole vent cocktail) ride this gate
+  ["PUSH8", 1], ["INGEST"], // low bond-energy threshold: eats the vent cocktail
   ["SELF_MEMBRANE"],
   ["PUSH8", 30],
   ["GT"],
@@ -166,7 +166,7 @@ function foragerProg(gate: number): Instr[] {
     ["SYNTH", "ENZ", 0],
     ["SYNTH", "AA", 0],
     ["SYNTH", "CHEMO", 0],
-    ["INGEST", 1],
+    ["PUSH8", 1], ["INGEST"],
     ["SENSE_CHEMICAL", CHEM_ACT_CHEMO_BIOPOLYMER_X],
     ["PUSH8", 30],
     ["MUL"],

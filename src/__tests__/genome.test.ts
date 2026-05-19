@@ -288,17 +288,19 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, HALT_MARK]).out.predate).toBe(true);
   });
-  it("INGEST sets material flag by index", () => {
-    const out = exec([OP.INGEST, 3, HALT_MARK]).out;
-    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 0, 0]);
+  it("INGEST pops a bond-energy threshold off the stack", () => {
+    const out = exec([OP.PUSH8, 50, OP.INGEST, HALT_MARK]).out;
+    expect(out.ingestThreshold).toBeCloseTo(50 * 0.02, 6); // INGEST_TH_SCALE
   });
-  it("INGEST flags accumulate across multiple ops", () => {
-    const out = exec([OP.INGEST, 3, OP.INGEST, 4, HALT_MARK]).out;
-    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 1, 1, 0]);
+  it("INGEST takes the most permissive (lowest) threshold", () => {
+    const out = exec([
+      OP.PUSH8, 50, OP.INGEST, OP.PUSH8, 10, OP.INGEST, HALT_MARK,
+    ]).out;
+    expect(out.ingestThreshold).toBeCloseTo(10 * 0.02, 6);
   });
-  it("INGEST flags default to all-zero without the op", () => {
+  it("INGEST threshold is Infinity (ingest nothing) without the op", () => {
     const out = exec([OP.NOP, HALT_MARK]).out;
-    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(out.ingestThreshold).toBe(Infinity);
   });
   it("TURN accumulates angle delta from the stack", () => {
     expect(exec([OP.PUSH8, 1, OP.TURN, HALT_MARK]).out.turn).toBe(1);
@@ -319,7 +321,7 @@ describe("VM actuators", () => {
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
     expect(out.turn).toBe(0);
-    expect(Array.from(out.ingestMaterials)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(out.ingestThreshold).toBe(Infinity);
     // Excrete array sized to CHEMICAL_COUNT (96) post-cleanup; check
     // it's all-zero rather than spelling out 96 entries.
     let total = 0;
@@ -379,14 +381,15 @@ describe("disassemble", () => {
   });
   it("renders material operand by name when provided", () => {
     const names = ["rock", "sand", "clay", "organic", "lipid", "gas"];
-    // EXCRETE / INGEST still pass through the material-operand naming
-    // map. With operand 7 mod 6 = 1, the name is "sand".
-    const text = disassemble(new Uint8Array([OP.INGEST, 3, OP.EXCRETE, 7, HALT_MARK]), names);
-    expect(text).toContain("ingest organic");
+    // EXCRETE still passes through the material-operand naming map.
+    // With operand 7 mod 6 = 1, the name is "sand". (INGEST is now
+    // zero-operand -- a bond-energy threshold off the stack -- so it
+    // is no longer a material-operand op.)
+    const text = disassemble(new Uint8Array([OP.EXCRETE, 7, HALT_MARK]), names);
     expect(text).toContain("excrete sand");
   });
   it("renders material operand by index without names", () => {
-    expect(disassemble(new Uint8Array([OP.INGEST, 2, HALT_MARK]))).toContain("ingest 2");
+    expect(disassemble(new Uint8Array([OP.EXCRETE, 2, HALT_MARK]))).toContain("excrete 2");
   });
   it("renders unknown bytes as db 0xNN", () => {
     expect(disassemble(new Uint8Array([0x7A]))).toContain("db 0x7a");

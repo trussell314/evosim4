@@ -86,7 +86,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // build -> generic chem properties shift (intended). genome ABI
     // unchanged (CHEMICAL_COUNT stays 96); determinism byte-identical
     // + mass-conservation re-verified green; SAVE_SCHEMA bumped.
-    // Bumped (Phase 2a-i, op redesign): added the TRANSPORT opcode
+    // Bumped (Phase 2b, op redesign): INGEST is now a zero-operand
+    // bond-energy-threshold engulf (pops a stack value) instead of a
+    // 6-bin material mask. Op arity + VM_OUT shape + every archetype's
+    // INGEST encoding changed -> seeded run diverges (intended). The
+    // sensor-bin gate + biopolymer generic-catch fallback are gone;
+    // selectivity is now an evolvable scalar. SAVE_SCHEMA 13->14.
+    // (prev) Bumped (Phase 2a-i, op redesign): added the TRANSPORT opcode
     // (0x56). OP_BYTES auto-derives from Object.values(OP), so a new
     // opcode shifts randMutByte's op/noop draw distribution -> every
     // seeded lineage's mutated bytes change (intended, the whole
@@ -94,7 +100,7 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
     // unchanged. Determinism (same-seed-identical) still green;
     // mass-conservation green; SAVE_SCHEMA bumped 11->12.
-    const GOLDEN = "22e020e8";
+    const GOLDEN = "880fc7e9";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
