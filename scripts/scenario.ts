@@ -32,6 +32,7 @@ import {
 
 type Cre = {
   id: number;
+  lineageRoot: number;
   x: number;
   y: number;
   energy: number;
@@ -395,6 +396,45 @@ const SCENARIOS: Record<string, Scenario> = {
       topUpBiopolymer(w, 1500);
     },
   },
+
+  // #5 predator (size-bully): heterotroph that INGESTs biopolymer to
+  // bulk past the predation gate (attacker.r >= 1.14*target.r) and
+  // PREDATEs on contact. Pre-screen: no chemistry deficit (het mode).
+  // Perfect scenario = its food replete (biopolymer chemostat, so it
+  // bulks AND can forage-survive) + abundant renewable PREY
+  // (co-stocked foragers, validated self-sustaining on the same
+  // chemostat) + no counter-predators, founders off. focal= column
+  // tracks predator lineages vs prey.
+  predator: {
+    id: "predator",
+    count: 30,
+    coStock: [{ id: "forager", count: 80 }],
+    describe:
+      "Biopolymer chemostat ~1800 (feeds predator + co-stocked prey), " +
+      "ambient O2=30/MIN=50, 80 forager prey co-stocked, no counter-" +
+      "predators, founders off. focal=predator lineages only. Tests " +
+      "whether the size-bully bulks past the 1.14x radius gate and " +
+      "self-sustains by predation + foraging.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -429,6 +469,19 @@ for (let i = 0; i < sc.count; i++) {
   if (c) focal.push(c as unknown as Cre);
 }
 sc.setup(w, focal);
+
+// Focal-lineage attribution: spawnSpeciesInstance assigns a fresh
+// lineageRoot per spawn, inherited by descendants. With co-stocked
+// prey present, total pop conflates predator + prey, so count the
+// focal archetype's own lineages separately.
+const focalRoots = new Set<number>(focal.map((c) => c.lineageRoot));
+function nFocal(): number {
+  let n = 0;
+  for (const c of w.creatures) {
+    if (focalRoots.has((c as unknown as Cre).lineageRoot)) n++;
+  }
+  return n;
+}
 
 interface St { births: number; dStarve: number; dMembrane: number; dAa: number; dMrna: number; dOld: number }
 function snap(): St {
@@ -511,6 +564,9 @@ const endT = OBSERVE_T;
 // closes by construction and any divergence from SimStats is visible.
 let live = new Set<number>();
 for (const c of w.creatures) live.add(c.id);
+// True starting total (focal + any co-stock) -- the close-check must
+// use this, not focal.length, or co-stocked scenarios never close.
+const startTotal = live.size;
 let idBirths = 0;
 let idDeaths = 0;
 console.log(`# replenish: ${sc.replenish ? "yes (chemostat, every sample)" : "none"}`);
@@ -530,6 +586,7 @@ while (w.t < endT) {
     if (sc.replenish) sc.replenish(w);
     console.log(
       `t=${String(Math.round(w.t)).padStart(3)}s pop=${String(w.creatures.length).padStart(4)} ` +
+        `focal=${String(nFocal()).padStart(4)} ` +
         `nMem>40=${String(nAboveMembrane(40)).padStart(3)} ` +
         `nDark=${String(nDark()).padStart(3)} ` +
         `mY=${meanY().toFixed(0).padStart(3)} ` +
@@ -546,12 +603,14 @@ while (w.t < endT) {
   }
 }
 const e = snap();
-const idClose = focal.length + idBirths - idDeaths;
+const idClose = startTotal + idBirths - idDeaths;
 console.log(
-  `# END  pop=${w.creatures.length} peak=${peak}`,
+  `# END  pop=${w.creatures.length} focal=${nFocal()} peak=${peak}`,
 );
 console.log(
-  `# id-accounting (exact): spawned=${focal.length} births=${idBirths} ` +
+  `# id-accounting (exact): start=${startTotal} (focal ${focal.length}` +
+    `${sc.coStock.length ? " + costock " + (startTotal - focal.length) : ""}) ` +
+    `births=${idBirths} ` +
     `deaths=${idDeaths} -> expected=${idClose} actual=${w.creatures.length} ` +
     `(closes: ${idClose === w.creatures.length})`,
 );
