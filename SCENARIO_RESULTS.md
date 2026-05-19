@@ -201,3 +201,38 @@ engulfed chloroplasts flood glucose t90-150 (mGLU ->8700, pop dips
 80->9) before host/symbiont ratio settles; from ~t240 it is a
 sustained tandem regime. The gate raise damped bloom-and-kill into
 a recover-and-sustain trajectory.
+
+## #6 armored -- ideal conditions + soft control (NOT validated)
+
+Scenarios `armored` (focal armored 40, coStock size-bully 30,
+biopolymer chemostat ~1800, O2=30/MIN=50, near-surface, perm midday,
+founders off) and `armored-control` (identical, focal=forager). One
+variable between them: the focal genome.
+
+Measured (10 min each, seed 4242):
+- armored focal: 40 ->27(60s) ->14(150s) ->4(240s) ->1(390s) ->0
+  (extinct ~t420). fMem 12 ->~60-76, fR 4.1 ->7.5 (membrane/size
+  investment real). predation-attributable deaths ~244
+  (idDeaths 383 - tracked 139; tracked = starve7 mem132).
+- soft control focal: 40 ->34(60s) ->17(150s) ->7(240s) ->1(330s)
+  ->0 (extinct ~t360). predation-attributable deaths ~338
+  (idDeaths 490 - tracked 152).
+- both runs: whole arena collapses (preds 30 -> peak ~67 -> 2,
+  pop -> 2) -- the same closed-arena predator boom-bust documented
+  for #5 predator, not an armor-specific failure.
+
+Verdict: the armor MECHANISM works directionally -- armored cells
+build a real size refuge + raise breach cost, cutting predation
+mortality (~244 vs ~338) and extending focal persistence ~60s vs
+the soft control. But the ARCHETYPE is not a self-sustaining
+population under sustained predation: it still goes extinct,
+marginally outlasting the control inside a total trophic collapse.
+Likely throttle: reproduceWhenGrown(80) is the catalogue's highest
+gate; under predation in a collapsing food web the cell rarely
+reaches SELF_MEMBRANE>80, so durable individuals can't convert
+survival into replacement-rate reproduction. NEXT (single variable,
+not yet applied -- awaiting direction): lower the armored reproduce
+gate (e.g. 80 -> ~45-50, still well above forager's 30 so it stays
+a tank) and re-run the same controlled pair; that isolates whether
+the armor STRATEGY is viable once reproduction isn't over-throttled,
+without propping the population by changing the environment.
