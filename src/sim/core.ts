@@ -1086,6 +1086,13 @@ export interface World {
   // Whether the founder top-up spawns new lineages. Optional: absent
   // (older saves / test literals) means enabled. Persisted.
   foundersEnabled?: boolean;
+  // Whether the world keeps replenishing resource particles toward the
+  // cap *after* the one-shot startup seed. The startup seed (the
+  // "initial period") always happens regardless; this only controls
+  // ongoing periodic resource dumping. Absent/false = closed system
+  // after startup. Persisted. (Non-ramp test worlds ignore this and
+  // keep their legacy continuous replenish.)
+  ongoingSeeding?: boolean;
   // Simulation RNG, installed by createWorld. Optional so hand-built
   // test World literals don't need it -- the module falls back to its
   // own simRng for internal draws regardless. Exposed for callers that

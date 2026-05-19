@@ -80,6 +80,7 @@ type WorkerInbound =
   | { type: "setPinnedSpecies"; keys: string[] }
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
+  | { type: "setSeeding"; on: boolean }
   | { type: "setDensityChem"; chem: number }
   | {
       type: "spawnSpecies";
@@ -163,6 +164,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setFoundersEnabled":
       if (world) world.foundersEnabled = m.on;
+      break;
+    case "setSeeding":
+      if (world) world.ongoingSeeding = m.on;
       break;
     case "setDensityChem":
       if (world) world.densityChem = m.chem;

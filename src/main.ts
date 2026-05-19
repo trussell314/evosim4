@@ -520,6 +520,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
       renderCapLabel();
     }
     syncFoundersBtn(snapshot.foundersEnabled !== false);
+    syncSeedingBtn(snapshot.ongoingSeeding === true);
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
@@ -1317,10 +1318,11 @@ leftHeader.addEventListener("click", () => {
 // floating dock. Explicit text color here -- bare label spans were
 // invisible because the container set no color.
 // ---------------------------------------------------------------------
-let controlsBarH = 40;        // measured each layout
+let controlsBarH = 0;         // measured each layout (0 when hidden)
 let bottomHudH = 0;           // measured each layout (bottom status strip)
 let overlayPanelH = 0;        // measured each layout (overlay panel)
 let archPanelH = 0;           // measured each layout (archetypes panel)
+let toggleBarH = 36;          // measured each layout (always-visible row)
 // Measured height of the fixed top status strip. The world fit
 // reserves it at the top (mirroring controlsBarH at the bottom) so
 // the world is never drawn behind the HUD -- the bar sits in its own
@@ -1369,24 +1371,40 @@ bottomHud.style.cssText =
 bottomHud.textContent = "t=0s  fps=--  sim=--x  r=--ms  s=--ms  build=--";
 root.appendChild(bottomHud);
 
-// Collapse handle (always visible, far left of the bar).
-const ctrlHandle = document.createElement("button");
-ctrlHandle.style.cssText = CBTN + "padding:4px 8px;";
+// Single shared toggle row, always visible, anchored at the very
+// bottom (it took ctrlBar's old bottom:0 slot). Three buttons --
+// overlay / archetypes / controls, in that order -- show/hide the
+// stacked panels above them. Arrow points UP when the section is
+// hidden, DOWN when it's visible.
+const toggleBar = document.createElement("div");
+toggleBar.style.cssText =
+  "position:fixed;z-index:12;bottom:0;display:flex;flex-wrap:wrap;" +
+  "align-items:center;gap:6px;padding:5px 8px;box-sizing:border-box;" +
+  "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
+  HUD_FONT;
+root.appendChild(toggleBar);
+function panelArrow(hidden: boolean): string { return hidden ? "▲" : "▼"; }
+const overlayToggleBtn = mkBtn("overlay ▲", "Show/hide the overlay panel");
+const archToggleBtn = mkBtn("archetypes ▲", "Show/hide the archetypes panel");
+const controlsToggleBtn = mkBtn("controls ▲", "Show/hide the controls panel");
+toggleBar.append(overlayToggleBtn, archToggleBtn, controlsToggleBtn);
+
 const ctrlGroupsWrap = document.createElement("div");
 ctrlGroupsWrap.style.cssText =
   "display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;" +
   "flex:1 1 auto;min-width:0;max-width:100%;";
 function renderCtrlCollapsed(): void {
-  ctrlHandle.textContent = controlsCollapsed ? "▸ controls" : "▾ controls";
-  ctrlGroupsWrap.style.display = controlsCollapsed ? "none" : "flex";
+  controlsToggleBtn.textContent = `controls ${panelArrow(controlsCollapsed)}`;
+  setBtn(controlsToggleBtn, !controlsCollapsed, T_TEAL);
+  ctrlBar.style.display = controlsCollapsed ? "none" : "flex";
 }
-ctrlHandle.addEventListener("click", () => {
+controlsToggleBtn.addEventListener("click", () => {
   controlsCollapsed = !controlsCollapsed;
   renderCtrlCollapsed();
   positionWorldButtons();
   resize();
 });
-ctrlBar.append(ctrlHandle, ctrlGroupsWrap);
+ctrlBar.append(ctrlGroupsWrap);
 
 // A labelled control group.
 function mkGroup(name: string): HTMLDivElement {
@@ -1417,29 +1435,27 @@ let overlayCollapsed = true;
 const overlayPanel = document.createElement("div");
 overlayPanel.style.cssText =
   "position:fixed;z-index:11;bottom:0;display:flex;flex-direction:column;" +
-  "align-items:flex-end;gap:6px;padding:5px 8px;box-sizing:border-box;" +
+  "align-items:flex-start;gap:6px;padding:5px 8px;box-sizing:border-box;" +
   "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
-  "border-left:1px solid #1a3340;" + HUD_FONT;
-const overlayHandle = document.createElement("button");
-overlayHandle.style.cssText = CBTN + "padding:4px 8px;";
+  HUD_FONT;
 const overlayWrap = document.createElement("div");
 overlayWrap.style.cssText =
-  "display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;" +
+  "display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-start;" +
   "gap:6px 10px;max-width:100%;";
 function renderOverlayCollapsed(): void {
-  overlayHandle.textContent = overlayCollapsed ? "▸ overlay" : "▾ overlay";
-  overlayWrap.style.display = overlayCollapsed ? "none" : "flex";
+  overlayToggleBtn.textContent = `overlay ${panelArrow(overlayCollapsed)}`;
+  setBtn(overlayToggleBtn, !overlayCollapsed, T_TEAL);
+  overlayPanel.style.display = overlayCollapsed ? "none" : "flex";
 }
-overlayHandle.addEventListener("click", () => {
+overlayToggleBtn.addEventListener("click", () => {
   overlayCollapsed = !overlayCollapsed;
   renderOverlayCollapsed();
-  // Expanding/collapsing changes the overlay panel's height; the
-  // bottom HUD sits on top of it and the world fit reserves the
-  // whole stack, so re-measure + re-fit (mirrors the controls handle).
+  // Toggling changes the panel's height; the stack above it and the
+  // world fit reserve the whole run, so re-measure + re-fit.
   positionWorldButtons();
   resize();
 });
-overlayPanel.append(overlayHandle, overlayWrap);
+overlayPanel.append(overlayWrap);
 root.appendChild(overlayPanel);
 
 // Archetypes panel: a collapsible, bottom-left tab (mirrors the
@@ -1447,30 +1463,29 @@ root.appendChild(overlayPanel);
 // GENOME_ARCHETYPES founder. Substrate stance: these are *seeds*, not
 // engine rules -- clicking injects one cell of an authored genome via
 // the existing spawnSpecies path; it gets no special treatment and
-// must survive selection on its own. Collapsed by default so it's
-// just a "▸ archetypes" tab until opened.
+// must survive selection on its own. Hidden by default (toggled from
+// the shared bottom button row).
 let archCollapsed = true;
 const archPanel = document.createElement("div");
 archPanel.style.cssText =
   "position:fixed;z-index:11;bottom:0;display:flex;flex-direction:column;" +
   "align-items:flex-start;gap:6px;padding:5px 8px;box-sizing:border-box;" +
   "color:#9ee;background:rgba(2,12,18,0.96);border-top:1px solid #1a3340;" +
-  "border-right:1px solid #1a3340;" + HUD_FONT;
-const archHandle = document.createElement("button");
-archHandle.style.cssText = CBTN + "padding:4px 8px;";
+  HUD_FONT;
 const archWrap = document.createElement("div");
 archWrap.style.cssText =
   "display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px 12px;" +
   "max-width:100%;";
 function renderArchCollapsed(): void {
-  archHandle.textContent = archCollapsed ? "▸ archetypes" : "▾ archetypes";
-  archWrap.style.display = archCollapsed ? "none" : "flex";
+  archToggleBtn.textContent = `archetypes ${panelArrow(archCollapsed)}`;
+  setBtn(archToggleBtn, !archCollapsed, T_TEAL);
+  archPanel.style.display = archCollapsed ? "none" : "flex";
 }
-archHandle.addEventListener("click", () => {
+archToggleBtn.addEventListener("click", () => {
   archCollapsed = !archCollapsed;
   renderArchCollapsed();
   // Toggling changes the panel height; the world fit reserves the
-  // whole bottom stack, so re-measure + re-fit (mirrors overlay).
+  // whole bottom stack, so re-measure + re-fit.
   positionWorldButtons();
   resize();
 });
@@ -1569,7 +1584,7 @@ for (const a of ARCHETYPES) {
   (a.cls === "seed" ? gArchSeed : gArchDirect).appendChild(b);
 }
 renderArchCollapsed();
-archPanel.append(archHandle, archWrap);
+archPanel.append(archWrap);
 root.appendChild(archPanel);
 
 // ---- run: reset / turbo / profile / export ----
@@ -1638,6 +1653,27 @@ function syncFoundersBtn(on: boolean): void {
   foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
   setBtn(foundersBtn, foundersOn, T_GREEN);
 }
+// Ongoing resource seeding. Off by default: the one-shot startup seed
+// (the "initial period") always runs regardless; turning this on
+// resumes periodic resource replenishment toward the cap afterward.
+let seedingOn = false;
+const seedingBtn = mkBtn(
+  "seeding off",
+  "Keep dumping resources periodically after the initial seed period (the initial period always happens; default off = closed system after startup)",
+);
+setBtn(seedingBtn, false, T_GREEN);
+seedingBtn.addEventListener("click", () => {
+  seedingOn = !seedingOn;
+  seedingBtn.textContent = seedingOn ? "seeding on" : "seeding off";
+  setBtn(seedingBtn, seedingOn, T_GREEN);
+  simWorker.postMessage({ type: "setSeeding", on: seedingOn });
+});
+function syncSeedingBtn(on: boolean): void {
+  if (on === seedingOn) return;
+  seedingOn = on;
+  seedingBtn.textContent = seedingOn ? "seeding on" : "seeding off";
+  setBtn(seedingBtn, seedingOn, T_GREEN);
+}
 let particleCap = 5000;
 const capWrap = document.createElement("div");
 capWrap.style.cssText =
@@ -1662,7 +1698,7 @@ capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
 capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
 renderCapLabel();
 capWrap.append(capTitle, capMinus, capValue, capPlus);
-gWorld.append(foundersBtn, capWrap);
+gWorld.append(foundersBtn, seedingBtn, capWrap);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density";
@@ -1738,30 +1774,37 @@ renderOverlayCollapsed();
 // measure real height so the world fit can reserve exactly that.
 function positionWorldButtons(): void {
   const panelW = analysisMinimized ? ANALYSIS_PANEL_W_MIN : analysisPanelW();
-  ctrlBar.style.left = `${leftPanelWidth()}px`;
+  const L = leftPanelWidth();
+  // Bottom-to-top stack: [toggle row] [controls] [archetypes]
+  // [overlay] [bottom HUD], then the world canvas above. A hidden
+  // panel measures 0 (display:none) and contributes nothing.
+  toggleBar.style.left = `${L}px`;
+  toggleBar.style.right = `${panelW}px`;
+  toggleBarH = Math.ceil(toggleBar.getBoundingClientRect().height) || 36;
+  // Controls panel: directly above the toggle row.
+  ctrlBar.style.left = `${L}px`;
   ctrlBar.style.right = `${panelW}px`;
-  controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 40;
-  // Overlay panel (now the lower of the two): bottom-right, right edge
-  // tracking the right slide-out, docked directly above ctrlBar.
-  overlayPanel.style.right = `${panelW}px`;
-  overlayPanel.style.bottom = `${controlsBarH}px`;
-  overlayPanelH = Math.ceil(overlayPanel.getBoundingClientRect().height) || 0;
-  // Bottom status strip: span the same gutter as ctrlBar, docked above
-  // the overlay panel so the two are stacked (HUD on top, overlay
-  // below) and neither overlaps ctrlBar.
-  bottomHud.style.left = `${leftPanelWidth()}px`;
-  bottomHud.style.right = `${panelW}px`;
-  bottomHud.style.bottom = `${controlsBarH + overlayPanelH}px`;
-  bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
-  // Archetypes panel: bottom-left, left edge tracking the left
-  // slide-out, stacked directly above the status strip so the bottom
-  // run is [arch panel][bottom HUD][overlay panel/ctrlBar].
-  archPanel.style.left = `${leftPanelWidth()}px`;
+  ctrlBar.style.bottom = `${toggleBarH}px`;
+  controlsBarH = Math.ceil(ctrlBar.getBoundingClientRect().height) || 0;
+  // Archetypes panel: above controls.
+  archPanel.style.left = `${L}px`;
   archPanel.style.right = `${panelW}px`;
-  archPanel.style.bottom = `${controlsBarH + overlayPanelH + bottomHudH}px`;
+  archPanel.style.bottom = `${toggleBarH + controlsBarH}px`;
   archPanelH = Math.ceil(archPanel.getBoundingClientRect().height) || 0;
+  // Overlay panel: above archetypes.
+  overlayPanel.style.left = `${L}px`;
+  overlayPanel.style.right = `${panelW}px`;
+  overlayPanel.style.bottom = `${toggleBarH + controlsBarH + archPanelH}px`;
+  overlayPanelH = Math.ceil(overlayPanel.getBoundingClientRect().height) || 0;
+  // Bottom status strip: the topmost of the bottom stack, directly
+  // under the world canvas.
+  bottomHud.style.left = `${L}px`;
+  bottomHud.style.right = `${panelW}px`;
+  bottomHud.style.bottom =
+    `${toggleBarH + controlsBarH + archPanelH + overlayPanelH}px`;
+  bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
   // Keep the status strip clear of the left slide-out's tab/panel.
-  hud.style.left = `${leftPanelWidth() + 8}px`;
+  hud.style.left = `${L + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
 }
 // The HUD grows/shrinks a line as its stats text wraps (longer sim
@@ -1774,7 +1817,8 @@ new ResizeObserver(() => {
   if (hudBarH !== prev) resize();
 }).observe(hud);
 function bottomReserveH(): number {
-  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0) + controlsBarH + overlayPanelH + bottomHudH + archPanelH;
+  return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0)
+    + toggleBarH + controlsBarH + archPanelH + overlayPanelH + bottomHudH;
 }
 
 

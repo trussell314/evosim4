@@ -1830,6 +1830,7 @@ export function createWorld(
     stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
     rxnStats: newRxnStats(),
     foundersEnabled: true,
+    ongoingSeeding: false,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveLineageRoots: new Set(),
@@ -4660,9 +4661,14 @@ function decayParticles(world: World, dt: number): void {
 }
 
 function replenishParticles(world: World, dt: number): void {
-  // Ramp worlds (production) do a one-shot startup seed only -- there
-  // is no continuous replenishment; once seeded the pool is fixed.
-  if (world.useSeedRamp) return;
+  // Ramp worlds (production) do a one-shot startup seed (the "initial
+  // period", always). Continuous replenishment afterward is opt-in via
+  // the UI "seeding" toggle: default off keeps the post-startup world
+  // closed; on resumes the periodic resource dump toward the cap once
+  // the startup seed has finished.
+  if (world.useSeedRamp && (!world.ongoingSeeding || !world.initialSeedDone)) {
+    return;
+  }
   // particleSpawnRate <= 0 disables ALL spawning (used by tests that
   // want a frozen world).
   if (world.particleSpawnRate <= 0) return;
@@ -7075,7 +7081,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:10:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:11:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -7151,6 +7157,8 @@ interface SavedWorld {
   particleTarget?: number;
   // Founder generation toggle. Absent (old saves) = enabled.
   foundersEnabled?: boolean;
+  // Ongoing resource-replenishment toggle. Absent (old saves) = off.
+  ongoingSeeding?: boolean;
   // Reaction / ATP accounting history. Optional: older saves restore
   // with a fresh empty accumulator.
   rxnStats?: SavedRxnStats;
@@ -7260,6 +7268,7 @@ export function serializeWorld(w: World): string {
     founderTarget: w.founderTarget,
     particleTarget: w.particleTarget,
     foundersEnabled: w.foundersEnabled,
+    ongoingSeeding: w.ongoingSeeding,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     atmosphere: { ...w.atmosphere },
@@ -7399,6 +7408,8 @@ export function applySavedWorld(world: World, json: string): boolean {
   }
   // Absent in older saves -> founders enabled (prior behavior).
   world.foundersEnabled = saved.foundersEnabled !== false;
+  // Absent in older saves -> ongoing seeding off (closed system).
+  world.ongoingSeeding = saved.ongoingSeeding === true;
   world.rxnStats = saved.rxnStats
     ? deserializeRxnStats(saved.rxnStats)
     : newRxnStats();
@@ -7628,6 +7639,8 @@ export interface RenderSnapshot extends WorldEnv {
   reactionTotals?: Int32Array;
   // Mirrors world.foundersEnabled so the UI toggle reflects loaded state.
   foundersEnabled?: boolean;
+  // Mirrors world.ongoingSeeding so the UI toggle reflects loaded state.
+  ongoingSeeding?: boolean;
   // Windowed reaction history (sparse) for the detail time-graph.
   rxnStatsHistory?: SavedRxnStats;
   // Optional per-phase timing. Mirrors world.profile when present.
@@ -7889,6 +7902,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
     foundersEnabled: world.foundersEnabled !== false,
+    ongoingSeeding: world.ongoingSeeding === true,
     profile: world.profile,
   };
 }
