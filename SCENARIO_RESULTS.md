@@ -57,3 +57,19 @@ genome/semantics mismatch; left unfixed per instruction.
 - Runs use CO₂/MIN chemostats; a fully-natural world (no mineral
   replenishment; `minerals` = NO SOURCE, env-uptake only at perm 0.1)
   is an untested open item for the no-INGEST autotrophs.
+
+## #4 forager (heterotroph) — nailed
+
+Scenario: biopolymer food chemostat (~1500 particles), ambient O2/MIN
+replete, no predators, founders off.
+
+- **30 → 110** (peak 208, then settled ~100 plateau), 655 births,
+  id-accounting closes exactly. Self-sustains + grows on replete food.
+- Not food/aa limited: with food replete, digestion produced an aa
+  *surplus* (mAA → 33, ambAA → ~60 excreted). Growth ceiling is
+  membrane-synthesis throughput (out[9]+out[11] vmax ≈1.4): mMem
+  stuck ~20, rarely past the 30 gate; mem-death dominant (323/551).
+- Watch item (not a survival flaw — it grows): membrane-synth is a
+  decay-driven-demand bottleneck the static analyzer can't size
+  (same class as mRNA). No engine change (non-fatal); logged only.
+- SimStats undercounts deaths by 24 here (id-accounting authoritative).
