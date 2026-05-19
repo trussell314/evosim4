@@ -167,3 +167,37 @@ Result (controlled vs prior collapse):
 Residual: slow LATE decline (~t480+) in BOTH farmer-solo and the
 tandem -- same root, 1/64 engulf still a marginal net drain over
 10min. Next single-variable: rarity period 64->128.
+
+## farmer + chloroplast -- internal-division gate tune (36 -> 45)
+
+chloro-symbiosis scenario (40 free chloroplasts + 40 farmer hosts,
+near-surface lit + permanent midday, CO2/MIN replete, biopolymer
+chemostat; engulfed chloroplast photosynthesises on host depth-light,
+leaks glucose to shared pool -- native transfer, no translocase).
+
+Pre-tune (chloroplast reproduceWhenGrown 36): engulfed-chloroplast
+bloom-and-kill. engSym up to 406, eng:host ~2.3-4.7 (runaway),
+mGLU 1500-11000 sustained flood, host pop violent thrash
+(peak 481 -> 200).
+
+Fix (genome-only): raise chloroplast internal-division gate to the
+mito-validated band, reproduceWhenGrown 36 -> 45.
+
+Result (controlled, identical scenario, single variable):
+- engSym peak 406 -> 136; eng:host runaway ~2.3-4.7 -> stable
+  ~1.4-1.8 (vs mito's ~0.2-0.7 -- still the eagerest plastid but no
+  longer blooming).
+- pop: crash to 9 by t180 -> steady recovery -> 125 (peak 170),
+  sustained through 600s (was violent peak-481->200 oscillation).
+- (a) sustained endosymbiosis MET: engSym persists continuously
+  t90->600 (83 inHost end, 33 hosts carrying); free chloroplast
+  also recovers (focal 67 end).
+- (b) tandem reproduction MET in stable phase (t>=240s): hosts and
+  engSym co-grow at steady ~1.4-1.8 ratio (hosts 9->58, engSym
+  16->83), no longer over-dividing.
+
+Residual (transient, not the targeted bloom): early overshoot --
+engulfed chloroplasts flood glucose t90-150 (mGLU ->8700, pop dips
+80->9) before host/symbiont ratio settles; from ~t240 it is a
+sustained tandem regime. The gate raise damped bloom-and-kill into
+a recover-and-sustain trajectory.
