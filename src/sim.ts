@@ -59,14 +59,10 @@ import {
   CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
   CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS,
   CHEM_CHEMORECEPTOR_FA, CHEM_CHEMORECEPTOR_MARKER0,
-  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-  CHEM_ACT_CHEMO_MINERALS_X, CHEM_ACT_CHEMO_MINERALS_Y,
-  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_FA_Y,
-  CHEM_ACT_CHEMO_MARKER0_X, CHEM_ACT_CHEMO_MARKER0_Y,
   CHEM_MECHANORECEPTOR, CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
   CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
-  CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
+  CHEM_BOND, CHEM_REPAIR,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
 export {
@@ -3390,25 +3386,10 @@ const VEL_TO_FORCE_GAIN = 0.5;    // velocity contribution to perceived mech
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
-// Chemoreceptor target order MUST match NAMED_CHEMICALS layout
-// (slot index 0..3). Used by runActivation to iterate the 4
-// per-target chemo activation passes.
-const CHEMO_TARGET_RECEPTORS: ReadonlyArray<number> = [
-  CHEM_CHEMORECEPTOR_BIOPOLYMER, CHEM_CHEMORECEPTOR_MINERALS,
-  CHEM_CHEMORECEPTOR_FA, CHEM_CHEMORECEPTOR_MARKER0,
-];
-const CHEMO_TARGET_CHEMS: ReadonlyArray<number> = [
-  CHEM_BIOPOLYMER, CHEM_MIN, CHEM_FA, CHEM_MARKER0,
-];
-const CHEMO_TARGET_ACT_X: ReadonlyArray<number> = [
-  CHEM_ACT_CHEMO_BIOPOLYMER_X, CHEM_ACT_CHEMO_MINERALS_X,
-  CHEM_ACT_CHEMO_FA_X, CHEM_ACT_CHEMO_MARKER0_X,
-];
-const CHEMO_TARGET_ACT_Y: ReadonlyArray<number> = [
-  CHEM_ACT_CHEMO_BIOPOLYMER_Y, CHEM_ACT_CHEMO_MINERALS_Y,
-  CHEM_ACT_CHEMO_FA_Y, CHEM_ACT_CHEMO_MARKER0_Y,
-];
-const _ACT_SCRATCH = new Float32Array(2);
+// Phase 5 retired the CHEMO branch of runActivation; the per-target
+// receptor/signal-chem arrays it iterated were deleted along with it.
+// CHEM_CHEMORECEPTOR_* and CHEM_ACT_CHEMO_*_X/Y ids remain in the
+// chem table (no renumber) but are no longer written.
 // `host` is set only for engulfed organelles. The penetrating physical
 // fields (PHOTO/THERMO/MAGNETO/MECH) are identical either way -- they
 // reach the organelle through the host's position. CHEMO differs: a
@@ -3454,31 +3435,16 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   const magR = cols[CHEM_MAGNETORECEPTOR][i];
   cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * MAG_FIELD_X * dt;
   cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * MAG_FIELD_Y * dt;
-  // CHEMO: 4 target-specific gradients. Skip targets the cell hasn't
-  // invested in -- gradients are spatial queries (cheap but not free).
-  const range = c.senseRange;
-  for (let t = 0; t < CHEMO_TARGET_RECEPTORS.length; t++) {
-    const recR = cols[CHEMO_TARGET_RECEPTORS[t]][i];
-    const ax = CHEMO_TARGET_ACT_X[t];
-    const ay = CHEMO_TARGET_ACT_Y[t];
-    if (recR <= 0) {
-      cols[ax][i] *= k;
-      cols[ay][i] *= k;
-      continue;
-    }
-    if (host) {
-      // Organelle: sense the host cytoplasm's concentration of the
-      // target chem (scalar, X slot). No spatial gradient inside a
-      // host, so Y just decays toward 0.
-      const hostConc = host.store.chemCols[CHEMO_TARGET_CHEMS[t]][host.idx];
-      cols[ax][i] = cols[ax][i] * k + recR * hostConc * dt;
-      cols[ay][i] = cols[ay][i] * k;
-      continue;
-    }
-    chemGradient(c.x, c.y, range, CHEMO_TARGET_CHEMS[t], _ACT_SCRATCH);
-    cols[ax][i] = cols[ax][i] * k + recR * _ACT_SCRATCH[0] * dt;
-    cols[ay][i] = cols[ay][i] * k + recR * _ACT_SCRATCH[1] * dt;
-  }
+  // Phase 5: the CHEMO branch (4 receptor-gated particle-gradient
+  // signals into CHEM_ACT_CHEMO_*_X/Y) is retired -- SENSE_OUT
+  // <chemId> reads the same chemGradient universally for any chem,
+  // with no SYNTH'd receptor required. The receptor + signal chem
+  // ids (CHEM_CHEMORECEPTOR_*, CHEM_ACT_CHEMO_*_X/Y) remain in the
+  // chem table at their existing ids to avoid renumbering ripple;
+  // their pools are simply no longer written, so they stay 0 unless
+  // a legacy lineage's bootstrap reaction (slots 15-18) still
+  // produces a trickle.
+  void host;
 }
 
 function diffuseAmbient(c: Creature, world: World, dt: number): void {
@@ -7254,7 +7220,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:17:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:18:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

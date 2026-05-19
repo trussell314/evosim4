@@ -262,9 +262,18 @@ the slot; INH_K=1, INH_SYNTH_VMAX=0.3, INH_ATP_COST=4,
 INH_DECAY_PER_SEC=0.005 (symmetric to CAT); SAVE_SCHEMA 16→17;
 golden unchanged; +2 unit tests — VM dispatch sets inhSynthMask
 parallel to catSynthMask, and end-to-end suppression of bootstrap
-synth_aa via SYNTH INH 4 vs a no-op control) · 5 retire receptor kinds /
-activated-chemo chems / SYNTH CHEMO (the only sense family
-SENSE_OUT actually subsumes; PHOTO/THERMO/MECH/MAG stay). **Phases 2, 3, 4 and 5 are
+synth_aa via SYNTH INH 4 vs a no-op control) · **5 retire chemo activation
+machinery — DONE** (chemo branch of runActivation deleted; the 4
+CHEMO_TARGET_* arrays gone; SYNTH CHEMO is a no-op in both genome
+dispatch switches [SYNTH_KIND_COUNT kept at 17 for mutation-byte
+stability]; archetypes' `SYNTH CHEMO + climbGradient(CHEM_ACT_CHEMO_*)`
+migrated to a single `climbParticleGradient(CHEM_BIOPOLYMER, gain)`
+that uses SENSE_OUT; scenario.ts foragerProg + TEST_DEFAULT_GENOME
+mirrored; two now-orphan K-3 chemo activation tests removed; the
+chemo receptor + activated-chemo signal chem ids stay in the chem
+table to avoid renumber ripple; PHOTO/THERMO/MECH/MAG untouched as
+designed; SAVE_SCHEMA 17→18; golden f4525ec8→b434c6c9; forager/
+benthic/vent/predator/armored all viable). **Phases 2, 3, 4 and 5 are
 ALL behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +
 explicit mass/RNG-order handling) — but Phase 4 is one scoped gate
 decision, not a multi-slot tangle. Every

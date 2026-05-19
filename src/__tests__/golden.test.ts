@@ -100,7 +100,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
     // unchanged. Determinism (same-seed-identical) still green;
     // mass-conservation green; SAVE_SCHEMA bumped 11->12.
-    // Bumped (Phase 4a, op redesign): the synthMask enable-gate path
+    // Bumped (Phase 5, op redesign): chemo activation branch retired
+    // (CHEMO receptor + activated-chemo signal chems no longer
+    // written by runActivation; SYNTH CHEMO is a no-op kept for
+    // SYNTH_KIND_COUNT stability). Archetypes' SYNTH CHEMO +
+    // SENSE_CHEMICAL CHEM_ACT_CHEMO_*_X/Y patterns migrated to a
+    // direct SENSE_OUT <CHEM_BIOPOLYMER> particle-gradient read
+    // (via the new climbParticleGradient helper). SAVE_SCHEMA
+    // 17->18; mass-conservation green.
+    // (prev) Bumped (Phase 4a, op redesign): the synthMask enable-gate path
     // is retired. Named bootstrap reactions ran only when the genome
     // had set the corresponding SYNTH_BIT_* via a SYNTH op; now they
     // run unconditionally on their existing uncatRate floor. Every
@@ -108,7 +116,7 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // become no-ops (their synthMask bits are no longer consulted
     // by the reaction loop). Intended behavior change; SAVE_SCHEMA
     // 15->16; mass-conservation green.
-    const GOLDEN = "f4525ec8";
+    const GOLDEN = "b434c6c9";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

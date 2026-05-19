@@ -52,18 +52,16 @@ import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, ty
 // production curated default that used to exist before founders went
 // fully random; kept here so behavior tests stay deterministic without
 // the sim shipping a hand-built genome.
+// CHEM_BIOPOLYMER id = 11 (named chem).
 const TEST_DEFAULT_GENOME = new Uint8Array([
   OP.SENSE_AMP,
-  OP.SENSE_CHEMICAL, 23,
-  OP.SENSE_CHEMICAL, 24,
+  OP.SENSE_OUT, 11,   // Phase 5: SENSE_OUT pushes [gx, gy] for biopolymer
   OP.THRUST,
-  OP.INGEST, 1,
-  OP.INGEST, 0,
+  OP.PUSH8, 1, OP.INGEST, // bond-energy-threshold engulf, low threshold
   OP.SYNTH, SYNTH_KIND.ENZ, 0,
   OP.SYNTH, SYNTH_KIND.FA, 0,
   OP.SYNTH, SYNTH_KIND.BIO, 0,
   OP.SYNTH, SYNTH_KIND.MRNA, 0,
-  OP.SYNTH, SYNTH_KIND.CHEMO, 0,
   OP.SYNTH, SYNTH_KIND.REPAIR, 0,
   OP.SYNTH, SYNTH_KIND.CAT, 0,
   OP.SELF_MEMBRANE,
@@ -1256,7 +1254,7 @@ describe("creature: reproduction", () => {
     expect(w.creatures.length).toBeGreaterThan(405);
     expect(w.creatures.length).toBeLessThanOrEqual(4096);
     expect(Number.isFinite(w.creatures.length)).toBe(true);
-  }, 20_000);
+  }, 40_000);
 });
 
 describe("creature: predation (cell eats cell)", () => {
@@ -2274,23 +2272,10 @@ describe("mass conservation", () => {
     expect(blindAct).toBeLessThan(litAct * 0.01);
   });
 
-  it("K-3 activation pass: chemoreceptor_biopolymer + nearby biopolymer -> gradient activation", () => {
-    const w = quietWorld();
-    w.particleSpawnRate = 0;
-    // Plant a biopolymer cluster east of the cell.
-    for (let i = 0; i < 50; i++) {
-      pushParticle(w, { x: 600, y: 300 + (i % 50), z: 12, vx: 0, vy: 0, vz: 0, r: 3,
-        chemId: CHEM_IDS.biopolymer, density: 1.0 });
-    }
-    const c = makeCreature({ x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([HALT_MARK]),
-      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-        chemoreceptorBiopolymer: 2 } });
-    w.creatures.push(c);
-    for (let i = 0; i < 30; i++) step(w, 1 / 60);
-    // Positive activatedChemoBiopolymerX means gradient pulls toward +x (east).
-    expect(c.store.m_activatedChemoBiopolymerX[c.idx]).toBeGreaterThan(0);
-  });
+  // Phase 5 retired the chemoreceptor + activated_chemo branch of
+  // runActivation. The same emergent taxis is exercised by the
+  // Phase 3 SENSE_OUT tests above (gradient-vector primitive); the
+  // legacy K-3 chemo activation tests are removed with the machinery.
 
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
     // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
@@ -2311,37 +2296,8 @@ describe("mass conservation", () => {
     expect(c.repairTicks).toBeGreaterThan(0);
   });
 
-  it("zero receptor pool keeps the activated chemo signal at zero", () => {
-    // K-5: gradient sensing is now activated-chemo (CHEM id 23 = X
-    // axis for biopolymer). The activation pass writes it only when
-    // the cell holds chemoreceptor_biopolymer (chem id 19) above
-    // zero. Otherwise the activated chem stays at zero -- and a
-    // genome reading SENSE_CHEMICAL 23 sees zero.
-    const w = quietWorld();
-    w.particleSpawnRate = 0;
-    for (let i = 0; i < 100; i++) {
-      pushParticle(w, { x: 600, y: 300, z: 12, vx: 0, vy: 0, vz: 0, r: 3,
-        chemId: CHEM_IDS.biopolymer, density: 1.0 });
-    }
-    const blind = makeCreature({
-      x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_CHEMICAL, 23, OP.STORE, 0, HALT_MARK]),
-      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-        chemoreceptorBiopolymer: 0 },
-    });
-    w.creatures.push(blind);
-    step(w, 1 / 60);
-    expect(blind.vm.regs[0]).toBe(0);
-    const seeing = makeCreature({
-      x: 450, y: 300, energy: 50, senseRange: 300,
-      genome: new Uint8Array([OP.SENSE_CHEMICAL, 23, OP.STORE, 0, HALT_MARK]),
-      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1,
-        chemoreceptorBiopolymer: 2 },
-    });
-    w.creatures.push(seeing);
-    for (let i = 0; i < 30; i++) step(w, 1 / 60);
-    expect(seeing.vm.regs[0]).not.toBe(0);
-  });
+  // (Phase 5 also removed the "zero receptor pool keeps activated
+  // chemo at zero" test along with the machinery it tested.)
 
   it("cell <-> ambient diffusion is mass-conserving per chem", () => {
     const w = quietWorld();

@@ -508,7 +508,11 @@ export function runTick(
           case SYNTH_KIND.CHL:    out.synthMask |= 1 << SYNTH_BIT_CHL; break;
           case SYNTH_KIND.MRNA:   out.synthMask |= 1 << SYNTH_BIT_MRNA; break;
           case SYNTH_KIND.PHOTO:  out.synthMask |= 1 << (SYNTH_BIT_PHOTO_BASE + (param % 3)); break;
-          case SYNTH_KIND.CHEMO:  out.synthMask |= 1 << (SYNTH_BIT_CHEMO_BASE + (param % 4)); break;
+          // Phase 5: SYNTH CHEMO is a no-op. Chemo receptor sense
+          // collapsed into the universal SENSE_OUT <chemId> op; this
+          // case is kept so SYNTH_KIND_COUNT stays stable for the
+          // mutation-byte distribution.
+          case SYNTH_KIND.CHEMO:  break;
           case SYNTH_KIND.MECH:   out.synthMask |= 1 << SYNTH_BIT_MECH; break;
           case SYNTH_KIND.THERMO: out.synthMask |= 1 << SYNTH_BIT_THERMO; break;
           case SYNTH_KIND.MAGNETO: out.synthMask |= 1 << SYNTH_BIT_MAGNETO; break;
@@ -1033,10 +1037,8 @@ export function genomeSynthMask(genome: Uint8Array): number {
       case SYNTH_KIND.PHOTO:
         mask |= (1 << SYNTH_BIT_PHOTO_BASE) | (1 << (SYNTH_BIT_PHOTO_BASE + 1)) | (1 << (SYNTH_BIT_PHOTO_BASE + 2));
         break;
-      case SYNTH_KIND.CHEMO:
-        mask |= (1 << SYNTH_BIT_CHEMO_BASE) | (1 << (SYNTH_BIT_CHEMO_BASE + 1))
-              | (1 << (SYNTH_BIT_CHEMO_BASE + 2)) | (1 << (SYNTH_BIT_CHEMO_BASE + 3));
-        break;
+      // Phase 5: SYNTH CHEMO is a no-op; see runtime switch.
+      case SYNTH_KIND.CHEMO: break;
       case SYNTH_KIND.MECH:    mask |= 1 << SYNTH_BIT_MECH; break;
       case SYNTH_KIND.THERMO:  mask |= 1 << SYNTH_BIT_THERMO; break;
       case SYNTH_KIND.MAGNETO: mask |= 1 << SYNTH_BIT_MAGNETO; break;

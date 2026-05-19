@@ -18,11 +18,10 @@
 import { asm, assertWellFormed, type Instr } from "./genome-asm";
 import {
   CHEM_ACT_PHOTO_VISIBLE,
-  CHEM_ACT_CHEMO_BIOPOLYMER_X,
-  CHEM_ACT_CHEMO_BIOPOLYMER_Y,
   CHEM_ACT_THERMO,
   CHEM_ACT_MAG_X,
   CHEM_ACT_MAG_Y,
+  CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
   CHEM_WASTE,
@@ -95,6 +94,22 @@ function climbGradient(xChem: number, yChem: number, gain: number): Instr[] {
     ["SENSE_CHEMICAL", yChem],
     ["PUSH8", gain],
     ["MUL"],
+    ["THRUST"],
+  ];
+}
+
+// Climb the spatial gradient of a chem's PARTICLE field directly,
+// no SYNTH'd receptor required. SENSE_OUT pushes [gx, gy]; scale
+// both by gain then THRUST. The post-Phase-5 detritus/food-tropism
+// helper -- replaces climbGradient + the chemoreceptor + activation
+// pass machinery for chem particles.
+function climbParticleGradient(chemId: number, gain: number): Instr[] {
+  return [
+    ["SENSE_OUT", chemId],   // stack: [gx, gy]
+    ["PUSH8", gain], ["MUL"], // [gx, gy*gain]
+    ["SWAP"],                 // [gy*gain, gx]
+    ["PUSH8", gain], ["MUL"], // [gy*gain, gx*gain]
+    ["SWAP"],                 // [gx*gain, gy*gain]
     ["THRUST"],
   ];
 }
@@ -174,13 +189,8 @@ function build(): Archetype[] {
       desc: "Honest baseline heterotroph: chemoreceptor for bulk organic, climbs the food gradient, ingests, digests, divides on reserve.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ...reproduceWhenGrown(30, "np"),
       ],
     },
@@ -191,13 +201,8 @@ function build(): Archetype[] {
       desc: "Roaming predator: climbs the bulk-organic gradient into food/prey-dense regions (prey don't emit a marker to home on), ingests to bulk up past the predation size gate, and PREDATEs on contact.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          40,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 40),
         ["PREDATE"],
         ...reproduceWhenGrown(36, "np"),
       ],
@@ -214,13 +219,8 @@ function build(): Archetype[] {
         ["SYNTH", "BIO", 0],
         ["SYNTH", "BIO", 0],
         ["SYNTH", "BIO", 0],
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          12,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 12),
         ...reproduceWhenGrown(80, "np"),
       ],
     },
@@ -232,13 +232,8 @@ function build(): Archetype[] {
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "BOND", 7], // marker tag 7, inherited by the clone
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ...reproduceWhenGrown(30, "np"),
       ],
     },
@@ -273,13 +268,8 @@ function build(): Archetype[] {
       desc: "Seed: heterotroph that climbs into organic/prey-dense regions and engulfs RARELY (a persistent register counter gates ENGULF to ~1/127 VM passes). SELF_ENERGY gating was ineffective -- realized ATP (~165-250) is far above any sane threshold, so engulf fired unconditionally and the lineage cannibalised itself to collapse (farmer-solo 30->9 vs near-identical engulf-less forager 30->110). A rarity gate caps the kin-cannibalism rate below the reproduction rate so the host self-sustains, while engulf/farming still occurs (tandem). Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          35,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 35),
         // Rarity-gated ENGULF (register oscillator, bet-hedger
         // pattern). reg0 persists across ticks; engulf only when
         // reg0 % 127 == 0 -> ~1/127 of passes, regardless of ATP. This
@@ -359,13 +349,8 @@ function build(): Archetype[] {
       desc: "Heritable size plasticity: SPLICE_DUP an inert trailing cassette when ATP is low (amplify), SPLICE_DEL it when fat (streamline). Splices only ever touch the appended NOP cassette, never the functional head.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         // Splice offset = CASSETTE_OFF, the start of the trailing NOP
         // cassette (must stay >= the end of the reproduce gate; tracks
         // genome layout -- recompute if the head changes).
@@ -396,13 +381,8 @@ function build(): Archetype[] {
       desc: "Non-genetic switching: a register oscillator drives POKE_BYTE to rewrite a byte of its own genome, toggling phenotype across ticks.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["LOAD", 0],
         ["PUSH8", 1],
         ["ADD"],
@@ -422,13 +402,8 @@ function build(): Archetype[] {
       desc: "Chemical warfare: aggressively excretes waste + CO2 to push local ambient over toxify thresholds and damage neighbours.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["PUSH8", 50],
         ["EXCRETE", CHEM_WASTE],
         ["PUSH8", 50],
@@ -443,13 +418,8 @@ function build(): Archetype[] {
       desc: "Emits a marker0 plume every tick: substrate for emergent aggregation, trail-following, luring and quorum-like behavior in other lineages.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          30,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["PUSH8", 30],
         ["EXCRETE", CHEM_MARKER0],
         ...reproduceWhenGrown(34, "np"),
@@ -486,13 +456,8 @@ function build(): Archetype[] {
       desc: "Sea-floor decomposer: chemotaxes the settled bulk-organic (marine-snow detritus that sinks and pools on the floor), ingests it, runs heterotroph synthesis, and excretes metabolic CO2 back into the medium. Benthic position is emergent (follows sinking food), not scripted.",
       prog: [
         ...HET_SYNTH,
-        ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
         ["PUSH8", ING_DETRITUS], ["INGEST"],
-        ...climbGradient(
-          CHEM_ACT_CHEMO_BIOPOLYMER_X,
-          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
-          12,
-        ),
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 12),
         ["SENSE_CHEMICAL", CHEM_CO2], // own CO2 pool -> excretion amount
         ["EXCRETE", CHEM_CO2],
         ...reproduceWhenGrown(30, "np"),

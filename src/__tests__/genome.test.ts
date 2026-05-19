@@ -27,7 +27,6 @@ import {
   SYNTH_BIT_CHL,
   SYNTH_BIT_MRNA,
   SYNTH_BIT_PHOTO_BASE,
-  SYNTH_BIT_CHEMO_BASE,
   SYNTH_BIT_MECH,
   SYNTH_BIT_THERMO,
   SYNTH_BIT_MAGNETO,
@@ -680,10 +679,9 @@ describe("VM op coverage: every defined op", () => {
           .toBe(1 << (SYNTH_BIT_PHOTO_BASE + (p % 3)));
       }
     });
-    it("CHEMO param selects the target bit (param % 4)", () => {
+    it("CHEMO is a Phase-5 no-op (subsumed by SENSE_OUT <chemId>)", () => {
       for (let p = 0; p < 6; p++) {
-        expect(exec([OP.SYNTH, SYNTH_KIND.CHEMO, p, HALT_MARK]).out.synthMask)
-          .toBe(1 << (SYNTH_BIT_CHEMO_BASE + (p % 4)));
+        expect(exec([OP.SYNTH, SYNTH_KIND.CHEMO, p, HALT_MARK]).out.synthMask).toBe(0);
       }
     });
     it("CAT routes to catSynthMask, not synthMask (param = slot)", () => {

@@ -34,8 +34,6 @@ import {
   NAMED_CHEMICAL_COUNT,
   CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_THERMO,
-  CHEM_ACT_CHEMO_BIOPOLYMER_X,
-  CHEM_ACT_CHEMO_BIOPOLYMER_Y,
 } from "../src/sim/chem-ids";
 
 // === Phase 1: abiotic energy landscape =============================
@@ -165,14 +163,13 @@ function foragerProg(gate: number): Instr[] {
     ["SYNTH", "FA", 0],
     ["SYNTH", "ENZ", 0],
     ["SYNTH", "AA", 0],
-    ["SYNTH", "CHEMO", 0],
     ["PUSH8", 1], ["INGEST"],
-    ["SENSE_CHEMICAL", CHEM_ACT_CHEMO_BIOPOLYMER_X],
-    ["PUSH8", 30],
-    ["MUL"],
-    ["SENSE_CHEMICAL", CHEM_ACT_CHEMO_BIOPOLYMER_Y],
-    ["PUSH8", 30],
-    ["MUL"],
+    // climbParticleGradient(CHEM_BIOPOLYMER, 30) expansion
+    ["SENSE_OUT", CHEM_BIOPOLYMER],
+    ["PUSH8", 30], ["MUL"],
+    ["SWAP"],
+    ["PUSH8", 30], ["MUL"],
+    ["SWAP"],
     ["THRUST"],
     ["SELF_MEMBRANE"],
     ["PUSH8", gate],
