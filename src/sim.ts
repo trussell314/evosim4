@@ -5502,6 +5502,42 @@ function updateCreatures(world: World, dt: number): void {
       }
     }
 
+    // VM-controlled facilitated transport. TRANSPORT <chemId> moves
+    // a chem across the cell<->world membrane DOWN its gradient only
+    // (v1: no active/uphill pumping, no ATP). Mass-exact: chem moves
+    // 1:1 between the cell pool and the region ambient field (the
+    // same ledger excretion / diffusion use). Deterministic (no rng).
+    // Unlocks acquisition of dissolved generics (permeability 0) that
+    // passive diffusion cannot move.
+    {
+      const cols = c.store.chemCols;
+      const ci = c.idx;
+      const tr = vmOut.transport;
+      const ambient = world.ambient;
+      const ab = ambientBaseAt(world, c.x, c.y);
+      for (let chemId = 0; chemId < CHEMICAL_COUNT; chemId++) {
+        const req = tr[chemId];
+        if (req === 0) continue;
+        const ak = ab + chemId;
+        const inside = cols[chemId][ci];
+        const gap = ambient[ak] - inside; // >0 favors import, <0 export
+        if (gap === 0) continue;
+        let flow: number; // applied to the cell pool (+ = into cell)
+        if (req > 0) {
+          if (gap <= 0) continue; // uphill import -> v1 forbids
+          flow = Math.min(req, gap * 0.5); // cap at no-overshoot point
+        } else {
+          if (gap >= 0) continue; // uphill export -> v1 forbids
+          flow = -Math.min(-req, -gap * 0.5);
+        }
+        if (flow > 0) { if (flow > ambient[ak]) flow = ambient[ak]; }
+        else { if (-flow > inside) flow = -inside; }
+        if (flow === 0) continue;
+        cols[chemId][ci] += flow;
+        ambient[ak] -= flow;
+      }
+    }
+
     if (c.ingestCooldown > 0) {
       c.ingestCooldown = Math.max(0, c.ingestCooldown - dt);
     }
@@ -7081,7 +7117,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:11:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:12:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

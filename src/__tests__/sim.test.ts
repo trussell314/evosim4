@@ -869,6 +869,46 @@ describe("creature: ingestion cost and cooldown", () => {
   });
 });
 
+describe("TRANSPORT op (Phase 2a-i: facilitated, down-gradient, v1)", () => {
+  const GEN = 46; // first generic chem id (NAMED_CHEMICAL_COUNT)
+  function setAmb(w: World, chem: number, v: number): void {
+    for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) {
+      w.ambient[b + chem] = v;
+    }
+  }
+  it("imports a chem down-gradient, mass-exact", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({
+      energy: 50,
+      genome: new Uint8Array([OP.PUSH8, 60, OP.TRANSPORT, GEN]),
+    });
+    w.creatures.push(c);
+    setAmb(w, GEN, 20);
+    c.store.chemCols[GEN][c.idx] = 0;
+    const total0 = ambTotal(w, GEN) + c.store.chemCols[GEN][c.idx];
+    step(w, 0.001);
+    const cell1 = c.store.chemCols[GEN][c.idx];
+    expect(cell1).toBeGreaterThan(0); // imported via TRANSPORT
+    expect(Math.abs(ambTotal(w, GEN) + cell1 - total0)).toBeLessThan(1e-3);
+  });
+  it("does not import uphill in v1 (cell richer than ambient)", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({
+      energy: 50,
+      genome: new Uint8Array([OP.PUSH8, 60, OP.TRANSPORT, GEN]),
+    });
+    w.creatures.push(c);
+    setAmb(w, GEN, 0);
+    c.store.chemCols[GEN][c.idx] = 30;
+    const cell0 = c.store.chemCols[GEN][c.idx];
+    step(w, 0.001);
+    // v1 forbids uphill import; nothing else produces GEN here.
+    expect(c.store.chemCols[GEN][c.idx]).toBeLessThanOrEqual(cell0 + 1e-9);
+  });
+});
+
 describe("creature: ingestion (basic)", () => {
   it("absorbs a particle inside the cell radius", () => {
     const w = quietWorld();

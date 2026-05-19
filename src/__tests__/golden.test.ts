@@ -86,7 +86,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // build -> generic chem properties shift (intended). genome ABI
     // unchanged (CHEMICAL_COUNT stays 96); determinism byte-identical
     // + mass-conservation re-verified green; SAVE_SCHEMA bumped.
-    const GOLDEN = "11f0b56b";
+    // Bumped (Phase 2a-i, op redesign): added the TRANSPORT opcode
+    // (0x56). OP_BYTES auto-derives from Object.values(OP), so a new
+    // opcode shifts randMutByte's op/noop draw distribution -> every
+    // seeded lineage's mutated bytes change (intended, the whole
+    // point of the new op being reachable by mutation). genome ABI
+    // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
+    // unchanged. Determinism (same-seed-identical) still green;
+    // mass-conservation green; SAVE_SCHEMA bumped 11->12.
+    const GOLDEN = "22e020e8";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

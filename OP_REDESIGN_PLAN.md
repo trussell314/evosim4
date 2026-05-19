@@ -217,8 +217,13 @@ non-uniform-namespace tension is eliminated rather than flagged.
 
 ## Phase sequence
 
-0 scaffold · **1 abiotic source — DONE** · 2 acquisition (INGEST
-resolution + `TRANSPORT`) · 3 `SENSE_OUT` (gradient-vector
+0 scaffold · **1 abiotic source — DONE** · 2 acquisition:
+**2a-i `TRANSPORT` facilitated/down-gradient/no-ATP — DONE**
+(opcode 0x56, signed `out.transport`, mass-exact applier, golden
+re-baselined 11f0b56b→22e020e8, SAVE_SCHEMA 11→12, +2 unit tests) ·
+2a-ii `TRANSPORT` active/uphill + ATP cost + no-free-energy property
+test · 2b INGEST → bond-energy-threshold engulf (migrate archetypes)
+· 3 `SENSE_OUT` (gradient-vector
 primitive) · 4 retire the `synthMask` enable-gate path; `CATALYST`
 becomes the sole paid lever; ONE decision: keep or drop the
 "declare the pathway" gate (free floor already in `uncatRate`) ·

@@ -53,6 +53,13 @@ export const OP = {
   PREDATE:       0x53,
   TURN:          0x54,
   ENGULF:        0x55,
+  // TRANSPORT <chemId>: pop a signed amount (+ import from ambient,
+  // - export to ambient); facilitated down-gradient flux of ANY chem
+  // across the cell<->world membrane. Lets a genome acquire/dump
+  // dissolved chems that passive permeability can't move (generics
+  // are permeability 0). v1 is facilitated only (down-gradient,
+  // mass-exact, no ATP); active uphill pumping is a later sub-step.
+  TRANSPORT:     0x56,
 
   INGEST:        0x5E,
   SENSE_AMP:     0x64,
@@ -164,6 +171,7 @@ OPERANDS[OP.JMP] = 1;
 OPERANDS[OP.JZ] = 1;
 OPERANDS[OP.JNZ] = 1;
 OPERANDS[OP.EXCRETE] = 1;
+OPERANDS[OP.TRANSPORT] = 1;
 OPERANDS[OP.INGEST] = 1;
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
@@ -262,6 +270,9 @@ export interface VMOutputs {
   // applies this after the VM runs by rotating the cell's velocity vector.
   turn: number;
   excrete: Float32Array;
+  // Signed per-chem membrane-flux request: + import from ambient,
+  // - export. Sized to the full chem table (TRANSPORT <chemId>).
+  transport: Float32Array;
   reproduce: boolean;
   // Parent's share of mass after fission. Set by REPRODUCE from the
   // stack-top value, clamped to [0.1, 0.9]; out-of-range / NaN / empty
@@ -316,6 +327,7 @@ export function newOutputs(): VMOutputs {
     // EXCRETE was widened to take operand mod CHEMICAL_COUNT, so the
     // per-tick excretion request is sized to the full chem table.
     excrete: new Float32Array(CHEMICAL_COUNT),
+    transport: new Float32Array(CHEMICAL_COUNT),
     reproduce: false, reproduceFraction: 0.4,
     predate: false, engulf: false,
     ingestMaterials: new Uint8Array(6),
@@ -348,6 +360,7 @@ export function runTick(
   out.thrustY = 0;
   out.turn = 0;
   out.excrete.fill(0);
+  out.transport.fill(0);
   out.reproduce = false;
   // Parent keeps 40%, child gets 60%. Skewed in favor of the newborn
   // because the parent has had time to build reserves and can rebuild
@@ -521,6 +534,13 @@ export function runTick(
         // chems the old m6-mask restricted them to.
         const idx = genome[state.pc % L] % CHEMICAL_COUNT; state.pc++;
         out.excrete[idx] += Math.max(0, vmPop(stack));
+        break;
+      }
+      case OP.TRANSPORT: {
+        // Operand = chem id (mod CHEMICAL_COUNT). Stack value is
+        // SIGNED: positive imports from ambient, negative exports.
+        const idx = genome[state.pc % L] % CHEMICAL_COUNT; state.pc++;
+        out.transport[idx] += vmPop(stack);
         break;
       }
       case OP.REPRODUCE: {
