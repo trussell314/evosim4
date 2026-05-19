@@ -24,11 +24,11 @@ import {
   CHEM_ACT_MAG_X,
   CHEM_ACT_MAG_Y,
   CHEM_GLU,
-  CHEM_AA,
   CHEM_CO2,
   CHEM_WASTE,
   CHEM_MARKER0,
 } from "./sim/chem-ids";
+import { TRANSPORT_ATP_SLOT } from "./sim/reactions";
 
 // INGEST material slots are the 6 legacy sensor bins, order
 // [minerals, biopolymer, fa, o2, co2, glu]; bulk organic / generic
@@ -307,25 +307,19 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: PROVISIONING endosymbiont (mitochondria-faithful within engine limits). Minimal soma, low membrane (cheap to engulf), marker0 engulf-lure. Ingests + digests host-pool biopolymer (ENZ) and O2, then EXCRETEs the usable products -- glucose (energy substrate the host respires) + amino acid (host's chronic growth limiter) -- back into the shared host pool, plus CO2. So a host carrying it is energetically + materially SUBSIDISED: it gains usable energy/building-blocks from the symbiont (the mitochondrial hallmark). Literal ATP export is engine-forbidden (energy is intracellular); glucose+aa export is the faithful substrate analog, not a scripted hand-off. Slow internal division (gate 45) keeps it roughly proportional to host fission (tandem).",
+      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion, Path 2). Minimal soma, low membrane (cheap to engulf), marker0 engulf-lure. Ingests + digests host-pool biopolymer (ENZ) + O2, RESPIRES internally (out[0]: glu+O2 -> CO2 + ATP), and exports the ATP to the host via a SYNTH'd ATP TRANSLOCASE (ANT analog, SYNTH CAT param=TRANSPORT_ATP_SLOT) across the vacuolar membrane -- the real mitochondrial mechanism, now that energy can cross. Returns CO2 to the shared pool. Slow internal division (gate 45) keeps it roughly proportional to host fission (tandem). The translocase is facilitated/down-gradient, so ATP flows organelle->host only while the mito is respiration-rich -- emergent, not a scripted hand-off.",
       prog: [
         ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
         ["SYNTH", "MRNA", 0],
         ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0], // digests host-pool biopolymer
+        ["SYNTH", "ENZ", 0], // digests host-pool biopolymer -> glu
         ["SYNTH", "AA", 0],
+        ["SYNTH", "CAT", TRANSPORT_ATP_SLOT], // build the ATP translocase (ANT)
         ["INGEST", ING_BIOPOLYMER], // substrate from the host pool
         ["INGEST", ING_O2], // electron acceptor (respiration)
         ["THRUST"], // drift to a host during the free-living phase
-        // Provisioning exports: return the digestion/respiration
-        // products to the host so carrying the symbiont is a net
-        // energy + building-block subsidy (mitochondrial hallmark).
-        ["PUSH8", 30],
-        ["EXCRETE", CHEM_GLU], // energy substrate -> host respires it
-        ["PUSH8", 12],
-        ["EXCRETE", CHEM_AA], // host's chronic growth limiter
         ["PUSH8", 8],
-        ["EXCRETE", CHEM_CO2], // respiration waste
+        ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
         // 18 -> 45: slow division. One lever fixes two failures --
