@@ -513,7 +513,52 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
       topUpBiopolymer(w, 1500);
     },
-    report: () => mitoReport(),
+    report: () => symReport(),
+  },
+
+  // #8 chloroplast SEPARATE-spawn symbiosis: 40 free chloroplasts +
+  // 40 farmer hosts, NEAR-SURFACE + permanent midday so light reaches
+  // both free chloroplasts AND engulfed plastids (runInnerCell uses
+  // the host's depth-light). Ambient CO2/MIN replete (chloroplast
+  // photosynthesis substrate) + biopolymer chemostat (the heterotroph
+  // farmer host's food). Glucose is a native transferable chem, so an
+  // engulfed chloroplast's leaked glu enters the shared host pool with
+  // no ATP-translocase analog. Watches whether the host engulfs the
+  // plastid + gains carbon + sustains tandem while it stays lit.
+  "chloro-symbiosis": {
+    id: "chloroplast",
+    count: 40,
+    coStock: [{ id: "farmer", count: 40 }],
+    describe:
+      "SEPARATE: 40 free chloroplasts + 40 farmer hosts, NEAR-SURFACE " +
+      "(lit) + permanent midday, ambient CO2=50/MIN=50 + biopolymer " +
+      "chemostat ~1500 (farmer food). Engulfed chloroplast photo-" +
+      "synthesises on host depth-light and leaks glu to the shared " +
+      "pool (native transfer, no translocase). report: symReport.",
+    setup: (w, cells, coStock) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      // keep BOTH lineages in the lit near-surface band so the
+      // plastid (free or engulfed-via-host-depth) actually fixes C.
+      const place = (arr: Cre[], spread: number): void => {
+        for (let k = 0; k < arr.length; k++) {
+          arr[k].y = surfaceY + 5 + (k % spread) * 3;
+          arr[k].x = w.width * (0.06 + 0.88 * ((k + 0.5) / arr.length));
+        }
+      };
+      place(cells, 8);
+      place(coStock, 8);
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    report: () => symReport(),
   },
 
   // #11 mitochondria, scenario B: PRE-ENGULFED. Each host starts with
@@ -559,7 +604,7 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
       topUpBiopolymer(w, 1500);
     },
-    report: () => mitoReport(),
+    report: () => symReport(),
   },
 };
 
@@ -688,7 +733,11 @@ function engMitoEnclosure(): { inHost: number; inMito: number; inOther: number }
   return { inHost, inMito, inOther };
 }
 
-function mitoReport(): string {
+// Generic symbiosis report (works for any focal symbiont +
+// co-stocked host -- mito or chloroplast). "Sym" not "Mito" for
+// accuracy. inSym = symbiont enclosed by a symbiont-lineage cell
+// (the post-host-extinction contents-promotion edge, flagged).
+function symReport(): string {
   const hosts = nFree(coStockRoots);
   const freeM = nFree(focalRoots);
   const engM = nEngulfed(focalRoots);
@@ -697,10 +746,10 @@ function mitoReport(): string {
   const e = engMitoEnclosure();
   return (
     `hosts=${String(hosts).padStart(3)} ` +
-    `freeMito=${String(freeM).padStart(4)} ` +
-    `engMito=${String(engM).padStart(4)} ` +
-    `[inHost=${e.inHost} inMito=${e.inMito} inOther=${e.inOther}] ` +
-    `hostsW/Mito=${String(hostsW).padStart(3)} ` +
+    `freeSym=${String(freeM).padStart(4)} ` +
+    `engSym=${String(engM).padStart(4)} ` +
+    `[inHost=${e.inHost} inSym=${e.inMito} inOther=${e.inOther}] ` +
+    `hostsW/Sym=${String(hostsW).padStart(3)} ` +
     `eng:host=${ratio}`
   );
 }

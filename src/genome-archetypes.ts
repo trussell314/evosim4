@@ -471,6 +471,7 @@ function build(): Archetype[] {
   // genomes verbatim.
   const farmer = built.find((a) => a.id === "farmer")!;
   const mito = built.find((a) => a.id === "mitochondria")!;
+  const chloro = built.find((a) => a.id === "chloroplast")!;
   built.push({
     id: "farmer-mito",
     label: "farmer+mito",
@@ -478,6 +479,14 @@ function build(): Archetype[] {
     desc: "Seed: a farmer HOST spawned with a mitochondrion already engulfed in its contents (a pre-formed endosymbiotic unit). The host gets a membrane/energy head start so the relative sizes keep it viable for a time; the mito respires internally and exports ATP via its translocase. Watch whether the pairing persists + reproduces in tandem (host fission partitions the symbiont to daughters).",
     genome: farmer.genome,
     symbiont: mito.genome,
+  });
+  built.push({
+    id: "farmer-chloroplast",
+    label: "farmer+chloro",
+    cls: "seed",
+    desc: "Seed: a farmer HOST spawned with a chloroplast already engulfed (pre-formed plastid endosymbiosis -- the secondary-endosymbiosis analog). The engulfed chloroplast photosynthesises using the HOST's depth-light and leaks surplus glucose into the shared cytoplasm, so the heterotroph host gains fixed carbon -- but ONLY while the host stays at a lit depth (a roaming/deep host gets nothing). Host gets a membrane/energy head start (relative sizes viable for a time). Glucose is a native transferable chem -- no ATP-translocase needed (unlike mito).",
+    genome: farmer.genome,
+    symbiont: chloro.genome,
   });
   return built;
 }
