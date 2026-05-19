@@ -210,6 +210,46 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
     },
   },
+
+  // Phototaxis in an environment where its behavior is ADAPTIVE: a
+  // real depth-attenuated light gradient (light = exp(-y/250)). Cells
+  // start DEEP (not surface-pinned) so they're in the dark
+  // (act_photo<6) -> the genome climbs the mag axis, and since
+  // MAG_FIELD_Y=-1 that thrust is UPWARD toward the surface/light ->
+  // emergent depth-keeping. No aa feeding; CO2+MIN chemostat; permanent
+  // midday (the gradient is depth, not day/night). mY tracks whether
+  // they actually migrate up.
+  "phototaxis-gradient": {
+    id: "phototaxis",
+    count: 30,
+    coStock: [],
+    describe:
+      "NO aa feeding. Depth light gradient (cells start DEEP, y in " +
+      "[0.40,0.85]*H, not surface-pinned): dark -> climb mag axis -> " +
+      "MAG_FIELD_Y=-1 = thrust UP toward light = adaptive depth-" +
+      "keeping. CO2=50/MIN=50 chemostat, permanent midday (gradient " +
+      "is depth). mY measures upward migration.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        // Deep + spread: low light so the migrate branch engages,
+        // but not so deep that photosynthesis can't fund the climb.
+        c.y = w.height * (0.4 + 0.45 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -280,6 +320,13 @@ function nDark(): number {
   for (const c of w.creatures) if (c.store.chemCols[CHEM_ACT_PHOTO_VISIBLE][c.idx] < 6) n++;
   return n;
 }
+function meanY(): number {
+  const cs = w.creatures;
+  if (!cs.length) return 0;
+  let s = 0;
+  for (const c of cs) s += c.y;
+  return s / cs.length;
+}
 
 console.log(`# scenario: ${id}  (x${focal.length} spawned${sc.coStock.length ? ", co-stock " + sc.coStock.map(c => c.id + ":" + c.count).join(",") : ", no co-stock"})`);
 console.log(`# ${sc.describe}`);
@@ -322,6 +369,7 @@ while (w.t < endT) {
       `t=${String(Math.round(w.t)).padStart(3)}s pop=${String(w.creatures.length).padStart(4)} ` +
         `nMem>40=${String(nAboveMembrane(40)).padStart(3)} ` +
         `nDark=${String(nDark()).padStart(3)} ` +
+        `mY=${meanY().toFixed(0).padStart(3)} ` +
         `mActPh=${meanCell(CHEM_ACT_PHOTO_VISIBLE).toFixed(1).padStart(5)} ` +
         `mMem=${meanCell(CHEM_MEMBRANE).toFixed(2).padStart(6)} ` +
         `mATP=${meanEnergy().toFixed(1).padStart(7)} ` +
