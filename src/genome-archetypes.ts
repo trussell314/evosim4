@@ -197,7 +197,7 @@ function build(): Archetype[] {
       id: "armored",
       label: "armored tank",
       cls: "direct",
-      desc: "Indigestible prey strategy: pours synthesis into membrane (breach cost scales with membrane), grazes slowly, divides only when large.",
+      desc: "Indigestible prey strategy: pours synthesis into membrane (breach cost scales with membrane), grazes slowly, same divide cadence as the forager (gate 30) so armor is the only difference.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "BIO", 0],
@@ -211,7 +211,7 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           12,
         ),
-        ...reproduceWhenGrown(47, "np"),
+        ...reproduceWhenGrown(30, "np"),
       ],
     },
     {
