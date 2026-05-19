@@ -1541,12 +1541,23 @@ const gArchSeed = mkArchGroup("seed");
 for (const a of ARCHETYPES) {
   const b = mkBtn(a.label, a.desc);
   b.addEventListener("click", () => {
-    simWorker.postMessage({
-      type: "spawnSpecies",
-      genome: Array.from(a.genome),
-      count: archSpawnCount,
-      placement: archPlacement,
-    });
+    if (a.symbiont) {
+      // Composite: host genome + a pre-engulfed symbiont.
+      simWorker.postMessage({
+        type: "spawnComposite",
+        genome: Array.from(a.genome),
+        symbiont: Array.from(a.symbiont),
+        count: archSpawnCount,
+        placement: archPlacement,
+      });
+    } else {
+      simWorker.postMessage({
+        type: "spawnSpecies",
+        genome: Array.from(a.genome),
+        count: archSpawnCount,
+        placement: archPlacement,
+      });
+    }
     const prev = a.label;
     b.textContent = `spawned ${archSpawnCount} ✓`;
     setBtn(b, true, T_GREEN);

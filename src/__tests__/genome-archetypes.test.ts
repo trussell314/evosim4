@@ -12,9 +12,9 @@ import { createWorld, spawnSpeciesInstance, step } from "../sim";
 
 describe("genome archetypes", () => {
   it("the catalogue has unique ids/labels and both classes", () => {
-    expect(ARCHETYPES.length).toBe(16);
-    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(16);
-    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(16);
+    expect(ARCHETYPES.length).toBe(17);
+    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(17);
+    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(17);
     expect(ARCHETYPES.some((a) => a.cls === "direct")).toBe(true);
     expect(ARCHETYPES.some((a) => a.cls === "seed")).toBe(true);
   });
@@ -25,6 +25,11 @@ describe("genome archetypes", () => {
         expect(() => assertWellFormed(a.genome)).not.toThrow();
         expect(a.genome.length).toBeGreaterThan(0);
         expect(disassemble(a.genome)).not.toMatch(/db 0x/);
+        if (a.symbiont) {
+          expect(() => assertWellFormed(a.symbiont!)).not.toThrow();
+          expect(a.symbiont!.length).toBeGreaterThan(0);
+          expect(disassemble(a.symbiont!)).not.toMatch(/db 0x/);
+        }
       });
 
       it("spawns into a world and steps without throwing", () => {

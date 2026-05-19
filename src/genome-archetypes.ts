@@ -100,6 +100,11 @@ export interface Archetype {
   desc: string; // tooltip
   cls: "direct" | "seed";
   genome: Uint8Array;
+  // Composite archetype: when set, `genome` is the HOST and this is a
+  // symbiont that spawns already engulfed inside the host's contents
+  // (the engine engulf invariant). The host is given a size/energy
+  // head start so the pre-formed unit is viable for a while.
+  symbiont?: Uint8Array;
 }
 
 function build(): Archetype[] {
@@ -454,11 +459,27 @@ function build(): Archetype[] {
       ],
     },
   ];
-  return list.map(({ id, label, desc, cls, prog }) => {
+  const built: Archetype[] = list.map(({ id, label, desc, cls, prog }) => {
     const genome = asm(prog);
     assertWellFormed(genome);
     return { id, label, desc, cls, genome };
   });
+  // Composite: a farmer host that already carries a mitochondrion
+  // endosymbiont (spawned engulfed via the engine engulf invariant;
+  // host given a size/energy head start so the pre-formed unit is
+  // viable for a while). Reuses the validated farmer + mitochondria
+  // genomes verbatim.
+  const farmer = built.find((a) => a.id === "farmer")!;
+  const mito = built.find((a) => a.id === "mitochondria")!;
+  built.push({
+    id: "farmer-mito",
+    label: "farmer+mito",
+    cls: "seed",
+    desc: "Seed: a farmer HOST spawned with a mitochondrion already engulfed in its contents (a pre-formed endosymbiotic unit). The host gets a membrane/energy head start so the relative sizes keep it viable for a time; the mito respires internally and exports ATP via its translocase. Watch whether the pairing persists + reproduces in tandem (host fission partitions the symbiont to daughters).",
+    genome: farmer.genome,
+    symbiont: mito.genome,
+  });
+  return built;
 }
 
 export const ARCHETYPES: ReadonlyArray<Archetype> = build();

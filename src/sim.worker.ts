@@ -25,6 +25,7 @@ import {
   takeSnapshot,
   setParticleTarget,
   spawnSpeciesInstance,
+  spawnCompositeInstance,
   pickClumpCenter,
   CHEM_BASE_DENSITY,
   type ParticleForceParams,
@@ -83,6 +84,13 @@ type WorkerInbound =
   | {
       type: "spawnSpecies";
       genome: number[];
+      count?: number;
+      placement?: "scatter" | "clump";
+    }
+  | {
+      type: "spawnComposite";
+      genome: number[]; // host
+      symbiont: number[]; // pre-engulfed in the host's contents
       count?: number;
       placement?: "scatter" | "clump";
     }
@@ -169,6 +177,20 @@ self.addEventListener("message", (e: MessageEvent) => {
         const place: SpawnPlacement | undefined =
           m.placement === "clump" ? { mode: "clump", center } : undefined;
         for (let i = 0; i < n; i++) spawnSpeciesInstance(world, g, place);
+      }
+      break;
+    case "spawnComposite":
+      if (world && m.genome.length > 0 && m.symbiont.length > 0) {
+        const host = Uint8Array.from(m.genome);
+        const sym = Uint8Array.from(m.symbiont);
+        const n = Math.max(1, Math.min(100, m.count ?? 1));
+        const center =
+          m.placement === "clump" ? pickClumpCenter(world) : undefined;
+        const place: SpawnPlacement | undefined =
+          m.placement === "clump" ? { mode: "clump", center } : undefined;
+        for (let i = 0; i < n; i++) {
+          spawnCompositeInstance(world, host, sym, place);
+        }
       }
       break;
     case "toggleProfile":

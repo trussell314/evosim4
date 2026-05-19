@@ -43,7 +43,9 @@ import {
   TRANSPORT_SLOT_BASE,
   TRANSPORT_CHEM_IDS,
   TRANSPORT_ATP_SLOT,
+  spawnCompositeInstance,
 } from "../sim";
+import { ARCHETYPES } from "../genome-archetypes";
 import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
 // Local viable-heterotroph genome for test creatures. Mirrors the
@@ -2679,6 +2681,26 @@ describe("EGT emergent ratchet (Substrate A, sub-commit 5)", () => {
     const rare = countIntegrations(4000);      // buffer rarely available
     expect(frequent).toBeGreaterThan(rare);
     expect(rare).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("composite archetype spawn (host + pre-engulfed symbiont)", () => {
+  it("spawns the host free with the symbiont engulfed in its contents", () => {
+    const w = createWorld(800, 600, { seed: 7 }) as unknown as World;
+    const a = ARCHETYPES.find((x) => x.id === "farmer-mito")!;
+    expect(a.symbiont).toBeTruthy();
+    const host = spawnCompositeInstance(w, a.genome, a.symbiont!);
+    expect(host).not.toBeNull();
+    // symbiont is alive INSIDE the host, not in the free population.
+    expect(host!.contents.length).toBe(1);
+    expect(w.creatures.includes(host!)).toBe(true);
+    expect(w.creatures.includes(host!.contents[0])).toBe(false);
+    // host got the size/energy head start (relative sizes viable).
+    expect(host!.molecules.membrane).toBeGreaterThanOrEqual(60);
+    expect(host!.energy).toBeGreaterThanOrEqual(220);
+    expect(host!.r).toBeGreaterThan(host!.contents[0].r);
+    // steps without throwing (engulfed symbiont runs inside the host).
+    expect(() => { for (let i = 0; i < 60; i++) step(w, 1 / 60); }).not.toThrow();
   });
 });
 

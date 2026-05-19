@@ -2543,6 +2543,35 @@ export function spawnSpeciesInstance(
   return c;
 }
 
+// Composite spawn: a HOST that already carries a SYMBIONT engulfed in
+// its contents (a pre-formed endosymbiotic unit). Both go through the
+// normal creature-init path; the symbiont is then moved into the
+// host's contents and removed from the free population -- exactly the
+// invariant the live engulf path maintains (alive in host.contents,
+// organelleSynthMask set, NOT in world.creatures). The host gets a
+// membrane + energy head start so the relative sizes keep the unit
+// viable for a time (a fresh host carrying a draining captive from
+// t0 otherwise collapses before it can establish).
+export function spawnCompositeInstance(
+  world: World,
+  hostGenome: Uint8Array,
+  symGenome: Uint8Array,
+  placement?: SpawnPlacement,
+): Creature | null {
+  const host = spawnSpeciesInstance(world, hostGenome, placement);
+  if (host === null) return null;
+  host.molecules.membrane = Math.max(host.molecules.membrane, 60);
+  host.energy = Math.max(host.energy, 220);
+  updateCreatureRadius(host);
+  const sym = spawnSpeciesInstance(world, symGenome);
+  if (sym === null) return host; // cap full -- host without symbiont
+  sym.organelleSynthMask = genomeSynthMask(sym.genome);
+  host.contents.push(sym);
+  const i = world.creatures.indexOf(sym);
+  if (i >= 0) world.creatures.splice(i, 1); // engulfed: not free
+  return host;
+}
+
 
 const PHYLO_EVENT_CAP = 2000;
 
