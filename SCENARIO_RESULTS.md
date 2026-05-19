@@ -236,3 +236,31 @@ gate (e.g. 80 -> ~45-50, still well above forager's 30 so it stays
 a tank) and re-run the same controlled pair; that isolates whether
 the armor STRATEGY is viable once reproduction isn't over-throttled,
 without propping the population by changing the environment.
+
+### follow-up: gate matched to forager (30) -- armor isolated
+
+Re-ran the controlled pair with armored's reproduce gate set to 30
+(== forager), so the ONLY variable is the 4x SYNTH BIO membrane
+investment.
+
+Measured (10 min, seed 4242):
+- armored (gate 30): focal 40 ->31(60s) ->19(120s) ->6(180s) ->0
+  (~t270). predation deaths ~466 (idDeaths 637 - mem171). fMem
+  stayed ~11-22, fR ~4-6 -- NO tank accumulates.
+- soft control (gate 30): focal 40 ->32(60s) ->22(120s) ->15(180s)
+  ->0 (~t270). predation deaths ~359 (idDeaths 757 - mem395).
+- both extinct ~t270; armored took MORE predation, not less.
+
+Decisive conclusion: with the gate matched, the armor genome is
+indistinguishable from (marginally worse than) the soft forager.
+The defensive value seen in the gate-80 run was NOT membrane
+investment per se -- it was deferred division -> larger cells ->
+size refuge past the predator's 1.14x breach gate. Armor in this
+engine is inseparable from a high reproduce gate: at forager
+cadence the cell divides at SELF_MEMBRANE>30 and never accumulates
+a tank, so the 4x SYNTH BIO is wasted (spent then split at
+division). In all three configs (gate 80/47/30) #6 is non-viable
+as a population -- the closed arena boom-busts regardless. The
+experimental gate change (80->47->30) is degenerate at 30 (armor
+inert) and should be reverted to the catalogued 80 to preserve the
+intended-if-weak design; the finding stands as documented.
