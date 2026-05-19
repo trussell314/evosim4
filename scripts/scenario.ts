@@ -15,6 +15,7 @@ import {
   type World,
 } from "../src/sim";
 import { ARCHETYPES } from "../src/genome-archetypes";
+import { pushParticle } from "../src/sim/core";
 import {
   CHEM_CO2,
   CHEM_ADP,
@@ -23,6 +24,8 @@ import {
   CHEM_MEMBRANE,
   CHEM_MIN,
   CHEM_AA,
+  CHEM_O2,
+  CHEM_BIOPOLYMER,
   CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_THERMO,
 } from "../src/sim/chem-ids";
@@ -58,6 +61,27 @@ function ambientMean(w: World, chem: number): number {
   let s = 0, n = 0;
   for (let b = 0; b + chem < A.length; b += AMB_STRIDE) { s += A[b + chem]; n++; }
   return n ? s / n : 0;
+}
+// Food chemostat: keep total particle count topped up to `target`
+// with biopolymer particles (the forager's INGEST substrate). Uses a
+// probe-local rng for placement (determinism irrelevant here).
+function topUpBiopolymer(w: World, target: number): void {
+  const ww = w as unknown as {
+    particles: unknown[]; width: number; height: number;
+    depth: number; surfaceY: number;
+  };
+  let need = target - ww.particles.length;
+  while (need-- > 0) {
+    const r = 1 + Math.random() * 1.5;
+    pushParticle(w, {
+      x: Math.random() * ww.width,
+      y: ww.surfaceY + Math.random() * (ww.height - ww.surfaceY),
+      z: r + Math.random() * (ww.depth - 2 * r),
+      vx: 0, vy: 0, vz: 0,
+      r,
+      chemId: CHEM_BIOPOLYMER,
+    });
+  }
 }
 
 const SCENARIOS: Record<string, Scenario> = {
@@ -332,6 +356,45 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
     },
   },
+
+  // #4 forager: heterotroph, no chemistry deficit (analyzer
+  // heterotroph view: glucose 1.12 / aa 4.0 / fa 2.7 ok). Its
+  // binding constraint is FOOD (biopolymer particles to INGEST +
+  // digest via out[10]) and O2/MIN for respiration+biosynth, not the
+  // reaction table. Perfect scenario = food-replete: ~1500 biopolymer
+  // particles maintained (chemostat), ambient O2+MIN replete, no
+  // predators, founders off. Isolates "does it find+digest food and
+  // self-sustain". Reproduce gate SELF_MEMBRANE>30.
+  forager: {
+    id: "forager",
+    count: 30,
+    coStock: [],
+    describe:
+      "Food-replete: ~1500 biopolymer particles maintained every " +
+      "sample (chemostat), ambient O2=30/MIN=50 replete, no " +
+      "predators, founders off. Cells spread mid-column. Tests " +
+      "whether the honest-baseline heterotroph finds + digests food " +
+      "and self-sustains given abundant food.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -427,7 +490,10 @@ function meanActTh(): number {
 
 console.log(`# scenario: ${id}  (x${focal.length} spawned${sc.coStock.length ? ", co-stock " + sc.coStock.map(c => c.id + ":" + c.count).join(",") : ", no co-stock"})`);
 console.log(`# ${sc.describe}`);
-console.log(`# reproduce gate: SELF_MEMBRANE > 40`);
+console.log(
+  `# reproduce gate: SELF_MEMBRANE > per-archetype threshold ` +
+    `(photoauto/phototaxis/thermophile 40, forager/colony 30, ...)`,
+);
 console.log(
   `# t=0  pop=${w.creatures.length} ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1)} ` +
     `meanMembrane=${meanCell(CHEM_MEMBRANE).toFixed(2)} meanATP=${meanEnergy().toFixed(1)} ` +
