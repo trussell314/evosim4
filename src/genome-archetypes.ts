@@ -250,7 +250,7 @@ function build(): Archetype[] {
       id: "farmer",
       label: "farmer host",
       cls: "seed",
-      desc: "Seed: heterotroph that climbs into organic/prey-dense regions, ENGULFs neighbours, and relies on internal division of its captives. Farming emerges from the shared cytoplasm.",
+      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and CONDITIONALLY engulfs -- only when it has an energy surplus (SELF_ENERGY > 50), so a struggling farmer stops taking on draining captives instead of cannibalising itself to collapse. Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
@@ -260,7 +260,17 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           35,
         ),
+        // Conditional ENGULF: only when energy-rich enough to support
+        // another live captive. Unconditional engulf made farmer
+        // cannibalise kin + accumulate draining captives -> collapse
+        // (forager, same genome minus ENGULF, self-sustains). The
+        // genome decides via SELF_ENERGY -- no engine-side rule.
+        ["SELF_ENERGY"],
+        ["PUSH8", 50],
+        ["GT"],
+        ["JZ", "noEngulf"],
         ["ENGULF"],
+        ["LABEL", "noEngulf"],
         // 40 -> 28: forager (near-identical genome) only self-sustains
         // at ~30, and farmer carries extra ENGULF cost + draining
         // captives, so it must divide a bit EARLIER, not later --

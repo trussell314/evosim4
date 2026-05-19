@@ -419,6 +419,41 @@ const SCENARIOS: Record<string, Scenario> = {
   // (co-stocked foragers, validated self-sustaining on the same
   // chemostat) + no counter-predators, founders off. focal= column
   // tracks predator lineages vs prey.
+  // #9 farmer SOLO: validate the host standalone (no mito), same
+  // recipe forager #4 was nailed on. forager (= farmer minus ENGULF)
+  // self-sustained 30->110 here; this isolates whether conditional
+  // ENGULF lets farmer self-sustain too (vs the prior collapse).
+  "farmer-solo": {
+    id: "farmer",
+    count: 30,
+    coStock: [],
+    describe:
+      "Farmer host validated standalone: ~1500 biopolymer chemostat, " +
+      "ambient O2=30/MIN=50, no mito, no predators, founders off. " +
+      "Same scenario forager #4 nailed (30->110). Tests whether " +
+      "conditional ENGULF (SELF_ENERGY>50 gate) lets the host " +
+      "self-sustain instead of cannibalising to collapse.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+  },
+
   predator: {
     id: "predator",
     count: 30,
