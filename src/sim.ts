@@ -85,9 +85,10 @@ export {
 };
 import {
   REACTIONS, NAMED_REACTION_COUNT,
-  TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS,
+  TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS, TRANSPORT_TARGETS, TRANSPORT_ATP,
+  TRANSPORT_ATP_SLOT,
 } from "./sim/reactions";
-export { TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS };
+export { TRANSPORT_SLOT_BASE, TRANSPORT_CHEM_IDS, TRANSPORT_ATP_SLOT };
 export { NAMED_REACTION_COUNT };
 import {
   SENSOR_CHEM_LABELS, CHEM_SHORT_LABELS, chemName,
@@ -751,11 +752,14 @@ export function runTransportReactions(c: Creature, world: World, dt: number): vo
   const ambient = world.ambient;
   const ab = ambientBaseAt(world, s.x[i], s.y[i]);
   const surface = s.r[i] / MIN_CREATURE_R;
-  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+  for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
+    const k = TRANSPORT_TARGETS[n];
+    // ATP translocase (ANT) is inner-membrane only: there is no
+    // ambient ATP, so it does not act at the cell<->world membrane.
+    if (k === TRANSPORT_ATP) continue;
     const slot = TRANSPORT_SLOT_BASE + n;
     const pool = cats[slot][i];
     if (pool <= 0) continue; // no transporter protein -> no facilitated flux
-    const k = TRANSPORT_CHEM_IDS[n];
     const ak = ab + k;
     const inside = cols[k][i];
     const outside = ambient[ak];
@@ -4230,11 +4234,33 @@ function runInnerCell(
   const iCat = inner.store.catalystCols;
   const hCat = host.store.catalystCols;
   const surf = inner.store.r[ii] / MIN_CREATURE_R;
-  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+  const iEnergy = inner.store.energy;
+  const hEnergy = host.store.energy;
+  for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
+    const k = TRANSPORT_TARGETS[n];
     const slot = TRANSPORT_SLOT_BASE + n;
     const pool = iCat[slot][ii] + hCat[slot][hi];
     if (pool <= 0) continue;
-    const k = TRANSPORT_CHEM_IDS[n];
+    if (k === TRANSPORT_ATP) {
+      // ATP translocase (ANT analog): facilitated, gradient-driven
+      // movement of the `energy` scalar across the vacuolar membrane.
+      // Same kinetics as the metabolite transporters; 1:1 and both
+      // endpoints are inside the host's mass ledger (host total
+      // includes inner via creatureSelfMass) so it is mass-exact.
+      const inside = iEnergy[ii];
+      const outside = hEnergy[hi];
+      const gap = outside - inside;
+      if (gap === 0) continue;
+      const src = gap > 0 ? outside : inside;
+      const sat = src / (src + KM_DEFAULT);
+      let flow = REACTIONS[slot].vmax * (pool / CAT_REF) * surf * sat * gap * dt;
+      if (flow > 0) { if (flow > outside) flow = outside; }
+      else { if (-flow > inside) flow = -inside; }
+      if (flow === 0) continue;
+      iEnergy[ii] += flow;
+      hEnergy[hi] -= flow;
+      continue;
+    }
     const ic = iCols[k];
     const hc = hCols[k];
     const inside = ic[ii];

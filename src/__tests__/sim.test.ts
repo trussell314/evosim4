@@ -42,6 +42,7 @@ import {
   runTransportReactions,
   TRANSPORT_SLOT_BASE,
   TRANSPORT_CHEM_IDS,
+  TRANSPORT_ATP_SLOT,
 } from "../sim";
 import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
@@ -2772,5 +2773,32 @@ describe("standing transporters (Substrate B, sub-commit 2: host<->organelle)", 
 
   it("isolates the transporter effect vs no-catalyst control", () => {
     expect(runScenario(10)).toBeGreaterThan(runScenario(0) + 2);
+  });
+
+  // ATP translocase (ANT): the engine change for literal mitochondrial
+  // ATP export. Moves the per-creature `energy` scalar (NOT a chem)
+  // organelle->host across the vacuolar membrane only, gradient-driven,
+  // mass-exact (both endpoints are inside the host's mass ledger).
+  // (Per-step 1:1-ness of the energy transfer is identical-by-
+  // construction to the cell<->world / chem vacuolar transporters
+  // already covered; host+inner energy is NOT closed across 120
+  // full-sim steps -- maintenance spends it -- so asserting it here
+  // would be the wrong test. The global mass-conservation invariant
+  // ("total mass is preserved...") guards the engine.)
+  function runAtp(catalystPool: number): number {
+    const { w, host, inner } = engulfed();
+    host.energy = 100;
+    inner.energy = 5000; // respiration-rich organelle
+    inner.store.catalystCols[TRANSPORT_ATP_SLOT][inner.idx] = catalystPool;
+    for (let i = 0; i < 120; i++) step(w, 1 / 60);
+    return 5000 - inner.energy; // energy that left the organelle
+  }
+
+  it("ATP translocase moves energy organelle->host (down-gradient)", () => {
+    expect(runAtp(10)).toBeGreaterThan(5);
+  });
+
+  it("isolates the ATP-translocase effect vs no-catalyst control", () => {
+    expect(runAtp(10)).toBeGreaterThan(runAtp(0) + 2);
   });
 });

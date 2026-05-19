@@ -181,7 +181,29 @@ export const TRANSPORT_CHEM_IDS: readonly number[] = [
   CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA,
   CHEM_FA, CHEM_MIN, CHEM_ADP, CHEM_WASTE,
 ];
-export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_CHEM_IDS.length;
+// ATP translocase sentinel (NOT a chem id -- ATP is the per-creature
+// `energy` scalar, not a chemCols entry). A transporter slot whose
+// `transport` field is this moves the `energy` scalar across the
+// VACUOLAR membrane only (host<->organelle), the faithful ADP/ATP
+// translocase (ANT) analog: ATP can't cross a bilayer passively, only
+// via this dedicated carrier, and (like real ANT) it's an inner-
+// membrane protein -- there is no ambient ATP, so it does NOT act at
+// the outer (cell<->world) membrane. Path 1 (CHEM_ATP) will later
+// replace this sentinel with a real chem id; the slot + genome
+// expression survive.
+export const TRANSPORT_ATP = -1;
+// The transport band: the 8 small-molecule metabolites plus the ATP
+// translocase. One contiguous post-build-overwritten band so the
+// seeded buildReactionTable draw order stays byte-identical.
+export const TRANSPORT_TARGETS: readonly number[] = [
+  ...TRANSPORT_CHEM_IDS,
+  TRANSPORT_ATP,
+];
+export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_TARGETS.length;
+// Catalyst slot a genome SYNTHs (SYNTH CAT param=this) to build the
+// ATP translocase (ANT). It is the last slot of the transport band.
+export const TRANSPORT_ATP_SLOT =
+  TRANSPORT_SLOT_BASE + TRANSPORT_TARGETS.length - 1;
 // Facilitated permeability scaler at full catalyst pool (analogous to
 // a generic reaction's vmax). Net flux also scales with the cross-
 // membrane concentration gap, the catalyst pool, and cell surface.
@@ -189,13 +211,13 @@ const TRANSPORT_VMAX = 0.6;
 function installTransporters(out: Reaction[]): void {
   const empty = new Uint8Array(0);
   const emptyF = new Float32Array(0);
-  for (let n = 0; n < TRANSPORT_CHEM_IDS.length; n++) {
+  for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
     out[TRANSPORT_SLOT_BASE + n] = {
       sChem: empty, sCount: emptyF, pChem: empty, pCount: emptyF,
       atpDelta: 0, lightIn: 0, vmax: TRANSPORT_VMAX, uncatRate: 0,
       gateMask: 0, surfaceScale: false, atpFloor: false,
       mrnaScale: false, chlScale: false, enzScale: false,
-      transport: TRANSPORT_CHEM_IDS[n],
+      transport: TRANSPORT_TARGETS[n],
     };
   }
 }
