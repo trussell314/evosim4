@@ -4,6 +4,50 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
+  Analysis (2026-05-19) of the engine's full timescale ladder:
+  ingest cooldowns (0.15s) ≪ surface waves (7s) ≪ swells/updraft
+  (18-28s) ≈ cell generation (~46s; benthic doubled in ~46s in the
+  60s smoke) < temp-patch (38s) < **day (90s)** < membrane / catalyst
+  / inhibitor half-life (138s) ≪ current cycle = region ambient
+  diffusion half-life (600s) ≈ enzyme/chl/mRNA half-life (693s).
+  The ordering is internally consistent and matches a plankton-pace
+  microbe: ~2 generations per day, currents/diffusion ~6.7 days
+  apart, photic and protein-decay timescales chain reasonably.
+  The only off-Earth bit is the day-vs-current ratio: in reality
+  currents/eddies/tides vary on day-to-many-day scales, NOT 6.7×
+  faster than a day. Bumping `dayPeriod` to 600 aligns the day with
+  the existing current/diffusion cycle (1 day per current cycle,
+  Earth-like) and moves cells to bacterium-pace (~13 generations
+  per day).
+
+  **One real dynamics consequence** (the reason this is deferred,
+  not a one-line drive-by): under day=90 the night is only 45s and
+  costs ~20% of membrane; under day=600 the night is 300s and at
+  `MEMBRANE_DECAY_PER_SEC = 0.005` costs **~78% of membrane**
+  (`(1-0.005)^300 ≈ 0.22`). Photoautotroph archetypes' `reproduceWhenGrown(40, …)`
+  thresholds were tuned for the short-pulse cycle. Under the long
+  cycle they get a much longer growth burst by day (good) but a
+  real night-stress to survive (some lineages may not). Re-balance
+  lever: nudge `MEMBRANE_DECAY_PER_SEC` 0.005 → ~0.003 so a single
+  night costs ~60% instead of ~78%. Heterotrophs (forager / benthic
+  / vent / predator) read no light and should be unaffected.
+
+  **Other timescales stay sensible** under the bump (everything
+  scales relatively): physical waves get more numerous per day,
+  protein turnover settles to ~1-day half-life (within real
+  bacterial enzyme range), currents/diffusion align with the day.
+  mRNA half-life stays unrealistically slow (real mRNA: minutes;
+  sim: ~1 day post-bump) -- pre-existing approximation, not caused
+  by the day change.
+
+  Touch points: `dayPeriod: 90` in `createWorld`'s defaults
+  (`src/sim.ts` around line 1893); optional matching tweak to
+  `MEMBRANE_DECAY_PER_SEC` (~line 809); `SAVE_SCHEMA` bump + golden
+  re-baseline (photic timing shifts the seeded fingerprint); run
+  photoautotroph + phototaxis scenarios to confirm post-night
+  viability.
+
 - **Path 1 — make ATP a first-class chemical (`CHEM_ATP`).** Path 2
   (ATP translocase / ANT analog, host<->organelle) is DONE & green
   (`c0c7980`); mito wired to it (`df9dcf6`). Path 1 is the general
