@@ -173,6 +173,43 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_AA, 30);
     },
   },
+
+  // Same controlled "natural" test for phototaxis: no aa feeding,
+  // CO2+MIN replete chemostat only, near-surface, permanent midday.
+  // Harder case than photoautotroph-natural -- phototaxis carries two
+  // extra aa-sink receptor synths (PHOTO+MAGNETO) and a continuous
+  // THRUST. Tests whether the synth_aa vmax 1.2 lets it self-supply
+  // aa with NO exogenous source.
+  "phototaxis-natural": {
+    id: "phototaxis",
+    count: 30,
+    coStock: [],
+    describe:
+      "NO aa feeding (natural). CO2=50/MIN=50 chemostat only; cells " +
+      "primed CO2=20 ADP=30 MIN=30 (NO aa prime). Near-surface, " +
+      "permanent midday, founders off. Same recipe as " +
+      "photoautotroph-natural; phototaxis adds PHOTO+MAGNETO receptor " +
+      "aa-sinks and continuous THRUST (nDark measured).",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = surfaceY + 5 + (k % 6) * 3;
+        c.x = w.width * (0.06 + 0.88 * ((k + 0.5) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
