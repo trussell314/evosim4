@@ -54,6 +54,22 @@ test, so a predator must out-mass the *cluster*, not the individual
 member. Optionally make `ENGULF` likewise require out-massing the
 cluster. Validate via the existing probe / A/B harness.
 
+**Corroboration — #6 armored 2×2 (2026-05-19).** Independent
+evidence that predation resistance collapses onto *individual bulk*
+with no separable axis. A controlled 2×2 (armor × reproduce-gate;
+data in `SCENARIO_RESULTS.md` → "#6 armored") found the
+"armored tank" (max `SYNTH BIO` → high membrane → breach cost ∝
+membrane) confers **no** survival benefit over a soft forager once
+the reproduce gate is matched, and a soft forager@80 *equals*
+armored@80 (~t420 / ~245 predation deaths). The only working lever
+is the reproduce gate: deferring division grows larger non-dividing
+cells that clear the size gate. So membrane investment is not a
+selectable "armor" strategy distinct from "grow big / divide late" —
+the same gap as above (the mass ratio is the *only* edibility gate;
+nothing rewards a defensive trait that isn't raw size). The armored
+archetype is retained but `uiHidden` so it isn't presented as a real
+strategy.
+
 ---
 
 ## Related, NOT yet validated (hypotheses only)

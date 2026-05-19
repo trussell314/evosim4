@@ -1554,6 +1554,7 @@ renderArchPlace();
 const gArchDirect = mkArchGroup("direct");
 const gArchSeed = mkArchGroup("seed");
 for (const a of ARCHETYPES) {
+  if (a.uiHidden) continue; // retained for scenarios/tests, not user-spawnable
   const b = mkBtn(a.label, a.desc);
   b.addEventListener("click", () => {
     if (a.symbiont) {

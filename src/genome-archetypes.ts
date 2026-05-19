@@ -105,6 +105,10 @@ export interface Archetype {
   // (the engine engulf invariant). The host is given a size/energy
   // head start so the pre-formed unit is viable for a while.
   symbiont?: Uint8Array;
+  // Retained in the catalogue (scenarios/tests/founder genome) but
+  // not rendered as a user spawn button -- see #6 armored: kept for
+  // reproducibility, disabled from creation per SCENARIO_RESULTS.md.
+  uiHidden?: boolean;
 }
 
 function build(): Archetype[] {
@@ -197,7 +201,8 @@ function build(): Archetype[] {
       id: "armored",
       label: "armored tank",
       cls: "direct",
-      desc: "Indigestible prey strategy: pours synthesis into membrane (breach cost scales with membrane), grazes slowly, same divide cadence as the forager (gate 30) so armor is the only difference.",
+      desc: "Indigestible prey strategy: pours synthesis into membrane (breach cost scales with membrane), grazes slowly, divides only when very large. RETAINED BUT UI-DISABLED: controlled 2x2 (SCENARIO_RESULTS.md) showed the apparent predation-resistance edge is the high reproduce gate (deferred division -> size refuge past the 1.14x breach gate), NOT the membrane investment -- armor is not a separately selectable axis. Kept for scenarios/tests; not user-spawnable.",
+      uiHidden: true,
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "BIO", 0],
@@ -211,7 +216,7 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           12,
         ),
-        ...reproduceWhenGrown(30, "np"),
+        ...reproduceWhenGrown(80, "np"),
       ],
     },
     {
@@ -463,11 +468,13 @@ function build(): Archetype[] {
       ],
     },
   ];
-  const built: Archetype[] = list.map(({ id, label, desc, cls, prog }) => {
-    const genome = asm(prog);
-    assertWellFormed(genome);
-    return { id, label, desc, cls, genome };
-  });
+  const built: Archetype[] = list.map(
+    ({ id, label, desc, cls, prog, uiHidden }) => {
+      const genome = asm(prog);
+      assertWellFormed(genome);
+      return { id, label, desc, cls, genome, ...(uiHidden ? { uiHidden } : {}) };
+    },
+  );
   // Composite: a farmer host that already carries a mitochondrion
   // endosymbiont (spawned engulfed via the engine engulf invariant;
   // host given a size/energy head start so the pre-formed unit is

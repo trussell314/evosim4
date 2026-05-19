@@ -84,8 +84,21 @@ resolved):
 6. **Armored "tank" prey.** Max `SYNTH BIO` (membrane); high membrane
    makes you expensive-to-impossible to breach (cost ∝ target
    membrane). Survive by being indigestible, not by fleeing.
-   Exercises the emergent grow-big-vs-grow-armor axis. **Fully
-   expressible.**
+   Exercises the emergent grow-big-vs-grow-armor axis. **Expressible,
+   but RETAINED & UI-DISABLED (`uiHidden`).** A controlled 2×2
+   (armor × reproduce-gate; full data in `SCENARIO_RESULTS.md` →
+   "#6 armored") showed the apparent predation-resistance edge is
+   the *high reproduce gate* — deferred division → larger
+   non-dividing cells → size refuge past the predator's 1.14×
+   breach gate — **not** the membrane investment: a soft forager@80
+   matches armored@80 (~t420 / ~245 predation deaths). The
+   membrane-breach-cost mechanic produces no separately selectable
+   signal; "armor" is not a distinct phenotype from "divide late /
+   grow big". Genome reverted to the catalogued gate 80 and kept for
+   scenarios/tests/founder reproducibility, but removed from the
+   spawn UI so it is not presented as a real strategy. See the
+   substrate-gap note in `COLONY_GAPS.md` (predation resistance
+   collapses onto body size).
 7. **Greenbeard colony.** `SYNTH BOND <markerM>`; clones bond, gaining
    crossover at reproduction + cohesion predation-resistance. **Now
    expressible (substrate complete).** The differentiation gap is
