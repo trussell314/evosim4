@@ -606,6 +606,83 @@ const SCENARIOS: Record<string, Scenario> = {
     },
     report: () => symReport(),
   },
+
+  // #6 armored: indigestible-prey strategy. Ideal conditions = a
+  // food-replete world under sustained predator pressure (size-bully
+  // co-stocked). Armor only matters if there is something to defend
+  // against, so predators are essential to the test, not optional.
+  // Success: the armored focal lineage persists/co-exists under
+  // predation by out-growing the 1.14x breach gate and raising the
+  // per-membrane breach cost -- contrast with armored-control (soft
+  // forager focal, identical predator pressure) which should be
+  // culled. Single variable between the two: the focal genome.
+  armored: {
+    id: "armored",
+    count: 40,
+    coStock: [{ id: "predator", count: 30 }],
+    describe:
+      "Biopolymer chemostat ~1800 (feeds armored grazers + the " +
+      "co-stocked size-bully predators), ambient O2=30/MIN=50, " +
+      "near-surface, permanent midday, founders off. focal=armored " +
+      "lineages only; pop includes predators. Tests whether the " +
+      "membrane-tank survives sustained predation (size refuge + " +
+      "breach-cost) where a soft control does not.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+    },
+    report: (w) => armorReport(w),
+  },
+
+  // Soft-bodied control: identical predator pressure + food, focal is
+  // the forager (no membrane investment). The only variable vs the
+  // `armored` run is the focal genome, so a divergence in focal
+  // survival isolates the armor strategy.
+  "armored-control": {
+    id: "forager",
+    count: 40,
+    coStock: [{ id: "predator", count: 30 }],
+    describe:
+      "Control for #6 armored: focal=forager (soft-bodied), same " +
+      "biopolymer chemostat ~1800, O2=30/MIN=50, near-surface, " +
+      "permanent midday, founders off, same 30 size-bully predators. " +
+      "Single variable vs `armored`: the focal genome.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+    },
+    report: (w) => armorReport(w),
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -751,6 +828,29 @@ function symReport(): string {
     `[inHost=${e.inHost} inSym=${e.inMito} inOther=${e.inOther}] ` +
     `hostsW/Sym=${String(hostsW).padStart(3)} ` +
     `eng:host=${ratio}`
+  );
+}
+
+// #6 armored report: focal (armored) survivors + their mean membrane
+// and radius (the armor signal), against the co-stocked predator
+// count. A persisting focal with rising membrane/radius while
+// predators are present = the size-refuge + breach-cost strategy
+// working. fMem/fR are over FREE focal creatures only.
+function armorReport(w: World): string {
+  let fn = 0, fMem = 0, fR = 0;
+  for (const c of w.creatures) {
+    const cc = c as unknown as Cre & { r: number };
+    if (!focalRoots.has(cc.lineageRoot)) continue;
+    fn++;
+    fMem += cc.store.chemCols[CHEM_MEMBRANE][cc.idx];
+    fR += cc.r;
+  }
+  const preds = nFree(coStockRoots);
+  return (
+    `armored=${String(fn).padStart(3)} ` +
+    `fMem=${(fn ? fMem / fn : 0).toFixed(1).padStart(6)} ` +
+    `fR=${(fn ? fR / fn : 0).toFixed(2).padStart(5)} ` +
+    `preds=${String(preds).padStart(3)}`
   );
 }
 
