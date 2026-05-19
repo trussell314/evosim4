@@ -1290,11 +1290,58 @@ export interface World {
   // Static immovable terrain: rocks pre-placed at world creation. Each
   // obstacle is a cluster of overlapping circle "lobes" so it can be
   // irregular in shape. Particles + creatures collide with them like
-  // a fixed wall (no impulse, just positional pushback). Crescent floor
-  // and the seven-or-so dropped boulders both live here.
+  // a fixed wall (no impulse, just positional pushback). Hand-authored
+  // shapes from sim/terrain-shapes.ts get instantiated here.
   obstacles: Obstacle[];
+  // Per-column topmost-rock-y, indexed by integer x. Used by the
+  // founder-placement fast path. Empty array for worlds without
+  // terrain. Populated by generateObstacles.
+  terrainHeightmap?: Float32Array;
+  // Per-column wave-clip y, indexed by integer x. For columns where a
+  // rock cliff pierces the still water surface, this holds the
+  // deepest y the cliff occupies so the wavy surface clamps to it
+  // (water can't poke through solid rock). +Inf for columns with no
+  // cliff. Read by surfaceYAt. Empty array for worlds without terrain.
+  waveClipY?: Float32Array;
+  // Hydrothermal vent. Optional: tests build worlds without one. The
+  // vent runs an eruption schedule, emits hot particles upward during
+  // eruptions, and contributes a localized temperature bubble that
+  // temperatureAt reads. Mass conservation: emitted mass is recorded
+  // on world.ventEmitted so the engine's mass invariant becomes
+  // particles+cells+ambient-ventEmitted = const.
+  vent?: VentState;
+  // Cumulative mass the vent has injected into the world, per molecule
+  // index (Molecules layout). Treated as a source term in the mass
+  // ledger -- worldMass() subtracts this so the conservation invariant
+  // remains tight even though the vent is technically a true source.
+  ventEmitted?: Float64Array;
   // Optional per-phase timing. When present, step() accumulates wall-clock
   // milliseconds spent in each phase plus a tick counter. Read + reset by
   // the UI to display where the frame budget actually goes.
   profile?: WorldProfile;
+}
+
+// Hydrothermal vent state. One per world (or none in test scaffolds).
+// Position is in world coordinates; the vent sits inside the seafloor
+// rock with its mouth opening at (x, y - mouthDepth). The phase machine
+// runs dormant -> warmup -> eruption -> cooldown -> dormant on a fixed
+// schedule (with small jitter) so the user sees a recognizable pattern:
+// long quiet stretches punctuated by visible plumes.
+export interface VentState {
+  x: number;
+  y: number;
+  // Next scheduled eruption start time (sim seconds). When t crosses
+  // this, phase flips to "warmup".
+  nextEruptionAt: number;
+  // When the current eruption (warmup + main + cooldown) ends and the
+  // vent returns to dormant. 0 when dormant.
+  eruptionEndsAt: number;
+  // 0..1 intensity envelope. Dormant=0; warmup ramps 0->1; main holds
+  // 1; cooldown ramps 1->0. Read by emit + temperatureAt + renderer.
+  intensity: number;
+  // True while emitting (warmup + main + cooldown). Dormant=false.
+  active: boolean;
+  // Accumulator for emission cadence: emit one batch every so many sim
+  // seconds while active.
+  emitClock: number;
 }

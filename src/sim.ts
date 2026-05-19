@@ -114,6 +114,8 @@ import {
   resetCreatureIdCounter, setParticleSlotReusedHook,
   PARTICLE_STORE_PREALLOC_CAP, CREATURE_STORE_PREALLOC_CAP,
 } from "./sim/core";
+import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
+import { makeVentState, stepVent } from "./sim/vent";
 
 // WorldProfile + makeProfile/resetProfile live in ./sim/profile
 // (imported + re-exported at the top of this file).
@@ -984,6 +986,15 @@ export interface WorldEnv {
   tempPatchLength: number;
   tempPatchPeriod: number;
   dayPhase: number;
+  // Optional vent state. WorldEnv is the narrow slice that helpers
+  // like temperatureAt see; vents contribute heat through this so the
+  // helper doesn't need a full World.
+  vent?: import("./sim/core").VentState;
+  // Per-column wave-clip y -- where a rock cliff pierces the still
+  // surface, this holds the deepest y of the cliff so the wavy water
+  // surface gets clamped against rock instead of sliding through it.
+  // Optional; surfaceYAt no-ops when absent.
+  waveClipY?: Float32Array;
 }
 
 export function surfaceActivity(world: WorldEnv): number {
@@ -1018,7 +1029,19 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   // Coupling to the vertical mixing field: where updraft is pushing
   // water up (negative ay in applyForces), the surface bulges up.
   dy -= 0.8 * A * Math.sin(kU * x + wU * t);
-  return world.surfaceY + dy;
+  const wave = world.surfaceY + dy;
+  // Rock-vs-wave: where a rock cliff pierces the still water surface,
+  // the water can't be shallower than the cliff's bottom -- the wave
+  // line gets clamped to the rock's underside. world.waveClipY (when
+  // present) carries the deepest cliff-bottom y per column; columns
+  // with no cliff store +Inf so the Math.max collapses to a no-op.
+  // Worlds without terrain leave waveClipY undefined and skip the
+  // lookup entirely (tests, headless scenarios).
+  const wc = world.waveClipY;
+  if (!wc || wc.length === 0) return wave;
+  const ix = Math.max(0, Math.min(wc.length - 1, Math.floor(x)));
+  const clip = wc[ix];
+  return clip === Number.POSITIVE_INFINITY ? wave : Math.max(wave, clip);
 }
 
 // Per-tick surface-height lookup. surfaceYAt() is ~5 Math.sin calls;
@@ -1058,7 +1081,24 @@ export function temperatureAt(world: WorldEnv, x: number, y: number): number {
   const kT = (2 * Math.PI) / world.tempPatchLength;
   const wT = (2 * Math.PI) / world.tempPatchPeriod;
   const patch = world.tempPatchAmp * Math.sin(kT * x + wT * world.t);
-  return base + patch;
+  // Active vent: localized Gaussian heat bubble around the vent. Zero
+  // contribution when dormant; ventHeatAt fast-rejects past ~3 radii.
+  const vent = world.vent ? ventHeatAtInline(world.vent, x, y) : 0;
+  return base + patch + vent;
+}
+
+// Inlined hot path for vent contribution to keep temperatureAt's
+// non-vent case branch-free. Mirrors ventHeatAt in sim/vent.ts but
+// avoids the full module dependency at this hot site.
+function ventHeatAtInline(v: import("./sim/core").VentState, x: number, y: number): number {
+  if (!v.active) return 0;
+  const dx = x - v.x;
+  const dy = y - v.y;
+  const d2 = dx * dx + dy * dy;
+  const R = 90; // VENT_TEMP_RADIUS
+  const r2 = R * R;
+  if (d2 > 9 * r2) return 0;
+  return 40 * v.intensity * Math.exp(-d2 / r2);
 }
 
 // Solar light multiplier 0..1. Sin curve over dayPhase with midday at
@@ -1101,327 +1141,183 @@ function advanceDisturbance(world: World, dt: number): void {
   }
 }
 
-// Procedurally-generated rocky terrain. Built once at world creation
-// and never modified after -- the obstacle collision broad-phase
-// (band index + cell bitmap) is rebuilt to match in rebuildObstacleIndex.
+// Static rocky terrain. Built once at world creation and never modified
+// after -- the obstacle collision broad-phase (band index + cell
+// bitmap) is rebuilt to match in rebuildObstacleIndex.
 //
-// Terrain is composed of three feature kinds, all packaged as
-// Obstacle polygons so the existing collision pipeline handles them
-// uniformly:
+// Geometry comes from hand-authored normalized polygons in
+// ./sim/terrain-shapes.ts. Each one gets scaled to the actual
+// (width, height) of the world, packaged as an Obstacle via
+// pushTerrainPolygon -- which lobe-packs the interior so the
+// existing circle-vs-circle obstacle collision handles it -- and
+// added to world.obstacles.
 //
-//   1. Seafloor: a chain of mostly-horizontal rock chunks along the
-//      world bottom. Their TOP profile follows a multi-octave value-
-//      noise heightmap, so the floor looks organic (varying bumps
-//      20-100px tall) instead of a flat shelf. Cut into multiple
-//      chunks (~6) so each chunk has a reasonable lobe count -- one
-//      mega-polygon's vertex-per-lobe count would balloon.
-//   2. Cave: a horseshoe-shaped solid (floor + ceiling + back wall)
-//      embedded in the seafloor along one side wall, leaving a
-//      hollow chamber with a narrow horizontal mouth facing inward.
-//      Built as three rectangle-ish polygons that together close off
-//      everything BUT the chamber interior + mouth.
-//   3. Outcropping(s): 1-2 wedge-shaped polygons jutting horizontally
-//      from a side wall, ~80-150px protrusion, ~30-60px thick at the
-//      wall and tapering toward the tip. Creates "overhang" pockets
-//      with water above AND below the wedge.
-//
-// All polygons get circle-lobe approximations via lobesFromTerrainPolygon
-// (small radius "+" pattern packed inside the polygon's footprint).
-// Total lobe count across all obstacles sits under 500; with the
-// band/cell broad-phase that's negligible per-tick work.
-// Master switch for the rock terrain. Disabled while the procedural
-// generator is being replaced with a hand-authored, save-stable
-// shape. When false, generateObstacles produces an empty world (no
-// seafloor, cave, or outcroppings) and the heightmap globals are
-// cleared so founder placement + obstacle collision behave as
-// "open water everywhere". All the generator + lobe-packing code is
-// kept intact below for the rework.
-const TERRAIN_ENABLED = false;
+// Two derived per-column maps are built here as well:
+//   - TERRAIN_HEIGHTMAP[x]: topmost rock y at column x, used as a
+//     fast-path early-reject in founderTerrainBlocked.
+//   - WAVE_CLIP_Y[x]: the y the wavy water surface clamps to when
+//     a rock cliff pierces the still water level at column x.
+//     Without this, the wave line would slide right through any
+//     rock that pokes above the still surface (the top-left cliff
+//     in the layout). Consumed by surfaceYAt.
+const TERRAIN_ENABLED = true;
 
 export function generateObstacles(world: World): void {
   world.obstacles = [];
-  if (!TERRAIN_ENABLED) {
-    TERRAIN_HEIGHTMAP = new Float32Array(0);
-    TERRAIN_HEIGHTMAP_WIDTH = 0;
-    return;
-  }
+  world.terrainHeightmap = undefined;
+  world.waveClipY = undefined;
+  if (!TERRAIN_ENABLED) return;
   const W = world.width;
   const H = world.height;
-  // Bedrock baseline: floor sits ~12% of world height above the bottom
-  // edge on average, with the multi-octave noise pushing it up by
-  // 20-100px in places. Keeps a decent water column even on a portrait
-  // layout while leaving a thick rock band at the floor.
-  const floorBase = H * 0.88;
-  const FLOOR_NOISE_AMP = 60; // max upward bump above floorBase
-  const FLOOR_NOISE_MIN = 8;  // minimum bump (so no chunk is razor-thin)
-  // Single shared earth-tone for all rock features. The per-pixel
-  // texture pass (buildTerrainBitmap in main.ts) modulates this with
-  // noise + lighting; storing one base tone keeps the bitmap writer
-  // simple and avoids "this rock is darker than that one for no
-  // reason" patches.
+  // Single shared earth-tone for all rocks. The per-pixel texture pass
+  // (buildTerrainBitmap in main.ts) modulates this with value noise +
+  // directional lighting + crack mask; keeping one base tone here
+  // avoids "this rock is darker than that one for no reason" patches.
   const baseTone = "#4a4038";
-
-  // ---- 1. Seafloor heightmap (multi-octave value noise) ----
-  // Value noise: integer-lattice random values, smooth-stepped between
-  // them, summed across octaves with halving amplitude and doubling
-  // frequency. Pure JS (no external assets) and deterministic per call
-  // -- though we ride Math.random for everything else here, so worlds
-  // generated in different orders won't match. That's fine; this is a
-  // fresh-world feature, not a save-state-restorable one.
-  const heightmap = new Float32Array(W);
-  const noiseSeed = simRng() * 1e6;
-  const octaveCount = 4;
-  for (let x = 0; x < W; x++) {
-    let amp = 1;
-    let freq = 1 / 220; // base wavelength ~220px (~3-4 humps across a 720px world)
-    let sum = 0;
-    let norm = 0;
-    for (let o = 0; o < octaveCount; o++) {
-      sum += amp * smoothNoise1D(x * freq + noiseSeed + o * 1000);
-      norm += amp;
-      amp *= 0.5;
-      freq *= 2;
-    }
-    const n = sum / norm; // 0..1
-    heightmap[x] = floorBase - FLOOR_NOISE_MIN - n * (FLOOR_NOISE_AMP - FLOOR_NOISE_MIN);
+  for (const poly of ROCK_POLYGONS) {
+    pushTerrainPolygon(world, scalePolygon(poly, W, H), baseTone);
   }
 
-  // ---- 2. Cave placement ----
-  // Pick a side and carve a chamber out of the bedrock. We mark the
-  // chamber interior so the seafloor polygon strip skips those x
-  // columns (they become part of the chamber floor/ceiling/back-wall
-  // obstacles instead).
-  const caveOnLeft = simRng() < 0.5;
-  const caveWidth = 120 + simRng() * 60;  // 120..180
-  // Larger mouth so the opening is visually obvious. Previous 25..40
-  // tall / 30..50 deep slot read as "a faint scratch in the wall"
-  // even when the geometry was correct -- and combined with lobe
-  // overhang from the lip polygons it pinched closed for cells. The
-  // bigger mouth costs some "refuge" privacy but is unambiguously a
-  // doorway from across the world.
-  const mouthHeight = 45 + simRng() * 20; // 45..65
-  const mouthDepth = 60 + simRng() * 30;  // 60..90
-  // Horizontal extent. Outer edge against the wall; inner edge faces
-  // the chamber mouth. Anchor flush at x=0/W (was +/-4) so there's no
-  // sliver of seafloor between the cave back wall and the world edge.
-  const caveOuterX = caveOnLeft ? 0 : W;
-  const caveInnerX = caveOnLeft ? caveOuterX + caveWidth : caveOuterX - caveWidth;
-  const lipInnerXEarly = caveOnLeft ? caveInnerX + mouthDepth : caveInnerX - mouthDepth;
-  // Vertical position. caveTopY must sit BELOW the deepest heightmap
-  // value in the cave's footprint, otherwise the chamber's top pokes
-  // up out of the seafloor and the whole side-mouth illusion breaks
-  // (cave reads as a free-floating rectangle next to the rock).
-  // Compute that floor first, then size the chamber to fit between
-  // it and the world bottom.
-  const caveBottomY = H - 8;
-  const fpStart = Math.max(0, Math.min(W - 1, Math.floor(Math.min(caveOuterX, lipInnerXEarly))));
-  const fpEnd = Math.max(0, Math.min(W - 1, Math.floor(Math.max(caveOuterX, lipInnerXEarly))));
-  let deepestSurface = 0;
-  for (let xi = fpStart; xi <= fpEnd; xi++) {
-    if (heightmap[xi] > deepestSurface) deepestSurface = heightmap[xi];
-  }
-  // Want a ceiling of at least 12px of rock above the chamber so the
-  // lip has substance. Then the chamber height is whatever's left.
-  const CEILING_THICK_MIN = 12;
-  const caveTopY = Math.max(deepestSurface + CEILING_THICK_MIN, caveBottomY - 120);
-  const caveHeight = caveBottomY - caveTopY;
-  // Clamp mouth to fit cleanly inside the chamber. caveHeight can
-  // shrink below the original 80..120 range when the local heightmap
-  // is deep enough to force caveTopY downward; without this clamp the
-  // mouth slot can poke through the chamber's floor or ceiling and
-  // the lip polygons go inside-out.
-  const mouthHeightClamped = Math.min(mouthHeight, caveHeight * 0.6);
-  const mouthCenterY = caveTopY + caveHeight * (0.45 + 0.2 * simRng());
-  const mouthTopY = mouthCenterY - mouthHeightClamped / 2;
-  const mouthBottomY = mouthCenterY + mouthHeightClamped / 2;
-  // Mark heightmap columns inside the cave footprint so the seafloor
-  // chunks skip them. The mouth lip extends past caveInnerX by
-  // mouthDepth, so the excluded span must cover the lip as well --
-  // otherwise the seafloor chunks paint over the mouth and the cave
-  // reads as a sealed pocket.
-  const caveX0 = Math.min(caveOuterX, caveInnerX, lipInnerXEarly);
-  const caveX1 = Math.max(caveOuterX, caveInnerX, lipInnerXEarly);
-
-  // ---- 3. Cave polygons ----
-  // Floor slab: under the chamber, from outer wall to inner mouth.
-  // Ceiling slab: above the chamber, same x-range.
-  // Back wall slab: at the outer end, only the vertical strip between
-  //   the floor and the ceiling on the non-mouth side.
-  // Mouth lip: between caveInnerX and (caveInnerX +/- mouthDepth)
-  //   there's a partial overhang above mouthTopY and below mouthBottomY,
-  //   leaving only mouthHeight clear in between. We attach these as
-  //   extensions of the ceiling and floor polygons rather than separate
-  //   obstacles, so the polygons stay convex-ish for lobe packing.
-  const lipInnerX = lipInnerXEarly;
-
-  // Ceiling polygon: from outer wall to lip-inner-x at top, dropping
-  // down to caveTopY along the chamber span and stepping down again to
-  // mouthTopY across the lip span. Top edge follows the seafloor
-  // heightmap so the chamber roof is contiguous with the surrounding
-  // floor surface visually.
-  const ceilingPoly: { x: number; y: number }[] = [];
-  {
-    // Walk the top edge along the heightmap from outer to lip-inner.
-    const xStart = caveOnLeft ? caveOuterX : lipInnerX;
-    const xEnd = caveOnLeft ? lipInnerX : caveOuterX;
-    const TOP_STEP = 4;
-    for (let x = xStart; x <= xEnd; x += TOP_STEP) {
-      const ix = Math.max(0, Math.min(W - 1, Math.floor(x)));
-      ceilingPoly.push({ x, y: heightmap[ix] });
-    }
-    ceilingPoly.push({ x: xEnd, y: heightmap[Math.max(0, Math.min(W - 1, Math.floor(xEnd)))] });
-    // Bottom edge: lip first (the part that hangs further down into
-    // the mouth slot), then the chamber roof. Direction depends on
-    // which wall we're attached to so the polygon stays CCW-ish.
-    if (caveOnLeft) {
-      // Currently at (xEnd = lipInnerX, top). Step down past the lip:
-      ceilingPoly.push({ x: lipInnerX, y: mouthTopY });
-      ceilingPoly.push({ x: caveInnerX, y: mouthTopY });
-      ceilingPoly.push({ x: caveInnerX, y: caveTopY });
-      ceilingPoly.push({ x: caveOuterX, y: caveTopY });
-    } else {
-      ceilingPoly.push({ x: caveOuterX, y: caveTopY });
-      ceilingPoly.push({ x: caveInnerX, y: caveTopY });
-      ceilingPoly.push({ x: caveInnerX, y: mouthTopY });
-      ceilingPoly.push({ x: lipInnerX, y: mouthTopY });
+  // Per-column heightmap: topmost rock y per integer x across every
+  // obstacle. Used as a cheap early-reject in founderTerrainBlocked /
+  // topTerrainYAtColumn. founderTerrainBlocked falls through to a
+  // per-obstacle lobe check anyway, so this is purely a fast-path hint
+  // -- a column that has rock high up but clear water below still gets
+  // the heightmap top, and the lobe sweep refines the actual
+  // overlap. Initialized to +Inf so columns with no rock report
+  // "open water" via the existing semantics.
+  const heightmap = new Float32Array(Math.max(1, Math.floor(W)));
+  heightmap.fill(Number.POSITIVE_INFINITY);
+  for (const ob of world.obstacles) {
+    if (!ob.polygon) continue;
+    const x0 = Math.max(0, Math.floor(ob.minX));
+    const x1 = Math.min(heightmap.length - 1, Math.ceil(ob.maxX));
+    for (let x = x0; x <= x1; x++) {
+      // Top y at this column = smallest y the polygon covers (y down).
+      // Done by ray-casting at integer x: find min y where the polygon
+      // interior begins. Cheap (one ray per column, <50 vertices).
+      let topY = Number.POSITIVE_INFINITY;
+      // Walk vertical edges of the polygon; the smallest y where the
+      // ray (x = const) crosses an edge bounds the polygon span. Then
+      // we also accept any vertex with the matching x range -- a flat
+      // top edge contributes only its endpoints to crossings.
+      const poly = ob.polygon;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        if ((xi <= x && xj >= x) || (xj <= x && xi >= x)) {
+          if (xi === xj) {
+            // Vertical edge: every y on it is a potential top.
+            if (yi < topY) topY = yi;
+            if (yj < topY) topY = yj;
+          } else {
+            const t = (x - xi) / (xj - xi);
+            const y = yi + (yj - yi) * t;
+            if (y < topY) topY = y;
+          }
+        }
+      }
+      if (topY < heightmap[x]) heightmap[x] = topY;
     }
   }
 
-  // Floor polygon: rectangle from outer wall to caveInnerX (no lip on
-  // the bottom -- visually the mouth is more interesting as a top lip),
-  // sitting below the chamber and above the world floor. We do drop a
-  // small lip on the bottom too for visual symmetry.
-  const floorPoly: { x: number; y: number }[] = [];
-  {
-    if (caveOnLeft) {
-      floorPoly.push({ x: caveOuterX, y: caveBottomY });
-      floorPoly.push({ x: caveInnerX, y: caveBottomY });
-      floorPoly.push({ x: caveInnerX, y: mouthBottomY });
-      floorPoly.push({ x: lipInnerX, y: mouthBottomY });
-      floorPoly.push({ x: lipInnerX, y: H });
-      floorPoly.push({ x: caveOuterX, y: H });
-    } else {
-      floorPoly.push({ x: caveInnerX, y: caveBottomY });
-      floorPoly.push({ x: caveOuterX, y: caveBottomY });
-      floorPoly.push({ x: caveOuterX, y: H });
-      floorPoly.push({ x: lipInnerX, y: H });
-      floorPoly.push({ x: lipInnerX, y: mouthBottomY });
-      floorPoly.push({ x: caveInnerX, y: mouthBottomY });
+  // Wave clip map: for each column where a rock CLIFF pierces the
+  // still water surface (the rock extends from y=0 down past
+  // surfaceY), the wave can't move freely; it gets clamped to the
+  // rock's bottom-of-cliff y so it doesn't slide through solid stone.
+  // We approximate by: a column has a "cliff" if its TERRAIN_HEIGHTMAP
+  // top is at y=0 (rock touches the air boundary). For such columns
+  // we scan every obstacle's polygon at this x and find the deepest
+  // y where the rock still covers (x, *) -- that's where water can
+  // actually start. Columns with no cliff get +Infinity, which the
+  // wave function reads as "no clip".
+  const stillSurfaceY = H * SURFACE_Y_FRAC;
+  const waveClip = new Float32Array(heightmap.length);
+  waveClip.fill(Number.POSITIVE_INFINITY);
+  for (let x = 0; x < heightmap.length; x++) {
+    if (heightmap[x] > 1) continue; // not a cliff: skip
+    // Find deepest y this x is still inside any rock polygon. Scan
+    // every obstacle that horizontally covers x.
+    let deepest = stillSurfaceY;
+    for (const ob of world.obstacles) {
+      if (!ob.polygon) continue;
+      if (x < ob.minX || x > ob.maxX) continue;
+      // Find max-y edge crossing at this x while the polygon at y=0
+      // covers x (the cliff portion). Easiest: walk edges, track all
+      // y crossings, take the max that's contiguous with y=0.
+      const poly = ob.polygon;
+      const crossings: number[] = [];
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        if ((xi <= x && xj >= x) || (xj <= x && xi >= x)) {
+          if (xi === xj) {
+            crossings.push(yi);
+            crossings.push(yj);
+          } else {
+            const t = (x - xi) / (xj - xi);
+            crossings.push(yi + (yj - yi) * t);
+          }
+        }
+      }
+      crossings.sort((a, b) => a - b);
+      // Pair-wise: (crossings[0], crossings[1]) is a polygon interior
+      // span at this x; (crossings[2], crossings[3]) is the next, etc.
+      // The cliff span is whichever pair starts at y~=0. Take its
+      // upper bound (deepest y of that span).
+      for (let k = 0; k + 1 < crossings.length; k += 2) {
+        if (crossings[k] <= 1) {
+          if (crossings[k + 1] > deepest) deepest = crossings[k + 1];
+        }
+      }
     }
+    waveClip[x] = deepest;
   }
 
-  // Back wall polygon: vertical strip at the outer wall, from caveTopY
-  // (where the ceiling already covers down to) to caveBottomY (where
-  // the floor takes over). Width ~14px so there's actual rock between
-  // the chamber and the side wall (the side-wall body is implicit --
-  // creatures don't escape through world bounds).
-  const backWallPoly: { x: number; y: number }[] = [];
-  {
-    const wallThick = 14;
-    if (caveOnLeft) {
-      backWallPoly.push({ x: caveOuterX, y: caveTopY });
-      backWallPoly.push({ x: caveOuterX + wallThick, y: caveTopY });
-      backWallPoly.push({ x: caveOuterX + wallThick, y: caveBottomY });
-      backWallPoly.push({ x: caveOuterX, y: caveBottomY });
-    } else {
-      backWallPoly.push({ x: caveOuterX - wallThick, y: caveTopY });
-      backWallPoly.push({ x: caveOuterX, y: caveTopY });
-      backWallPoly.push({ x: caveOuterX, y: caveBottomY });
-      backWallPoly.push({ x: caveOuterX - wallThick, y: caveBottomY });
-    }
-  }
+  world.terrainHeightmap = heightmap;
+  world.waveClipY = waveClip;
 
-  pushTerrainPolygon(world, ceilingPoly, baseTone);
-  pushTerrainPolygon(world, floorPoly, baseTone);
-  pushTerrainPolygon(world, backWallPoly, baseTone);
-
-  // ---- 4. Seafloor chunks ----
-  // The cave occupies [caveX0, caveX1] in the floor row, so the chain
-  // of seafloor chunks skips that span. Each chunk covers a horizontal
-  // slice ~120-180px wide with a top profile sampled from heightmap.
-  // Splitting keeps individual polygons small enough that lobe packing
-  // produces a reasonable approximation (one long thin polygon would
-  // either get under-sampled or balloon lobe count).
-  const CHUNK_W_MIN = 120, CHUNK_W_MAX = 180;
-  // Build the list of [x0, x1] spans that need seafloor chunks: the
-  // pre-cave segment and the post-cave segment.
-  const spans: [number, number][] = [];
-  if (caveX0 > 0) spans.push([0, caveX0]);
-  if (caveX1 < W) spans.push([caveX1, W]);
-  for (const [spanStart, spanEnd] of spans) {
-    let xStart = spanStart;
-    while (xStart < spanEnd) {
-      const target = CHUNK_W_MIN + simRng() * (CHUNK_W_MAX - CHUNK_W_MIN);
-      let xEnd = Math.min(spanEnd, xStart + target);
-      // Snap last chunk to the span end -- avoids a tiny tail chunk.
-      if (spanEnd - xEnd < CHUNK_W_MIN * 0.6) xEnd = spanEnd;
-      const poly = buildFloorChunkPolygon(heightmap, xStart, xEnd, H);
-      pushTerrainPolygon(world, poly, baseTone);
-      xStart = xEnd;
-    }
-  }
-
-  // ---- 5. Outcroppings ----
-  // 1 or 2 wedge-shaped overhangs jutting horizontally from a side
-  // wall, above the seafloor band so there's water both above and
-  // below them. Random side per outcropping. We pick a y-band roughly
-  // in the middle vertical third of the water column so they don't
-  // collide with the cave (cave hugs the floor) or with surface waves.
-  const outcropCount = 1 + Math.floor(simRng() * 2); // 1..2
-  for (let oc = 0; oc < outcropCount; oc++) {
-    const onLeft = simRng() < 0.5;
-    const protrusion = 80 + simRng() * 70; // 80..150
-    const thickness = 30 + simRng() * 30;  // 30..60 at wall
-    const yCenter = H * (0.35 + simRng() * 0.3); // 35-65% of height
-    // Anchor flush against the world wall (x=0 or x=W). Previous
-    // version started at +/-4 to feel "embedded", but that left a
-    // visible gap between the wedge and the side -- the rock has to
-    // actually touch the wall for the overhang to read right.
-    const baseX = onLeft ? 0 : W;
-    const tipX = onLeft ? baseX + protrusion : baseX - protrusion;
-    // Wedge polygon. Top edge sweeps gently down from base to tip;
-    // bottom edge sweeps up sharper so the wedge tapers toward the
-    // tip. Adds a couple of mid-edge vertices for organic look.
-    const top1 = yCenter - thickness * 0.55;
-    const bot1 = yCenter + thickness * 0.55;
-    const midX = onLeft ? baseX + protrusion * 0.5 : baseX - protrusion * 0.5;
-    const top2 = yCenter - thickness * 0.32 + (simRng() - 0.5) * 6;
-    const bot2 = yCenter + thickness * 0.30 + (simRng() - 0.5) * 6;
-    const tipY = yCenter + (simRng() - 0.5) * thickness * 0.2;
-    const poly: { x: number; y: number }[] = onLeft
-      ? [
-        { x: baseX, y: top1 },
-        { x: midX, y: top2 },
-        { x: tipX, y: tipY },
-        { x: midX, y: bot2 },
-        { x: baseX, y: bot1 },
-      ]
-      : [
-        { x: baseX, y: top1 },
-        { x: baseX, y: bot1 },
-        { x: midX, y: bot2 },
-        { x: tipX, y: tipY },
-        { x: midX, y: top2 },
-      ];
-    pushTerrainPolygon(world, poly, baseTone);
-  }
-
-  // Stash the heightmap on the world for topTerrainYAtColumn /
-  // founderTerrainBlocked. Cheap (~few KB) and lets the founder
-  // placement do a single O(1) lookup per attempt instead of an
-  // O(obstacles) sweep.
-  TERRAIN_HEIGHTMAP = heightmap;
-  TERRAIN_HEIGHTMAP_WIDTH = W;
+  // Vent: anchor it at the normalized VENT_ORIGIN inside the seafloor
+  // notch. Per-world vent state (next eruption time, current phase)
+  // resets here so a fresh world is dormant for the first cycle.
+  initVent(world, VENT_ORIGIN.x * W, VENT_ORIGIN.y * H);
 }
 
-// Heightmap of the seafloor surface, indexed by integer x. Used by
-// the founder placement code (topTerrainYAtColumn). The cave and
-// outcroppings are NOT folded into this map -- founderTerrainBlocked
-// does an obstacle-by-obstacle test for those because they're sparse
-// enough that a per-obstacle sweep is cheap, and they have non-
-// monotonic-in-y geometry (overhangs) that doesn't fit a heightmap.
-let TERRAIN_HEIGHTMAP: Float32Array = new Float32Array(0);
-let TERRAIN_HEIGHTMAP_WIDTH = 0;
+// Install the vent state on the world. Stays consistent with the
+// generateObstacles entry point: the vent anchor is in world coords
+// (computed there from the VENT_ORIGIN normalized point) so test
+// scaffolds that bypass generateObstacles never get a vent unless they
+// opt in. ventEmitted ledger is sized to MOLECULE_IDS.length so the
+// mass-conservation ledger has one slot per molecule.
+function initVent(world: World, x: number, y: number): void {
+  world.vent = makeVentState(x, y, world.dayPeriod, simRng);
+  if (!world.ventEmitted) {
+    world.ventEmitted = new Float64Array(MOLECULE_IDS.length);
+  } else {
+    world.ventEmitted.fill(0);
+  }
+}
+
+// Tick the vent. Wrapped here so the vent module stays free of the
+// pushParticle import (which would pull in the whole sim graph). Skip
+// when the world has no vent installed (test scaffolds).
+function runVent(world: World, dt: number): void {
+  if (!world.vent) return;
+  // Respect the particle cap so the vent can't push the world over the
+  // overflow band even at peak intensity.
+  const cap = effectiveParticleCap(world);
+  stepVent(world, dt, simRng, (x, y, z, vx, vy, vz, r, chemId, density, molecules) => {
+    if (world.particles.length >= cap) return;
+    pushParticle(world, { x, y, z, vx, vy, vz, r, chemId, density, molecules });
+  });
+}
+
+
+// Per-world derived terrain maps. Stored on World so test scaffolds
+// that swap worlds across describe blocks don't leak stale terrain
+// state into a quietWorld() that should be open water everywhere.
+// generateObstacles populates world.terrainHeightmap and
+// world.waveClipY; callers below read directly from the world.
 
 // True if a candidate body of radius `bodyR` centered at (x, y) would
 // overlap any rock. Conservative: tests the candidate disc against
@@ -1429,15 +1325,12 @@ let TERRAIN_HEIGHTMAP_WIDTH = 0;
 // would push out anyway. Used at founder spawn so cells don't enter
 // inside the cave, under an outcropping, or stuck in the seafloor.
 function founderTerrainBlocked(world: World, x: number, y: number, bodyR: number): boolean {
-  // Quick check against the seafloor heightmap. If the candidate body
-  // overlaps the heightmap rock at this column, reject. (The heightmap
-  // is the seafloor's top surface -- below it is rock.)
-  if (TERRAIN_HEIGHTMAP_WIDTH > 0) {
-    const ix = Math.max(0, Math.min(TERRAIN_HEIGHTMAP_WIDTH - 1, Math.floor(x)));
-    if (y + bodyR > TERRAIN_HEIGHTMAP[ix]) return true;
-  }
-  // Per-obstacle lobe test for the cave + outcroppings. With ~10-15
-  // obstacles and ~10 lobes each this is ~150 ops per attempt; fine.
+  // Per-obstacle lobe test against every rock. With ~5 obstacles and
+  // ~30 lobes each this is ~150 ops per attempt -- fine. (The
+  // heightmap fast-path that used to short-circuit here only worked
+  // for a monotonic seafloor; the hand-authored layout has top-down
+  // cliffs that don't fit that assumption, so we rely solely on the
+  // lobe sweep now.)
   for (const ob of world.obstacles) {
     if (x + bodyR < ob.minX || x - bodyR > ob.maxX) continue;
     if (y + bodyR < ob.minY || y - bodyR > ob.maxY) continue;
@@ -1453,36 +1346,13 @@ function founderTerrainBlocked(world: World, x: number, y: number, bodyR: number
   return false;
 }
 
-// Topmost rock surface at column x. Used by external callers (debug
-// tooling, future spawn paths) that want the seafloor surface only.
-// Ignores cave and outcroppings -- those have overhang geometry and
-// "the top y" isn't well-defined for them.
-export function topTerrainYAtColumn(x: number): number {
-  if (TERRAIN_HEIGHTMAP_WIDTH === 0) return Infinity;
-  const ix = Math.max(0, Math.min(TERRAIN_HEIGHTMAP_WIDTH - 1, Math.floor(x)));
-  return TERRAIN_HEIGHTMAP[ix];
-}
-
-// Helper: build a seafloor chunk polygon. Top edge follows the
-// heightmap (sampled every TOP_STEP px); bottom edge runs along the
-// world bottom. Closes left-edge down -> bottom-right -> bottom-left.
-function buildFloorChunkPolygon(
-  heightmap: Float32Array, x0: number, x1: number, worldH: number,
-): { x: number; y: number }[] {
-  const TOP_STEP = 6;
-  const poly: { x: number; y: number }[] = [];
-  // Walk top edge left-to-right.
-  for (let x = x0; x < x1; x += TOP_STEP) {
-    const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
-    poly.push({ x, y: heightmap[ix] });
-  }
-  // Final top-right vertex pinned to the actual x1 so adjacent chunks
-  // meet exactly (no gap, no overlap visible after the bitmap paint).
-  const ixEnd = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x1 - 1)));
-  poly.push({ x: x1, y: heightmap[ixEnd] });
-  poly.push({ x: x1, y: worldH });
-  poly.push({ x: x0, y: worldH });
-  return poly;
+// Topmost rock surface at column x. Looks up world.terrainHeightmap;
+// returns +Inf for columns with no rock (or worlds without terrain).
+export function topTerrainYAtColumn(world: World, x: number): number {
+  const hm = world.terrainHeightmap;
+  if (!hm || hm.length === 0) return Infinity;
+  const ix = Math.max(0, Math.min(hm.length - 1, Math.floor(x)));
+  return hm[ix];
 }
 
 // Push a terrain polygon as an Obstacle with lobes packed inside.
@@ -1550,33 +1420,6 @@ function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]):
     if (intersect) inside = !inside;
   }
   return inside;
-}
-
-// 1D smooth value noise on the integer lattice. Two adjacent integers
-// produce hash-derived random values in [0,1]; we smoothstep between
-// them. Deterministic in t (so the same float input always returns
-// the same value), which matters for the multi-octave sum to be
-// repeatable across pixels.
-function smoothNoise1D(t: number): number {
-  const i = Math.floor(t);
-  const f = t - i;
-  const a = hash1D(i);
-  const b = hash1D(i + 1);
-  // Smoothstep (3f^2 - 2f^3) to soften the linear lerp -- without
-  // this, summed octaves get a sawtooth at lattice boundaries.
-  const s = f * f * (3 - 2 * f);
-  return a * (1 - s) + b * s;
-}
-
-// Cheap deterministic hash -> [0,1). Standard mulberry-style integer
-// hash. Not cryptographic, but produces uncorrelated values across
-// adjacent inputs which is all we need for value noise.
-function hash1D(x: number): number {
-  let h = (x | 0) ^ 0x9e3779b9;
-  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
-  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
-  h = h ^ (h >>> 15);
-  return ((h >>> 0) % 65536) / 65536;
 }
 
 function makeObstacleFromLobes(lobes: ObstacleLobe[], color: string): Obstacle {
@@ -4564,6 +4407,7 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.walls += n - m; m = n;
     sampleRegionTemps(world);
     seedRamp(world, dt);
+    runVent(world, dt);
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
@@ -4603,6 +4447,7 @@ export function step(world: World, dt: number): void {
     applyWalls(world);
     sampleRegionTemps(world);
     seedRamp(world, dt);
+    runVent(world, dt);
     aerate(world, dt);
     aerateAmbient(world, dt);
     diffuseRegions(world, dt);
@@ -7221,7 +7066,12 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:19:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+// Bumped 19 -> 20: static rocky terrain (hand-authored polygons) +
+// hydrothermal vent are part of every world; the vent's schedule and
+// emission ledger are not yet persisted, so reloaded saves restart
+// the vent dormant. Old saves without rock terrain would land cells
+// inside the new rocks, so we invalidate them via the schema bump.
+export const SAVE_SCHEMA = `evosim4:20:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -8012,6 +7862,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     tempPatchLength: world.tempPatchLength,
     tempPatchPeriod: world.tempPatchPeriod,
     dayPhase: world.dayPhase,
+    vent: world.vent ? { ...world.vent } : undefined,
+    waveClipY: world.waveClipY,
     particleTarget: world.particleTarget,
     extinctionCount: world.extinctionCount,
     engulfedCount,

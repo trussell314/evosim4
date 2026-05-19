@@ -2366,6 +2366,9 @@ function render(): void {
   if (!terrainBitmap) buildTerrainBitmap();
   if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
 
+  // Vent: dark mouth in the rock + active eruption shimmer overlaid.
+  if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
+
   // Region grid overlay (toggled by the lower-left button). Matches
   // REGION_PX so the dissolved/reserve region boundaries are visible.
   if (gridLinesOn) {
@@ -3149,6 +3152,55 @@ function buildTerrainBitmap(): void {
     octx.stroke();
   }
   terrainBitmap = off;
+}
+
+// Hydrothermal vent visual. The vent itself is a small dark mouth
+// drilled through the rock at (vent.x, vent.y); while erupting we
+// stack three semi-transparent ellipses on top to read as a heated
+// shimmer plume. Intensity drives both the plume opacity and a
+// subtle orange glow at the mouth so the user can tell at a glance
+// whether the vent is dormant or active.
+function drawVent(
+  c: CanvasRenderingContext2D,
+  vent: { x: number; y: number; intensity: number; active: boolean },
+  t: number,
+): void {
+  // Mouth: dark elliptical opening, ~14 px wide x 6 px tall. Sits
+  // just above the rock's notch in the seafloor.
+  c.save();
+  c.translate(vent.x, vent.y);
+  c.beginPath();
+  c.ellipse(0, -3, 9, 4, 0, 0, Math.PI * 2);
+  c.fillStyle = "rgba(8, 6, 4, 0.95)";
+  c.fill();
+  // Inner highlight at the mouth's rim -- catches eye even when dormant.
+  c.beginPath();
+  c.ellipse(0, -3, 7, 3, 0, 0, Math.PI * 2);
+  const innerGrad = c.createRadialGradient(0, -3, 0, 0, -3, 7);
+  const glow = vent.active ? 0.35 + 0.55 * vent.intensity : 0.08;
+  innerGrad.addColorStop(0, `rgba(255, 130, 60, ${glow})`);
+  innerGrad.addColorStop(1, "rgba(50, 10, 0, 0)");
+  c.fillStyle = innerGrad;
+  c.fill();
+
+  if (vent.active) {
+    // Shimmer plume: three stacked ellipses with low alpha, moving
+    // upward, modulated by intensity. Phase from t so the plume
+    // visibly pulses. Plume tops out about 80 px above the mouth.
+    const phase = (t * 1.7) % 1;
+    for (let i = 0; i < 4; i++) {
+      const k = (i + phase) % 1;
+      const dy = -10 - k * 70;
+      const w = 10 + k * 26;
+      const h = 6 + k * 10;
+      const a = vent.intensity * (1 - k) * 0.45;
+      c.beginPath();
+      c.ellipse(0, dy, w, h, 0, 0, Math.PI * 2);
+      c.fillStyle = `rgba(255, 160, 90, ${a.toFixed(3)})`;
+      c.fill();
+    }
+  }
+  c.restore();
 }
 
 // Pseudo-random hash on (x, y). Returns roughly uniform in [-0.5, 0.5).

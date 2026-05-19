@@ -122,7 +122,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // become no-ops (their synthMask bits are no longer consulted
     // by the reaction loop). Intended behavior change; SAVE_SCHEMA
     // 15->16; mass-conservation green.
-    const GOLDEN = "d510f4c1";
+    // Bumped: hand-authored static terrain (4 rock polygons) + a
+    // hydrothermal vent now ship with every fresh world. The new
+    // obstacles change the seeded layout (founder spawn rejects rock
+    // overlap, particles bounce off rock) and the vent's eruption
+    // schedule consumes RNG draws -- both shift the fingerprint
+    // deterministically. Determinism + mass-conservation still green.
+    const GOLDEN = "ac941ecd";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
