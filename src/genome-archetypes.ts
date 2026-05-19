@@ -34,7 +34,6 @@ import {
 // debris (the staple heterotroph food) rides slot 1.
 const ING_BIOPOLYMER = 1;
 const ING_O2 = 3;
-const ING_GLU = 5;
 
 // Inert trailing cassette. stress-amp's SPLICE_DUP/DEL must target a
 // non-essential region (offset 0 corrupts the SYNTH kit and shifts
@@ -262,7 +261,12 @@ function build(): Archetype[] {
           35,
         ),
         ["ENGULF"],
-        ...reproduceWhenGrown(40, "np"),
+        // 40 -> 28: forager (near-identical genome) only self-sustains
+        // at ~30, and farmer carries extra ENGULF cost + draining
+        // captives, so it must divide a bit EARLIER, not later --
+        // dividing is also what partitions engulfed symbionts to the
+        // daughter (the tandem-reproduction mechanism).
+        ...reproduceWhenGrown(28, "np"),
       ],
     },
     {
@@ -289,22 +293,27 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure; ingests glucose + O2 and returns CO2. Carries a digestive-enzyme + biopolymer bootstrap so it can actually feed free-living (free glucose isn't seeded into open water) before a host takes it up. Honest framing: its product (ATP) does NOT cross the host membrane; any host benefit is emergent gas/substrate cycling via the shared pool, never a scripted ATP hand-off.",
+      desc: "Seed: digestive/respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure. Digests biopolymer (ENZ) and consumes O2, returning glu/aa/fa + CO2 to the shared pool -- a non-parasitic passenger (does NOT strip host glucose). Slow internal division so it stays roughly proportional to host fission (tandem), not a bloat-and-kill bloom. Honest framing: ATP does NOT cross the host membrane; host benefit is emergent shared-pool digestion/gas cycling, never a scripted hand-off.",
       prog: [
         ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
         ["SYNTH", "MRNA", 0],
         ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0], // free-living bootstrap: digest organic
+        ["SYNTH", "ENZ", 0], // digests biopolymer (shared pool)
         ["SYNTH", "AA", 0],
-        ["INGEST", ING_BIOPOLYMER], // free-living fuel via digestion
-        ["INGEST", ING_GLU], // respiratory fuel inside a glucose-rich host
+        ["INGEST", ING_BIOPOLYMER], // carbon via digestion, not host glu
+        // (INGEST glu removed: don't strip the host's glucose ->
+        //  shift from glucose-parasite to digestion passenger)
         ["INGEST", ING_O2], // electron acceptor
         ["THRUST"], // drift to substrate before engulfment
         ["PUSH8", 8],
         ["EXCRETE", CHEM_CO2], // respiration product back to shared pool
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
-        ...reproduceWhenGrown(18, "np"), // fission inside host is uncapped
+        // 18 -> 45: slow division. One lever fixes two failures --
+        // curbs internal overgrowth (stays ~proportional to host =
+        // tandem, not bloat-and-kill) AND curbs free-living bloom so
+        // "engulfed" is the stable niche, not independence.
+        ...reproduceWhenGrown(45, "np"),
       ],
     },
     {

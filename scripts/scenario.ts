@@ -459,7 +459,7 @@ const SCENARIOS: Record<string, Scenario> = {
   // + tandem (eng:host ratio) arise on their own.
   "mito-symbiosis": {
     id: "mitochondria",
-    count: 60,
+    count: 40,
     coStock: [{ id: "farmer", count: 40 }],
     describe:
       "SEPARATE: 60 free mito + 40 farmer hosts (ENGULF archetype), " +
@@ -489,7 +489,7 @@ const SCENARIOS: Record<string, Scenario> = {
   // partitions contents to daughters; mito internal division).
   "mito-engulfed": {
     id: "mitochondria",
-    count: 80,
+    count: 40,
     coStock: [{ id: "farmer", count: 40 }],
     describe:
       "PRE-ENGULFED: 40 farmer hosts each pre-loaded with 2 mito in " +
@@ -506,7 +506,7 @@ const SCENARIOS: Record<string, Scenario> = {
       let mi = 0;
       for (const h of hosts) {
         const host = h as unknown as { contents: unknown[] };
-        for (let j = 0; j < 2 && mi < mito.length; j++, mi++) {
+        for (let j = 0; j < 1 && mi < mito.length; j++, mi++) {
           const m = mito[mi] as unknown as {
             genome: Uint8Array; organelleSynthMask: number;
           };
@@ -627,16 +627,44 @@ function nHostsCarrying(hostRoots: Set<number>, symRoots: Set<number>): number {
 // engulfed mito (recursed), hosts carrying >=1 mito, and the
 // engulfed-mito : host ratio (the "tandem" indicator -- stable/
 // growing ratio = symbiosis persisting + co-reproducing).
+// Classify every engulfed mito by the lineage of its DIRECT enclosing
+// cell, to resolve the earlier engMito>0 / hosts=0 anomaly: is the
+// mito inside a host (farmer), inside another mito, or inside some
+// other lineage? Walk world.creatures and recurse contents, tracking
+// the immediate parent.
+function engMitoEnclosure(): { inHost: number; inMito: number; inOther: number } {
+  let inHost = 0, inMito = 0, inOther = 0;
+  const walk = (list: WithContents[], parentRoot: number): void => {
+    for (const inner of list) {
+      if (focalRoots.has(rootOf(inner))) {
+        if (coStockRoots.has(parentRoot)) inHost++;
+        else if (focalRoots.has(parentRoot)) inMito++;
+        else inOther++;
+      }
+      if (inner.contents && inner.contents.length) {
+        walk(inner.contents, rootOf(inner));
+      }
+    }
+  };
+  for (const c of w.creatures) {
+    const cc = c as unknown as WithContents;
+    if (cc.contents && cc.contents.length) walk(cc.contents, rootOf(c));
+  }
+  return { inHost, inMito, inOther };
+}
+
 function mitoReport(): string {
   const hosts = nFree(coStockRoots);
   const freeM = nFree(focalRoots);
   const engM = nEngulfed(focalRoots);
   const hostsW = nHostsCarrying(coStockRoots, focalRoots);
   const ratio = hosts > 0 ? (engM / hosts).toFixed(2) : "-";
+  const e = engMitoEnclosure();
   return (
     `hosts=${String(hosts).padStart(3)} ` +
     `freeMito=${String(freeM).padStart(4)} ` +
     `engMito=${String(engM).padStart(4)} ` +
+    `[inHost=${e.inHost} inMito=${e.inMito} inOther=${e.inOther}] ` +
     `hostsW/Mito=${String(hostsW).padStart(3)} ` +
     `eng:host=${ratio}`
   );
