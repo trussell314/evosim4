@@ -249,7 +249,11 @@ function build(): Archetype[] {
         ["PUSH8", 6],
         ["EXCRETE", CHEM_GLU], // bleed surplus fixed carbon to the pool
         ["LABEL", "noLeak"],
-        ...reproduceWhenGrown(36, "np"),
+        // High internal-division gate: an engulfed chloroplast that
+        // divides too eagerly blooms inside the host (glucose flood,
+        // host population thrash). Raised to the mito-validated band
+        // so the plastid stays tandem-proportional to its host.
+        ...reproduceWhenGrown(45, "np"),
       ],
     },
     {
