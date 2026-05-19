@@ -24,21 +24,50 @@ emergent program over primitives, never a dedicated verb.
    slot is multi-substrate *and* multi-product, so "the reaction
    that makes X" is undefined. This is continuous with today's
    `SYNTH CAT param=slot` (`genome.ts:453`), just generalized +
-   renamed. **Correction (review 2026-05-19):** the named-SYNTH →
-   `CATALYST <fixed slot>` "alias" framing is mechanically WRONG and
-   must not be treated as a rename. SYNTH kinds set a *bit* in
-   `synthMask` (`genome.ts:440-452`) that gates **multiple** reaction
-   slots via `rxn.gateMask` (e.g. `SYNTH_BIT_BIO` gates slots 9, 11,
-   24 — `reactions.ts:316,327,354`); a gate is "free if the bit is
-   set" whereas a `CATALYST` pool must be biosynthesized at
-   `CAT_ATP_COST`. So the collapse is a **behavioral + energetic
-   redesign** (multi-slot → multi-`CATALYST`, gate-semantics →
-   pool-semantics), determinism- and mass-sensitive, NOT an
-   aliasing. `BOND` is therefore not the sole non-lossless case —
-   `BIO/AA/FA/ENZ/MRNA/CHL/REPAIR` are all non-lossless, because
-   their product chems also drive engine machinery beyond a reaction
-   (membrane integrity/toxify, repair→somatic-mutation suppression,
-   `CHEM_BOND` adhesion gate + greenbeard, `CHL`→photosynthesis).
+   renamed. The original "named-SYNTH ≡ `CATALYST <fixed slot>`
+   alias" framing was wrong (a rename), and the review's "tangled
+   behavioral redesign" framing over-stated it. **Resolved framing
+   (2026-05-19):** the engine has TWO cleanly separable mechanisms,
+   which the named slots happen to bundle:
+   - **Free enable-gate** — named bootstrap reactions (slots 0–25)
+     carry `uncatRate > 0` ("bootstrap rate every cell gets free",
+     `reactions.ts:257`) **plus** a `gateMask` = a `synthMask` bit
+     (`:258`). The gate is an *enable flag* ("the genome ran
+     `SYNTH BIO`, so this curated pathway is unlocked"), NOT the
+     rate. The free rate already lives in `uncatRate`.
+   - **Paid catalyst pool** — generic slots have `uncatRate:0,
+     gateMask:0`; inert until a `catalystCols` pool is biosynthesized
+     at `CAT_ATP_COST` (decaying, must be rebuilt), adding
+     `vmax·pool/CAT_REF`.
+   `CATALYST` only ever needs to be the **paid pool — one
+   behavior**. The free floor does NOT belong in the op; it is
+   already in the reaction table's `uncatRate`. So named `SYNTH`
+   biomass/pigment kinds become **unnecessary, not aliased**: a
+   do-nothing genome still metabolizes off `uncatRate`; `CATALYST`
+   is purely the specialization lever on top. Phase 4 reduces to
+   ONE scoped decision: keep the "must declare the pathway"
+   enable-gate (preserves real selective pressure — losing
+   `SYNTH BIO` by mutation currently sterilizes a lineage) or drop
+   it (a do-nothing cell becomes baseline-viable; changes
+   evolutionary dynamics). Still determinism-sensitive, but a single
+   knob, not a multi-slot tangle. `BOND`'s kin-marker is the one
+   genuinely separate loss (relocate, see below); product-driven
+   machinery (membrane integrity, repair→mutation-suppression,
+   adhesion, `CHL`→photosynthesis) is preserved automatically
+   because those reactions/products are untouched — only the
+   `synthMask` *gate path* is what's being retired.
+
+   **Why the paid property is non-negotiable:** (1) it is the
+   emergence mechanism — free catalysis ⇒ every cell expresses
+   every catalyst ⇒ no opportunity cost ⇒ no selection for distinct
+   metabolic strategies (substrate-not-script collapses); (2) it is
+   the conservation spine — ~half the generic reactions are
+   exergonic, so zero-cost activation = an unconditional energy
+   fountain; the build+maintenance cost is the thermodynamic price
+   against perpetual motion; (3) the free bootstrap floor is the
+   deliberate bounded exception (newborn viability: can't pay for
+   catalysts before metabolizing), intentionally weak and limited to
+   the curated set, never the open generic space.
 2. **Name = product, not action.** `CATALYST` (builds a reusable
    standing catalyst), not `CATALYZE`. Same logic flags the HGT pair
    as mis-filed under `SYNTH` (see op surface).
@@ -59,7 +88,7 @@ levels/vectors from the stack so they are computed/regulated):
 | `SENSE_IN <chemId>` | chem id | own cytoplasmic pool (today's `SENSE_CHEMICAL`) |
 | `SENSE_OUT <chemId>` | chem id | **NOT a scalar read.** `runActivation` (`sim.ts:3398-3435`) emits *directional X/Y gradient* vectors (`CHEM_ACT_*_X/_Y`), receptor-pool-scaled and decaying. A scalar ambient read cannot express taxis. Subsuming the receptor machinery requires returning a gradient **vector** (≥2 values + receptor gating + decay) — a substantially larger primitive than one row implies |
 | `TRANSPORT <chemId>` | chem id | signed-amount membrane flux; facilitated down-gradient (free), active up-gradient (ATP cost). "Conservation-airtight" is a REQUIREMENT not a freebie: the ATP debit and moved-mass credit must enter the *same* accounting the mass test checks (current transporters are `atpDelta:0`, applied via `runTransportReactions` `sim.ts:5227`). Subsumes `EXCRETE` + transporter band |
-| `CATALYST <slotId>` | reaction slot | analog level from stack. Named `SYNTH` kinds do NOT collapse to single-slot aliases (see Rule 1 correction) — Phase 4 is a behavioral redesign |
+| `CATALYST <slotId>` | reaction slot | analog level from stack. **One behavior: the paid catalyst pool.** The free bootstrap floor stays in the reaction table's `uncatRate` (not the op); named `SYNTH` kinds become unnecessary, not aliased (see Rule 1) |
 | `INGEST` | **UNRESOLVED** | particulate channel — see design problem below |
 
 Survivors that do **not** collapse (operate on genome/eDNA-particle
@@ -171,10 +200,12 @@ operand namespace — the exact wart this redesign exists to remove.
 
 0 scaffold · **1 abiotic source — DONE** · 2 acquisition (INGEST
 resolution + `TRANSPORT`) · 3 `SENSE_OUT` (gradient-vector
-primitive) · 4 named-`SYNTH` → `CATALYST` **behavioral redesign**
-(multi-slot, pool-vs-gate energetics, product machinery) · 5 retire
-receptor kinds/activation chems. **Phases 2, 3, 4 and 5 are ALL
-behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +
-explicit mass/RNG-order handling) — Phase 4 is NOT a rename. Every
+primitive) · 4 retire the `synthMask` enable-gate path; `CATALYST`
+becomes the sole paid lever; ONE decision: keep or drop the
+"declare the pathway" gate (free floor already in `uncatRate`) ·
+5 retire receptor kinds/activation chems. **Phases 2, 3, 4 and 5 are
+ALL behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +
+explicit mass/RNG-order handling) — but Phase 4 is one scoped gate
+decision, not a multi-slot tangle. Every
 commit: `tsc`/`vitest`/`vite build` green + archetype-viability
 smoke; mass conservation green every commit.
