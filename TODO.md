@@ -14,19 +14,23 @@ Living list of deferred work. Newest/explicit asks at top.
   Float32Array(b, o.base.energy, cap)`), not a chemCols column; and
   the engine has a dual store (`molCols`/`Molecules` vs the 96-wide
   `chemCols`, bridged by `CHEM_NAMED_MOL_IDX`). Staged plan:
-  1. **Atomic id-space + storage cutover (one deliberate
-     behavior-change commit):** append `CHEM_ATP` at id 96 (keeps
-     chems 0..95 stable), `CHEMICAL_COUNT 96->97`, add the
-     `Molecules`/`NAMED_CHEMICALS` entry + molCols<->chemCols bridge
-     row; migrate the `energy` buffer region into `chemCols[CHEM_ATP]`
-     (update the shared-buffer offset table + worker layout +
-     serialize/restore + `Creature.energy` accessor). Unavoidable in
-     this commit: genome ABI shift (`%CHEMICAL_COUNT` on
-     SENSE_CHEMICAL/EXCRETE/PARTITION), procedural reaction-table RNG
-     order change -> determinism re-anchored + **golden rebaselined
-     deliberately** + **`SAVE_SCHEMA` bump** (it embeds
-     `CHEMICAL_COUNT`/`NAMED_CHEMICAL_COUNT`). Keep mass-conservation
-     green (ATP already in `creatureTotalMass`).
+  1. **Storage cutover (REVISED, lower-risk -- do NOT use 96->97).**
+     Convert one GENERIC chem slot into the named `CHEM_ATP`:
+     `NAMED_CHEMICAL_COUNT 45->46`, `GENERIC 51->50`,
+     **`CHEMICAL_COUNT` stays 96**. This PRESERVES the genome ABI
+     (`%CHEMICAL_COUNT` unchanged -> existing genomes' chem-addressing
+     intact) and the seeded reaction-table RNG order (chem-id draws
+     still 0..95). Add `Molecules.atp` (a new `m_atp` column),
+     `CHEM_ATP = 45` (first ex-generic slot), update MOLECULE_IDS /
+     NAMED_CHEMICALS / CHEM_NAMED_MOL_IDX; repoint `Creature.energy`
+     get/set + `newCreature` init + the alloc-zero onto `m_atp`
+     (chemCols[CHEM_ATP]); drop the standalone `energy` F32 column
+     from CREATURE_F32_COLS. `creatureTotalMass` must STOP adding the
+     explicit `c.energy` term (atp now summed once via MOLECULE_IDS --
+     else double-count). Unavoidable: **`SAVE_SCHEMA` bump** (embeds
+     NAMED_CHEMICAL_COUNT) + **golden re-verify/rebaseline** (named/
+     generic boundary moves; likely small). Mass invariant stays
+     green by the dedupe above.
   2. **Generalise transport:** retire the Path-2 `TRANSPORT_ATP`
      sentinel -> a normal chem-id transporter on `CHEM_ATP` (slot +
      `SYNTH CAT` genome expression survive; only
