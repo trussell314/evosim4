@@ -242,11 +242,20 @@ position for ANY chem with no SYNTH'd receptor — emergent taxis;
 zero vector for engulfed organelles; VMSensors gained a deterministic
 `gradient()` hook supplied by the engine, no per-tick alloc; legacy
 receptor/activation machinery kept in parallel — forager still
-viable; SAVE_SCHEMA 14→15; golden unchanged; +2 tests) · 4 retire
-the `synthMask` enable-gate path; `CATALYST`
-becomes the sole paid lever; ONE decision: keep or drop the
-"declare the pathway" gate (free floor already in `uncatRate`) ·
-5 retire receptor kinds/activation chems. **Phases 2, 3, 4 and 5 are
+viable; SAVE_SCHEMA 14→15; golden unchanged; +2 tests) ·
+**4a retire the `synthMask` enable-gate — DONE** (deleted the
+gateMask field from Reaction + the 21 named bootstrap installs;
+removed the gate check from runGenericReactions; named bootstrap
+reactions now run unconditionally on their existing uncatRate
+floor — every cell metabolizes at baseline; named SYNTH biomass /
+receptor / mech / thermo / mag ops become no-ops, kept harmlessly
+in archetypes; SAVE_SCHEMA 15→16; golden 880fc7e9→f4525ec8;
+forager/benthic/vent viability re-verified) · 4b add `SYNTH INH
+<slot>` allosteric inhibitor (paid inhibitor pool per slot,
+decaying, multiplies rate down — the off-switch for the now-
+unconditional bootstrap floor) · 5 retire receptor kinds /
+activated-chemo chems / SYNTH CHEMO (the only sense family
+SENSE_OUT actually subsumes; PHOTO/THERMO/MECH/MAG stay). **Phases 2, 3, 4 and 5 are
 ALL behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +
 explicit mass/RNG-order handling) — but Phase 4 is one scoped gate
 decision, not a multi-slot tangle. Every

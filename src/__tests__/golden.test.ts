@@ -100,7 +100,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
     // unchanged. Determinism (same-seed-identical) still green;
     // mass-conservation green; SAVE_SCHEMA bumped 11->12.
-    const GOLDEN = "880fc7e9";
+    // Bumped (Phase 4a, op redesign): the synthMask enable-gate path
+    // is retired. Named bootstrap reactions ran only when the genome
+    // had set the corresponding SYNTH_BIT_* via a SYNTH op; now they
+    // run unconditionally on their existing uncatRate floor. Every
+    // cell metabolizes at baseline; named SYNTH biomass/receptor ops
+    // become no-ops (their synthMask bits are no longer consulted
+    // by the reaction loop). Intended behavior change; SAVE_SCHEMA
+    // 15->16; mass-conservation green.
+    const GOLDEN = "f4525ec8";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

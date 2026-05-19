@@ -632,7 +632,7 @@ function refreshSurfaceFingerprints(world: World): void {
   }
 }
 
-function runGenericReactions(c: Creature, dt: number, ambientLight: number, synthMask: number): void {
+function runGenericReactions(c: Creature, dt: number, ambientLight: number): void {
   const s = c.store; const i = c.idx;
   const KM = KM_DEFAULT;
   for (let slot = 0; slot < N_REACTIONS; slot++) {
@@ -640,7 +640,6 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number, synt
     // Transport-flavored slots are not intra-pool reactions; the
     // cross-compartment applier (runTransportReactions) handles them.
     if (rxn.transport !== undefined) continue;
-    if (rxn.gateMask !== 0 && (synthMask & rxn.gateMask) === 0) continue;
     const pool = s.catalystCols[slot][i];
     if (rxn.uncatRate <= 0 && pool <= 0) continue;
     // Light gate
@@ -4108,7 +4107,7 @@ function runInnerCell(
   // Chemistry from the LIVE synth mask the VM just produced (not the
   // frozen organelleSynthMask), plus catalyst synthesis -- exactly
   // the free-cell metabolic pipeline.
-  runGenericReactions(inner, dtT, light, inner.vmOut.synthMask);
+  runGenericReactions(inner, dtT, light);
   const cm = inner.vmOut.catSynthMask;
   if (cm) {
     for (let k = 0; k < CATALYST_COUNT; k++) {
@@ -5232,7 +5231,7 @@ function updateCreatures(world: World, dt: number): void {
     // Biosynth gateMasks honour vmOut.synthMask so SYNTH_AA / FA /
     // BIO / CHL / ENZ / RIBO ops still gate what gets built.
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
-    runGenericReactions(c, dtT, ambientLight, vmOut.synthMask);
+    runGenericReactions(c, dtT, ambientLight);
     // Standing transporters across the outer membrane (cell<->world).
     // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a
     // transport-flavored reaction slot; selective uptake/excretion of
@@ -7157,7 +7156,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:15:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:16:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
