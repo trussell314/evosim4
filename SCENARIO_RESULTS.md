@@ -264,3 +264,42 @@ as a population -- the closed arena boom-busts regardless. The
 experimental gate change (80->47->30) is degenerate at 30 (armor
 inert) and should be reverted to the catalogued 80 to preserve the
 intended-if-weak design; the finding stands as documented.
+
+### 2x2 closeout: forager@80 (ad-hoc genome) -- gate isolated
+
+Added probe scenario `forager80`: the catalogue forager with its
+reproduce gate forced to 80 (ad-hoc genome built in-script, guarded
+by a byte-equality assertion vs the real forager so it is provably
+forager-with-only-the-gate-changed). Same predator pressure/food as
+all the armored runs. Completes the 2x2 (armor x gate):
+
+| config              | gate | armor | focal extinct | predation deaths |
+|---------------------|------|-------|---------------|------------------|
+| armored@80 (orig.)  |  80  |  yes  | ~t420         | ~244             |
+| forager@80          |  80  |  no   | ~t390-420     | ~245             |
+| armored@30 (matched)|  30  |  yes  | ~t270         | ~466             |
+| forager@30 (control)|  30  |  no   | ~t270         | ~359             |
+
+(predation deaths = exact idDeaths - SimStats tracked; forager@80
+idDeaths 463 - tracked 218.)
+
+Decisive: the original armored@80 edge was the REPRODUCE GATE, not
+the armor. Holding armor constant and varying the gate buys ~120s
+persistence and ~halves predation mortality (forager 30->80:
+t270/359 -> t390+/245; armored 30->80: t270/466 -> t420/244).
+Holding the gate constant and varying armor changes essentially
+nothing: at gate 80 armored (~t420, ~244) ~= forager (~t390-420,
+~245). The 4x SYNTH BIO membrane investment adds no measurable
+benefit; the working mechanism is deferred division -> larger
+non-dividing cells -> size refuge past the predator's 1.14x breach
+gate, which ANY genome gets from a high gate (a high-gate forager
+incidentally reaches fMem 36-75 via its normal SYNTH BIO, so
+"armored" is not even a distinct phenotype here). The
+membrane-breach-cost mechanic #6 was designed around produces no
+distinct selective signal in this setup. Caveat: all four still go
+extinct (closed-arena boom-bust), so this is relative persistence,
+not viability -- a non-collapsing arena could still expose a
+membrane-specific benefit the collapse masks. Candidate
+COLONY_GAPS / substrate note: predation resistance currently
+collapses onto body size (the 1.14x gate), so a dedicated "armor"
+axis is not separately selectable from "grow big / divide late".
