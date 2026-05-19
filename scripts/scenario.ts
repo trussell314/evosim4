@@ -24,6 +24,7 @@ import {
   CHEM_MIN,
   CHEM_AA,
   CHEM_ACT_PHOTO_VISIBLE,
+  CHEM_ACT_THERMO,
 } from "../src/sim/chem-ids";
 
 type Cre = {
@@ -250,6 +251,87 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
     },
   },
+
+  // #3 thermophile baseline: the proven autotroph recipe + DEFAULT
+  // temp field (surface 28C, bottom 12C). The genome nulls act_thermo
+  // = self-sorts to the 15C isotherm, which at default temps is
+  // y~493 (deep, light ~exp(-1.97)~0.14). Prediction: thermo-thrust
+  // drives cells DOWN out of the light (analogous to phototaxis-
+  // natural's futile thrust) -> underperforms the plain autotroph.
+  "thermophile-natural": {
+    id: "thermophile",
+    count: 30,
+    coStock: [],
+    describe:
+      "NO aa feeding. Proven autotroph recipe (near-surface start, " +
+      "permanent midday, CO2=50/MIN=50 chemostat) + DEFAULT temp " +
+      "(surf 28C/bot 12C). Genome nulls act_thermo -> targets the " +
+      "15C isotherm ~ y493 (dark). Baseline showing the autotroph-vs-" +
+      "thermotaxis conflict. mActTh -> 0 iff it reaches its isotherm.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = surfaceY + 5 + (k % 6) * 3;
+        c.x = w.width * (0.06 + 0.88 * ((k + 0.5) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+    },
+  },
+
+  // #3 thermophile, behavior made ADAPTIVE: temperature field set so
+  // the 15C isotherm (where the genome nulls act_thermo) sits in a
+  // LIT shallow layer. tempSurface=17, tempBottom=1, patch off:
+  // T=15 at depthFrac (17-15)/(17-1)=0.125 -> y ~= 30+0.125*570 ~=
+  // 101, light exp(-101/250) ~= 0.67. Cells spread in depth, sort to
+  // the lit isotherm. CO2/MIN chemostat, no aa, permanent midday.
+  "thermophile-gradient": {
+    id: "thermophile",
+    count: 30,
+    coStock: [],
+    describe:
+      "NO aa feeding. Temp field tuned so the 15C isotherm (genome's " +
+      "act_thermo null) is at a LIT depth: tempSurface=17 bottom=1 " +
+      "patch=0 -> T=15 at y~=101 (light ~0.67). Cells spread in " +
+      "depth; should self-sort to ~y101 and self-sustain. CO2=50/" +
+      "MIN=50 chemostat, permanent midday. mActTh->0 + mY->~101 if " +
+      "thermal sorting works.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      const wEnv = w as unknown as {
+        tempSurface: number; tempBottom: number; tempPatchAmp: number;
+        surfaceY: number;
+      };
+      wEnv.tempSurface = 17;
+      wEnv.tempBottom = 1;
+      wEnv.tempPatchAmp = 0; // clean horizontal isotherm
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.2 + 0.6 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+    },
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -332,6 +414,16 @@ function meanY(): number {
   for (const c of cs) s += c.y;
   return s / cs.length;
 }
+// Mean activated-thermo. The thermophile genome nulls this (thrust
+// proportional to it), so it -> ~0 if the cell has reached its
+// preferred 15C isotherm. Measures whether thermal sorting works.
+function meanActTh(): number {
+  const cs = w.creatures;
+  if (!cs.length) return 0;
+  let s = 0;
+  for (const c of cs) s += c.store.chemCols[CHEM_ACT_THERMO][c.idx];
+  return s / cs.length;
+}
 
 console.log(`# scenario: ${id}  (x${focal.length} spawned${sc.coStock.length ? ", co-stock " + sc.coStock.map(c => c.id + ":" + c.count).join(",") : ", no co-stock"})`);
 console.log(`# ${sc.describe}`);
@@ -375,6 +467,7 @@ while (w.t < endT) {
         `nMem>40=${String(nAboveMembrane(40)).padStart(3)} ` +
         `nDark=${String(nDark()).padStart(3)} ` +
         `mY=${meanY().toFixed(0).padStart(3)} ` +
+        `mActTh=${meanActTh().toFixed(1).padStart(6)} ` +
         `mActPh=${meanCell(CHEM_ACT_PHOTO_VISIBLE).toFixed(1).padStart(5)} ` +
         `mMem=${meanCell(CHEM_MEMBRANE).toFixed(2).padStart(6)} ` +
         `mATP=${meanEnergy().toFixed(1).padStart(7)} ` +
