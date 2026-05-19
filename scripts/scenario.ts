@@ -46,9 +46,14 @@ interface Scenario {
   describe: string;
   // mutate world + freshly spawned cells before the run
   setup: (w: World, cells: Cre[]) => void;
-  // optional per-sample top-up (a chemostat: "perfect" = a
-  // non-depleting nutrient-replete medium). Reported in the header.
+  // optional per-SAMPLE top-up (ambient chems: don't deplete fast,
+  // so 30s cadence is fine). "perfect" = non-depleting medium.
   replenish?: (w: World) => void;
+  // optional per-STEP maintenance. Required for particle food: a
+  // fast-eating heterotroph bloom strips a fixed stock to ~0 between
+  // 30s samples, so the food chemostat must run every tick or it
+  // isn't a chemostat (predator run: overshoot->starvation collapse).
+  perStep?: (w: World) => void;
   coStock: { id: string; count: number }[];
 }
 
@@ -390,7 +395,8 @@ const SCENARIOS: Record<string, Scenario> = {
         c.store.chemCols[CHEM_MIN][c.idx] = 30;
       }
     },
-    replenish: (w) => {
+    perStep: (w) => {
+      // continuous: fast eaters strip a fixed stock between samples
       setAmbientAll(w, CHEM_O2, 30);
       setAmbientAll(w, CHEM_MIN, 50);
       topUpBiopolymer(w, 1500);
@@ -429,7 +435,9 @@ const SCENARIOS: Record<string, Scenario> = {
         c.store.chemCols[CHEM_MIN][c.idx] = 30;
       }
     },
-    replenish: (w) => {
+    perStep: (w) => {
+      // continuous: a predator+prey bloom strips a fixed stock to ~0
+      // between 30s samples -> overshoot starvation collapse.
       setAmbientAll(w, CHEM_O2, 30);
       setAmbientAll(w, CHEM_MIN, 50);
       topUpBiopolymer(w, 1800);
@@ -569,10 +577,15 @@ for (const c of w.creatures) live.add(c.id);
 const startTotal = live.size;
 let idBirths = 0;
 let idDeaths = 0;
-console.log(`# replenish: ${sc.replenish ? "yes (chemostat, every sample)" : "none"}`);
+console.log(
+  `# maintenance: ${sc.replenish ? "ambient every-sample" : ""}` +
+    `${sc.perStep ? (sc.replenish ? " + " : "") + "food every-STEP (continuous)" : ""}` +
+    `${!sc.replenish && !sc.perStep ? "none" : ""}`,
+);
 
 while (w.t < endT) {
   step(w, DT);
+  if (sc.perStep) sc.perStep(w);
   if (w.creatures.length > peak) peak = w.creatures.length;
   const now = new Set<number>();
   for (const c of w.creatures) {
