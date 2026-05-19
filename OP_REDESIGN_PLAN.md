@@ -179,7 +179,12 @@ independent):
 4. `PACKAGE`/`COMPETENCE` rename + whether they leave the `SYNTH`
    family now or in Phase 5.
 5. Phase 4 enable-gate: keep "declare the pathway" vs drop it
-   (deferrable to Phase 4; see Rule 1).
+   (see Rule 1). **STATUS: PAUSED 2026-05-19 by request.** Phases
+   0–3 (the door-opening universal primitives: TRANSPORT, INGEST
+   threshold, SENSE_OUT) are shipped + validated. Phases 4–5
+   (consolidation of the SYNTH/receptor surface) are deferred
+   pending an explicit decision on this fork; do NOT start Phase 4
+   code until it is resolved. Nothing here blocks the shipped work.
 
 ## Review findings — hard constraints (2026-05-19, code-grounded)
 
