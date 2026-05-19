@@ -24,6 +24,7 @@ import {
   CHEM_ACT_MAG_X,
   CHEM_ACT_MAG_Y,
   CHEM_GLU,
+  CHEM_AA,
   CHEM_CO2,
   CHEM_WASTE,
   CHEM_MARKER0,
@@ -306,20 +307,25 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: digestive/respiratory endosymbiont. Minimal soma, low membrane (cheap to engulf), leaks a marker0 lure. Digests biopolymer (ENZ) and consumes O2, returning glu/aa/fa + CO2 to the shared pool -- a non-parasitic passenger (does NOT strip host glucose). Slow internal division so it stays roughly proportional to host fission (tandem), not a bloat-and-kill bloom. Honest framing: ATP does NOT cross the host membrane; host benefit is emergent shared-pool digestion/gas cycling, never a scripted hand-off.",
+      desc: "Seed: PROVISIONING endosymbiont (mitochondria-faithful within engine limits). Minimal soma, low membrane (cheap to engulf), marker0 engulf-lure. Ingests + digests host-pool biopolymer (ENZ) and O2, then EXCRETEs the usable products -- glucose (energy substrate the host respires) + amino acid (host's chronic growth limiter) -- back into the shared host pool, plus CO2. So a host carrying it is energetically + materially SUBSIDISED: it gains usable energy/building-blocks from the symbiont (the mitochondrial hallmark). Literal ATP export is engine-forbidden (energy is intracellular); glucose+aa export is the faithful substrate analog, not a scripted hand-off. Slow internal division (gate 45) keeps it roughly proportional to host fission (tandem).",
       prog: [
         ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
         ["SYNTH", "MRNA", 0],
         ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0], // digests biopolymer (shared pool)
+        ["SYNTH", "ENZ", 0], // digests host-pool biopolymer
         ["SYNTH", "AA", 0],
-        ["INGEST", ING_BIOPOLYMER], // carbon via digestion, not host glu
-        // (INGEST glu removed: don't strip the host's glucose ->
-        //  shift from glucose-parasite to digestion passenger)
-        ["INGEST", ING_O2], // electron acceptor
-        ["THRUST"], // drift to substrate before engulfment
+        ["INGEST", ING_BIOPOLYMER], // substrate from the host pool
+        ["INGEST", ING_O2], // electron acceptor (respiration)
+        ["THRUST"], // drift to a host during the free-living phase
+        // Provisioning exports: return the digestion/respiration
+        // products to the host so carrying the symbiont is a net
+        // energy + building-block subsidy (mitochondrial hallmark).
+        ["PUSH8", 30],
+        ["EXCRETE", CHEM_GLU], // energy substrate -> host respires it
+        ["PUSH8", 12],
+        ["EXCRETE", CHEM_AA], // host's chronic growth limiter
         ["PUSH8", 8],
-        ["EXCRETE", CHEM_CO2], // respiration product back to shared pool
+        ["EXCRETE", CHEM_CO2], // respiration waste
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
         // 18 -> 45: slow division. One lever fixes two failures --
