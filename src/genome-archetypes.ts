@@ -125,8 +125,14 @@ function build(): Archetype[] {
         ["SYNTH", "PHOTO", 0],
         ["SYNTH", "MAGNETO", 0],
         ["SENSE_CHEMICAL", CHEM_ACT_PHOTO_VISIBLE],
-        ["PUSH8", 6],
-        ["LT"], // light < 6 ?
+        // Threshold sized to the engine's realized act_photo_visible
+        // range: measured <=~3.4 even at the surface in full midday,
+        // so the old 6 was unreachable -> the "lit, stop migrating"
+        // branch never fired and the cell thrust upward forever. 2
+        // sits between the deep-dark (~0.1-0.8) and lit-surface (~3)
+        // values, making it bistable: deep -> migrate up, lit -> stop.
+        ["PUSH8", 2],
+        ["LT"], // act_photo < 2  ->  dark, migrate
         ["JZ", "lit"],
         ...climbGradient(CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, 30),
         ["LABEL", "lit"],
