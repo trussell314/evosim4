@@ -116,3 +116,32 @@ only on strong surplus, to close the host-viability gap vs forager
 while still permitting symbiosis). tsc + 34 archetype tests green;
 no scenario run performed yet (per instruction). Next run should
 re-check farmer-solo + mito-symbiosis with the >90 gate.
+
+## #9 farmer + #11 mitochondria -- post Path 1/2 (ATP first-class + ANT)
+
+ATP is now a first-class chemical (CHEM_ATP) and the mito is a true
+ANT-style ATP-exporter (digest->respire->translocase, vacuolar-only,
+mass-exact). Controlled run (farmer-solo + mito-symbiosis +
+mito-engulfed; ENGULF>90 farmer):
+
+- farmer-solo (control, no mito): 30 -> ends 9 (peak 50). ENGULF>90
+  did NOT fix it (>50 was 30->19; >90 is 30->9). Farmer is NOT a
+  viable standalone heterotroph -- the controlled proof.
+- mito-symbiosis: endosymbiosis forms cleanly + persists ~500s
+  (engMito 5..22, ALL inHost, hostsW..13, eng:host ~1-2, host
+  reproduction co-occurs early) -- then erodes with the host
+  (37->3 hosts, pop 77->4). NO measurable host rescue: host-with-mito
+  (~3) does not beat host-alone (~9).
+- mito-engulfed: perfect start (39/39 inHost) -> hosts 0 by t120
+  (unchanged); post-extinction inMito anomaly recurs (flagged).
+
+Verdict: (a) endosymbiosis forms+persists for a window but not
+sustained; (b) tandem brief then erodes. The ATP-export MECHANISM is
+done & correct and is NOT the blocker. The blocker is singular and
+isolated: farmer (#9) is intrinsically non-viable standalone
+(30->9 solo even at ENGULF>90) while near-identical forager (#4)
+nailed 30->110. A symbiont can't sustain a symbiosis with a host
+that dies on its own; the ATP subsidy showed no rescue because the
+host failure is unrelated to ATP supply. NEXT: fix farmer standalone
+viability (diagnose farmer-vs-forager; conditional ENGULF reduced
+but didn't eliminate the self-harm) -- not more ATP/mito work.
