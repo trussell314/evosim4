@@ -18,6 +18,8 @@ import { ARCHETYPES } from "../src/genome-archetypes";
 import { asm, type Instr } from "../src/genome-asm";
 import { pushParticle } from "../src/sim/core";
 import { genomeSynthMask } from "../src/genome";
+import { REACTIONS } from "../src/sim/reactions";
+import { CHEM_BOND_POTENTIAL } from "../src/sim/chemistry";
 import {
   CHEM_CO2,
   CHEM_ADP,
@@ -27,12 +29,126 @@ import {
   CHEM_MIN,
   CHEM_AA,
   CHEM_O2,
+  CHEM_ATP,
   CHEM_BIOPOLYMER,
+  NAMED_CHEMICAL_COUNT,
   CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_THERMO,
   CHEM_ACT_CHEMO_BIOPOLYMER_X,
   CHEM_ACT_CHEMO_BIOPOLYMER_Y,
 } from "../src/sim/chem-ids";
+
+// === Phase 1: abiotic energy landscape =============================
+// Scan the import-time-fixed, seeded generic reaction table for the
+// strongest catalyst-gated exergonic reaction whose substrates are
+// all either GENERIC (a discoverable chem the vent can emit) or
+// ambient inorganics (O2/CO2/MIN). Nothing is hand-tuned: the
+// engine's own seeded chemistry picks the slot, its fuel cocktail,
+// and the yield. The energetic pathways need SEVERAL generic
+// substrates at once -- so a realistic abiotic source is a
+// multi-component "vent fluid", not one chem. This proves the
+// substrate ALREADY expresses chemolithotrophy once the world emits
+// such a fluid; the cell only evolves `SYNTH CAT <slot>`.
+const AMBIENT_INORGANIC = new Set([CHEM_O2, CHEM_CO2, CHEM_MIN, CHEM_AA]);
+// substrate is acquirable if it's a generic (the vent can emit it /
+// it rides the biopolymer INGEST gate) or an ambient inorganic.
+function acquirable(c: number): boolean {
+  return c >= NAMED_CHEMICAL_COUNT || AMBIENT_INORGANIC.has(c);
+}
+function genericSubs(slot: number): number[] {
+  return [...REACTIONS[slot].sChem].filter((c) => c >= NAMED_CHEMICAL_COUNT);
+}
+// Energy module: strongest (atpDelta*vmax) exergonic catalyst-gated
+// reaction with all-acquirable substrates and >=1 generic fuel.
+function pickEnergySlot(): number {
+  let best = -1, bestScore = 0;
+  for (let k = 0; k < REACTIONS.length; k++) {
+    const r = REACTIONS[k];
+    if (r.uncatRate !== 0 || r.atpDelta <= 0 || r.lightIn !== 0) continue;
+    if (r.sChem.length === 0 || ![...r.sChem].every(acquirable)) continue;
+    if (genericSubs(k).length === 0) continue;
+    const score = r.atpDelta * r.vmax;
+    if (score > bestScore) { bestScore = score; best = k; }
+  }
+  if (best < 0) throw new Error("no acquirable exergonic energy reaction");
+  return best;
+}
+// Carbon-fixation module: a catalyst-gated reaction that PRODUCES the
+// heterotroph carbon staple (GLU) from acquirable inputs -- the cell
+// pays for it with the energy module's ATP. Prefer the cheapest
+// (least endergonic) and fastest.
+function pickCarbonSlot(): number {
+  let best = -1, bestScore = -Infinity;
+  for (let k = 0; k < REACTIONS.length; k++) {
+    const r = REACTIONS[k];
+    if (r.uncatRate !== 0 || r.lightIn !== 0) continue;
+    if (![...r.pChem].includes(CHEM_GLU)) continue;
+    if (r.sChem.length === 0 || ![...r.sChem].every(acquirable)) continue;
+    const score = -r.atpDelta + r.vmax; // cheap (low ATP cost) + fast
+    if (score > bestScore) { bestScore = score; best = k; }
+  }
+  if (best < 0) throw new Error("no acquirable GLU-producing reaction");
+  return best;
+}
+const VENT = (() => {
+  const energy = pickEnergySlot();
+  const carbon = pickCarbonSlot();
+  const fuels = [...new Set([...genericSubs(energy), ...genericSubs(carbon)])];
+  return {
+    energy, carbon, fuels,
+    atp: REACTIONS[energy].atpDelta, vmax: REACTIONS[energy].vmax,
+    cAtp: REACTIONS[carbon].atpDelta,
+  };
+})();
+
+// Premise-proof focal genome: the heterotroph viability kit PLUS one
+// evolved-style catalyst for the abiotic-fuel reaction, eating the
+// vent fuel as particles (generic chems ride the biopolymer INGEST
+// gate). NOT a shipped archetype -- a scenario probe demonstrating
+// the substrate already expresses chemolithotrophy.
+const ventProbeGenome = asm([
+  ["SYNTH", "BIO", 0],
+  ["SYNTH", "MRNA", 0],
+  ["SYNTH", "FA", 0],
+  ["SYNTH", "ENZ", 0],
+  ["SYNTH", "AA", 0],
+  ["SYNTH", "CAT", VENT.energy], // abiotic-fuel -> ATP (energy module)
+  ["SYNTH", "CAT", VENT.carbon], // acquirable -> GLU (carbon-fix module)
+  ["INGEST", 1], // generic chems (the whole vent cocktail) ride this gate
+  ["SELF_MEMBRANE"],
+  ["PUSH8", 30],
+  ["GT"],
+  ["JZ", "np"],
+  ["REPRODUCE"],
+  ["LABEL", "np"],
+] as Instr[]);
+
+// Bounded, accounted abiotic source: a sea-floor seep refilled to a
+// fixed standing count (a chemostat -> the influx is bounded, never
+// runaway). Mirrors topUpBiopolymer but emits the vent fuel at the
+// floor band.
+function ventEmit(w: World, fuels: number[], target: number): void {
+  const ww = w as unknown as {
+    particles: { chemId: number }[];
+    width: number; height: number; depth: number;
+  };
+  const fuelSet = new Set(fuels);
+  let have = 0;
+  for (const p of ww.particles) if (fuelSet.has(p.chemId)) have++;
+  let need = target - have;
+  let rot = have;
+  while (need-- > 0) {
+    const r = 1 + Math.random() * 1.2;
+    pushParticle(w, {
+      x: Math.random() * ww.width,
+      y: ww.height * 0.88 + Math.random() * (ww.height * 0.1),
+      z: r + Math.random() * (ww.depth - 2 * r),
+      vx: 0, vy: 0, vz: 0,
+      r,
+      chemId: fuels[rot++ % fuels.length], // even cocktail mix
+    });
+  }
+}
 
 // Ad-hoc genome: the `forager` archetype with its reproduce gate set
 // to an arbitrary threshold (the catalogue forager is fixed at 30).
@@ -816,6 +932,51 @@ const SCENARIOS: Record<string, Scenario> = {
     },
     report: (w) => benthicReport(w),
   },
+
+  // Phase 1 premise proof: NO organic energy anywhere (no glu, no
+  // biopolymer/detritus). The only energy input is the abiotic vent
+  // fuel emitted at the floor; ambient AA/MIN supply biomass
+  // precursors so the test isolates ENERGY. If the focal lineage
+  // sustains a positive ATP pool here, the substrate already
+  // expresses chemolithotrophy (energy from a non-living source via
+  // an evolved catalyst) -- no engine change needed for Phase 1.
+  vent: {
+    id: "forager",
+    genome: ventProbeGenome,
+    count: 40,
+    coStock: [],
+    describe:
+      "Abiotic vent: floor seep emits generic fuel chem to a fixed " +
+      "standing count (~1200, bounded/accounted). NO glu, NO " +
+      "biopolymer. Ambient AA=20/MIN=50/O2=30 for biomass only. " +
+      "Focal = HET viability kit + SYNTH CAT(exergonic vent-fuel " +
+      "slot) + INGEST. Sustained +ATP => chemolithotrophy is " +
+      "already substrate-expressible.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_CO2, 20);
+      setAmbientAll(w, CHEM_MIN, 50);
+      setAmbientAll(w, CHEM_AA, 20);
+      ventEmit(w, VENT.fuels, 1200);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.86 + 0.1 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_AA][c.idx] = 5;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_CO2, 20);
+      setAmbientAll(w, CHEM_MIN, 50);
+      setAmbientAll(w, CHEM_AA, 20);
+      ventEmit(w, VENT.fuels, 1200);
+    },
+    report: (w) => ventReport(w),
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -1015,6 +1176,35 @@ function benthicReport(w: World): string {
     `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1).padStart(6)} ` +
     `co2P=${String(co2P).padStart(4)} ` +
     `bioP=${String(bioP).padStart(4)}`
+  );
+}
+
+// Phase 1 premise check: focal survivors + their mean ATP (energy
+// must be POSITIVE and sustained when the ONLY energy input is the
+// abiotic vent fuel) + standing vent-particle count.
+function ventReport(w: World): string {
+  let fn = 0, fAtp = 0;
+  for (const c of w.creatures) {
+    const cc = c as unknown as Cre & {
+      lineageRoot: number;
+      store: { chemCols: Float32Array[] };
+      idx: number;
+    };
+    if (!focalRoots.has(cc.lineageRoot)) continue;
+    fn++;
+    fAtp += cc.store.chemCols[CHEM_ATP][cc.idx];
+  }
+  const ww = w as unknown as { particles: { chemId: number }[] };
+  const fuelSet = new Set(VENT.fuels);
+  let vp = 0;
+  for (const p of ww.particles) if (fuelSet.has(p.chemId)) vp++;
+  return (
+    `vent=${String(fn).padStart(3)} ` +
+    `fATP=${(fn ? fAtp / fn : 0).toFixed(1).padStart(7)} ` +
+    `E:s${VENT.energy}(+${VENT.atp.toFixed(1)}x${VENT.vmax.toFixed(2)}) ` +
+    `C:s${VENT.carbon}(${VENT.cAtp.toFixed(2)}) ` +
+    `fuels=${VENT.fuels.map((c) => "c" + c.toString(16)).join("+")} ` +
+    `ventP=${String(vp).padStart(4)}`
   );
 }
 

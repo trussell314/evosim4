@@ -331,3 +331,36 @@ config). The substrate-not-script intent holds: benthic-ness is an
 emergent outcome of detritus-tropism, not an engine rule. The CO2
 output is in place for a future #17 cross-feeder once GAP #6 (no
 non-photic energy path) is addressed.
+
+## Phase 1 `vent` — abiotic chemolithoautotrophy premise (RESULT)
+
+Scenario `vent` (scripts/scenario.ts): NO organic energy (no glu, no
+biopolymer). A bounded, accounted floor seep emits a generic
+"vent-fluid" cocktail; ambient AA/MIN/O2/CO2 for biomass only. Focal
+= a PROBE genome (not a shipped archetype): HET viability kit +
+`SYNTH CAT`(strongest acquirable exergonic slot, auto-found in the
+seeded table) + `SYNTH CAT`(a GLU-producing slot) + `INGEST`. No
+engine change; tsc/vitest(355)/build green; no determinism/schema
+impact.
+
+Measured (4 min, seed 4242), slots auto-picked E:s79(+7.2×1.19)
+C:s185(≈0), fuel cocktail c51+c35+c5d:
+- **Energy is decisively solved in-substrate.** Mean focal ATP holds
+  100+ sustained with the ONLY energy input being abiotic vent fuel
+  via an evolved `SYNTH CAT` catalyst. This refutes the original
+  GAP #6 "no non-photic energy path / chemolithotrophy
+  inexpressible" outright.
+- **Reproduces.** Adding the carbon-fix catalyst flipped 0 → 20
+  births: chemolithoAUTOtrophy (energy module + carbon-fix module,
+  two evolved catalysts, zero engine change) is substrate-
+  expressible.
+- **Not yet self-sustaining** (40 → 10): carbon-limited, not
+  energy-limited. The seeded table holds exactly ONE catalyst-gated
+  GLU-producing reaction with acquirable substrates, slow and
+  competing for the same fuel.
+
+Verdict: Phase 1 premise PROVEN (abiotic energy niche is real and
+needs only a world fuel source, no ABI change). Refined gap: scarce
+evolvable carbon-fixation routes from inorganic inputs — see
+COLONY_GAPS GAP #6 (revised). Not tuned further on purpose: forcing
+self-sustenance by hand would script the substrate.

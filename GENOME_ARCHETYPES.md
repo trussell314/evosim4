@@ -184,18 +184,21 @@ confirmed substrate gap (see below + `COLONY_GAPS.md` GAP #6).
     "negatively-buoyant / THRUST to stay low" framing was wrong —
     creatures are water-neutral with no passive sink; the working
     mechanism is food-tropism, which is cleaner / more emergent.)
-17. **Benthic chemolithotroph / cross-feeder.** *Blocked —
-    inexpressible as conceived.* The substrate review (transcript +
-    `COLONY_GAPS.md` GAP #6) found there is **no** non-photic energy
-    path: the reaction table yields ATP only from aerobic
-    (GLU+O₂), fermentation (GLU), and β-oxidation (FA+O₂); the sole
-    autotrophy is photosynthesis (needs light). Nothing oxidizes
-    `MIN` or fixes `CO₂` in the dark, and metabolism is **not
-    genome-selectable** (reactions fire automatically from whatever
-    substrate is present), so "chemolithotroph" / "anaerobic
-    specialist" cannot be a *genetic* strategy. Recorded as GAP #6
-    with a concrete (unimplemented) reaction-table proposal for a
-    chemolithotrophic ATP path; until that lands, #17 is deferred.
+17. **Benthic chemolithotroph / cross-feeder.** *Expressible,
+    carbon-limited* (reclassified — the earlier "blocked /
+    inexpressible" was retracted; see `COLONY_GAPS.md` GAP #6
+    revised). The reaction table has ~230 procedurally-generated
+    generic reactions (≈half exergonic) that are inert until a
+    genome evolves `SYNTH CAT <slot>`, so catabolic strategy **is**
+    genome-selectable and non-photic energy **is** harvestable. The
+    Phase-1 `vent` scenario (bounded abiotic fuel seep, no engine
+    change) shows a probe genome sustains ATP 100+ purely from
+    abiotic fuel and reproduces once a carbon-fix catalyst is added.
+    It is not yet self-sustaining: the bottleneck is **carbon
+    fixation** (exactly one slow GLU-producing reaction from
+    acquirable inputs), not energy. Next lever is a world fuel
+    source (validated, low-risk) + the carbon-route question in
+    GAP #6 — not a new ATP reaction.
 
 ## Substrate gaps → what each unlocks (the guide)
 

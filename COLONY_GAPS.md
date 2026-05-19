@@ -101,61 +101,70 @@ Listed for completeness; do not treat as confirmed.
 
 ---
 
-## GAP #6 — No chemolithotrophy; metabolism not genome-selectable (VALIDATED 2026-05-19)
+## GAP #6 — chemolithotrophy: energy SOLVED in-substrate; carbon-fixation route is the real scarcity (REVISED 2026-05-19)
 
-**Finding:** there is no non-photic energy path. A
-chemolithotroph / anaerobic specialist (e.g. archetype #17, the
-benthic CO₂/mineral cross-feeder) cannot be expressed at all, and —
-more fundamentally — *which* catabolic pathway a cell uses is **not
-a genetic trait**: the reactions fire automatically from whatever
-substrate is present, so a genome cannot select "ferment, don't
-respire" or "oxidize minerals."
+**The original GAP #6 finding was wrong and is retracted.** It claimed
+"no non-photic energy path / chemolithotrophy inexpressible /
+metabolism not genome-selectable," sourced from a shallow read that
+saw only the ~26 hand-authored named reactions and missed the ~230
+procedurally-generated generic ones.
 
-**Evidence (from the 2026-05-19 substrate review):**
+**Corrected picture (deeper read + Phase-1 `vent` scenario):**
 
-- Energy-yielding reactions (`src/sim/reactions.ts` ~268–283) are
-  exactly three: aerobic `GLU+O₂ → 2CO₂` (+10 ATP), fermentation
-  `GLU → ½CO₂+½WASTE` (+2 ATP, no O₂), β-oxidation `FA+O₂`. The only
-  autotrophy is photosynthesis (`CO₂+light → GLU+O₂`, needs light).
-- Nothing consumes `CHEM_MIN` or `CHEM_CO2` for ATP without light;
-  minerals only feed ATP-*consuming* biosynth reactions.
-- Reactions are unconditional given substrate — there is no SYNTH
-  kind or op that gates respiration vs fermentation, so the choice
-  is purely environmental (ambient O₂), never heritable.
-- O₂ is not a life gate: no O₂-depletion death; fermentation always
-  yields energy at 0 O₂. "Low-O₂ tolerant" is therefore not a
-  distinguishable phenotype either.
+- `buildReactionTable` (`src/sim/reactions.ts`) emits 256 slots:
+  ~26 named bootstrap + ~230 **generic** reactions with random
+  substrates/products over the full 96-chem space,
+  `atpDelta = Σ s.bondPotential − Σ p.bondPotential` (≈half
+  exergonic), `uncatRate: 0` so they are inert **until the cell
+  evolves `SYNTH CAT <slot>`** to build that catalyst.
+- So catabolic strategy **is** genome-selectable: which generic
+  reactions a lineage runs is exactly which catalyst slots it
+  SYNTHs. Energy from non-organic, non-photic fuel is fully
+  expressible today with zero engine change.
+- Generic chems carry rolled `bondEnergy` (~20% in 30–90), spawn as
+  particles (`GENERIC_SPAWN_ORDER` covers all generics), and are
+  INGEST-able via the biopolymer sensor-slot fallback
+  (`sim.ts:5625`). The only thing missing was a **world source** of
+  such fuel independent of biomass recycling.
 
-**Consequence:** the entire chemolithotroph / syntroph / anaerobic-
-specialist design space is closed. #17 deferred; #16 (detritivore)
-is unaffected (it is an ordinary heterotroph + CO₂ excretion).
+**Phase-1 evidence (`scripts/scenario.ts` → `vent`, no engine
+change):** a bounded abiotic floor seep emits a generic "vent fluid"
+cocktail; a probe genome = HET viability kit + `SYNTH CAT`(strongest
+acquirable exergonic slot) + `SYNTH CAT`(a GLU-producing slot) +
+`INGEST`. Result over 4 min: energy harvesting is **strong and
+sustained** (mean focal ATP 100+ purely from abiotic fuel — the
+original "no non-photic energy" claim is decisively false), and the
+lineage **reproduces** (0→20 births once the carbon catalyst is
+added). It is not yet self-sustaining (40→10) because it is
+**carbon-limited, not energy-limited**.
 
-**Proposed engine fix (DESIGN ONLY — not implemented).** Add one
-chemolithotrophic ATP reaction so dark mineral-energy becomes a real
-niche, opening a door without scripting the organism:
+**The actual residual gap (precise):** the seeded table contains
+**exactly one** catalyst-gated reaction that produces the
+heterotroph carbon staple `GLU` from acquirable (generic/ambient-
+inorganic) inputs, and it is slow (`vmax` 0.77, `atpDelta` ≈0) and
+competes with the energy reaction for the same fuel chem. So
+chemolitho**autotrophy** is *expressible* but *throughput-starved*:
+the scarcity is **evolvable carbon-fixation routes from inorganic
+inputs**, not energy and not "genome-selectability."
 
-- New reaction (catalyst-slot gated, like the existing catabolism
-  slots): `MIN + O₂ → WASTE`, `+k` ATP (k small, e.g. ~3–4, between
-  fermentation's 2 and aerobic's 10) — a chemolithotrophic mineral
-  oxidation. Rate `vmax` modest so it is a slow, steady living, not
-  a bloom fuel.
-- To make it *genome-selectable* (the deeper half of the gap), gate
-  it on a catalyst the cell must `SYNTH CAT <slot>` to express
-  (reuse the existing `SYNTH CAT` standing-transporter/catalyst
-  mechanism), so "be a chemolithotroph" is an evolved investment,
-  not a free universal pathway. Aerobic/fermentation stay
-  unconditional to preserve determinism + mass-conservation tests;
-  the new path is additive and only active when the catalyst is
-  present.
-- Optional second step for a true sediment cross-feed: a reaction
-  consuming `WASTE` (currently terminal) for a small ATP yield, so
-  #16's fermentation `WASTE` output becomes #17's food — a real
-  syntrophic loop rather than a flavor note.
-- Validation gate before shipping: determinism
-  (`src/__tests__/determinism.test.ts`) and mass-conservation
-  (`sim.test.ts`) must stay green; the new reaction must conserve
-  atoms in the chem table and draw no RNG.
+**Implications for the planned work:**
 
-This is recorded for a future chemistry pass; **do not implement
-without an explicit go-ahead** (it changes the reaction table, which
-is determinism- and mass-sensitive).
+- The Phase-1 abiotic-source idea is validated and is a real,
+  low-risk substrate addition (a world emitter of bounded reduced
+  fuel) — it makes chemolithotrophy a discoverable niche.
+- The original "add a MIN+O₂ ATP reaction" fix is unnecessary
+  (energy was never the gap) and is withdrawn.
+- The universal-id transport work (Option B, Phases 2–4) still
+  stands on its own merits (dissolved-generic acquisition,
+  uniform op surface) but is **not** required for chemolithotrophy
+  and should not be justified by it.
+- New design question this raised: carbon-fixation route richness.
+  Either (a) accept it as an emergent bottleneck (selection favors
+  the rare GLU route — arguably correct/realistic), or (b) widen
+  the generic table's product distribution so more slots reach the
+  carbon staples. (b) is determinism-sensitive; defer with the rest.
+
+#16 (detritivore) is unaffected. #17 is no longer "inexpressible" —
+it is expressible but currently non-self-sustaining for the
+carbon-throughput reason above; reclassify from "blocked" to
+"expressible, carbon-limited."
