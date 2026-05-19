@@ -4,6 +4,18 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **Add a multicellular-organism archetype.** Create a founder genome
+  in `src/genome-archetypes.ts` for a multicellular organism (a
+  bonded cell collective with division of labor — beyond the existing
+  `colony` greenbeard seed, which only bonds clones). Should exercise
+  the substrate's multicellularity primitives (`SYNTH BOND` adhesion,
+  `PARTITION` for asymmetric daughter cytoplasm → differentiation,
+  leaky inter-cell sharing) so distinct cell roles can emerge from
+  one genome. Validate with the scenario harness (does a
+  differentiated collective form and persist). See `COLONY_GAPS.md`
+  (#1 differentiation substrate landed via `PARTITION`; #2/#4/#5
+  open) and the `colony` archetype as the starting point.
+
 - **WATCH — unbounded genome growth (pre-existing, latent).** Long
   headless runs grow a pathological lineage's genome into the tens–
   hundreds of KB while the population median stays ~40 bytes. Measured
