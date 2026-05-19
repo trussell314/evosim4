@@ -221,8 +221,12 @@ non-uniform-namespace tension is eliminated rather than flagged.
 **2a-i `TRANSPORT` facilitated/down-gradient/no-ATP — DONE**
 (opcode 0x56, signed `out.transport`, mass-exact applier, golden
 re-baselined 11f0b56b→22e020e8, SAVE_SCHEMA 11→12, +2 unit tests) ·
-2a-ii `TRANSPORT` active/uphill + ATP cost + no-free-energy property
-test · 2b INGEST → bond-energy-threshold engulf (migrate archetypes)
+**2a-ii `TRANSPORT` active/uphill + ATP cost — DONE** (down-gradient
+free/facilitated; up-gradient pumps but costs
+`TRANSPORT_PUMP_ATP·ln(1+C_dest/C_src)`, affordability-limited;
+down-leg yields no ATP so no cycle can mint energy; SAVE_SCHEMA
+12→13; golden unchanged; +1 no-free-energy A-vs-B test) ·
+2b INGEST → bond-energy-threshold engulf (migrate archetypes)
 · 3 `SENSE_OUT` (gradient-vector
 primitive) · 4 retire the `synthMask` enable-gate path; `CATALYST`
 becomes the sole paid lever; ONE decision: keep or drop the

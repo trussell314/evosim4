@@ -869,14 +869,14 @@ describe("creature: ingestion cost and cooldown", () => {
   });
 });
 
-describe("TRANSPORT op (Phase 2a-i: facilitated, down-gradient, v1)", () => {
+describe("TRANSPORT op (Phase 2a-ii: facilitated + active pump)", () => {
   const GEN = 46; // first generic chem id (NAMED_CHEMICAL_COUNT)
   function setAmb(w: World, chem: number, v: number): void {
     for (let b = 0; b + chem < w.ambient.length; b += AMB_STRIDE) {
       w.ambient[b + chem] = v;
     }
   }
-  it("imports a chem down-gradient, mass-exact", () => {
+  it("imports a chem down-gradient (facilitated), mass-exact", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
     const c = makeCreature({
@@ -892,20 +892,40 @@ describe("TRANSPORT op (Phase 2a-i: facilitated, down-gradient, v1)", () => {
     expect(cell1).toBeGreaterThan(0); // imported via TRANSPORT
     expect(Math.abs(ambTotal(w, GEN) + cell1 - total0)).toBeLessThan(1e-3);
   });
-  it("does not import uphill in v1 (cell richer than ambient)", () => {
+  it("pumps uphill (cell richer than ambient) and stays mass-exact", () => {
     const w = quietWorld();
     w.particleSpawnRate = 0;
     const c = makeCreature({
-      energy: 50,
+      energy: 100,
       genome: new Uint8Array([OP.PUSH8, 60, OP.TRANSPORT, GEN]),
     });
     w.creatures.push(c);
-    setAmb(w, GEN, 0);
-    c.store.chemCols[GEN][c.idx] = 30;
+    setAmb(w, GEN, 10);
+    c.store.chemCols[GEN][c.idx] = 40; // dst(inside) > src(outside) => uphill
     const cell0 = c.store.chemCols[GEN][c.idx];
+    const total0 = ambTotal(w, GEN) + cell0;
     step(w, 0.001);
-    // v1 forbids uphill import; nothing else produces GEN here.
-    expect(c.store.chemCols[GEN][c.idx]).toBeLessThanOrEqual(cell0 + 1e-9);
+    const cell1 = c.store.chemCols[GEN][c.idx];
+    expect(cell1).toBeGreaterThan(cell0); // active pump moved it uphill
+    expect(Math.abs(ambTotal(w, GEN) + cell1 - total0)).toBeLessThan(1e-3);
+  });
+  it("active pumping costs ATP — no free energy (vs no-pump control)", () => {
+    // Two identical worlds; genomes have equal instruction count
+    // (2 ops) so VM/idle ATP drain is identical. Only A pumps uphill.
+    const mk = (g: number[]) => {
+      const w = quietWorld();
+      w.particleSpawnRate = 0;
+      const c = makeCreature({ energy: 100, genome: new Uint8Array(g) });
+      w.creatures.push(c);
+      setAmb(w, GEN, 10);
+      c.store.chemCols[GEN][c.idx] = 40; // uphill for the pumper
+      return { w, c };
+    };
+    const A = mk([OP.PUSH8, 60, OP.TRANSPORT, GEN]); // pumps uphill
+    const B = mk([OP.PUSH8, 60, OP.PUSH8, 60]);      // no transport
+    for (let i = 0; i < 20; i++) { step(A.w, 0.001); step(B.w, 0.001); }
+    // The pumper spent strictly more ATP (the up-gradient work).
+    expect(A.c.energy).toBeLessThan(B.c.energy);
   });
 });
 

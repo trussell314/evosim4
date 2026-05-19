@@ -320,6 +320,14 @@ const KM_DEFAULT = 1;
 const CAT_REF = 5;
 const CAT_SYNTH_VMAX = 0.3;
 const CAT_ATP_COST = 4;
+// Active-transport (TRANSPORT op, up-gradient pumping) tuning. Cost
+// per unit flow = TRANSPORT_PUMP_ATP * ln(1 + min(C_dest/C_src,
+// MAX_RATIO)). EPS floors the ratio so a near-empty source can't
+// divide-by-zero; MAX_RATIO bounds the cost when C_src ~ 0. Down-
+// gradient transport is free (no constant needed).
+const TRANSPORT_PUMP_ATP = 0.5;
+const TRANSPORT_MAX_RATIO = 1e3;
+const TRANSPORT_EPS = 1e-6;
 const CAT_DECAY_PER_SEC = 0.005;
 
 // ===================================================================
@@ -5502,13 +5510,21 @@ function updateCreatures(world: World, dt: number): void {
       }
     }
 
-    // VM-controlled facilitated transport. TRANSPORT <chemId> moves
-    // a chem across the cell<->world membrane DOWN its gradient only
-    // (v1: no active/uphill pumping, no ATP). Mass-exact: chem moves
-    // 1:1 between the cell pool and the region ambient field (the
-    // same ledger excretion / diffusion use). Deterministic (no rng).
-    // Unlocks acquisition of dissolved generics (permeability 0) that
-    // passive diffusion cannot move.
+    // VM-controlled transport. TRANSPORT <chemId> moves a chem
+    // across the cell<->world membrane; stack value is signed
+    // (+ import from ambient, - export). DOWN-gradient is facilitated
+    // and free (capped at the no-overshoot point so it can't
+    // oscillate). UP-gradient is an active pump: it is allowed (a
+    // cell CAN concentrate against the gradient) but costs ATP
+    // ~ flow * ln(C_dest/C_src) -- the thermodynamic work. Crucially
+    // the down-gradient leg yields NO ATP, so transport is never an
+    // ATP source and any pump-in -> leak-out cycle strictly loses
+    // ATP: no free energy can be minted. Mass-exact (chem moves 1:1
+    // cell<->region ambient, the same ledger excretion/diffusion
+    // use), deterministic (no rng), affordability-limited (never
+    // moves mass it could not pay for). Unlocks acquisition of
+    // dissolved generics (permeability 0) passive diffusion can't
+    // move.
     {
       const cols = c.store.chemCols;
       const ci = c.idx;
@@ -5520,19 +5536,35 @@ function updateCreatures(world: World, dt: number): void {
         if (req === 0) continue;
         const ak = ab + chemId;
         const inside = cols[chemId][ci];
-        const gap = ambient[ak] - inside; // >0 favors import, <0 export
-        if (gap === 0) continue;
-        let flow: number; // applied to the cell pool (+ = into cell)
-        if (req > 0) {
-          if (gap <= 0) continue; // uphill import -> v1 forbids
-          flow = Math.min(req, gap * 0.5); // cap at no-overshoot point
+        const outside = ambient[ak];
+        const importing = req > 0;
+        const src = importing ? outside : inside;  // depleted side
+        const dst = importing ? inside : outside;  // accumulated side
+        let mag = Math.abs(req);
+        if (mag > src) mag = src;                   // can't move what's absent
+        if (mag <= 0) continue;
+        let costPerUnit = 0;
+        if (dst < src) {
+          // down-gradient: facilitated, free, no overshoot past
+          // equalization (gap/2 keeps it from oscillating).
+          const halfGap = (src - dst) * 0.5;
+          if (mag > halfGap) mag = halfGap;
         } else {
-          if (gap >= 0) continue; // uphill export -> v1 forbids
-          flow = -Math.min(-req, -gap * 0.5);
+          // up-gradient: active pump, ATP-costed by the conc ratio.
+          const ratio = Math.min(
+            (dst + TRANSPORT_EPS) / (src + TRANSPORT_EPS),
+            TRANSPORT_MAX_RATIO,
+          );
+          costPerUnit = TRANSPORT_PUMP_ATP * Math.log(ratio + 1); // >0
         }
-        if (flow > 0) { if (flow > ambient[ak]) flow = ambient[ak]; }
-        else { if (-flow > inside) flow = -inside; }
-        if (flow === 0) continue;
+        if (mag <= 0) continue;
+        if (costPerUnit > 0) {
+          const got = spendATP(c, mag * costPerUnit, ATP_OTHER);
+          const afford = got / costPerUnit;
+          if (afford < mag) mag = afford;
+          if (mag <= 0) continue;
+        }
+        const flow = importing ? mag : -mag;
         cols[chemId][ci] += flow;
         ambient[ak] -= flow;
       }
@@ -7117,7 +7149,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:12:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:13:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
