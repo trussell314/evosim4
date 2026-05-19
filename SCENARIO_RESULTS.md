@@ -73,3 +73,46 @@ replete, no predators, founders off.
   decay-driven-demand bottleneck the static analyzer can't size
   (same class as mRNA). No engine change (non-fatal); logged only.
 - SimStats undercounts deaths by 24 here (id-accounting authoritative).
+
+## #5 predator — validated (predation functions; closed-arena boom-bust is correct)
+
+Biopolymer chemostat + 80 co-stocked forager prey. Predation works:
+focal (predator) lineages grew 30→310 by predating+foraging. The
+subsequent overshoot-collapse (peak 548→4) is correct closed-arena
+predator-prey dynamics (Gause), not a genome flaw; per direction,
+goal = genome validated, not population propped. Harness fix made en
+route: continuous (per-step) food chemostat (per-sample stripping
+caused a false collapse). Validated.
+
+## #9 farmer + #11 mitochondria — tandem endosymbiosis (in progress)
+
+Treated as one tandem exercise. Engine supports the arc (host fission
+partitions contents to daughter; engulfed REPRODUCE adds organelle).
+
+Measured progression (controlled, single-variable each step):
+- Unconditional ENGULF, mito gate 18: host collapsed to 0, mito
+  bloomed free. Tandem fails.
+- mito reworked (gate 18→45, drop INGEST glu): mito stops runaway
+  bloom + glucose-parasitism; host still collapsed → host is the
+  blocker.
+- farmer ENGULF gated on SELF_ENERGY>50 + mito gate 45:
+  **endosymbiosis demonstrably emerges and is cleanly measured** —
+  mito-symbiosis run reached engMito 31 (peak), all `inHost`,
+  hostsW/Mito 6, eng:host up to 2.38, with host reproduction (36→45)
+  co-occurring. Empirically resolves the size question: farmers DO
+  bulk past the 1.14× breach gate; engulfment is not size-blocked.
+  But host declined 45→8 (farmer-solo 30→19, still sub-forager) so
+  the symbiosis erodes rather than stabilising. Pre-engulfed variant
+  still fails fast (hosts 0 by t120).
+
+Verdict vs success criteria: (a) sustained endosymbiosis — largely
+met in the separate scenario (real, persisting, cleanly-measured);
+(b) tandem reproduction — partial (co-reproduction for a ~400s
+window, then erodes with the host). Residual blocker: farmer
+standalone viability is sub-forager.
+
+STAGED, NOT YET VALIDATED: farmer ENGULF gate raised 50→90 (engulf
+only on strong surplus, to close the host-viability gap vs forager
+while still permitting symbiosis). tsc + 34 archetype tests green;
+no scenario run performed yet (per instruction). Next run should
+re-check farmer-solo + mito-symbiosis with the >90 gate.

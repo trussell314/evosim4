@@ -250,7 +250,7 @@ function build(): Archetype[] {
       id: "farmer",
       label: "farmer host",
       cls: "seed",
-      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and CONDITIONALLY engulfs -- only when it has an energy surplus (SELF_ENERGY > 50), so a struggling farmer stops taking on draining captives instead of cannibalising itself to collapse. Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
+      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and CONDITIONALLY engulfs -- only with a strong energy surplus (SELF_ENERGY > 90), so a struggling farmer stops taking on draining captives instead of cannibalising itself to collapse. Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
@@ -260,13 +260,16 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           35,
         ),
-        // Conditional ENGULF: only when energy-rich enough to support
-        // another live captive. Unconditional engulf made farmer
-        // cannibalise kin + accumulate draining captives -> collapse
-        // (forager, same genome minus ENGULF, self-sustains). The
+        // Conditional ENGULF: only with a STRONG energy surplus.
+        // Unconditional engulf collapsed the host (cannibalising kin
+        // + draining captives); a >50 gate persisted-but-declined
+        // (solo 30->19, sub-forager). 90 engulfs only when well above
+        // the forager-fed ATP band, so the host stays viable while
+        // symbiosis still self-assembles (engulfment is not size-
+        // blocked -- prior run reached engMito 31, all inHost). The
         // genome decides via SELF_ENERGY -- no engine-side rule.
         ["SELF_ENERGY"],
-        ["PUSH8", 50],
+        ["PUSH8", 90],
         ["GT"],
         ["JZ", "noEngulf"],
         ["ENGULF"],
