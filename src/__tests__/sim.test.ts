@@ -929,6 +929,39 @@ describe("TRANSPORT op (Phase 2a-ii: facilitated + active pump)", () => {
   });
 });
 
+describe("SENSE_OUT op (Phase 3: gradient-vector environmental sense)", () => {
+  const GEN = 46;
+  it("steers THRUST up a particle gradient (emergent taxis, no receptor)", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({
+      energy: 80,
+      genome: new Uint8Array([OP.SENSE_OUT, GEN, OP.THRUST, HALT_MARK]),
+    });
+    w.creatures.push(c);
+    // Cluster GEN particles to the +x side, within sense range.
+    for (let n = 0; n < 25; n++) {
+      pushParticle(w, { x: c.x + 18, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 2, chemId: GEN });
+    }
+    const vx0 = c.vx;
+    step(w, 0.05);
+    expect(c.vx).toBeGreaterThan(vx0); // accelerated toward the cluster
+  });
+  it("no particles -> zero gradient -> no SENSE_OUT-driven thrust", () => {
+    const w = quietWorld();
+    w.particleSpawnRate = 0;
+    const c = makeCreature({
+      energy: 80,
+      genome: new Uint8Array([OP.SENSE_OUT, GEN, OP.THRUST, HALT_MARK]),
+    });
+    w.creatures.push(c);
+    const vx0 = c.vx, vy0 = c.vy;
+    step(w, 0.05);
+    expect(Math.abs(c.vx - vx0)).toBeLessThan(1e-6);
+    expect(Math.abs(c.vy - vy0)).toBeLessThan(1e-6);
+  });
+});
+
 describe("creature: ingestion (basic)", () => {
   it("absorbs a particle inside the cell radius", () => {
     const w = quietWorld();

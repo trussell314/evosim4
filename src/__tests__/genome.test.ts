@@ -47,7 +47,10 @@ function makeSensors(overrides: Partial<{
       cc[i] = overrides.chemConc[i];
     }
   }
-  return { chemConc: cc };
+  return {
+    chemConc: cc,
+    gradient: (_id, out) => { out[0] = 0; out[1] = 0; },
+  };
 }
 
 function makeSelf(overrides: Partial<{
@@ -238,7 +241,7 @@ describe("VM sensors", () => {
   it("SENSE_CHEMICAL reads internal pool by chem id", () => {
     const cc = new Float32Array(96);
     cc[5] = 42;
-    expect(exec([OP.SENSE_CHEMICAL, 5, HALT_MARK], { sensors: { chemConc: cc } }).state.stack).toEqual([42]);
+    expect(exec([OP.SENSE_CHEMICAL, 5, HALT_MARK], { sensors: { chemConc: cc, gradient: (_i,o)=>{o[0]=0;o[1]=0;} } }).state.stack).toEqual([42]);
   });
   it("SENSE_CHEMICAL operand wraps mod CHEMICAL_COUNT (96)", () => {
     // K-5: every external reading hits SENSE_CHEMICAL. Activated chems
@@ -247,7 +250,7 @@ describe("VM sensors", () => {
     const cc = new Float32Array(96);
     cc[23] = 9.5;
     // 23 + 96 = 119; mod 96 = 23, so the read still lands at slot 23.
-    expect(exec([OP.SENSE_CHEMICAL, 119, HALT_MARK], { sensors: { chemConc: cc } }).state.stack).toEqual([9.5]);
+    expect(exec([OP.SENSE_CHEMICAL, 119, HALT_MARK], { sensors: { chemConc: cc, gradient: (_i,o)=>{o[0]=0;o[1]=0;} } }).state.stack).toEqual([9.5]);
   });
 });
 
@@ -617,7 +620,7 @@ describe("VM op coverage: every defined op", () => {
   describe("genome self-modification", () => {
     function run(bytes: number[], budget: number): Uint8Array {
       const g = new Uint8Array(bytes);
-      runTick(g, newVMState(), { chemConc: new Float32Array(96) },
+      runTick(g, newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
         { energy: 100, mass: 0, membrane: 0 }, budget, newOutputs());
       return g;
     }
@@ -636,7 +639,7 @@ describe("VM op coverage: every defined op", () => {
       const out = newOutputs();
       // push offset(2) then length(100); SPLICE pops length then offset.
       runTick(new Uint8Array([OP.PUSH8, 2, OP.PUSH8, 100, OP.SPLICE_DUP]),
-        newVMState(), { chemConc: new Float32Array(96) },
+        newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
         { energy: 100, mass: 0, membrane: 0 }, 3, out);
       expect(out.spliceMode).toBe(1);
       expect(out.spliceLength).toBe(32);
@@ -645,7 +648,7 @@ describe("VM op coverage: every defined op", () => {
     it("SPLICE_DEL requests a deletion (mode 2)", () => {
       const out = newOutputs();
       runTick(new Uint8Array([OP.PUSH8, 1, OP.PUSH8, 3, OP.SPLICE_DEL]),
-        newVMState(), { chemConc: new Float32Array(96) },
+        newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
         { energy: 100, mass: 0, membrane: 0 }, 3, out);
       expect(out.spliceMode).toBe(2);
       expect(out.spliceLength).toBe(3);

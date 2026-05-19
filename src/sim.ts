@@ -4076,7 +4076,7 @@ function runInnerCell(
   // cell gets. VM_SENSORS/VM_SELF are shared scratch; we populate and
   // consume them synchronously here before the host loop reuses them.
   runActivation(inner, world, dt, host);
-  populateSensors(inner, world);
+  populateSensors(inner, world, true);
   VM_SELF.energy = inner.energy;
   {
     let selfMass = 0;
@@ -5139,8 +5139,17 @@ function applyForces(world: World, dt: number): void {
   if (forceWait) forceWait();
 }
 
+// Current-cell spatial context for the SENSE_OUT gradient sensor.
+// Set by populateSensors each tick (the same shared-scratch trick
+// VM_SENSORS/VM_SELF use). RANGE 0 => chemGradient returns the zero
+// vector (engulfed organelles: no spatial gradient inside a host).
+let GRAD_CX = 0, GRAD_CY = 0, GRAD_RANGE = 0;
+function simGradient(chemId: number, out: Float32Array): void {
+  chemGradient(GRAD_CX, GRAD_CY, GRAD_RANGE, chemId, out);
+}
 const VM_SENSORS: VMSensors = {
   chemConc: new Float32Array(CHEMICAL_COUNT),
+  gradient: simGradient,
 };
 const VM_SELF: VMSelf = {
   energy: 0,
@@ -6191,7 +6200,13 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   }
 }
 
-function populateSensors(c: Creature, _world: World): void {
+function populateSensors(c: Creature, _world: World, engulfed = false): void {
+  // SENSE_OUT spatial context. Engulfed organelles get range 0 ->
+  // zero gradient (no spatial field inside a host), mirroring the
+  // chemo pass's organelle handling.
+  GRAD_CX = c.x;
+  GRAD_CY = c.y;
+  GRAD_RANGE = engulfed ? 0 : c.senseRange;
   // K-5: external sensing collapsed onto SENSE_CHEMICAL <id>. The K-3
   // activation pass (runActivation, called every tick) writes
   // activated_photo/chemo/mech/thermo/mag chems into the same per-cell
@@ -7142,7 +7157,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:14:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:15:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

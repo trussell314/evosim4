@@ -79,6 +79,16 @@ export const OP = {
   // activated_* chems for every modality, this is the only external
   // sensor primitive a genome needs.
   SENSE_CHEMICAL:0x6F,
+
+  // Environmental gradient sensor. SENSE_OUT <chemId> pushes the
+  // local spatial gradient VECTOR of that chem's particle field at
+  // the cell's position: gx then gy (so `SENSE_OUT c; THRUST` climbs
+  // it -- THRUST pops ay then ax). Universal: works for ANY chem
+  // with no SYNTH'd receptor, so emergent taxis toward/away from any
+  // particle species is expressible without the dedicated
+  // chemoreceptor machinery. Zero vector for engulfed organelles
+  // (no spatial gradient inside a host).
+  SENSE_OUT:     0x6E,
 } as const;
 
 // SYNTH kinds. Op layout: SYNTH <kind, param>. Each kind sets one
@@ -179,9 +189,14 @@ OPERANDS[OP.TRANSPORT] = 1;
 // a small pushed value -> ~0 eats everything organic but excludes
 // zero-bond inorganics (MIN/O2/CO2). Selection tunes the value.
 const INGEST_TH_SCALE = 0.02;
+
+// Reused scratch for SENSE_OUT's [gx, gy] return (module-level so the
+// VM hot loop allocates nothing). RNG-free.
+const _GRAD = new Float32Array(2);
 OPERANDS[OP.LOAD] = 1;
 OPERANDS[OP.STORE] = 1;
 OPERANDS[OP.SENSE_CHEMICAL] = 1;
+OPERANDS[OP.SENSE_OUT] = 1;
 OPERANDS[OP.PARTITION] = 1;
 OPERANDS[OP.SYNTH] = 2;
 
@@ -257,6 +272,11 @@ export interface VMSensors {
   // a genome that wants "light" reads SENSE_CHEMICAL CHEM_ACT_PHOTO,
   // "gradient toward food" reads SENSE_CHEMICAL CHEM_ACT_CHEMO_*_X, etc.
   chemConc: Float32Array;
+  // Local spatial gradient of a chem's particle field at the cell's
+  // position. Writes [gx, gy] into `out`. Supplied by the engine
+  // (closes over the current cell/world); deterministic. Zero vector
+  // for engulfed organelles. Backs the SENSE_OUT op.
+  gradient(chemId: number, out: Float32Array): void;
 }
 
 // Self-state read by SELF_* ops. These are the values the cell knows
@@ -446,6 +466,17 @@ export function runTick(
         const id = genome[state.pc % L] % CHEMICAL_COUNT;
         state.pc++;
         vmPush(stack, sensors.chemConc[id]);
+        break;
+      }
+      case OP.SENSE_OUT: {
+        // operand mod CHEMICAL_COUNT. Pushes the local spatial
+        // gradient vector of that chem's particle field: gx then gy
+        // (THRUST pops ay,ax, so `SENSE_OUT c; THRUST` swims up-grad).
+        const id = genome[state.pc % L] % CHEMICAL_COUNT;
+        state.pc++;
+        sensors.gradient(id, _GRAD);
+        vmPush(stack, _GRAD[0]);
+        vmPush(stack, _GRAD[1]);
         break;
       }
       // Unified SYNTH op (Tier 3 K-4). Two-byte operand: kind, param.
@@ -688,7 +719,8 @@ export function summarizeGenome(
         hasCmp = true; break;
       case OP.SELF_MASS:
       case OP.SELF_MEMBRANE: case OP.SELF_ENERGY:
-      case OP.SENSE_CHEMICAL: {
+      case OP.SENSE_CHEMICAL:
+      case OP.SENSE_OUT: {
         const name = NAME_BY_OP[op].toLowerCase();
         if (!seenSensor.has(name)) { seenSensor.add(name); sensors.push(name); }
         break;

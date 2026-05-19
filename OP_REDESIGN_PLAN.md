@@ -231,8 +231,14 @@ pops a stack threshold ×INGEST_TH_SCALE=0.02; sensor bins +
 biopolymer generic-catch fallback deleted; all archetypes + scenario
 probes migrated to `PUSH8;INGEST`; SAVE_SCHEMA 13→14; golden
 22e020e8→880fc7e9; forager/benthic/vent viability re-verified)
-· 3 `SENSE_OUT` (gradient-vector
-primitive) · 4 retire the `synthMask` enable-gate path; `CATALYST`
+· **3 `SENSE_OUT` gradient-vector sensor — DONE** (opcode 0x6E,
+operand=chemId; pushes [gx,gy] from chemGradient at the cell's
+position for ANY chem with no SYNTH'd receptor — emergent taxis;
+zero vector for engulfed organelles; VMSensors gained a deterministic
+`gradient()` hook supplied by the engine, no per-tick alloc; legacy
+receptor/activation machinery kept in parallel — forager still
+viable; SAVE_SCHEMA 14→15; golden unchanged; +2 tests) · 4 retire
+the `synthMask` enable-gate path; `CATALYST`
 becomes the sole paid lever; ONE decision: keep or drop the
 "declare the pathway" gate (free floor already in `uncatRate`) ·
 5 retire receptor kinds/activation chems. **Phases 2, 3, 4 and 5 are

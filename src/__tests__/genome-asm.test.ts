@@ -11,7 +11,10 @@ import {
 } from "../genome";
 
 function bareSensors(): VMSensors {
-  return { chemConc: new Float32Array(96) };
+  return {
+    chemConc: new Float32Array(96),
+    gradient: (_id, out) => { out[0] = 0; out[1] = 0; },
+  };
 }
 function bareSelf(): VMSelf {
   return { energy: 10, mass: 5, membrane: 2 };
