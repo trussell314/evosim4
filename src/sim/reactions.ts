@@ -18,6 +18,7 @@ import {
   CHEM_CHEMORECEPTOR_MINERALS, CHEM_CHEMORECEPTOR_FA,
   CHEM_CHEMORECEPTOR_MARKER0, CHEM_MECHANORECEPTOR,
   CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR, CHEM_BOND, CHEM_REPAIR,
+  CHEM_ATP,
 } from "./chem-ids";
 import { CHEMICALS, CHEM_BOND_POTENTIAL } from "./chemistry";
 import {
@@ -182,16 +183,16 @@ export const TRANSPORT_CHEM_IDS: readonly number[] = [
   CHEM_FA, CHEM_MIN, CHEM_ADP, CHEM_WASTE,
 ];
 // ATP translocase sentinel (NOT a chem id -- ATP is the per-creature
-// `energy` scalar, not a chemCols entry). A transporter slot whose
-// `transport` field is this moves the `energy` scalar across the
-// VACUOLAR membrane only (host<->organelle), the faithful ADP/ATP
-// translocase (ANT) analog: ATP can't cross a bilayer passively, only
-// via this dedicated carrier, and (like real ANT) it's an inner-
-// membrane protein -- there is no ambient ATP, so it does NOT act at
-// the outer (cell<->world) membrane. Path 1 (CHEM_ATP) will later
-// replace this sentinel with a real chem id; the slot + genome
-// expression survive.
-export const TRANSPORT_ATP = -1;
+// ATP translocase target. Path 1: ATP is now a real chemical
+// (CHEM_ATP, == the aliased `energy` column), so this is a normal
+// chem-id transporter -- no sentinel/special-case needed. It is the
+// faithful ADP/ATP translocase (ANT): ATP has permeability 0 so it
+// never passively crosses a membrane (no free bleed to water, no
+// passive organelle<->host); it moves ONLY via this dedicated
+// carrier, and (like real ANT, an inner-membrane protein) it acts at
+// the VACUOLAR membrane only -- the outer-membrane applier skips
+// CHEM_ATP (there is no ambient ATP).
+export const TRANSPORT_ATP = CHEM_ATP;
 // The transport band: the 8 small-molecule metabolites plus the ATP
 // translocase. One contiguous post-build-overwritten band so the
 // seeded buildReactionTable draw order stays byte-identical.

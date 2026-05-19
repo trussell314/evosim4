@@ -65,6 +65,14 @@ export interface Molecules {
   marker1: number;
   marker2: number;
   marker3: number;
+  // ATP. Path 1: ATP is now a first-class chemical (was the
+  // per-creature `energy` scalar). It is mass-conserved like every
+  // other molecule and participates in the chem machinery (transport
+  // / reactions). The Creature.energy accessor + store.energy array
+  // are aliased onto this column, so all existing energy code paths
+  // are unchanged. Appended last (named id 45) so chems 0..44 keep
+  // their ids and the genome ABI (%CHEMICAL_COUNT) is unchanged.
+  atp: number;
 }
 
 export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
@@ -83,6 +91,7 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "magnetoreceptor", "activatedMagX", "activatedMagY",
   "bondChem", "repairChem",
   "marker0", "marker1", "marker2", "marker3",
+  "atp",
 ];
 
 export function emptyMolecules(): Molecules {
@@ -101,7 +110,7 @@ export const MOLECULE_INDEX: Record<keyof Molecules, number> =
 for (let i = 0; i < MOLECULE_IDS.length; i++) MOLECULE_INDEX[MOLECULE_IDS[i]] = i;
 
 export const CHEMICAL_COUNT = 96;
-export const NAMED_CHEMICAL_COUNT = 45;
+export const NAMED_CHEMICAL_COUNT = 46;
 // Order maps to chemCols[0..NAMED_CHEMICAL_COUNT-1]. The CHEM_* slot
 // constants below MUST match this order; see CHEMISTRY_OVERHAUL.md
 // phase K for the locked layout.
@@ -121,6 +130,7 @@ export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "magnetoreceptor", "activatedMagX", "activatedMagY",
   "bondChem", "repairChem",
   "marker0", "marker1", "marker2", "marker3",
+  "atp",
 ];
 
 // Slot indices for special handling (engine-managed ATP/ADP, etc.).
@@ -174,6 +184,9 @@ export const CHEM_REPAIR = 40;
 export const CHEM_MARKER0 = 41;
 // Markers occupy 41..44; marker0 has a constant since the
 // chemoreceptor system targets it specifically.
+// ATP: named id 45 (appended after markers; first ex-generic slot).
+// CHEMICAL_COUNT stays 96 so the genome ABI is unchanged.
+export const CHEM_ATP = 45;
 export const MRNA_REF = 5;
 export const CHL_REF = 5;
 export const ENZ_REF = 5;

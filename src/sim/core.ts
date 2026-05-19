@@ -422,7 +422,9 @@ export interface CreatureSharedLayout {
 const CREATURE_F32_COLS = [
   "x", "y", "z", "vx", "vy", "vz",
   "r", "density",
-  "energy", "senseRange", "thrustAccel",
+  // Path 1: `energy` is no longer its own column -- it aliases the
+  // m_atp named-molecule column (ATP is a first-class chemical).
+  "senseRange", "thrustAccel",
   "bornAt", "ingestCooldown",
   "ax", "ay",
   "m_glucose", "m_fattyAcid", "m_aminoAcid", "m_minerals",
@@ -441,6 +443,7 @@ const CREATURE_F32_COLS = [
   "m_magnetoreceptor", "m_activatedMagX", "m_activatedMagY",
   "m_bondChem", "m_repairChem",
   "m_marker0", "m_marker1", "m_marker2", "m_marker3",
+  "m_atp", // Path 1: ATP column; store.energy aliases this.
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
@@ -539,6 +542,7 @@ export class CreatureStore {
   m_marker1!: Float32Array;
   m_marker2!: Float32Array;
   m_marker3!: Float32Array;
+  m_atp!: Float32Array; // Path 1: ATP column; `energy` aliases it.
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -594,7 +598,7 @@ export class CreatureStore {
     this.vz = new Float32Array(b, o.base.vz, cap);
     this.r = new Float32Array(b, o.base.r, cap);
     this.density = new Float32Array(b, o.base.density, cap);
-    this.energy = new Float32Array(b, o.base.energy, cap);
+    // `energy` is aliased onto the m_atp column below (Path 1).
     this.senseRange = new Float32Array(b, o.base.senseRange, cap);
     this.thrustAccel = new Float32Array(b, o.base.thrustAccel, cap);
     this.bornAt = new Float32Array(b, o.base.bornAt, cap);
@@ -646,6 +650,12 @@ export class CreatureStore {
     this.m_marker1 = new Float32Array(b, o.base.m_marker1, cap);
     this.m_marker2 = new Float32Array(b, o.base.m_marker2, cap);
     this.m_marker3 = new Float32Array(b, o.base.m_marker3, cap);
+    this.m_atp = new Float32Array(b, o.base.m_atp, cap);
+    // Path 1: ATP is a first-class chemical. `energy` is the same
+    // backing array as the m_atp molecule column (== molCols[atp] ==
+    // chemCols[CHEM_ATP]); every store.energy / c.energy / c.molecules
+    // .atp / chemCols[CHEM_ATP] access hits one memory location.
+    this.energy = this.m_atp;
     this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
     this.fpW0 = new Uint32Array(b, o.base.fpW0, cap);
     this.fpW1 = new Uint32Array(b, o.base.fpW1, cap);
@@ -678,6 +688,7 @@ export class CreatureStore {
       this.m_magnetoreceptor, this.m_activatedMagX, this.m_activatedMagY,
       this.m_bondChem, this.m_repairChem,
       this.m_marker0, this.m_marker1, this.m_marker2, this.m_marker3,
+      this.m_atp, // MUST stay last to match MOLECULE_IDS order.
     ];
     this.chemCols = new Array(CHEMICAL_COUNT);
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
@@ -830,6 +841,8 @@ export class MoleculesView {
   set marker2(v: number) { this.c.store.m_marker2[this.c.idx] = v; }
   get marker3(): number { return this.c.store.m_marker3[this.c.idx]; }
   set marker3(v: number) { this.c.store.m_marker3[this.c.idx] = v; }
+  get atp(): number { return this.c.store.m_atp[this.c.idx]; }
+  set atp(v: number) { this.c.store.m_atp[this.c.idx] = v; }
 }
 
 // Reserves were retired in phase D of the chemistry overhaul.

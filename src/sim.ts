@@ -3952,15 +3952,14 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     inner.molecules[mk] -= give;
     childMolecules[mk] = give;
   }
-  // Energy and catalyst slots keep the uniform share: energy is not a
-  // determinant and catalyst slots aren't chem-addressable by PARTITION.
-  const energyGift = inner.energy * childShare;
-  inner.energy -= energyGift;
+  // Path 1: ATP is the `atp` molecule, so the MOLECULE_IDS loop above
+  // already split it parent->child (childMolecules.atp) and debited
+  // inner. No separate energyGift (that double-moved it).
   const child = newCreature(world.creatureStore, {
     x: host.x, y: host.y, z: host.z,
     r: MIN_CREATURE_R,
     density: inner.density,
-    energy: energyGift,
+    energy: childMolecules.atp,
     senseRange: computeSenseRange(childGenome),
     thrustAccel: computeThrustAccel(childGenome),
     genome: childGenome,
@@ -4234,33 +4233,18 @@ function runInnerCell(
   const iCat = inner.store.catalystCols;
   const hCat = host.store.catalystCols;
   const surf = inner.store.r[ii] / MIN_CREATURE_R;
-  const iEnergy = inner.store.energy;
-  const hEnergy = host.store.energy;
+  // Path 1: CHEM_ATP is a real chemCols id (== the aliased energy /
+  // m_atp column), so the ATP translocase is just the generic
+  // chem-transport path below -- no special energy branch. It is
+  // mass-exact (1:1; both endpoints inside the host's mass ledger,
+  // host total includes inner via creatureSelfMass) and the ANT
+  // analog: it only runs here (vacuolar), the outer applier skips
+  // CHEM_ATP, and ATP permeability 0 blocks any passive crossing.
   for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
     const k = TRANSPORT_TARGETS[n];
     const slot = TRANSPORT_SLOT_BASE + n;
     const pool = iCat[slot][ii] + hCat[slot][hi];
     if (pool <= 0) continue;
-    if (k === TRANSPORT_ATP) {
-      // ATP translocase (ANT analog): facilitated, gradient-driven
-      // movement of the `energy` scalar across the vacuolar membrane.
-      // Same kinetics as the metabolite transporters; 1:1 and both
-      // endpoints are inside the host's mass ledger (host total
-      // includes inner via creatureSelfMass) so it is mass-exact.
-      const inside = iEnergy[ii];
-      const outside = hEnergy[hi];
-      const gap = outside - inside;
-      if (gap === 0) continue;
-      const src = gap > 0 ? outside : inside;
-      const sat = src / (src + KM_DEFAULT);
-      let flow = REACTIONS[slot].vmax * (pool / CAT_REF) * surf * sat * gap * dt;
-      if (flow > 0) { if (flow > outside) flow = outside; }
-      else { if (-flow > inside) flow = -inside; }
-      if (flow === 0) continue;
-      iEnergy[ii] += flow;
-      hEnergy[hi] -= flow;
-      continue;
-    }
     const ic = iCols[k];
     const hc = hCols[k];
     const inside = ic[ii];
@@ -5974,8 +5958,9 @@ function tryReproduce(parent: Creature, world: World): void {
       childGenericChem[k] = give;
     }
   }
-  const energyGift = parent.energy * childShare;
-  parent.energy -= energyGift;
+  // Path 1: ATP is the `atp` molecule -- the MOLECULE_IDS split above
+  // already moved its share to childMolecules.atp and debited parent.
+  // No separate energyGift (double-moved energy before).
   // No additive yolk. The child receives exactly its proportional
   // share of the parent's molecules / reserves / energy. If the
   // parent didn't stockpile enough mRNA / chlorophyll / glucose
@@ -5987,7 +5972,7 @@ function tryReproduce(parent: Creature, world: World): void {
   updateCreatureRadius(parent);
 
   const angle = simRng() * Math.PI * 2;
-  let childMassEstimate = energyGift;
+  let childMassEstimate = 0; // atp included via MOLECULE_IDS
   for (const mk of MOLECULE_IDS) childMassEstimate += childMolecules[mk];
   const childRGuess = Math.max(MIN_CREATURE_R, Math.cbrt((3 * childMassEstimate) / (4 * Math.PI)));
   // Place the child outside the parent's recent food-eating zone.
@@ -6002,7 +5987,7 @@ function tryReproduce(parent: Creature, world: World): void {
     vx: parent.vx, vy: parent.vy, vz: parent.vz,
     r: MIN_CREATURE_R,
     density: parent.density,
-    energy: energyGift,
+    energy: childMolecules.atp,
     senseRange: computeSenseRange(childGenome),
     thrustAccel: computeThrustAccel(childGenome),
     genome: childGenome,
@@ -6155,7 +6140,10 @@ function predationCost(target: Creature, targetMass: number): number {
 }
 
 function creatureTotalMass(c: Creature): number {
-  let m = c.energy; // ATP is a real molecule and contributes to mass.
+  // Path 1: ATP is the `atp` molecule (== c.energy, aliased), so it
+  // is summed by the MOLECULE_IDS loop -- no separate c.energy term
+  // (that would double-count).
+  let m = 0;
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   // Engulfed prey lives in our vacuole; its mass still occupies our volume.
   for (const inner of c.contents) m += creatureSelfMass(inner);
@@ -6165,7 +6153,8 @@ function creatureTotalMass(c: Creature): number {
 // Mass of a single cell excluding its contents -- used to avoid recursion
 // when summing up an engulfed prey's contribution to its container's mass.
 function creatureSelfMass(c: Creature): number {
-  let m = c.energy;
+  // ATP counted via MOLECULE_IDS (it is the `atp` molecule == energy).
+  let m = 0;
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
 }
@@ -7055,7 +7044,9 @@ function applyWalls(world: World): void {
 // and named/generic chemistry pools intact.
 // ---------------------------------------------------------------------
 
-export const SAVE_SCHEMA = `evosim4:9:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+// v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
+// 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
+export const SAVE_SCHEMA = `evosim4:10:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

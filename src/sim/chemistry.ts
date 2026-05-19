@@ -146,6 +146,12 @@ const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* mark1  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4ae84a", isSignal: false },
   /* mark2  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#4a4ae8", isSignal: false },
   /* mark3  */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 100,  permeability: 0.5, bondEnergy: 5,    role: "marker",    color: "#e8e84a", isSignal: false },
+  // ATP (Path 1, named id 45). permeability 0: ATP does NOT passively
+  // cross a membrane (no free bleed to ambient; no passive organelle
+  // <->host) -- it moves only via the SYNTH'd ATP translocase (ANT,
+  // Path 2). solubility 0 + not in GENERIC_SPAWN_ORDER => never a
+  // free particle (energy stays intracellular). Mass-unit consistent.
+  /* atp    */ { molarMass: 1.0, density: 1.0,  defaultPhase: "aqueous", solubility: 0.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0,   bondEnergy: 0,    role: "none",      color: "#ffe066", isSignal: false },
 ];
 
 function buildChemicalTable(): ChemicalDef[] {

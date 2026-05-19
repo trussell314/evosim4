@@ -79,7 +79,14 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // 0.5 glu-per-unit ~= 5.4) -- carbon fixation was the binding
     // constraint once synth_aa was relieved (mGLU pinned ~0 in every
     // autotroph run). Global, intended; determinism + mass green.
-    const GOLDEN = "a11f6a54";
+    // Bumped again: Path 1 -- ATP is now a first-class chemical
+    // (CHEM_ATP, named id 45; `energy` aliases the m_atp column).
+    // NAMED_CHEMICAL_COUNT 45->46, GENERIC 51->50 so one fewer
+    // procedural generic chemical is rolled by the seeded chem-table
+    // build -> generic chem properties shift (intended). genome ABI
+    // unchanged (CHEMICAL_COUNT stays 96); determinism byte-identical
+    // + mass-conservation re-verified green; SAVE_SCHEMA bumped.
+    const GOLDEN = "11f0b56b";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

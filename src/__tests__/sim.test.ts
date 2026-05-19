@@ -219,7 +219,10 @@ function makeCreature(overrides: Partial<{
 }
 
 function cellTotalMass(c: Creature): number {
-  let m = c.energy;
+  // Path 1: ATP is the `atp` molecule (== c.energy, aliased), so it
+  // is summed by MOLECULE_IDS -- no separate c.energy term (matches
+  // the engine's creatureTotalMass; adding it back double-counts).
+  let m = 0;
   for (const k of MOLECULE_IDS) m += c.molecules[k];
   return m;
 }
@@ -787,7 +790,7 @@ describe("creature: ingestion cost and cooldown", () => {
     w.particleSpawnRate = 0;
     const c = makeCreature({ energy: 50, genome: OMNIVORE });
     w.creatures.push(c);
-    const GEN = 45; // first generic chem id (NAMED_CHEMICAL_COUNT)
+    const GEN = 46; // first generic chem id (NAMED_CHEMICAL_COUNT, now 46 after CHEM_ATP)
     const before = c.store.chemCols[GEN][c.idx];
     pushParticle(w, { x: c.x, y: c.y, z: c.z, vx: 0, vy: 0, vz: 0, r: 3, chemId: GEN, density: 1.2 });
     step(w, 0.001);
