@@ -251,7 +251,7 @@ function build(): Archetype[] {
       id: "farmer",
       label: "farmer host",
       cls: "seed",
-      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and CONDITIONALLY engulfs -- only with a strong energy surplus (SELF_ENERGY > 90), so a struggling farmer stops taking on draining captives instead of cannibalising itself to collapse. Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
+      desc: "Seed: heterotroph that climbs into organic/prey-dense regions and engulfs RARELY (a persistent register counter gates ENGULF to ~1/64 VM passes). SELF_ENERGY gating was ineffective -- realized ATP (~165-250) is far above any sane threshold, so engulf fired unconditionally and the lineage cannibalised itself to collapse (farmer-solo 30->9 vs near-identical engulf-less forager 30->110). A rarity gate caps the kin-cannibalism rate below the reproduction rate so the host self-sustains, while engulf/farming still occurs (tandem). Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
         ...HET_SYNTH,
         ["SYNTH", "CHEMO", 0],
@@ -261,18 +261,22 @@ function build(): Archetype[] {
           CHEM_ACT_CHEMO_BIOPOLYMER_Y,
           35,
         ),
-        // Conditional ENGULF: only with a STRONG energy surplus.
-        // Unconditional engulf collapsed the host (cannibalising kin
-        // + draining captives); a >50 gate persisted-but-declined
-        // (solo 30->19, sub-forager). 90 engulfs only when well above
-        // the forager-fed ATP band, so the host stays viable while
-        // symbiosis still self-assembles (engulfment is not size-
-        // blocked -- prior run reached engMito 31, all inHost). The
-        // genome decides via SELF_ENERGY -- no engine-side rule.
-        ["SELF_ENERGY"],
-        ["PUSH8", 90],
-        ["GT"],
-        ["JZ", "noEngulf"],
+        // Rarity-gated ENGULF (register oscillator, bet-hedger
+        // pattern). reg0 persists across ticks; engulf only when
+        // reg0 % 64 == 0 -> ~1/64 of passes, regardless of ATP. This
+        // caps the kin-cannibalism rate (every engulf converts a free
+        // reproducing farmer into a captive + burdens the host) below
+        // the reproduction rate so the lineage doesn't sink itself,
+        // while engulf still happens often enough for the farming /
+        // endosymbiosis behaviour. Genome-only -- no engine rule.
+        ["LOAD", 0],
+        ["PUSH8", 1],
+        ["ADD"],
+        ["STORE", 0], // reg0++ (free-running counter)
+        ["LOAD", 0],
+        ["PUSH8", 64],
+        ["MOD"], // reg0 % 64
+        ["JNZ", "noEngulf"], // != 0 -> skip; engulf only 1/64 passes
         ["ENGULF"],
         ["LABEL", "noEngulf"],
         // 40 -> 28: forager (near-identical genome) only self-sustains
