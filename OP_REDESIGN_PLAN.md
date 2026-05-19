@@ -24,9 +24,21 @@ emergent program over primitives, never a dedicated verb.
    slot is multi-substrate *and* multi-product, so "the reaction
    that makes X" is undefined. This is continuous with today's
    `SYNTH CAT param=slot` (`genome.ts:453`), just generalized +
-   renamed. The named-SYNTH **aliases** bind to fixed *slot
-   constants*, not products (`SYNTH BIO` ≡ `CATALYST
-   <BIO_BOOTSTRAP_SLOT>`).
+   renamed. **Correction (review 2026-05-19):** the named-SYNTH →
+   `CATALYST <fixed slot>` "alias" framing is mechanically WRONG and
+   must not be treated as a rename. SYNTH kinds set a *bit* in
+   `synthMask` (`genome.ts:440-452`) that gates **multiple** reaction
+   slots via `rxn.gateMask` (e.g. `SYNTH_BIT_BIO` gates slots 9, 11,
+   24 — `reactions.ts:316,327,354`); a gate is "free if the bit is
+   set" whereas a `CATALYST` pool must be biosynthesized at
+   `CAT_ATP_COST`. So the collapse is a **behavioral + energetic
+   redesign** (multi-slot → multi-`CATALYST`, gate-semantics →
+   pool-semantics), determinism- and mass-sensitive, NOT an
+   aliasing. `BOND` is therefore not the sole non-lossless case —
+   `BIO/AA/FA/ENZ/MRNA/CHL/REPAIR` are all non-lossless, because
+   their product chems also drive engine machinery beyond a reaction
+   (membrane integrity/toxify, repair→somatic-mutation suppression,
+   `CHEM_BOND` adhesion gate + greenbeard, `CHL`→photosynthesis).
 2. **Name = product, not action.** `CATALYST` (builds a reusable
    standing catalyst), not `CATALYZE`. Same logic flags the HGT pair
    as mis-filed under `SYNTH` (see op surface).
@@ -45,9 +57,9 @@ levels/vectors from the stack so they are computed/regulated):
 | Op | Arg | Notes |
 |---|---|---|
 | `SENSE_IN <chemId>` | chem id | own cytoplasmic pool (today's `SENSE_CHEMICAL`) |
-| `SENSE_OUT <chemId>` | chem id | local ambient conc; **subsumes** the receptor/activation machinery → taxis becomes emergent |
-| `TRANSPORT <chemId>` | chem id | signed-amount membrane flux; facilitated down-gradient (free), active up-gradient (ATP cost, conservation-airtight). Subsumes `EXCRETE` + transporter band |
-| `CATALYST <slotId>` | reaction slot | analog level from stack; **subsumes** every named `SYNTH` biomass/pigment/repair kind via fixed-slot aliases |
+| `SENSE_OUT <chemId>` | chem id | **NOT a scalar read.** `runActivation` (`sim.ts:3398-3435`) emits *directional X/Y gradient* vectors (`CHEM_ACT_*_X/_Y`), receptor-pool-scaled and decaying. A scalar ambient read cannot express taxis. Subsuming the receptor machinery requires returning a gradient **vector** (≥2 values + receptor gating + decay) — a substantially larger primitive than one row implies |
+| `TRANSPORT <chemId>` | chem id | signed-amount membrane flux; facilitated down-gradient (free), active up-gradient (ATP cost). "Conservation-airtight" is a REQUIREMENT not a freebie: the ATP debit and moved-mass credit must enter the *same* accounting the mass test checks (current transporters are `atpDelta:0`, applied via `runTransportReactions` `sim.ts:5227`). Subsumes `EXCRETE` + transporter band |
+| `CATALYST <slotId>` | reaction slot | analog level from stack. Named `SYNTH` kinds do NOT collapse to single-slot aliases (see Rule 1 correction) — Phase 4 is a behavioral redesign |
 | `INGEST` | **UNRESOLVED** | particulate channel — see design problem below |
 
 Survivors that do **not** collapse (operate on genome/eDNA-particle
@@ -117,12 +129,52 @@ Open sub-questions for the class taxonomy (resolve before Phase 2):
 4. `PACKAGE`/`COMPETENCE` rename + whether they leave the `SYNTH`
    family now or in Phase 5.
 
-## Phase sequence (unchanged from agreed plan)
+## Review findings — hard constraints (2026-05-19, code-grounded)
+
+A critical review verified claims against source. Sound: the
+slot-addressing rule (1) and the INGEST sensor-bin/generic-catch
+finding. Corrected above: the SYNTH→CATALYST "alias" and SENSE_OUT
+"scalar subsumption" framings. Additional hard constraints any
+Phase-2+ code must satisfy:
+
+- **RNG draw-order is load-bearing.** `buildReactionTable`'s seeded
+  draws + `TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_TARGETS`
+  (`reactions.ts:176-203`) must stay byte-identical. Any reaction-
+  slot reorganization for fixed-slot constants (Phase 4) risks
+  reordering import-time draws — treat as a hard constraint.
+- **256-slot budget.** Alias slot constants + the open generic
+  space + the transporter band all share `CATALYST_COUNT=256`
+  (`genome.ts:134`, `NAMED_REACTION_COUNT=26`). Collision/budget is
+  unresolved — must be reconciled before Phase 4.
+- **Active-transport conservation accounting** must be specified
+  (not just asserted): ATP debit + mass credit in the mass-test
+  accounting.
+- **`observedOpBias` heritability shift.** Collapsing opcodes
+  shrinks `OP_BYTES` (`genome.ts:1187-1221`), changing every seeded
+  lineage's heritable junk-tolerance ratio — a determinism *and*
+  evolutionary-dynamics change to call out, not silent.
+- **Per-chem hot loops.** `SENSE_OUT`/`TRANSPORT` over 96 chems and
+  catalyst dispatch (`sim.ts:5233` 256-bit loop) are per-cell-per-
+  tick; size the cost.
+
+Refined INGEST recommendation: clean chem-id break is correct but
+**smaller** than first implied — only sensor bin 1 (biopolymer) has
+the generic-catch fallback; bins 0/3/4/5 are named-chem with no
+fallback and migrate cleanly to chem ids. Particle-class taxonomy:
+prefer a **continuous bond-energy threshold** (`k` from stack) over
+a `SOLID/ORGANIC/MINERAL` enum — an enum is a curated list
+(substrate-not-script violation). Tension to flag, not bury: a
+single `INGEST <classId|chemId>` op reintroduces a non-uniform
+operand namespace — the exact wart this redesign exists to remove.
+
+## Phase sequence
 
 0 scaffold · **1 abiotic source — DONE** · 2 acquisition (INGEST
-resolution + `TRANSPORT`, `SAVE_SCHEMA` bump + determinism
-re-baseline) · 3 `SENSE_OUT` · 4 collapse named `SYNTH` → `CATALYST`
-aliases · 5 retire receptor kinds/activation chems. Every commit:
-`tsc`/`vitest`/`vite build` green + archetype-viability smoke; mass
-conservation green every commit; determinism re-baselined only in
-behavioral phases.
+resolution + `TRANSPORT`) · 3 `SENSE_OUT` (gradient-vector
+primitive) · 4 named-`SYNTH` → `CATALYST` **behavioral redesign**
+(multi-slot, pool-vs-gate energetics, product machinery) · 5 retire
+receptor kinds/activation chems. **Phases 2, 3, 4 and 5 are ALL
+behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +
+explicit mass/RNG-order handling) — Phase 4 is NOT a rename. Every
+commit: `tsc`/`vitest`/`vite build` green + archetype-viability
+smoke; mass conservation green every commit.
