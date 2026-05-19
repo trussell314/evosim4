@@ -122,8 +122,14 @@ export const SYNTH_KIND = {
   // verb: the donor cannot address a recipient. Who, if anyone, takes
   // it up is decided by the physical carrier + recipient competence.
   PACKAGE: 15,
+  // Allosteric inhibitor for reaction slot <param>. Dual of CAT --
+  // the genome SYNTHs an inhibitor protein that multiplies the slot's
+  // effective rate DOWN (1 - INH_K * inhPool / CAT_REF). Paid + decaying;
+  // it is the off-switch for the bootstrap floor reactions that run
+  // unconditionally now that the synthMask enable-gate has been retired.
+  INH: 16,
 } as const;
-export const SYNTH_KIND_COUNT = 16;
+export const SYNTH_KIND_COUNT = 17;
 // synthMask bit positions. Per-kind bits 0..5 + 13..17 use one bit
 // each; PHOTO occupies bits 6..8 (one per band), CHEMO occupies
 // bits 9..12 (one per target). 18 bits total.
@@ -331,6 +337,10 @@ export interface VMOutputs {
   // by SYNTH_CAT with operand mod N_CATALYSTS == k. The
   // sim runs catalyst synthesis for slot k iff bit k is set.
   catSynthMask: number;
+  // Parallel mask: bit k set means SYNTH INH param=k fired this tick.
+  // updateCreatures() runs biosynthInhibitor(slot) for each set bit
+  // (dual of catSynthMask -> biosynthCatalyst).
+  inhSynthMask: number;
   // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
   // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
   // this after runTick returns: changing genome length mid-tick would
@@ -362,6 +372,7 @@ export function newOutputs(): VMOutputs {
     synthMask: 0,
     bondMarker: -1,
     catSynthMask: 0,
+    inhSynthMask: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     partitionChem: new Int16Array(PARTITION_CAP),
     partitionBias: new Float32Array(PARTITION_CAP),
@@ -401,6 +412,7 @@ export function runTick(
   out.synthMask = 0;
   out.bondMarker = -1;
   out.catSynthMask = 0;
+  out.inhSynthMask = 0;
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
@@ -503,6 +515,7 @@ export function runTick(
           case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
           case SYNTH_KIND.REPAIR: out.synthMask |= 1 << SYNTH_BIT_REPAIR; break;
           case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
+          case SYNTH_KIND.INH:    out.inhSynthMask |= 1 << (param % CATALYST_COUNT); break;
           case SYNTH_KIND.COMPETENCE: out.synthMask |= 1 << SYNTH_BIT_COMPETENCE; break;
           case SYNTH_KIND.PACKAGE: out.synthMask |= 1 << SYNTH_BIT_PACKAGE; break;
         }
@@ -639,6 +652,7 @@ export interface GenomeSummary {
   // PCs. Best-effort static analysis: operand byte mod CATALYST_COUNT.
   // Doesn't catch runtime PC drift; gives an honest "likely portfolio".
   catalystSlots: number[];
+  inhibitorSlots: number[];
   metabolism: string;       // one-line classification
   warnings: string[];       // structural issues that doom the lineage
   oneLine: string;          // top-of-summary one-liner
@@ -662,6 +676,7 @@ export function summarizeGenome(
   let synthBio = false, synthAA = false, synthFA = false;
   let synthEnz = false, synthChl = false, synthRibo = false;
   const catalystSlots: number[] = [];
+  const inhibitorSlots: number[] = [];
 
   let i = 0;
   while (i < genome.length) {
@@ -706,6 +721,12 @@ export function summarizeGenome(
             const param = genome[(i + 2) % genome.length] ?? 0;
             const slot = param % CATALYST_COUNT;
             if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
+            break;
+          }
+          case SYNTH_KIND.INH: {
+            const param = genome[(i + 2) % genome.length] ?? 0;
+            const slot = param % CATALYST_COUNT;
+            if (!inhibitorSlots.includes(slot)) inhibitorSlots.push(slot);
             break;
           }
           // Tier 3 sense-related SYNTH kinds don't get summary flags
@@ -905,7 +926,7 @@ export function summarizeGenome(
     reproduce, predate, engulf, selfModifies,
     sensors, capabilities,
     synthBio, synthAA, synthFA, synthEnz, synthChl, synthRibo,
-    catalystSlots, metabolism, warnings, oneLine,
+    catalystSlots, inhibitorSlots, metabolism, warnings, oneLine,
     verdict: lines.join("\n"),
   };
 }

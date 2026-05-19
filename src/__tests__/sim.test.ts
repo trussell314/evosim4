@@ -968,6 +968,36 @@ describe("SENSE_OUT op (Phase 3: gradient-vector environmental sense)", () => {
   });
 });
 
+describe("SYNTH INH op (Phase 4b: allosteric inhibitor on a reaction slot)", () => {
+  it("inhibitor pool dampens the bootstrap synth_aa rate (slot 4)", () => {
+    // Two cells, identical setup. Cell A SYNTHs an inhibitor for the
+    // synth_aa slot every tick (a slot now running on uncatRate post
+    // Phase 4a, with no synthMask gate). Cell B does nothing. Both
+    // start with the same GLU/MIN/MRNA/ATP. After several ticks the
+    // inhibitor pool builds in A and damps the synth_aa rate; A's AA
+    // production lags B's. (A's substrate cost for building the
+    // inhibitor reinforces -- not creates -- the effect; both push
+    // A's AA accumulation down vs B.)
+    function mk(genome: Uint8Array): { w: World; c: ReturnType<typeof makeCreature> } {
+      const w = quietWorld();
+      w.particleSpawnRate = 0;
+      const c = makeCreature({
+        energy: 200,
+        molecules: { glucose: 50, minerals: 50, aminoAcid: 5, mrna: 5 },
+        genome,
+      });
+      w.creatures.push(c);
+      return { w, c };
+    }
+    const A = mk(new Uint8Array([OP.SYNTH, SYNTH_KIND.INH, 4, HALT_MARK]));
+    const B = mk(new Uint8Array([HALT_MARK]));
+    for (let i = 0; i < 60; i++) { step(A.w, 1 / 60); step(B.w, 1 / 60); }
+    expect(A.c.store.inhibitorCols[4][A.c.idx]).toBeGreaterThan(0); // pool built
+    // A produced less amino acid than B (inhibitor suppressed synth_aa).
+    expect(A.c.molecules.aminoAcid).toBeLessThan(B.c.molecules.aminoAcid);
+  });
+});
+
 describe("creature: ingestion (basic)", () => {
   it("absorbs a particle inside the cell radius", () => {
     const w = quietWorld();

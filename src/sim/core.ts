@@ -415,6 +415,7 @@ export interface CreatureSharedLayout {
   offsets: {
     base: Record<string, number>; // primitive + molecule + reserve cols
     catalyst: number[];           // CATALYST_COUNT entries
+    inhibitor: number[];          // CATALYST_COUNT entries (allosteric repressor pools, parallel to catalyst)
     generic: number[];            // GENERIC_CHEMICAL_COUNT entries
   };
 }
@@ -460,6 +461,8 @@ function allocCreatureBuffer(cap: number): { buffer: ArrayBufferLike; offsets: C
   for (const k of CREATURE_U32_COLS) { base[k] = o; o = align(o + u32Size); }
   const catalyst: number[] = [];
   for (let k = 0; k < CATALYST_COUNT; k++) { catalyst.push(o); o = align(o + f32Size); }
+  const inhibitor: number[] = [];
+  for (let k = 0; k < CATALYST_COUNT; k++) { inhibitor.push(o); o = align(o + f32Size); }
   const generic: number[] = [];
   for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) { generic.push(o); o = align(o + f32Size); }
   const total = o;
@@ -471,7 +474,7 @@ function allocCreatureBuffer(cap: number): { buffer: ArrayBufferLike; offsets: C
   } else {
     buffer = new ArrayBuffer(total);
   }
-  return { buffer, offsets: { base, catalyst, generic } };
+  return { buffer, offsets: { base, catalyst, inhibitor, generic } };
 }
 
 export class CreatureStore {
@@ -548,6 +551,13 @@ export class CreatureStore {
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
   // a contiguous region of the shared buffer.
   catalystCols!: Float32Array[];
+  // Parallel allosteric-inhibitor pool: one Float32Array per slot,
+  // SAME shape and decay/biosynth economics as catalystCols, but
+  // multiplies its target reaction's rate DOWN (1 - INH_K*pool/CAT_REF)
+  // instead of up. The off-switch for bootstrap reactions that now
+  // run unconditionally on uncatRate (Phase 4a removed the synthMask
+  // enable-gate); built via SYNTH INH <slot>.
+  inhibitorCols!: Float32Array[];
   // Parallel array of column refs for indexed access in hot loops.
   // molCols[molKey] -> m_<key>. Initialized once after the typed arrays
   // exist. (Reserves have been collapsed into chemCols: every ingested
@@ -665,6 +675,10 @@ export class CreatureStore {
     for (let k = 0; k < CATALYST_COUNT; k++) {
       this.catalystCols[k] = new Float32Array(b, o.catalyst[k], cap);
     }
+    this.inhibitorCols = new Array(CATALYST_COUNT);
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      this.inhibitorCols[k] = new Float32Array(b, o.inhibitor[k], cap);
+    }
     this.genericChemCols = new Array(GENERIC_CHEMICAL_COUNT);
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) {
       this.genericChemCols[k] = new Float32Array(b, o.generic[k], cap);
@@ -742,7 +756,10 @@ export class CreatureStore {
     // Zero every molecule column via molCols. Cheaper than listing
     // 40+ field names and stays correct as Tier 3 grows the table.
     for (let k = 0; k < this.molCols.length; k++) this.molCols[k][i] = 0;
-    for (let k = 0; k < CATALYST_COUNT; k++) this.catalystCols[k][i] = 0;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      this.catalystCols[k][i] = 0;
+      this.inhibitorCols[k][i] = 0;
+    }
     // Named chemCols 0..NAMED_CHEMICAL_COUNT-1 alias molCols and are
     // already cleared above; only the generic slice needs its own pass.
     for (let k = 0; k < GENERIC_CHEMICAL_COUNT; k++) this.genericChemCols[k][i] = 0;

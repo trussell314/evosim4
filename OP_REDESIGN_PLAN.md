@@ -250,10 +250,19 @@ reactions now run unconditionally on their existing uncatRate
 floor — every cell metabolizes at baseline; named SYNTH biomass /
 receptor / mech / thermo / mag ops become no-ops, kept harmlessly
 in archetypes; SAVE_SCHEMA 15→16; golden 880fc7e9→f4525ec8;
-forager/benthic/vent viability re-verified) · 4b add `SYNTH INH
-<slot>` allosteric inhibitor (paid inhibitor pool per slot,
-decaying, multiplies rate down — the off-switch for the now-
-unconditional bootstrap floor) · 5 retire receptor kinds /
+forager/benthic/vent viability re-verified) · **4b add `SYNTH INH <slot>`
+allosteric inhibitor — DONE** (new SYNTH_KIND.INH = 16,
+SYNTH_KIND_COUNT 16→17; VM_OUT.inhSynthMask parallels catSynthMask;
+CreatureStore.inhibitorCols mirrors catalystCols [allocator +
+zero-on-compact + fission split inner+free-cell + save/load
+sparse-serial]; biosynthInhibitor / decay loop / dispatch mirror
+the catalyst path; reaction rate × `max(0, 1 - INH_K · inhPool /
+CAT_REF)` in runGenericReactions, so a full inhibitor pool zeros
+the slot; INH_K=1, INH_SYNTH_VMAX=0.3, INH_ATP_COST=4,
+INH_DECAY_PER_SEC=0.005 (symmetric to CAT); SAVE_SCHEMA 16→17;
+golden unchanged; +2 unit tests — VM dispatch sets inhSynthMask
+parallel to catSynthMask, and end-to-end suppression of bootstrap
+synth_aa via SYNTH INH 4 vs a no-op control) · 5 retire receptor kinds /
 activated-chemo chems / SYNTH CHEMO (the only sense family
 SENSE_OUT actually subsumes; PHOTO/THERMO/MECH/MAG stay). **Phases 2, 3, 4 and 5 are
 ALL behavioral** (determinism re-baseline + `SAVE_SCHEMA` bump +

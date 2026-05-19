@@ -329,6 +329,17 @@ const TRANSPORT_PUMP_ATP = 0.5;
 const TRANSPORT_MAX_RATIO = 1e3;
 const TRANSPORT_EPS = 1e-6;
 const CAT_DECAY_PER_SEC = 0.005;
+// Allosteric inhibitor (SYNTH INH <slot>) — dual of catalyst. Same
+// substrate (AA+MIN) and ATP cost as catalyst biosynthesis; same
+// decay rate (recycles to AA+MIN). INH_K is the per-(pool/CAT_REF)
+// rate-multiplier reduction: a full unit of inhibitor pool kills
+// the reaction completely (rate × max(0, 1 − 1·1) = 0). Equal
+// catalyst + inhibitor pools collide head-on, leaving the rate at
+// uncatRate (no net amplification, no zeroing).
+const INH_SYNTH_VMAX = 0.3;
+const INH_ATP_COST = 4;
+const INH_DECAY_PER_SEC = 0.005;
+const INH_K = 1;
 
 // ===================================================================
 // Reaction / ATP accounting -------------------------------------------
@@ -709,7 +720,16 @@ function runGenericReactions(c: Creature, dt: number, ambientLight: number): voi
       if (en <= 0) continue;
       machineryMult *= en / ENZ_REF;
     }
-    const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface * machineryMult;
+    // Allosteric inhibitor dampens the effective rate (Phase 4b).
+    // inhPool/CAT_REF = 1 with INH_K=1 zeros the slot; below that
+    // it linearly scales the (uncat + catalyzed) rate down.
+    const inhPool = s.inhibitorCols[slot][i];
+    let inhMult = 1;
+    if (inhPool > 0) {
+      inhMult = 1 - INH_K * (inhPool / CAT_REF);
+      if (inhMult <= 0) continue;
+    }
+    const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface * machineryMult * inhMult;
     let amt = rate * dt;
     if (amt > limit) amt = limit;
     if (amt <= 0) continue;
@@ -3797,6 +3817,30 @@ function biosynthCatalyst(
     },
   );
 }
+// Dual of biosynthCatalyst: same substrate (AA+MIN) and ATP cost,
+// but the synthesized pool LIVES in inhibitorCols and DAMPENS its
+// target slot's effective rate. Recorded under the same RX as
+// catalyst maintenance/synth since the bookkeeping shape is
+// identical (mass-conserving recycle through aaMin on decay).
+function biosynthInhibitor(
+  c: Creature,
+  dt: number,
+  vmax: number,
+  atpCost: number,
+  slot: number,
+): void {
+  const col = c.store.inhibitorCols[slot];
+  const i = c.idx;
+  runSyntheticReaction(
+    c, dt, CAT_SUBSTRATE_CHEM, CAT_SUBSTRATE_COUNT,
+    -atpCost, vmax, true,
+    (amt) => {
+      col[i] += amt;
+      recordRxn(RX_SYNTH_CATALYST, RX_LOC_CELL, 0);
+      recordAtp(ATP_RXN_ENDO, atpCost * amt, 0);
+    },
+  );
+}
 
 function autoExcrete(c: Creature, world: World): void {
   const s = c.store; const i = c.idx;
@@ -3909,6 +3953,18 @@ function maintenanceDecay(c: Creature, dt: number): void {
       recordRxn(RX_MAINT_CATALYST, RX_LOC_CELL, 0);
     }
   }
+  // Same shape for the inhibitor pools.
+  for (let k = 0; k < CATALYST_COUNT; k++) {
+    const col = s.inhibitorCols[k];
+    const v = col[i];
+    if (v > 0) {
+      const lost = v * INH_DECAY_PER_SEC * stressMult * dt;
+      col[i] = v - lost;
+      s.m_aminoAcid[i] += 0.5 * lost;
+      s.m_minerals[i] += 0.5 * lost;
+      recordRxn(RX_MAINT_CATALYST, RX_LOC_CELL, 0);
+    }
+  }
 }
 
 // Chemistry for an engulfed cell (endosymbiont). No VM, no motion,
@@ -4015,6 +4071,18 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     }
   }
   {
+    // Same proportional split for the inhibitor pools.
+    const pc = inner.store.inhibitorCols;
+    const cc = child.store.inhibitorCols;
+    const pi = inner.idx; const ci = child.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = pc[k][pi];
+      const give = v * childShare;
+      pc[k][pi] = v - give;
+      cc[k][ci] = give;
+    }
+  }
+  {
     const pc = inner.store.genericChemCols;
     const cc = child.store.genericChemCols;
     const pi = inner.idx; const ci = child.idx;
@@ -4112,6 +4180,12 @@ function runInnerCell(
   if (cm) {
     for (let k = 0; k < CATALYST_COUNT; k++) {
       if (cm & (1 << k)) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
+    }
+  }
+  const im = inner.vmOut.inhSynthMask;
+  if (im) {
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      if (im & (1 << k)) biosynthInhibitor(inner, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
     }
   }
   maintenanceDecay(inner, dt);
@@ -5246,6 +5320,13 @@ function updateCreatures(world: World, dt: number): void {
         if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
       }
     }
+    // Dual: SYNTH_INH <id> per-slot allosteric inhibitor.
+    const im = vmOut.inhSynthMask;
+    if (im) {
+      for (let k = 0; k < CATALYST_COUNT; k++) {
+        if (im & (1 << k)) biosynthInhibitor(c, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
+      }
+    }
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);
@@ -6047,6 +6128,18 @@ function tryReproduce(parent: Creature, world: World): void {
       childCatalysts[k] = give;
     }
   }
+  // Same proportional split for the inhibitor pools.
+  const childInhibitors = new Float32Array(CATALYST_COUNT);
+  {
+    const cols = parent.store.inhibitorCols;
+    const pi = parent.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      const v = cols[k][pi];
+      const give = v * childShare;
+      cols[k][pi] = v - give;
+      childInhibitors[k] = give;
+    }
+  }
   // Same proportional split for the generic chemical pool. Named
   // chemCols (0..7) are aliased onto molCols so they already split
   // above via the molecules path; we only need to split the
@@ -6111,6 +6204,11 @@ function tryReproduce(parent: Creature, world: World): void {
     const cols = child.store.catalystCols;
     const ci = child.idx;
     for (let k = 0; k < CATALYST_COUNT; k++) cols[k][ci] = childCatalysts[k];
+  }
+  {
+    const cols = child.store.inhibitorCols;
+    const ci = child.idx;
+    for (let k = 0; k < CATALYST_COUNT; k++) cols[k][ci] = childInhibitors[k];
   }
   {
     const cols = child.store.genericChemCols;
@@ -7156,7 +7254,7 @@ function applyWalls(world: World): void {
 
 // v10: Path 1 -- ATP is a first-class chemical (CHEM_ATP, named id
 // 45); NAMED_CHEMICAL_COUNT 45->46 (so this string changes anyway).
-export const SAVE_SCHEMA = `evosim4:16:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:17:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -7172,6 +7270,7 @@ interface SavedCreature {
   molecules: Record<string, number>;
   // Sparse: only nonzero entries -- catalystCols is 256 wide, most slots empty.
   catalysts: SavedSparse[];
+  inhibitors: SavedSparse[];
   // Sparse: 56 wide for generic chemicals.
   generics: SavedSparse[];
   // Engulfed inner cells (endosymbionts). Recursive: an inner cell can
@@ -7286,6 +7385,7 @@ function snapshotCreature(c: Creature): SavedCreature {
     organelleSynthMask: c.organelleSynthMask,
     molecules: mol,
     catalysts: snapshotSparseCol(s.catalystCols, i, CATALYST_COUNT),
+    inhibitors: snapshotSparseCol(s.inhibitorCols, i, CATALYST_COUNT),
     generics: snapshotSparseCol(s.genericChemCols, i, GENERIC_CHEMICAL_COUNT),
     contents: c.contents.length > 0 ? c.contents.map(snapshotCreature) : undefined,
     eDnaBuffer: c.eDnaBuffer && c.eDnaBuffer.length > 0
@@ -7428,6 +7528,7 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
   for (const v of sc.vmStack) c.vm.stack.push(v);
   const s = c.store;
   for (const e of sc.catalysts) s.catalystCols[e.i][c.idx] = e.v;
+  if (sc.inhibitors) for (const e of sc.inhibitors) s.inhibitorCols[e.i][c.idx] = e.v;
   for (const e of sc.generics) s.genericChemCols[e.i][c.idx] = e.v;
   // Restore engulfed cells. They get their own creature slot (alloc'd
   // by restoreCreature) but are NOT pushed onto world.creatures --

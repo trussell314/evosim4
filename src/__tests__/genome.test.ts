@@ -691,6 +691,12 @@ describe("VM op coverage: every defined op", () => {
       expect(out.synthMask).toBe(0);
       expect(out.catSynthMask).toBe(1 << (3 % CATALYST_COUNT));
     });
+    it("INH routes to inhSynthMask (param = slot), parallel to CAT", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.INH, 7, HALT_MARK]);
+      expect(out.synthMask).toBe(0);
+      expect(out.catSynthMask).toBe(0);
+      expect(out.inhSynthMask).toBe(1 << (7 % CATALYST_COUNT));
+    });
     it("kindByte wraps mod SYNTH_KIND_COUNT", () => {
       expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.AA, 0, HALT_MARK]).out.synthMask)
         .toBe(1 << SYNTH_BIT_AA);
