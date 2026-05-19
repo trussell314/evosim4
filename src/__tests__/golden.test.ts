@@ -68,7 +68,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: SYNTH_KIND.PACKAGE added (SYNTH_KIND_COUNT
     // 15 -> 16) and cells expressing it now actively shed self
     // fragments -- both intended behavior changes.
-    const GOLDEN = "c50314cd";
+    // Bumped again: synth_aa reaction vmax 0.4 -> 1.2 (reactions.ts
+    // out[4]) so a pure photoautotroph can close its own amino-acid
+    // budget from photosynthate + minerals (biological realism --
+    // de-novo aa synthesis is not a growth bottleneck in real
+    // primary producers). Global, intended behavior change;
+    // determinism + mass-conservation re-verified green.
+    const GOLDEN = "3f43094f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

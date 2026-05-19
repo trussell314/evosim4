@@ -250,7 +250,17 @@ function installNamedReactions(out: Reaction[]): void {
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
   // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.
-  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 0.4, { gateMask: 1 << SYNTH_BIT_AA, atpFloor: true, mrnaScale: true }); // synth_aa
+  // synth_aa vmax 0.4 -> 1.2: the de-novo amino-acid route real
+  // autotrophs use. At 0.4 it was structurally below a cell's own aa
+  // demand at vmax (synth_membrane 0.8*0.5=0.40 + synth_chl 0.10 +
+  // synth_ribo 0.075 + receptor 0.075 ~= 0.65), so a pure
+  // photoautotroph could never close its own aa budget on
+  // light+CO2+minerals (measured: declined with aa-death dominant
+  // unless aa was fed exogenously). 1.2 covers summed sink demand
+  // with headroom for reproduction/maintenance, so primary producers
+  // are self-sufficient as in nature. Deliberate global behavior
+  // change (every aa-making cell); golden re-baselined intentionally.
+  out[4] = mk([CHEM_GLU, CHEM_MIN], [0.7, 0.3], [CHEM_AA], [1], -2, 1.2, { gateMask: 1 << SYNTH_BIT_AA, atpFloor: true, mrnaScale: true }); // synth_aa
   // synth_fa: lipogenesis from photosynthate. Cheapened (-6 -> -3 ATP)
   // and sped up (0.2 -> 0.6, ~in line with membrane synth that
   // consumes fa) so living autotrophs/mixotrophs top up fatty acid

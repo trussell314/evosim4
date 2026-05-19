@@ -101,6 +101,41 @@ const SCENARIOS: Record<string, Scenario> = {
     },
   },
 
+  // Controlled test of the synth_aa vmax 0.4->1.2 engine change:
+  // EXACTLY the conditions of photoautotroph "run 2" (CO2+MIN replete
+  // chemostat, NO amino-acid feeding, near-surface, permanent midday)
+  // so the only variable vs that 30->19 decline is the vmax change.
+  "photoautotroph-natural": {
+    id: "photoautotroph",
+    count: 30,
+    coStock: [],
+    describe:
+      "NO aa feeding (natural). CO2=50/MIN=50 chemostat only; cells " +
+      "primed CO2=20 ADP=30 MIN=30 (NO aa prime). Near-surface, " +
+      "permanent midday, founders off. Identical to photoautotroph " +
+      "run 2 (which declined 30->19); the sole difference is the " +
+      "engine synth_aa vmax 0.4->1.2, isolating that change.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = surfaceY + 5 + (k % 6) * 3;
+        c.x = w.width * (0.06 + 0.88 * ((k + 0.5) / cells.length));
+        c.store.chemCols[CHEM_CO2][c.idx] = 20;
+        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    replenish: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+    },
+  },
+
   phototaxis: {
     id: "phototaxis",
     count: 30,
@@ -147,9 +182,9 @@ if (!sc) {
   console.error(`no scenario for "${id}". have: ${Object.keys(SCENARIOS).join(", ")}`);
   process.exit(1);
 }
-const arch = ARCHETYPES.find((a) => a.id === id);
+const arch = ARCHETYPES.find((a) => a.id === sc.id);
 if (!arch) {
-  console.error(`no archetype "${id}"`);
+  console.error(`scenario "${id}" targets unknown archetype "${sc.id}"`);
   process.exit(1);
 }
 
