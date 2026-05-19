@@ -776,6 +776,46 @@ const SCENARIOS: Record<string, Scenario> = {
     },
     report: (w) => armorReport(w),
   },
+
+  // #16 benthic detritivore. Shared benthic niche scenario (the
+  // future #17 cross-feeder, once a chemolithotroph path exists,
+  // would co-stock here). Floor-fed biopolymer chemostat ~1500;
+  // light is irrelevant to a heterotroph so the day setting is
+  // cosmetic. Validates: (a) self-sustains on settled detritus,
+  // (b) benthic position EMERGES (focal mean y -> floor as it
+  // follows sinking food, with no scripted descent), (c) it emits
+  // CO2 (co2P / ambCO2 rise) -- the seed for a future chemocline.
+  benthic: {
+    id: "benthic-detritivore",
+    count: 40,
+    coStock: [],
+    describe:
+      "Sea-floor detritivore solo: biopolymer chemostat ~1500, " +
+      "ambient O2=30/MIN=50, founders off. Cells spawn spread " +
+      "through the column; benthic settling must EMERGE from " +
+      "detritus-tropism (biopolymer sinks), not a scripted descent. " +
+      "Watches sustain + mean depth + CO2 emission.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.1 + 0.8 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    report: (w) => benthicReport(w),
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -945,6 +985,36 @@ function armorReport(w: World): string {
     `fMem=${(fn ? fMem / fn : 0).toFixed(1).padStart(6)} ` +
     `fR=${(fn ? fR / fn : 0).toFixed(2).padStart(5)} ` +
     `preds=${String(preds).padStart(3)}`
+  );
+}
+
+// #16 benthic detritivore report: focal survivors, their mean depth
+// vs the floor (is benthic position emerging?), ambient CO2 mean and
+// the count of free CO2 particles (the niche-defining emission), and
+// the standing biopolymer (detritus) particle pool.
+function benthicReport(w: World): string {
+  let fn = 0, fy = 0;
+  for (const c of w.creatures) {
+    const cc = c as unknown as Cre & { lineageRoot: number };
+    if (!focalRoots.has(cc.lineageRoot)) continue;
+    fn++;
+    fy += cc.y;
+  }
+  const ww = w as unknown as {
+    height: number;
+    particles: { chemId: number }[];
+  };
+  let co2P = 0, bioP = 0;
+  for (const p of ww.particles) {
+    if (p.chemId === CHEM_CO2) co2P++;
+    else if (p.chemId === CHEM_BIOPOLYMER) bioP++;
+  }
+  return (
+    `bd=${String(fn).padStart(3)} ` +
+    `fY=${(fn ? fy / fn : 0).toFixed(0).padStart(3)}/${ww.height} ` +
+    `ambCO2=${ambientMean(w, CHEM_CO2).toFixed(1).padStart(6)} ` +
+    `co2P=${String(co2P).padStart(4)} ` +
+    `bioP=${String(bioP).padStart(4)}`
   );
 }
 

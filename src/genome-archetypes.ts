@@ -467,6 +467,32 @@ function build(): Archetype[] {
         ...reproduceWhenGrown(28, "np"),
       ],
     },
+    {
+      // #16 of GENOME_ARCHETYPES.md. No hard-coded "go to the
+      // floor": biopolymer is denser than water and sinks, so a
+      // detritus-tropic grazer EMERGENTLY settles to the sea floor
+      // by climbing the sinking-detritus gradient. EXCRETE CO2 dumps
+      // the cell's metabolic CO2 as particles -- the niche-defining
+      // emission that (by design intent) seeds a benthic chemocline
+      // for a future cross-feeder. A door, not a script.
+      id: "benthic-detritivore",
+      label: "benthic grazer",
+      cls: "direct",
+      desc: "Sea-floor decomposer: chemotaxes the settled bulk-organic (marine-snow detritus that sinks and pools on the floor), ingests it, runs heterotroph synthesis, and excretes metabolic CO2 back into the medium. Benthic position is emergent (follows sinking food), not scripted.",
+      prog: [
+        ...HET_SYNTH,
+        ["SYNTH", "CHEMO", 0], // target 0 = biopolymer / bulk organic
+        ["INGEST", ING_BIOPOLYMER],
+        ...climbGradient(
+          CHEM_ACT_CHEMO_BIOPOLYMER_X,
+          CHEM_ACT_CHEMO_BIOPOLYMER_Y,
+          12,
+        ),
+        ["SENSE_CHEMICAL", CHEM_CO2], // own CO2 pool -> excretion amount
+        ["EXCRETE", CHEM_CO2],
+        ...reproduceWhenGrown(30, "np"),
+      ],
+    },
   ];
   const built: Archetype[] = list.map(
     ({ id, label, desc, cls, prog, uiHidden }) => {

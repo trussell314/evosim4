@@ -164,34 +164,38 @@ resolved):
     for emergent aggregation, trail-following, prey luring,
     quorum-like behavior — none of it scripted.
 
-## Benthic / sediment niche (planned — not yet authored)
+## Benthic / sediment niche
 
-Backlog pair: a sea-floor detritus loop. No genomes written yet;
-needs a benthic scenario (floor `biopolymer` detritus chemostat, no
-light, vertical O₂ gradient surface→floor) to test against.
+A sea-floor detritus loop. #16 is authored; #17 is blocked on a
+confirmed substrate gap (see below + `COLONY_GAPS.md` GAP #6).
 
-16. **Benthic detritivore / decomposer.** Negatively-buoyant
-    low-swimmer that holds the floor and grazes *settled*
-    `biopolymer` — the "marine snow" of dead cells/aggregated
-    polymers that rains down and accumulates on the bottom — plus
-    sediment `MIN`. Runs heterotroph synthesis on it and
-    `EXCRETE co2` as waste. The emission is the point: exhaled CO₂
-    plus locally drawn-down O₂ builds a benthic chemocline other
-    lineages can climb (a door, not a script). **Fully expressible**
-    with existing ops (`INGEST biop`, `SYNTH ENZ`, gravity + THRUST
-    to stay low, `EXCRETE co2`); only the scenario is missing.
-17. **Benthic chemolithotroph / cross-feeder.** Low-O₂-tolerant
-    partner that lives off the chemical environment #16 creates:
-    climbs the emitted-CO₂ gradient and exploits the O₂-depleted
-    sediment band the decomposers leave behind — the engine analogue
-    of real sediment cross-feeding (sulfide/methane chemotrophs
-    eating decomposer waste). Probes an emergent benthic-chemocline
-    food web. **Partially expressible:** the niche shape (feed on
-    another lineage's emitted gradient + anoxic zone) works today,
-    but there is no distinct reduced-inorganic electron-donor species
-    (no H₂S/CH₄), so literal chemolithotrophy is approximated by
-    CO₂-gradient + low-O₂ exploitation — note as a candidate
-    substrate gap if the approximation proves too weak.
+16. **Benthic detritivore / decomposer.** *Authored* (`id:
+    benthic-detritivore`, label "benthic grazer"). Chemotaxes the
+    *settled* bulk-organic — the "marine snow" of dead cells /
+    aggregated polymers that sinks (`CHEM_BIOPOLYMER` density 1.05 >
+    water) and pools on the floor — `INGEST`s it, runs heterotroph
+    synthesis, and `EXCRETE`s its metabolic CO₂ back into the medium.
+    **Benthic position is EMERGENT, not scripted:** there is no
+    "descend" op; the cell merely climbs the detritus gradient and,
+    because detritus sinks, it ends up on the floor. The CO₂ emission
+    is the niche-defining seed for a future cross-feeder. **Fully
+    expressible**; scenario `benthic` (scripts/scenario.ts) validates
+    sustain + emergent depth + CO₂ output. (Note: the original
+    "negatively-buoyant / THRUST to stay low" framing was wrong —
+    creatures are water-neutral with no passive sink; the working
+    mechanism is food-tropism, which is cleaner / more emergent.)
+17. **Benthic chemolithotroph / cross-feeder.** *Blocked —
+    inexpressible as conceived.* The substrate review (transcript +
+    `COLONY_GAPS.md` GAP #6) found there is **no** non-photic energy
+    path: the reaction table yields ATP only from aerobic
+    (GLU+O₂), fermentation (GLU), and β-oxidation (FA+O₂); the sole
+    autotrophy is photosynthesis (needs light). Nothing oxidizes
+    `MIN` or fixes `CO₂` in the dark, and metabolism is **not
+    genome-selectable** (reactions fire automatically from whatever
+    substrate is present), so "chemolithotroph" / "anaerobic
+    specialist" cannot be a *genetic* strategy. Recorded as GAP #6
+    with a concrete (unimplemented) reaction-table proposal for a
+    chemolithotrophic ATP path; until that lands, #17 is deferred.
 
 ## Substrate gaps → what each unlocks (the guide)
 

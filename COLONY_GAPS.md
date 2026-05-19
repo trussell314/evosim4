@@ -98,3 +98,64 @@ Listed for completeness; do not treat as confirmed.
 - **#5 No colony cost / diffusion-limited interior.** Bonds are free,
   pairwise, topology-free, no upkeep, no penalty for buried core
   cells — bigger is unconditionally better; no morphology pressure.
+
+---
+
+## GAP #6 — No chemolithotrophy; metabolism not genome-selectable (VALIDATED 2026-05-19)
+
+**Finding:** there is no non-photic energy path. A
+chemolithotroph / anaerobic specialist (e.g. archetype #17, the
+benthic CO₂/mineral cross-feeder) cannot be expressed at all, and —
+more fundamentally — *which* catabolic pathway a cell uses is **not
+a genetic trait**: the reactions fire automatically from whatever
+substrate is present, so a genome cannot select "ferment, don't
+respire" or "oxidize minerals."
+
+**Evidence (from the 2026-05-19 substrate review):**
+
+- Energy-yielding reactions (`src/sim/reactions.ts` ~268–283) are
+  exactly three: aerobic `GLU+O₂ → 2CO₂` (+10 ATP), fermentation
+  `GLU → ½CO₂+½WASTE` (+2 ATP, no O₂), β-oxidation `FA+O₂`. The only
+  autotrophy is photosynthesis (`CO₂+light → GLU+O₂`, needs light).
+- Nothing consumes `CHEM_MIN` or `CHEM_CO2` for ATP without light;
+  minerals only feed ATP-*consuming* biosynth reactions.
+- Reactions are unconditional given substrate — there is no SYNTH
+  kind or op that gates respiration vs fermentation, so the choice
+  is purely environmental (ambient O₂), never heritable.
+- O₂ is not a life gate: no O₂-depletion death; fermentation always
+  yields energy at 0 O₂. "Low-O₂ tolerant" is therefore not a
+  distinguishable phenotype either.
+
+**Consequence:** the entire chemolithotroph / syntroph / anaerobic-
+specialist design space is closed. #17 deferred; #16 (detritivore)
+is unaffected (it is an ordinary heterotroph + CO₂ excretion).
+
+**Proposed engine fix (DESIGN ONLY — not implemented).** Add one
+chemolithotrophic ATP reaction so dark mineral-energy becomes a real
+niche, opening a door without scripting the organism:
+
+- New reaction (catalyst-slot gated, like the existing catabolism
+  slots): `MIN + O₂ → WASTE`, `+k` ATP (k small, e.g. ~3–4, between
+  fermentation's 2 and aerobic's 10) — a chemolithotrophic mineral
+  oxidation. Rate `vmax` modest so it is a slow, steady living, not
+  a bloom fuel.
+- To make it *genome-selectable* (the deeper half of the gap), gate
+  it on a catalyst the cell must `SYNTH CAT <slot>` to express
+  (reuse the existing `SYNTH CAT` standing-transporter/catalyst
+  mechanism), so "be a chemolithotroph" is an evolved investment,
+  not a free universal pathway. Aerobic/fermentation stay
+  unconditional to preserve determinism + mass-conservation tests;
+  the new path is additive and only active when the catalyst is
+  present.
+- Optional second step for a true sediment cross-feed: a reaction
+  consuming `WASTE` (currently terminal) for a small ATP yield, so
+  #16's fermentation `WASTE` output becomes #17's food — a real
+  syntrophic loop rather than a flavor note.
+- Validation gate before shipping: determinism
+  (`src/__tests__/determinism.test.ts`) and mass-conservation
+  (`sim.test.ts`) must stay green; the new reaction must conserve
+  atoms in the chem table and draw no RNG.
+
+This is recorded for a future chemistry pass; **do not implement
+without an explicit go-ahead** (it changes the reaction table, which
+is determinism- and mass-sensitive).
