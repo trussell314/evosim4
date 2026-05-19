@@ -4,6 +4,46 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **Path 1 — make ATP a first-class chemical (`CHEM_ATP`).** Path 2
+  (ATP translocase / ANT analog, host<->organelle) is DONE & green
+  (`c0c7980`); mito wired to it (`df9dcf6`). Path 1 is the general
+  fix ("not having ATP first-class has caused problems") but is a
+  larger, higher-risk refactor than first scoped — needs a dedicated
+  effort. Findings that raise the cost: `energy` is its OWN region of
+  the SoA worker shared-buffer (`o.base.energy` offset; `new
+  Float32Array(b, o.base.energy, cap)`), not a chemCols column; and
+  the engine has a dual store (`molCols`/`Molecules` vs the 96-wide
+  `chemCols`, bridged by `CHEM_NAMED_MOL_IDX`). Staged plan:
+  1. **Atomic id-space + storage cutover (one deliberate
+     behavior-change commit):** append `CHEM_ATP` at id 96 (keeps
+     chems 0..95 stable), `CHEMICAL_COUNT 96->97`, add the
+     `Molecules`/`NAMED_CHEMICALS` entry + molCols<->chemCols bridge
+     row; migrate the `energy` buffer region into `chemCols[CHEM_ATP]`
+     (update the shared-buffer offset table + worker layout +
+     serialize/restore + `Creature.energy` accessor). Unavoidable in
+     this commit: genome ABI shift (`%CHEMICAL_COUNT` on
+     SENSE_CHEMICAL/EXCRETE/PARTITION), procedural reaction-table RNG
+     order change -> determinism re-anchored + **golden rebaselined
+     deliberately** + **`SAVE_SCHEMA` bump** (it embeds
+     `CHEMICAL_COUNT`/`NAMED_CHEMICAL_COUNT`). Keep mass-conservation
+     green (ATP already in `creatureTotalMass`).
+  2. **Generalise transport:** retire the Path-2 `TRANSPORT_ATP`
+     sentinel -> a normal chem-id transporter on `CHEM_ATP` (slot +
+     `SYNTH CAT` genome expression survive; only
+     `transport: TRANSPORT_ATP` -> `transport: CHEM_ATP`; update mito
+     genome ref). Keep ATP non-diffusible at the OUTER membrane (a
+     free cell must not bleed ATP to water — matches reality);
+     vacuolar transport unchanged in behavior.
+  3. **Cleanup + validate:** remove scalar-special-casing now routed
+     through the chem path; unit test ATP-as-chem == prior scalar for
+     spendATP/respiration/maintenance; full suite + determinism +
+     mass + new golden + build.
+  Touch points: `sim/core.ts` (shared-buffer layout, store,
+  `Creature.energy`), `sim/chem-ids.ts`, `sim/reactions.ts`
+  (transport target, table), `sim.ts` (serialize/restore, snapshot,
+  every `energy` site is already behind the accessor),
+  `__tests__/golden.test.ts` (rebaseline), `SAVE_SCHEMA`.
+
 - **Add a multicellular-organism archetype.** Create a founder genome
   in `src/genome-archetypes.ts` for a multicellular organism (a
   bonded cell collective with division of labor — beyond the existing
