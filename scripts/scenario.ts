@@ -15,6 +15,7 @@ import {
   type World,
 } from "../src/sim";
 import { ARCHETYPES } from "../src/genome-archetypes";
+import { asm, type Instr } from "../src/genome-asm";
 import { pushParticle } from "../src/sim/core";
 import { genomeSynthMask } from "../src/genome";
 import {
@@ -29,7 +30,57 @@ import {
   CHEM_BIOPOLYMER,
   CHEM_ACT_PHOTO_VISIBLE,
   CHEM_ACT_THERMO,
+  CHEM_ACT_CHEMO_BIOPOLYMER_X,
+  CHEM_ACT_CHEMO_BIOPOLYMER_Y,
 } from "../src/sim/chem-ids";
+
+// Ad-hoc genome: the `forager` archetype with its reproduce gate set
+// to an arbitrary threshold (the catalogue forager is fixed at 30).
+// Reconstructed here, not exported from genome-archetypes, because
+// this is a throwaway probe. ING_BIOPOLYMER = 1 (module-local const
+// in genome-archetypes). Correctness is GUARANTEED by the byte-equal
+// assertion below: foragerProg(30) must asm() to the exact bytes of
+// the real forager, so foragerProg(80) is provably "forager with
+// only the reproduce gate changed -- nothing else".
+function foragerProg(gate: number): Instr[] {
+  return [
+    ["SYNTH", "BIO", 0],
+    ["SYNTH", "MRNA", 0],
+    ["SYNTH", "FA", 0],
+    ["SYNTH", "ENZ", 0],
+    ["SYNTH", "AA", 0],
+    ["SYNTH", "CHEMO", 0],
+    ["INGEST", 1],
+    ["SENSE_CHEMICAL", CHEM_ACT_CHEMO_BIOPOLYMER_X],
+    ["PUSH8", 30],
+    ["MUL"],
+    ["SENSE_CHEMICAL", CHEM_ACT_CHEMO_BIOPOLYMER_Y],
+    ["PUSH8", 30],
+    ["MUL"],
+    ["THRUST"],
+    ["SELF_MEMBRANE"],
+    ["PUSH8", gate],
+    ["GT"],
+    ["JZ", "np"],
+    ["REPRODUCE"],
+    ["LABEL", "np"],
+  ];
+}
+const FORAGER80 = asm(foragerProg(80));
+{
+  const real = ARCHETYPES.find((a) => a.id === "forager")!.genome;
+  const mine = asm(foragerProg(30));
+  const same =
+    real.length === mine.length && real.every((b, i) => b === mine[i]);
+  if (!same) {
+    console.error(
+      "forager@30 reconstruction does NOT byte-match the catalogue " +
+        "forager -- the foragerProg replica has drifted from " +
+        "genome-archetypes; refusing to run a misleading probe.",
+    );
+    process.exit(1);
+  }
+}
 
 type Cre = {
   id: number;
@@ -63,6 +114,9 @@ interface Scenario {
   // isn't a chemostat (predator run: overshoot->starvation collapse).
   perStep?: (w: World) => void;
   coStock: { id: string; count: number }[];
+  // optional ad-hoc focal genome, overriding the `id` archetype's
+  // genome (the `id` is still used for labels/report wiring).
+  genome?: Uint8Array;
 }
 
 const AMB_STRIDE = 96;
@@ -683,6 +737,45 @@ const SCENARIOS: Record<string, Scenario> = {
     },
     report: (w) => armorReport(w),
   },
+
+  // Gate isolation: SOFT-bodied forager but reproduce gate = 80
+  // (the catalogue forager is 30). Same predator pressure + food as
+  // `armored`/`armored-control`. Completes the 2x2 (armor x gate):
+  // forager@30 (armored-control), forager@80 (this), armored@30,
+  // armored@80 -- isolating whether the original armored@80 edge was
+  // the deferred-division size refuge (the gate) rather than the
+  // membrane investment (the armor).
+  forager80: {
+    id: "forager",
+    count: 40,
+    genome: FORAGER80,
+    coStock: [{ id: "predator", count: 30 }],
+    describe:
+      "Soft forager with reproduce gate 80 (vs catalogue 30), same " +
+      "biopolymer chemostat ~1800, O2=30/MIN=50, near-surface, " +
+      "permanent midday, founders off, same 30 size-bully predators. " +
+      "Single variable vs armored-control: the reproduce gate.",
+    setup: (w, cells) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        c.y = w.height * (0.15 + 0.7 * ((k + 0.5) / cells.length));
+        c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
+        c.store.chemCols[CHEM_O2][c.idx] = 10;
+        c.store.chemCols[CHEM_MIN][c.idx] = 30;
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_O2, 30);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1800);
+    },
+    report: (w) => armorReport(w),
+  },
 };
 
 const id = process.argv[2] ?? "photoautotroph";
@@ -716,9 +809,10 @@ for (const cs of sc.coStock) {
   }
 }
 const coStockRoots = new Set<number>(coStockCres.map((c) => c.lineageRoot));
+const focalGenome = sc.genome ?? arch.genome;
 const focal: Cre[] = [];
 for (let i = 0; i < sc.count; i++) {
-  const c = spawnSpeciesInstance(w, arch.genome);
+  const c = spawnSpeciesInstance(w, focalGenome);
   if (c) focal.push(c as unknown as Cre);
 }
 sc.setup(w, focal, coStockCres);
