@@ -142,21 +142,44 @@ Open sub-questions for the class taxonomy (resolve before Phase 2):
 - Interaction with selective predation/`PREDATE` (also particle/
   creature contact) — keep separate.
 
-## Open forks blocking Phase 2 code
+## Decisions (settled 2026-05-19)
 
-1. **INGEST addressing regime** (user chose "design-note this
-   first" — still open): (a) compat remap shim — operands 0–5 keep
-   legacy bin meaning incl. generic-catch, ≥6 = direct chem id, no
-   determinism break, permanent two-regime wart; vs (b) clean
-   chem-id break — uniform `mod CHEMICAL_COUNT`, migrate all
-   archetypes, determinism re-baseline, requires the particle-class
-   channel (decided above) so #16 survives. Recommendation: (b) +
-   particle-class channel, since (a)'s wart is permanent and the
-   class channel is needed regardless; confirm before coding.
-2. Particle-class taxonomy + op shape (sub-questions above).
-3. `BOND` kin-marker relocation when it collapses into `CATALYST`.
+**#1 + #2 — INGEST is a bond-energy-threshold engulf op (RESOLVED,
+supersedes the compat-shim vs chem-id-break fork and the
+particle-class-taxonomy sub-questions).** Particulate ingestion is
+*not* chem-id addressed at all. `INGEST` pops a **bond-energy
+threshold** from the stack and engulfs any contacted particle with
+`CHEM_BOND_POTENTIAL ≥ threshold`. Consequences:
+
+- Detritivory = low threshold (eats the open generic set, no
+  enumeration / no fallback bin / no class enum).
+- Selective feeding = high threshold (energy-rich only) — an
+  evolvable scalar, not a curated list.
+- "Chase organic, ignore rock" is *emergent from physics*:
+  `MIN`/O₂/CO₂ are `bondEnergy 0`, so any threshold > 0 excludes
+  them with no special case.
+- No non-uniform operand namespace (no `INGEST <chemId>` and no
+  `INGEST <classId>`) — the review's namespace-wart tension is
+  eliminated, not managed. Chemical specificity moves *after*
+  ingestion to internal reactions/`TRANSPORT`, which are already
+  chem-id addressed.
+- Trade accepted: ingestion selectivity is a coarse energy band,
+  not species-level — but it was always coarse (6 bins) and is
+  more substrate-honest as an emergent/internal concern.
+- Migration (Phase 2b): archetype `INGEST <bin>` → `PUSH <thresh>;
+  INGEST`; determinism re-baseline + viability re-check (esp. #16
+  detritivore, the forager line). The `sim.ts:5625` generic-catch
+  fallback and `SENSOR_BIN_BY_CHEM` are deleted, not ported.
+
+Still open (do not block Phase 2a `TRANSPORT`, which is INGEST-
+independent):
+
+3. `BOND` kin-marker relocation when the `synthMask` gate path is
+   retired (Phase 4 gate decision).
 4. `PACKAGE`/`COMPETENCE` rename + whether they leave the `SYNTH`
    family now or in Phase 5.
+5. Phase 4 enable-gate: keep "declare the pathway" vs drop it
+   (deferrable to Phase 4; see Rule 1).
 
 ## Review findings — hard constraints (2026-05-19, code-grounded)
 
@@ -186,15 +209,11 @@ Phase-2+ code must satisfy:
   catalyst dispatch (`sim.ts:5233` 256-bit loop) are per-cell-per-
   tick; size the cost.
 
-Refined INGEST recommendation: clean chem-id break is correct but
-**smaller** than first implied — only sensor bin 1 (biopolymer) has
-the generic-catch fallback; bins 0/3/4/5 are named-chem with no
-fallback and migrate cleanly to chem ids. Particle-class taxonomy:
-prefer a **continuous bond-energy threshold** (`k` from stack) over
-a `SOLID/ORGANIC/MINERAL` enum — an enum is a curated list
-(substrate-not-script violation). Tension to flag, not bury: a
-single `INGEST <classId|chemId>` op reintroduces a non-uniform
-operand namespace — the exact wart this redesign exists to remove.
+INGEST: resolved to the bond-energy-threshold engulf op (see
+Decisions #1+#2 above). The review's "continuous bond-energy
+threshold over an enum" steer is adopted in full, taken one step
+further: there is no chem-id ingest channel at all, so the
+non-uniform-namespace tension is eliminated rather than flagged.
 
 ## Phase sequence
 
