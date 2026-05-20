@@ -5180,19 +5180,19 @@ export function applyParticleForcesRange(
   const updraftEnv = p.updraftEnv;
   const colDepth = p.colDepth;
   const currentDrift = p.currentDrift;
-  const floorY = p.worldFloorY;
   for (let i = from; i < to; i++) {
     const xi = PX[i], yi = PY[i], ri = PR[i];
-    // Freeze asleep particles ONLY when they're resting at the
-    // bottom wall. Other asleep particles (e.g. lipids glued to the
-    // wavy surface ceiling) still need buoyancy + drag every tick so
-    // they bob with the surface; freezing them there glues them to a
-    // static y and the wave passes through them.
-    if (ASLEEP[i] && yi + ri >= floorY - 0.5) {
-      PVX[i] = 0; PVY[i] = 0; PVZ[i] = 0;
-      continue;
-    }
+    // No freeze branch. The old freeze-at-floor gate (zero velocity for
+    // ASLEEP particles at y >= floorY) was carried over from the old
+    // pebble-bed sediment. With rock terrain a "settled" particle isn't
+    // necessarily at the world floor -- it can be on top of any rock
+    // surface, in a rock pocket, etc. Zeroing velocity in those cases
+    // froze sediment dead even where gravity + buoyancy + brownian
+    // should keep it gently shifting. Let the force loop run for every
+    // particle; the cost is bounded and the gate's only saving was
+    // for ~bottom-row pebble piles that no longer exist.
     let vxi = PVX[i], vyi = PVY[i], vzi = PVZ[i];
+    void ASLEEP;
     const overrideD = PDENS[i];
     const density = overrideD !== 0 ? overrideD : matBase[PMAT[i]];
     let ay = grav * (1 - 1 / density);
