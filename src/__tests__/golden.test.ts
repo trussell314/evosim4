@@ -156,7 +156,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // active that shifts rates by a small per-tick amount. Vent's
     // contribution also moved out of temperatureAt and into the
     // stepper as a source. Deterministic, mass-OK.
-    const GOLDEN = "87e6630e";
+    // Bumped: tempPatchAmp default 3 -> 0. The patch sine wave was a
+    // hangover from the pre-rework wave coupling -- the analytical
+    // term still showed up on the temperature overlay as wavy stripes
+    // unrelated to anything physical. Zeroed by default.
+    const GOLDEN = "8245be01";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

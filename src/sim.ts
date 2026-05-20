@@ -2032,7 +2032,14 @@ export function createWorld(
     })(),
     tempSurface: 28,
     tempBottom: 12,
-    tempPatchAmp: 3,
+    // tempPatchAmp 0 by default. The patch term was a traveling sine
+    // wave that used to track the visible water waves but became
+    // decoupled when wave physics was reworked, leaving an unrelated
+    // pattern on the temperature overlay. Now that temperature is a
+    // diffused regional field (vent heat spreads, depth gradient is
+    // the baseline), the patch term is no longer doing useful work.
+    // Math stays in temperatureAt for tests + future re-introduction.
+    tempPatchAmp: 0,
     tempPatchLength: 360,
     tempPatchPeriod: 38,
     // Soft side walls: bounces lose most of their energy so a
