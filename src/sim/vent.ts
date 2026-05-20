@@ -33,9 +33,14 @@ const VENT_COOLDOWN_SEC = 3.0;
 
 // Emission cadence while active: one batch per EMIT_PERIOD sim seconds.
 const VENT_EMIT_PERIOD = 0.10;
-// Particles per emission batch at intensity=1. Scales by intensity^2 so
-// warmup/cooldown shed dramatically fewer particles than the peak.
-const VENT_BATCH_AT_PEAK = 4;
+// Expected particles per emission batch at intensity=1. Scales by
+// intensity^2 so warmup/cooldown shed dramatically fewer particles
+// than the peak. Fractional values < 1 are handled by floor(rate + rng):
+// most batches emit 0, occasional batches emit 1, average tracks the
+// rate. Dialed down 100x from the original (4) -- the 4-per-tick rate
+// over a multi-hour run accumulated hundreds of millions of particles
+// through the ledger and dominated the visual.
+const VENT_BATCH_AT_PEAK = 0.04;
 
 // Upward emission velocity. Particles get a strong vy < 0 (UP in y-down
 // coords) plus lateral spread; gravity + buoyancy take over once they
