@@ -1537,39 +1537,34 @@ function rebuildObstacleIndex(world: World): void {
   }
 }
 
-// Strict rock evacuation. The lobe-based obstacle collision pushes
-// bodies out radially from each overlapping lobe; that's correct for
-// a particle skimming the edge but can leave bodies stuck when they
-// sit deep inside a polygon (multiple lobes push in conflicting
-// directions, and the net push is small relative to the polygon
-// thickness). This pass uses the polygon outline as the ground truth:
-// any particle/creature center found inside an obstacle's polygon
-// is evacuated.
+// Rock evacuation safety net. Particle-rock collision
+// (resolveObstacleCollisions / collideObstaclesSoa) is the primary
+// mechanism that keeps particles out of rock -- it pushes any
+// overlap back along the polygon normal with restitution. This pass
+// is a strict fallback: if a particle's CENTER ended up inside a
+// polygon (e.g. a wave-clamp landed it there, or a between-tick
+// position update tunneled it past a thin feature), dump its mass
+// into the local ambient pool and remove the particle. Creatures
+// get teleported to just past the nearest edge so they keep their
+// state.
 //
-// Particles get destroyed and their mass dumped to the local ambient
-// pool (mass-conserving). Creatures get teleported to just past the
-// nearest polygon edge (creatures have state we don't want to lose).
+// Mass-conserving on both paths.
 function evacuateRocks(world: World): void {
   if (world.obstacles.length === 0) return;
   const ambient = world.ambient;
   const store = world.particleStore;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
-  // Cell-bitmap fast-reject: if the particle's cell is marked clear
-  // of rock, skip the polygon test. The bitmap is built with a small
-  // margin around each obstacle so anything that could possibly be
-  // inside still gets the full test.
+  // Cell-bitmap fast-reject: a single byte read skips particles in
+  // cells that contain no rock at all. With margin=0 (set in
+  // rebuildObstacleIndex), this rejects only the genuinely-clear
+  // cells; particles within the boundary cell still go through the
+  // polygon test below.
   const cellGrid = OBSTACLE_CELL_GRID;
   const cellCols = OBSTACLE_CELL_COLS;
   const cellRows = OBSTACLE_CELL_ROWS;
   const cellSize = OBSTACLE_CELL_SIZE;
+  const obstacles = world.obstacles;
   // Particles. Iterate backwards because removeParticleAt swap-pops.
-  // STRICT RULE: any particle whose cell is flagged "near rock" by
-  // the obstacle bitmap dissolves. The bitmap is built with a small
-  // margin around every polygon (rebuildObstacleIndex margin=6), so
-  // this kills anything within ~6 px of rock. The user's "nothing
-  // on or inside the rocks" requirement leaves no room for sediment
-  // piles, surface deposits, or grazing fast-movers; collision still
-  // does the radial push for the rare in-flight case.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const px = store.x[i], py = store.y[i];
     if (cellGrid.length === 0) break; // no terrain -- nothing to do
@@ -1577,7 +1572,20 @@ function evacuateRocks(world: World): void {
     const cy = Math.floor(py / cellSize);
     if (cx < 0 || cx >= cellCols || cy < 0 || cy >= cellRows) continue;
     if (cellGrid[cy * cellCols + cx] === 0) continue;
-    // In a rocky cell -- dissolve. Mass to local ambient.
+    // Cell flagged rocky -- run the polygon test. Only an actual
+    // inside-polygon hit triggers dissolution; particles RESTING ON
+    // the rock surface stay (their centers sit on the water side of
+    // the edge).
+    let inside = false;
+    for (let k = 0; k < obstacles.length; k++) {
+      const ob = obstacles[k];
+      if (px < ob.minX || px > ob.maxX || py < ob.minY || py > ob.maxY) continue;
+      const poly = ob.polygon;
+      if (!poly) continue;
+      if (pointInPolygon(px, py, poly)) { inside = true; break; }
+    }
+    if (!inside) continue;
+    // In rock -- dissolve. Mass to local ambient.
     const base = ambientBaseAt(world, px, py);
     const mol = store.molecules[i];
     if (mol) {

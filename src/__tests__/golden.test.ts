@@ -128,7 +128,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // overlap, particles bounce off rock) and the vent's eruption
     // schedule consumes RNG draws -- both shift the fingerprint
     // deterministically. Determinism + mass-conservation still green.
-    const GOLDEN = "a6899211";
+    // Bumped: evacuator now requires a polygon-inside hit (not just
+    // a bitmap-flagged border cell) before dissolving a particle.
+    // The over-aggressive ~12 px death halo around rock is gone --
+    // particles settle ON rock surfaces instead of vanishing on
+    // approach. Mass-conservation + determinism still green.
+    const GOLDEN = "8d359dff";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
