@@ -3080,33 +3080,27 @@ function buildTerrainBitmap(): void {
     topY[x] = foundY;
   }
 
-  // Pass 2: per-rock-pixel coloring. Going for a granular, weathered-
-  // stone read rather than the previous brain-coral pattern. The
-  // texture is built from:
+  // Pass 2: per-rock-pixel coloring. Going for a calm weathered-stone
+  // read -- low-frequency tonal variation, soft top-down lighting, and
+  // just enough grain to break up flat fills. The previous version
+  // stacked uncorrelated per-pixel white-noise grain, sharp mineral
+  // specks, and visible horizontal sin stratification on top of each
+  // other; everything fought for attention and the rocks read as TV
+  // static. Here:
   //
-  //   - Per-pixel WHITE-NOISE grain (uncorrelated hash) at low
-  //     amplitude -- gives the surface its fine sandpaper roughness.
-  //   - A faint MEDIUM noise field for irregular tone variation, no
-  //     visible "blobs".
-  //   - Sparse MINERAL SPECKS: rare pixels picked up by a thresholded
-  //     hash get a bright (quartz) or near-black (iron oxide) tag.
-  //   - Subtle HORIZONTAL STRATIFICATION via a low-amp sin on y --
-  //     reads as bedding layers without being obvious.
-  //   - Top-band rim lighting + interior shadow.
+  //   - Two octaves of smoothed value noise drive a single tone field,
+  //     remapped into the DARK..MID palette gradient.
+  //   - Top-lit highlight + interior shadow ramp smoothly over the
+  //     depth-from-surface (smoothstep, no abrupt cutoff).
+  //   - One octave of finer noise provides texture WITHOUT per-pixel
+  //     hash grain (no sandpaper static).
   //
-  // Palette is desaturated cool-grey rather than the warm brown that
-  // pushed the rock toward "mud" territory.
-  const PAL_DARK  = [46, 44, 42];   // dark slate
-  const PAL_MID   = [92, 88, 84];   // mid stone
-  const PAL_LIGHT = [148, 142, 134]; // top-lit highlight
-  const SPECK_BRIGHT = [205, 200, 188]; // quartz / mica fleck
-  const SPECK_DARK   = [22, 18, 16];    // iron oxide / cavity
-  const LIGHT_FALLOFF = 22;
-  const LIGHT_MAX = 0.45;
-  const SHADOW_MAX = 0.35;
-  // Smoothed 2D value noise via bilinear interpolation over an
-  // integer lattice. Output range ~[-0.5, 0.5]. Scale `s` controls
-  // patch size in pixels.
+  // Palette is desaturated cool-grey.
+  const PAL_DARK  = [44, 42, 40];
+  const PAL_MID   = [92, 88, 84];
+  const PAL_LIGHT = [156, 150, 142];
+  // Smoothed 2D value noise via bilinear interpolation over an integer
+  // lattice. Output range ~[-0.5, 0.5]. Scale `s` is patch size in px.
   const sn2 = (x: number, y: number, s: number): number => {
     const fx = x / s, fy = y / s;
     const ix = Math.floor(fx), iy = Math.floor(fy);
@@ -3119,64 +3113,46 @@ function buildTerrainBitmap(): void {
     const sy = ty * ty * (3 - 2 * ty);
     return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
   };
+  // Smoothstep in [0,1].
+  const ss = (t: number): number => {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    return t * t * (3 - 2 * t);
+  };
   for (let y = 0; y < h; y++) {
-    // Cheap stratification: per-row dark offset varying slowly on y.
-    // Amplitude ~3/255 -- visible only as a faint horizontal banding.
-    const strat = Math.sin(y * 0.07) * 2.5 + Math.sin(y * 0.013) * 1.5;
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
       if (buf[idx + 3] === 0) continue;
-      // Fine sandpaper grain (uncorrelated per pixel). Amplitude
-      // kept small so it adds texture without color-banding the body.
-      const grain = hash2D(x, y) * 16;
-      // Medium tonal variation, no visible "blobs".
-      const tone = sn2(x, y, 14) * 0.6 + sn2(x + 911, y + 277, 36) * 0.4;
-      // Mineral specks. Thresholded uncorrelated hash picks ~0.5% of
-      // pixels for bright fleck, another ~0.5% for dark cavity.
-      const sp = hash2D(x * 31 + 7, y * 17 + 3);
-      let speck: number[] | null = null;
-      if (sp > 0.485) speck = SPECK_BRIGHT;
-      else if (sp < -0.485) speck = SPECK_DARK;
-      // Top-band rim lighting / interior shadow lerp weights.
+      // Two octaves: a coarse field plus a finer detail field. No
+      // per-pixel hash grain -- the finer octave alone gives plenty of
+      // surface texture without static.
+      const tone =
+        sn2(x, y, 38) * 0.65 +
+        sn2(x + 911, y + 277, 11) * 0.35;
+      // Top-down lighting: smoothstep from full light at the rock
+      // surface down to full shadow ~80 px in. No abrupt cutoff.
       const surf = topY[x];
       const depthFromTop = Math.max(0, y - surf);
-      let lightW = 0;
-      let shadeW = 0;
-      if (depthFromTop < LIGHT_FALLOFF) {
-        const t = 1 - depthFromTop / LIGHT_FALLOFF;
-        lightW = LIGHT_MAX * t * t;
-      } else {
-        const t = Math.min(1, (depthFromTop - LIGHT_FALLOFF) / 90);
-        shadeW = SHADOW_MAX * t;
-      }
-      // Compose: lerp(DARK, MID, 0.5 + tone*0.45), then push toward
-      // LIGHT/DARK by lighting weights, then add grain + strat, then
-      // overlay sparse specks last.
-      const mix = Math.max(0, Math.min(1, 0.5 + tone * 0.45));
+      const lightT = 1 - ss(depthFromTop / 18);    // 1 at top -> 0 by 18 px
+      const shadeT = ss((depthFromTop - 18) / 80); // 0 until 18 px, 1 by 98 px
+      // Compose: lerp DARK..MID by tone, then blend toward LIGHT at
+      // the top and toward DARK in deep interior. Three clean stages,
+      // no per-pixel noise overlay.
+      const mix = Math.max(0, Math.min(1, 0.5 + tone));
       let rC = PAL_DARK[0] + (PAL_MID[0] - PAL_DARK[0]) * mix;
       let gC = PAL_DARK[1] + (PAL_MID[1] - PAL_DARK[1]) * mix;
       let bC = PAL_DARK[2] + (PAL_MID[2] - PAL_DARK[2]) * mix;
+      const lightW = 0.45 * lightT;
       if (lightW > 0) {
         rC += (PAL_LIGHT[0] - rC) * lightW;
         gC += (PAL_LIGHT[1] - gC) * lightW;
         bC += (PAL_LIGHT[2] - bC) * lightW;
       }
+      const shadeW = 0.35 * shadeT;
       if (shadeW > 0) {
         rC += (PAL_DARK[0] - rC) * shadeW;
         gC += (PAL_DARK[1] - gC) * shadeW;
         bC += (PAL_DARK[2] - bC) * shadeW;
-      }
-      rC += grain + strat;
-      gC += grain * 0.95 + strat;
-      bC += grain * 0.90 + strat;
-      if (speck) {
-        // Specks are nearly opaque overlays; the underlying lighting
-        // still bleeds through a little so the speck sits in the
-        // shaded face of the rock when in shadow.
-        const a = 0.85;
-        rC = rC * (1 - a) + speck[0] * a;
-        gC = gC * (1 - a) + speck[1] * a;
-        bC = bC * (1 - a) + speck[2] * a;
       }
       buf[idx]     = clamp255(rC);
       buf[idx + 1] = clamp255(gC);
@@ -3185,10 +3161,25 @@ function buildTerrainBitmap(): void {
   }
   octx.putImageData(imgData, 0, 0);
 
-  // (Polygon outline stroke removed -- the per-vertex strokes read
-  // as dark slashes across the rock body when polygons had high
-  // vertex counts. The rim-lighting in the texture pass provides the
-  // silhouette pop on its own.)
+  // Thin polygon-outline silhouette stroke. Drawn under multiply
+  // composite so it darkens the rim by a fixed factor rather than
+  // painting a hard line that would scintillate at high vertex counts.
+  octx.save();
+  octx.globalCompositeOperation = "multiply";
+  octx.strokeStyle = "rgba(40,38,36,1)";
+  octx.lineWidth = 1.2;
+  octx.lineJoin = "round";
+  for (const ob of snapshot.obstacles) {
+    if (!ob.polygon || ob.polygon.length < 3) continue;
+    octx.beginPath();
+    octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
+    for (let i = 1; i < ob.polygon.length; i++) {
+      octx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
+    }
+    octx.closePath();
+    octx.stroke();
+  }
+  octx.restore();
   terrainBitmap = off;
 }
 

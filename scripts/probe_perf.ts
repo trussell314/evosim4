@@ -28,9 +28,10 @@ phase("creatureColl", p.creatureColl);
 phase("sedimentColl", p.sedimentColl);
 phase("obstacleColl", p.obstacleColl);
 phase("walls",        p.walls);
+phase("evacuate",     p.evacuate);
 phase("aerate",       p.aerate);
 phase("replenish",    p.replenish);
 phase("prune",        p.prune);
 const tracked = p.bonds + p.forces + p.creatures + p.particleColl + p.creatureColl
-              + p.sedimentColl + p.obstacleColl + p.walls + p.aerate + p.replenish + p.prune;
+              + p.sedimentColl + p.obstacleColl + p.walls + p.evacuate + p.aerate + p.replenish + p.prune;
 console.log(`  TRACKED          ${(tracked/n).toFixed(3).padStart(8)} ms/tick   (untracked = ${((total - tracked)/n).toFixed(3)} ms)`);
