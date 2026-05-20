@@ -506,9 +506,9 @@ const SCENARIOS: Record<string, Scenario> = {
       "NO aa feeding. Temp field tuned so the 15C isotherm (genome's " +
       "act_thermo null) is at MID-water depth (~y=300): tempSurface=20 " +
       "bottom=10 patch=0 -> T=15 at y~=300 (lit zone, ~light 0.30). " +
-      "Cells spread in depth; most start within ~150px of the " +
-      "isotherm so the test is 'do they converge tightly?' not 'can " +
-      "they migrate 300px through dark?'. CO2=50/MIN=50 chemostat, " +
+      "Cells start CLUSTERED around y=240-360 (within +-60px of the " +
+      "isotherm) so the test is the genome's sort-and-hold behavior, " +
+      "not a 200px migration through dark. CO2=50/MIN=50 chemostat, " +
       "permanent midday. mActTh->0 + mY->~300 if thermal sorting works.",
     setup: (w, cells) => {
       w.dayPhase = 0.25;
@@ -524,10 +524,15 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
       for (let k = 0; k < cells.length; k++) {
         const c = cells[k];
-        c.y = w.height * (0.2 + 0.6 * ((k + 0.5) / cells.length));
+        // Tight cluster 0.4-0.6 of column height = y in [240, 360]
+        // for a 600px world. Migration distance to isotherm at y=300
+        // is at most ~60px regardless of where in the cluster a cell
+        // starts -- well within one bootstrap window.
+        c.y = w.height * (0.4 + 0.2 * ((k + 0.5) / cells.length));
         c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
         c.store.chemCols[CHEM_CO2][c.idx] = 20;
-        c.store.chemCols[CHEM_ADP][c.idx] = 30;
+        // Do NOT override ADP: founder spawn already grants 60, and
+        // overriding here would discard the bigger reserve.
         c.store.chemCols[CHEM_MIN][c.idx] = 30;
       }
     },

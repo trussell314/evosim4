@@ -199,7 +199,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // the founder can hold more ATP at a time; larger glucose pool
     // means it can keep respiring for longer before relying on
     // photosynthate or external sugar.
-    const GOLDEN = "9d55e6e7";
+    // Bumped again: founder reserves grown a second step (glucose
+    // 50 -> 100, adp 30 -> 60) to widen the migration bootstrap
+    // window further; sense-archetypes still lost most of their
+    // founders before reaching the lit zone at glu=50/adp=30.
+    const GOLDEN = "3b887ae6";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
