@@ -133,7 +133,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // The over-aggressive ~12 px death halo around rock is gone --
     // particles settle ON rock surfaces instead of vanishing on
     // approach. Mass-conservation + determinism still green.
-    const GOLDEN = "8d359dff";
+    // Bumped: dropped the redundant after-applyWalls evacuator call.
+    // One end-of-tick pass is enough now that the evacuator is
+    // polygon-gated and rare. The skipped intra-tick pass shifts a
+    // few particles' lifetime by 1 tick; deterministic, mass-conserving.
+    const GOLDEN = "c5727a90";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

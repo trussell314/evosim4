@@ -315,7 +315,8 @@ function maybeLogProfile(): void {
       + `forces=${wfmt(wp.forces)} creatures=${wfmt(wp.creatures)} `
       + `pColl=${wfmt(wp.particleColl)} cColl=${wfmt(wp.creatureColl)} `
       + `sColl=${wfmt(wp.sedimentColl)} oColl=${wfmt(wp.obstacleColl)} `
-      + `walls=${wfmt(wp.walls)} aerate=${wfmt(wp.aerate)} `
+      + `walls=${wfmt(wp.walls)} evac=${wfmt(wp.evacuate)} `
+      + `aerate=${wfmt(wp.aerate)} `
       + `replenish=${wfmt(wp.replenish)} prune=${wfmt(wp.prune)}`,
     );
     resetProfile(wp);

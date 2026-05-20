@@ -4783,11 +4783,6 @@ export function step(world: World, dt: number): void {
     resolveObstacleCollisions(world);
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
-    // Evacuation runs AFTER applyWalls so anything the wall clamp
-    // pushed into rock (particles compressed against the left wall
-    // at columns where rock touches y=0) gets destroyed before the
-    // next tick rather than persisting visibly for one frame.
-    evacuateRocks(world);
     n = performance.now(); p.walls += n - m; m = n;
     sampleRegionTemps(world);
     seedRamp(world, dt);
@@ -4815,8 +4810,13 @@ export function step(world: World, dt: number): void {
     m = performance.now();
     pruneSpecies(world);
     n = performance.now(); p.prune += n - m;
-    // Final evacuation pass: see comment in the non-profile branch.
+    m = performance.now();
+    // Single end-of-tick evacuation pass: catches wall-clamp-into-rock,
+    // vent/aerate spawns that landed inside thin rock features, and any
+    // collision-pushback that left a center inside a polygon. With the
+    // evacuator now polygon-gated, this is rare.
     evacuateRocks(world);
+    n = performance.now(); p.evacuate += n - m;
     p.ticks++;
   } else {
     applyBondSprings(world, dt);
@@ -4831,7 +4831,6 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
     applyWalls(world);
-    evacuateRocks(world);
     sampleRegionTemps(world);
     seedRamp(world, dt);
     runVent(world, dt);
@@ -4849,10 +4848,10 @@ export function step(world: World, dt: number): void {
     advanceFadingGhosts(world, dt);
     advanceEDnaCarriers(world, dt);
     pruneSpecies(world);
-    // Final evacuation pass: catches anything that spawn / aerate /
-    // vent / decay paths produced inside rock since the
-    // applyWalls-time evacuation. End-of-tick guarantee: when the
-    // snapshot is taken nothing is inside rock.
+    // Single end-of-tick evacuation pass. Catches the rare case where
+    // wall-clamp, vent/aerate spawn, or collision pushback left a
+    // particle center inside a rock polygon. End-of-tick guarantee:
+    // when the snapshot is taken, nothing is inside rock.
     evacuateRocks(world);
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
