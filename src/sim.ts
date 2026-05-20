@@ -3519,6 +3519,13 @@ function reservePass(world: World): void {
     if (s > 0) anySurplus = true;
   }
   if (anySurplus) {
+    // SLEEP_SPEED_SQ in px^2/s^2: only particles essentially at rest get
+    // a fading ghost. Vent plumes and other in-flight particles freeze
+    // into a visible trajectory artifact if we ghost them mid-flight
+    // (the demotion order picks the newest spawn first, which for the
+    // vent is the freshest ejected particle still climbing).
+    const px = store.x, py = store.y, pz = store.z;
+    const pvx = store.vx, pvy = store.vy, pvz = store.vz;
     for (let i = world.particles.length - 1; i >= 0; i--) {
       if (i >= world.particles.length) continue;
       if (store.genericChem[i] || store.molecules[i]) continue;
@@ -3526,11 +3533,13 @@ function reservePass(world: World): void {
       if (surplus[k] <= 0) continue;
       const r = store.r[i];
       const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
-      res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
+      res[regionIndexAt(world, px[i], py[i]) * AMBIENT_STRIDE + k]
         += (density * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[k];
-      if (world.fadingGhosts.length < FADING_GHOST_MAX) {
+      const vx = pvx[i], vy = pvy[i], vz = pvz[i];
+      const settled = vx * vx + vy * vy + vz * vz < SLEEP_SPEED_SQ;
+      if (settled && world.fadingGhosts.length < FADING_GHOST_MAX) {
         world.fadingGhosts.push({
-          x: store.x[i], y: store.y[i], z: store.z[i],
+          x: px[i], y: py[i], z: pz[i],
           r, chemId: k, age: 0,
         });
       }
