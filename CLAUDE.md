@@ -43,6 +43,25 @@ be evolvable.
 - **Validate every step.** `npx tsc --noEmit`, `npx vitest run`, and
   `npx vite build` must all pass before a commit. Refactor in small,
   individually-green commits, not one big-bang change.
+- **No semantic drift between code and its dependents.** When you
+  change an op's semantics, a chemistry rule, or any other interface
+  cells consume, you MUST in the same change-set:
+    1. Update every consumer in `src/` (archetypes, founder builder,
+       VM viability checks, summary/disasm helpers, tests).
+    2. Update every doc that names the changed thing
+       (`GENOME_ARCHETYPES.md`, `CHEM_IO_REFERENCE.md`,
+       `OP_REDESIGN_PLAN.md`, `README.md`, `CLAUDE.md`, plus any
+       `*_PLAN.md` whose claims you've invalidated).
+    3. Delete the dead surface entirely -- no inert enum members,
+       no no-op switch cases "kept for mutation-byte stability", no
+       stale comments that mislead the next reader. If determinism /
+       save-schema implications block deletion, do the deletion +
+       schema bump anyway and document the migration.
+  A migration "Phase N" commit that retires a mechanism without
+  also retiring its references is incomplete and must not be merged.
+  This rule is permanent and applies even when the inert surface
+  "still compiles." Compiles is not enough; the catalogue of dead
+  references is the bug.
 
 ## Workflow
 
