@@ -71,7 +71,7 @@ interface EmitSpec {
   unitMass: number;
 }
 
-const VENT_EMISSIONS: EmitSpec[] = [
+export const VENT_EMISSIONS: EmitSpec[] = [
   // Common: classic vent chemistry. Hot sulfide-rich brine carrying
   // dissolved CO2 and precipitating mineral grains.
   { chemId: CHEM_MIN, weight: 7.0, density: 1.8, unitMass: 1 },
@@ -119,6 +119,13 @@ const VENT_EMIT_MOL_IDX: number[] = (() => {
 
 const VENT_TOTAL_WEIGHT = VENT_EMISSIONS.reduce((a, s) => a + s.weight, 0);
 
+// The set of chems the vent can emit. The global-saturation gate in
+// sim.ts checks these against per-chem dissolved capacity and blocks
+// emissions when any of them crosses the threshold.
+export const VENT_EMISSION_CHEMS: number[] = Array.from(
+  new Set(VENT_EMISSIONS.map((s) => s.chemId)),
+);
+
 // Compute the next dormant span (sim seconds) given the world's
 // dayPeriod. Pulls one rng draw for jitter, so determinism is preserved.
 export function nextVentDormantSpan(dayPeriod: number, rng: () => number): number {
@@ -157,6 +164,10 @@ function pickEmission(rng: () => number): { spec: EmitSpec; molIdx: number } {
 // Tick the vent: advance the phase machine, set intensity, emit
 // particles if appropriate. spawn() is the engine's pushParticle
 // adapter (kept abstract so this module doesn't import sim.ts).
+// emissionsBlocked = true means the vent still cycles (phase machine,
+// intensity envelope, heat output via ventHeatAt) but emits zero
+// particles -- used by the global-saturation gate so the vent can't
+// pile chems past a ceiling.
 export function stepVent(
   world: World,
   dt: number,
@@ -167,23 +178,12 @@ export function stepVent(
     r: number, chemId: number, density: number,
     molecules: Molecules,
   ) => void,
+  emissionsBlocked: boolean = false,
 ): void {
   const v = world.vent;
   if (!v) return;
   const ledger = world.ventEmitted;
   const t = world.t;
-
-  // After the seed-ramp window closes the world is meant to be a
-  // closed substrate; the vent's role was to seed abiotic chemistry +
-  // localized heat during the initial fill. Permanently dormant from
-  // here on: any in-progress eruption ends, no new ones scheduled.
-  if (world.initialSeedDone) {
-    if (v.active) {
-      v.active = false;
-      v.intensity = 0;
-    }
-    return;
-  }
 
   // Phase transitions.
   if (!v.active && t >= v.nextEruptionAt) {
@@ -212,10 +212,12 @@ export function stepVent(
 
   // Emit one batch per VENT_EMIT_PERIOD while active. intensity^2 keeps
   // the ramp visually punchy -- the main phase pours, warmup/cooldown
-  // dribble.
+  // dribble. emissionsBlocked still advances the clock so the cycle
+  // stays coherent; it just skips both the spawn() and ledger writes.
   v.emitClock += dt;
   while (v.emitClock >= VENT_EMIT_PERIOD) {
     v.emitClock -= VENT_EMIT_PERIOD;
+    if (emissionsBlocked) continue;
     const ramp = v.intensity * v.intensity;
     const n = Math.max(0, Math.floor(VENT_BATCH_AT_PEAK * ramp + rng()));
     for (let i = 0; i < n; i++) {
