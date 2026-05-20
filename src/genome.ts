@@ -319,14 +319,18 @@ export interface VMOutputs {
   // and evolvable (mutation drifts the marker, splitting colonies into
   // bond-incompatible tribes over time).
   bondMarker: number;
-  // Bit flags for generic catalyst synthesis this tick. Bit k is set
-  // by SYNTH_CAT with operand mod N_CATALYSTS == k. The
-  // sim runs catalyst synthesis for slot k iff bit k is set.
-  catSynthMask: number;
-  // Parallel mask: bit k set means SYNTH INH param=k fired this tick.
-  // updateCreatures() runs biosynthInhibitor(slot) for each set bit
-  // (dual of catSynthMask -> biosynthCatalyst).
-  inhSynthMask: number;
+  // Per-slot expression flags for generic catalyst synthesis this tick.
+  // catSynthMask[k] != 0 means SYNTH_CAT with operand mod CATALYST_COUNT == k
+  // fired this tick; the sim runs catalyst synthesis for slot k iff that
+  // entry is nonzero. Stored as a Uint8Array(CATALYST_COUNT) rather than a
+  // packed JS bitmask -- CATALYST_COUNT is 256 but JS bitwise ops are
+  // 32-bit, so 1 << k for k >= 32 silently aliases low bits (slot 37
+  // collides with slot 5, etc.). Array form makes each slot independent.
+  catSynthMask: Uint8Array;
+  // Parallel array: inhSynthMask[k] != 0 means SYNTH INH param=k fired
+  // this tick. updateCreatures() runs biosynthInhibitor(slot) for each
+  // nonzero entry (dual of catSynthMask -> biosynthCatalyst).
+  inhSynthMask: Uint8Array;
   // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
   // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
   // this after runTick returns: changing genome length mid-tick would
@@ -357,8 +361,8 @@ export function newOutputs(): VMOutputs {
     ingestThreshold: Infinity,
     synthMask: 0,
     bondMarker: -1,
-    catSynthMask: 0,
-    inhSynthMask: 0,
+    catSynthMask: new Uint8Array(CATALYST_COUNT),
+    inhSynthMask: new Uint8Array(CATALYST_COUNT),
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     partitionChem: new Int16Array(PARTITION_CAP),
     partitionBias: new Float32Array(PARTITION_CAP),
@@ -397,8 +401,8 @@ export function runTick(
   out.ingestThreshold = Infinity;
   out.synthMask = 0;
   out.bondMarker = -1;
-  out.catSynthMask = 0;
-  out.inhSynthMask = 0;
+  out.catSynthMask.fill(0);
+  out.inhSynthMask.fill(0);
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
@@ -487,8 +491,8 @@ export function runTick(
         const param = genome[state.pc % L]; state.pc++;
         const kind = kindByte % SYNTH_KIND_COUNT;
         switch (kind) {
-          case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
-          case SYNTH_KIND.INH:    out.inhSynthMask |= 1 << (param % CATALYST_COUNT); break;
+          case SYNTH_KIND.CAT:    out.catSynthMask[param % CATALYST_COUNT] = 1; break;
+          case SYNTH_KIND.INH:    out.inhSynthMask[param % CATALYST_COUNT] = 1; break;
           case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
           case SYNTH_KIND.COMPETENCE: out.synthMask |= 1 << SYNTH_BIT_COMPETENCE; break;
           case SYNTH_KIND.PACKAGE: out.synthMask |= 1 << SYNTH_BIT_PACKAGE; break;

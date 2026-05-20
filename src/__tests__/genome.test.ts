@@ -436,15 +436,15 @@ describe("genome decoding: known byte sequences", () => {
   // After Phase 4a the only kinds with runtime effect are CAT, INH,
   // BOND, COMPETENCE, PACKAGE.
   describe("dynamic VM (runTick) -- the executed contract", () => {
-    it("[SYNTH, CAT, 3] sets bit 3 of catSynthMask (photosynth slot)", () => {
+    it("[SYNTH, CAT, 3] marks slot 3 expressed in catSynthMask (photosynth slot)", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 3]);
-      expect(out.catSynthMask & (1 << 3)).toBeTruthy();
-      expect(out.inhSynthMask).toBe(0);
+      expect(out.catSynthMask[3]).toBeTruthy();
+      expect(out.inhSynthMask.some((v) => v !== 0)).toBe(false);
     });
-    it("[SYNTH, INH, 4] sets bit 4 of inhSynthMask (synth_aa slot)", () => {
+    it("[SYNTH, INH, 4] marks slot 4 expressed in inhSynthMask (synth_aa slot)", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.INH, 4]);
-      expect(out.inhSynthMask & (1 << 4)).toBeTruthy();
-      expect(out.catSynthMask).toBe(0);
+      expect(out.inhSynthMask[4]).toBeTruthy();
+      expect(out.catSynthMask.some((v) => v !== 0)).toBe(false);
     });
     it("[SYNTH, BOND, 200] sets BOND bit AND exposes marker 200", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.BOND, 200]);
@@ -681,17 +681,52 @@ describe("VM op coverage: every defined op", () => {
     it("CAT routes to catSynthMask, not synthMask (param = slot)", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 3, HALT_MARK]);
       expect(out.synthMask).toBe(0);
-      expect(out.catSynthMask).toBe(1 << (3 % CATALYST_COUNT));
+      expect(out.catSynthMask[3 % CATALYST_COUNT]).toBe(1);
+      expect(out.catSynthMask.reduce((s, v) => s + v, 0)).toBe(1);
     });
     it("INH routes to inhSynthMask (param = slot), parallel to CAT", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.INH, 7, HALT_MARK]);
       expect(out.synthMask).toBe(0);
-      expect(out.catSynthMask).toBe(0);
-      expect(out.inhSynthMask).toBe(1 << (7 % CATALYST_COUNT));
+      expect(out.catSynthMask.some((v) => v !== 0)).toBe(false);
+      expect(out.inhSynthMask[7 % CATALYST_COUNT]).toBe(1);
+      expect(out.inhSynthMask.reduce((s, v) => s + v, 0)).toBe(1);
     });
     it("kindByte wraps mod SYNTH_KIND_COUNT", () => {
       expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.BOND, 0, HALT_MARK]).out.synthMask)
         .toBe(1 << SYNTH_BIT_BOND);
+    });
+    // Regression: catSynthMask / inhSynthMask used to be packed JS
+    // bitmasks. CATALYST_COUNT is 256 but JS bitwise ops are 32-bit,
+    // so 1 << 37 silently aliased to 1 << 5. SYNTH CAT 37 and SYNTH
+    // CAT 5 set the same bit, and the consumer loop fired phantom
+    // biosyntheses for every slot that shared its low 5 bits with an
+    // expressed slot. The mask is now Uint8Array(CATALYST_COUNT); each
+    // slot is independent. These tests would have caught the original
+    // bug because they exercise high-slot params and assert per-slot
+    // independence, which the bitmask form can't satisfy.
+    it("SYNTH CAT 37 marks slot 37, NOT slot 5 (high-slot params do not alias low ones)", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 37, HALT_MARK]);
+      expect(out.catSynthMask[37]).toBe(1);
+      expect(out.catSynthMask[5]).toBe(0);
+      expect(out.catSynthMask.reduce((s, v) => s + v, 0)).toBe(1);
+    });
+    it("SYNTH CAT 5 and SYNTH CAT 37 mark two distinct slots, not one shared one", () => {
+      // Two SYNTH ops back-to-back; the second comes after the kind byte
+      // padding so the VM's PC actually lands on its op.
+      const { out } = exec([
+        OP.SYNTH, SYNTH_KIND.CAT, 5,
+        OP.SYNTH, SYNTH_KIND.CAT, 37,
+        HALT_MARK,
+      ]);
+      expect(out.catSynthMask[5]).toBe(1);
+      expect(out.catSynthMask[37]).toBe(1);
+      expect(out.catSynthMask.reduce((s, v) => s + v, 0)).toBe(2);
+    });
+    it("SYNTH INH 64 marks slot 64, NOT slot 0 (same independence rule for inhibitor)", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.INH, 64, HALT_MARK]);
+      expect(out.inhSynthMask[64]).toBe(1);
+      expect(out.inhSynthMask[0]).toBe(0);
+      expect(out.inhSynthMask.reduce((s, v) => s + v, 0)).toBe(1);
     });
   });
 });

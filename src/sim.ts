@@ -112,7 +112,7 @@ import {
   PARTICLE_STORE_PREALLOC_CAP, CREATURE_STORE_PREALLOC_CAP,
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
-import { makeVentState, stepVent } from "./sim/vent";
+import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
 
 // WorldProfile + makeProfile/resetProfile live in ./sim/profile
 // (imported + re-exported at the top of this file).
@@ -1346,15 +1346,40 @@ function initVent(world: World, x: number, y: number): void {
 // Tick the vent. Wrapped here so the vent module stays free of the
 // pushParticle import (which would pull in the whole sim graph). Skip
 // when the world has no vent installed (test scaffolds).
+//
+// Global-saturation gate: the vent still cycles (phase machine,
+// intensity envelope, heat injection) at all times, but emits no
+// particles when any of its emission chems is at >=
+// VENT_SATURATION_FRAC of global dissolved capacity. This caps the
+// vent's pile-up potential without freezing the cycle.
+const VENT_SATURATION_FRAC = 0.10;
+function ventEmissionsBlocked(world: World): boolean {
+  const amb = world.ambient;
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const nReg = cols * rows;
+  for (const chem of VENT_EMISSION_CHEMS) {
+    let amount = 0;
+    let cap = 0;
+    for (let ri = 0; ri < nReg; ri++) {
+      amount += amb[ri * AMBIENT_STRIDE + chem];
+      const tReg = world.regionTemp.length > ri ? world.regionTemp[ri] : TEMP_BASELINE;
+      cap += regionDissolvedCapacity(chem, world, tReg);
+    }
+    if (cap > 0 && amount >= VENT_SATURATION_FRAC * cap) return true;
+  }
+  return false;
+}
 function runVent(world: World, dt: number): void {
   if (!world.vent) return;
   // Respect the particle cap so the vent can't push the world over the
   // overflow band even at peak intensity.
   const cap = effectiveParticleCap(world);
+  const blocked = ventEmissionsBlocked(world);
   stepVent(world, dt, simRng, (x, y, z, vx, vy, vz, r, chemId, density, molecules) => {
     if (world.particles.length >= cap) return;
     pushParticle(world, { x, y, z, vx, vy, vz, r, chemId, density, molecules });
-  });
+  }, blocked);
 }
 
 
@@ -4456,16 +4481,12 @@ function runInnerCell(
   // the free-cell metabolic pipeline.
   runGenericReactions(inner, dtT, light);
   const cm = inner.vmOut.catSynthMask;
-  if (cm) {
-    for (let k = 0; k < CATALYST_COUNT; k++) {
-      if (cm & (1 << k)) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
-    }
+  for (let k = 0; k < CATALYST_COUNT; k++) {
+    if (cm[k]) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
   }
   const im = inner.vmOut.inhSynthMask;
-  if (im) {
-    for (let k = 0; k < CATALYST_COUNT; k++) {
-      if (im & (1 << k)) biosynthInhibitor(inner, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
-    }
+  for (let k = 0; k < CATALYST_COUNT; k++) {
+    if (im[k]) biosynthInhibitor(inner, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
   }
   maintenanceDecay(inner, dt);
   toxify(inner, dt);
@@ -5608,20 +5629,16 @@ function updateCreatures(world: World, dt: number): void {
     // a chem now emerges from expressing that catalyst.
     runTransportReactions(c, world, dtT);
 
-    // Generic catalyst synthesis. SYNTH_CAT <id> sets a bit per slot;
-    // each catalyst built is its own protein.
+    // Generic catalyst synthesis. SYNTH_CAT <id> marks slot id as
+    // expressed this tick; each catalyst built is its own protein.
     const cm = vmOut.catSynthMask;
-    if (cm) {
-      for (let k = 0; k < CATALYST_COUNT; k++) {
-        if (cm & (1 << k)) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
-      }
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      if (cm[k]) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
     }
     // Dual: SYNTH_INH <id> per-slot allosteric inhibitor.
     const im = vmOut.inhSynthMask;
-    if (im) {
-      for (let k = 0; k < CATALYST_COUNT; k++) {
-        if (im & (1 << k)) biosynthInhibitor(c, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
-      }
+    for (let k = 0; k < CATALYST_COUNT; k++) {
+      if (im[k]) biosynthInhibitor(c, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
     }
 
     // Structural pools turn over even when nothing else is happening.

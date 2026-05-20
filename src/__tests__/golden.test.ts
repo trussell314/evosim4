@@ -178,7 +178,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // SYNTH CAT for differentiation. makeRandomViableGenome rebuilt
     // around CAT boosts instead of dead SYNTH biosynth ops. Every
     // archetype migrated. Determinism + mass-conservation green.
-    const GOLDEN = "b103d029";
+    // Bumped again: catSynthMask / inhSynthMask converted from packed
+    // JS bitmasks to Uint8Array(CATALYST_COUNT). The bitmask form
+    // silently aliased high slots into low ones (JS 1<<k uses low 5
+    // bits of k -- slot 37 collided with slot 5, and the consumer
+    // loop fired 8 phantom syntheses per expressed slot). Fixing it
+    // removes the phantom AA/MIN/ATP drain.
+    const GOLDEN = "27ceefa9";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
