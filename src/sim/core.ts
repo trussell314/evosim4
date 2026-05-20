@@ -1284,6 +1284,21 @@ export interface World {
   // depth the other; the sign reverses on a slow oscillation. Cells and
   // particles both feel it. Tests can zero this for stillwater scenarios.
   currentAmp: number;
+  // Wind: signed horizontal velocity that drives the surface waves.
+  // Positive => blowing right, negative => blowing left, magnitude
+  // sets wave amplitude. Driven by a smoothed random walk toward
+  // windTarget; gusts push windTarget to a higher magnitude for the
+  // duration of a disturbance event. Tests can pin wind=0 for
+  // glassy-surface scenarios.
+  wind: number;
+  windTarget: number;
+  // Per-column wind exposure maps in [0,1]. Computed at terrain build.
+  // windExposureFromLeft[x] is the exposure to wind blowing right (so
+  // tall rocks to the left of x shelter that column); from-right is
+  // the mirror. surfaceYAt picks the map matching the sign of wind.
+  // Empty for worlds without terrain.
+  windExposureFromLeft?: Float32Array;
+  windExposureFromRight?: Float32Array;
   // VM ops budget per creature per tick. Lower = cheaper; cells just
   // take more ticks to finish a full pass through their genome.
   vmInstrBudget: number;

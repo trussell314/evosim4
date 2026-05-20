@@ -68,6 +68,8 @@ import {
   SENSOR_CHEM_LABELS,
   MOLECULE_IDS,
   surfaceYAt,
+  windExposureAt,
+  WIND_MAX,
   temperatureAt,
   solarLight,
   takeSnapshot,
@@ -2380,6 +2382,13 @@ function render(): void {
   // Vent: dark mouth in the rock + active eruption shimmer overlaid.
   if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
 
+  // Wind streaks: short horizontal slashes drifting through the air
+  // band, intensity scaling with |wind|, faded out where rock occupies
+  // the column. Purely visual; no determinism impact (uses Math.random
+  // and real wall-clock time).
+  updateWindStreaks(width, surfaceY, snapshot.wind);
+  drawWindStreaks(ctx, snapshot);
+
   // Region grid overlay (toggled by the lower-left button). Matches
   // REGION_PX so the dissolved/reserve region boundaries are visible.
   if (gridLinesOn) {
@@ -3184,6 +3193,74 @@ function buildTerrainBitmap(): void {
   // vertex counts. The rim-lighting in the texture pass provides the
   // silhouette pop on its own.)
   terrainBitmap = off;
+}
+
+// Wind streaks. Lightweight visual layer in the air band above the
+// surface. State lives here (not in the snapshot) because it doesn't
+// need to be deterministic -- it's purely cosmetic. Each streak is
+// a short horizontal segment that advects with snapshot.wind and
+// fades over its lifetime.
+interface WindStreak { x: number; y: number; len: number; life: number; lifeMax: number }
+const WIND_STREAKS: WindStreak[] = [];
+const WIND_STREAK_POOL = 80;
+let windLastUpdateMs = performance.now();
+
+function updateWindStreaks(width: number, surfaceY: number, wind: number): void {
+  const now = performance.now();
+  const dt = Math.min(0.1, Math.max(0.001, (now - windLastUpdateMs) / 1000));
+  windLastUpdateMs = now;
+  while (WIND_STREAKS.length < WIND_STREAK_POOL) {
+    WIND_STREAKS.push({ x: 0, y: 0, len: 0, life: 0, lifeMax: 1 });
+  }
+  const mag = Math.min(1, Math.abs(wind) / WIND_MAX);
+  // Number of active streaks scales with wind magnitude.
+  const activeN = Math.floor(WIND_STREAK_POOL * mag);
+  const airTop = 0;
+  const airBot = Math.max(2, surfaceY - 4);
+  for (let i = 0; i < WIND_STREAK_POOL; i++) {
+    const s = WIND_STREAKS[i];
+    if (i >= activeN) { s.life = 0; continue; }
+    s.life -= dt;
+    if (s.life <= 0) {
+      // Respawn at the upwind edge so the streak streams across.
+      if (wind >= 0) s.x = -10 + Math.random() * (width * 0.3);
+      else           s.x = width + 10 - Math.random() * (width * 0.3);
+      s.y = airTop + Math.random() * (airBot - airTop);
+      s.lifeMax = 1.0 + Math.random() * 2.5;
+      s.life = s.lifeMax;
+      s.len = 4 + Math.random() * 10 * mag;
+    }
+    s.x += wind * dt;
+    // Wrap.
+    if (s.x > width + 60) s.x -= width + 120;
+    else if (s.x < -60) s.x += width + 120;
+  }
+}
+
+function drawWindStreaks(c: CanvasRenderingContext2D, snap: typeof snapshot): void {
+  const wind = snap.wind;
+  const mag = Math.min(1, Math.abs(wind) / WIND_MAX);
+  if (mag <= 0.05) return;
+  c.lineCap = "round";
+  c.lineWidth = 1;
+  const dir = wind >= 0 ? 1 : -1;
+  for (const s of WIND_STREAKS) {
+    if (s.life <= 0) continue;
+    // Fade in/out at the start and end of the streak's life.
+    const fadeIn = Math.min(1, (s.lifeMax - s.life) / 0.3);
+    const fadeOut = Math.min(1, s.life / 0.4);
+    let alpha = mag * 0.65 * fadeIn * fadeOut;
+    // Sheltered columns: streak fades out where wind is blocked.
+    const expo = windExposureAt(snap, s.x);
+    alpha *= expo;
+    if (alpha <= 0.02) continue;
+    const tipX = s.x + dir * s.len;
+    c.strokeStyle = `rgba(220,232,240,${alpha.toFixed(3)})`;
+    c.beginPath();
+    c.moveTo(s.x, s.y);
+    c.lineTo(tipX, s.y);
+    c.stroke();
+  }
 }
 
 // Hydrothermal vent visual. The vent itself is a small dark mouth

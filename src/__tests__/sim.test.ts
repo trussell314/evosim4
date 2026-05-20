@@ -145,6 +145,8 @@ function quietWorld(): World {
     disturbanceStartedAt: 0,
     disturbanceUntil: 0,
     nextDisturbanceAt: Number.POSITIVE_INFINITY,
+    wind: 0,
+    windTarget: 0,
     currentAmp: 0,
     vmInstrBudget: 8,
     obstacles: [],

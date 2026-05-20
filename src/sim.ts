@@ -986,25 +986,56 @@ export interface WorldEnv {
   tempPatchLength: number;
   tempPatchPeriod: number;
   dayPhase: number;
+  // Wind state (drives surface wave amplitude + direction). Wind
+  // magnitude is in the same units as the legacy surfaceWaveAmp
+  // baseline -- |wind|/WIND_MAX gives a 0..1 scale that gets
+  // multiplied into amplitude per column.
+  wind: number;
+  windExposureFromLeft?: Float32Array;
+  windExposureFromRight?: Float32Array;
   // Optional vent state. WorldEnv is the narrow slice that helpers
   // like temperatureAt see; vents contribute heat through this so the
   // helper doesn't need a full World.
   vent?: import("./sim/core").VentState;
 }
 
+// Maximum |wind| magnitude. surfaceYAt scales wave amplitude by
+// |wind|/WIND_MAX so this is the "100% storm" reference.
+export const WIND_MAX = 200;
+
+// Generic "how rough is the surface, 0..1 multiplier" reading. Now
+// derived from wind: |wind|/WIND_MAX with the disturbance intensity
+// folded in as an additional amplifier for aeration / brownian /
+// vertical-mixing call sites that already expected the old
+// disturbance-blended scalar. Sites that want the column-specific
+// wave amplitude should compute it from `wind` + `windExposureAt`.
 export function surfaceActivity(world: WorldEnv): number {
-  const t = world.t;
-  const env =
-    0.55 +
-    0.25 * Math.sin(t * (2 * Math.PI / 37)) +
-    0.20 * Math.sin(t * (2 * Math.PI / 91) + 1.7);
-  const envClamped = Math.max(0.15, Math.min(1.0, env));
-  return envClamped * (1 + 3 * world.disturbanceIntensity);
+  const windMag = Math.min(1, Math.abs(world.wind) / WIND_MAX);
+  return Math.max(0.05, windMag);
+}
+
+// Per-column wind exposure in [0,1]. 0 = sheltered (no waves
+// regardless of wind), 1 = fully exposed. Picks the from-left map
+// when wind blows right (the upwind side is to the left of x), the
+// from-right map otherwise. Worlds without terrain return 1.
+export function windExposureAt(world: WorldEnv, x: number): number {
+  const map = world.wind >= 0 ? world.windExposureFromLeft : world.windExposureFromRight;
+  if (!map || map.length === 0) return 1;
+  const ix = Math.max(0, Math.min(map.length - 1, Math.floor(x)));
+  return map[ix];
 }
 
 export function surfaceYAt(world: WorldEnv, x: number): number {
   const t = world.t;
-  const A = world.surfaceWaveAmp * surfaceActivity(world);
+  // Amplitude derives from wind magnitude and per-column shelter.
+  // Floor at 0 -- a sheltered column with calm wind is glassy.
+  const windFactor = Math.min(1, Math.abs(world.wind) / WIND_MAX);
+  const expo = windExposureAt(world, x);
+  const A = world.surfaceWaveAmp * windFactor * expo;
+  if (A <= 0) return world.surfaceY;
+  // Wave propagation direction follows wind sign: positive wind blows
+  // right, so waves travel +x; negative wind flips the time term.
+  const dir = world.wind >= 0 ? 1 : -1;
   const kS = (2 * Math.PI) / world.surfaceLength;
   const wS = (2 * Math.PI) / world.surfacePeriod;
   const kL = (2 * Math.PI) / world.swellLength;
@@ -1013,23 +1044,16 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   const wU = (2 * Math.PI) / world.updraftPeriod;
 
   // Main gravity wave.
-  let dy = A * Math.sin(kS * x - wS * t);
-  // Two off-rate harmonics: irrational frequency ratios and phase offsets
-  // keep the surface from repeating noticeably.
-  dy += 0.45 * A * Math.sin(1.7 * kS * x - 1.3 * wS * t + 0.6);
-  dy += 0.25 * A * Math.sin(3.1 * kS * x + 2.1 * wS * t + 1.4);
-  // Longer swell contribution. Slower phase so it reads as a separate
-  // motion riding under the chop.
-  dy += 0.7 * A * Math.sin(kL * x + 0.4 * wL * t);
-  // Coupling to the vertical mixing field: where updraft is pushing
-  // water up (negative ay in applyForces), the surface bulges up.
+  let dy = A * Math.sin(kS * x - dir * wS * t);
+  // Off-rate harmonics; irrational frequency ratios + phase offsets
+  // keep the surface from visibly repeating.
+  dy += 0.45 * A * Math.sin(1.7 * kS * x - dir * 1.3 * wS * t + 0.6);
+  dy += 0.25 * A * Math.sin(3.1 * kS * x + dir * 2.1 * wS * t + 1.4);
+  // Longer swell contribution.
+  dy += 0.7 * A * Math.sin(kL * x + dir * 0.4 * wL * t);
+  // Updraft coupling -- where updraft is pushing water up, the
+  // surface bulges up.
   dy -= 0.8 * A * Math.sin(kU * x + wU * t);
-  // Plain wave -- the rock-vs-wave interaction is handled at render
-  // time (rock bitmap paints over the water fill, masking the wave
-  // line behind solid rock) and at obstacle-collision time (particles
-  // and creatures clamped to the wave then get pushed out of any rock
-  // they overlap). No analytic clip needed; trying to do it here
-  // produced hard vertical jumps in the wave line at bay edges.
   return world.surfaceY + dy;
 }
 
@@ -1101,14 +1125,29 @@ function advanceDayCycle(world: World, dt: number): void {
   world.dayPhase = (world.dayPhase + dt / world.dayPeriod) % 1;
 }
 
-// Schedule + ramp disturbance ("storm") intensity. While intensity > 0,
-// surface waves, vertical mixing, and brownian forcing are all
-// amplified at use sites. Trapezoidal envelope: ramp up 0..1 in first
-// 30% of the event, hold, ramp 1..0 in last 30%. Gaps between events
-// are picked from [60s, 1200s] so they're irregular.
-function advanceDisturbance(world: World, dt: number): void {
-  void dt;
+// Wind state machine. Two layered behaviors:
+//
+//   1. Baseline drift: windTarget does a slow random walk every
+//      ~5 seconds, bounded to a gentle range. Even with no events,
+//      the surface always has SOME breeze.
+//   2. Gust events: the old "disturbance" schedule is repurposed.
+//      On a fresh event we pick a high-magnitude target (and a sign
+//      so the gust can come from either direction). disturbanceIntensity
+//      keeps a 0..1 envelope across the event for the legacy call
+//      sites (aerate / brownian / vertical mix) that still want a
+//      "weather is rough" multiplier.
+//
+// world.wind tracks toward windTarget with a slow time constant so
+// the actual sea state lags behind the target -- waves don't switch
+// direction instantly the moment the wind does.
+const WIND_DRIFT_STEP_SEC = 5;     // re-roll baseline windTarget every N sec
+const WIND_DRIFT_RANGE = 40;       // baseline windTarget magnitude (px/s)
+const WIND_RELAX_TAU = 6;          // seconds: how fast wind follows target
+const WIND_GUST_MAG_MIN = 120;     // gust event minimum |windTarget|
+const WIND_GUST_MAG_MAX = WIND_MAX; // ...and ceiling
+function advanceWind(world: World, dt: number): void {
   const t = world.t;
+  // 1. Disturbance event scheduler (re-used as the gust trigger).
   if (world.disturbanceUntil > 0 && t >= world.disturbanceUntil) {
     world.disturbanceUntil = 0;
     world.disturbanceIntensity = 0;
@@ -1118,6 +1157,10 @@ function advanceDisturbance(world: World, dt: number): void {
     world.disturbanceStartedAt = t;
     world.disturbanceUntil = t + duration;
     world.nextDisturbanceAt = world.disturbanceUntil + 60 + simRng() * 1140;
+    // Lock in a gust direction + magnitude for the whole event.
+    const sign = simRng() < 0.5 ? -1 : 1;
+    const mag = WIND_GUST_MAG_MIN + simRng() * (WIND_GUST_MAG_MAX - WIND_GUST_MAG_MIN);
+    world.windTarget = sign * mag;
   }
   if (world.disturbanceUntil > 0) {
     const duration = world.disturbanceUntil - world.disturbanceStartedAt;
@@ -1127,7 +1170,26 @@ function advanceDisturbance(world: World, dt: number): void {
     else if (f > 0.7) i = (1 - f) / 0.3;
     else i = 1;
     world.disturbanceIntensity = Math.max(0, Math.min(1, i));
+  } else {
+    // 2. Baseline drift between gusts. Sample a new target every
+    // WIND_DRIFT_STEP_SEC using a stride of world.t so the schedule
+    // is deterministic per world. The target is a fresh random pick
+    // in [-WIND_DRIFT_RANGE, +WIND_DRIFT_RANGE]; wind relaxes
+    // toward it smoothly. Floors disturbanceIntensity at 0 so the
+    // legacy call sites see a calm state.
+    world.disturbanceIntensity = 0;
+    // Discretize sampling on the WIND_DRIFT_STEP_SEC grid.
+    const lastStep = Math.floor((t - dt) / WIND_DRIFT_STEP_SEC);
+    const thisStep = Math.floor(t / WIND_DRIFT_STEP_SEC);
+    if (thisStep > lastStep) {
+      world.windTarget = (simRng() * 2 - 1) * WIND_DRIFT_RANGE;
+    }
   }
+  // Exponential approach: wind += (target - wind) * (1 - exp(-dt/tau)).
+  // For small dt the linearization dt/tau is accurate enough and
+  // cheaper than a Math.exp per tick.
+  const alpha = Math.min(1, dt / WIND_RELAX_TAU);
+  world.wind += (world.windTarget - world.wind) * alpha;
 }
 
 // Static rocky terrain. Built once at world creation and never modified
@@ -1210,6 +1272,54 @@ export function generateObstacles(world: World): void {
   }
 
   world.terrainHeightmap = heightmap;
+
+  // Wind exposure maps. cliffHeight[x] = how far above the still
+  // water surface the rock extends at column x (0 if no rock pokes
+  // out of the water). A tall cliff casts a wind shadow downwind
+  // proportional to its height; exposure ramps from 0 right behind
+  // the cliff back up to 1 over SHELTER_DIST_MAX pixels.
+  const stillSurfaceY = H * SURFACE_Y_FRAC;
+  const cliffHeight = new Float32Array(heightmap.length);
+  for (let x = 0; x < heightmap.length; x++) {
+    const top = heightmap[x];
+    if (top !== Number.POSITIVE_INFINITY && top < stillSurfaceY) {
+      cliffHeight[x] = stillSurfaceY - top;
+    }
+  }
+  // Shelter distance scales linearly with cliff height so a tiny
+  // bump shelters only a few px while a tall cliff shelters far
+  // downwind.
+  const SHELTER_DIST_PER_HEIGHT = 2;
+  const SHELTER_DIST_MAX = 180;
+  const buildExposureMap = (fromLeft: boolean): Float32Array => {
+    const m = new Float32Array(heightmap.length);
+    m.fill(1);
+    // For each column, scan UPWIND looking for the tallest cliff
+    // within shelter range. The shadow decays linearly with distance.
+    const step = fromLeft ? -1 : 1;
+    for (let x = 0; x < heightmap.length; x++) {
+      // If rock fills this column in the air band, exposure 0.
+      if (cliffHeight[x] > 0 && heightmap[x] <= 1) { m[x] = 0; continue; }
+      let bestShadow = 0;
+      const maxScan = SHELTER_DIST_MAX;
+      for (let d = 1; d <= maxScan; d++) {
+        const ux = x + step * d;
+        if (ux < 0 || ux >= heightmap.length) break;
+        const ch = cliffHeight[ux];
+        if (ch <= 0) continue;
+        const reach = Math.min(SHELTER_DIST_MAX, ch * SHELTER_DIST_PER_HEIGHT);
+        if (d > reach) continue;
+        // Shelter strength: cliff height normalized vs surfaceY, with
+        // linear distance falloff.
+        const strength = Math.min(1, ch / stillSurfaceY) * (1 - d / reach);
+        if (strength > bestShadow) bestShadow = strength;
+      }
+      m[x] = Math.max(0, 1 - bestShadow);
+    }
+    return m;
+  };
+  world.windExposureFromLeft = buildExposureMap(true);
+  world.windExposureFromRight = buildExposureMap(false);
 
   // Vent: anchor it at the normalized VENT_ORIGIN inside the seafloor
   // notch. Per-world vent state (next eruption time, current phase)
@@ -1424,6 +1534,109 @@ function rebuildObstacleIndex(world: World): void {
       for (let x = x0; x <= x1; x++) OBSTACLE_CELL_GRID[row + x] = 1;
     }
   }
+}
+
+// Strict rock evacuation. The lobe-based obstacle collision pushes
+// bodies out radially from each overlapping lobe; that's correct for
+// a particle skimming the edge but can leave bodies stuck when they
+// sit deep inside a polygon (multiple lobes push in conflicting
+// directions, and the net push is small relative to the polygon
+// thickness). This pass uses the polygon outline as the ground truth:
+// any particle/creature center found inside an obstacle's polygon
+// is evacuated.
+//
+// Particles get destroyed and their mass dumped to the local ambient
+// pool (mass-conserving). Creatures get teleported to just past the
+// nearest polygon edge (creatures have state we don't want to lose).
+function evacuateRocks(world: World): void {
+  if (world.obstacles.length === 0) return;
+  const ambient = world.ambient;
+  const store = world.particleStore;
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  // Particles. Iterate backwards because removeParticleAt swap-pops.
+  for (let i = world.particles.length - 1; i >= 0; i--) {
+    const px = store.x[i], py = store.y[i];
+    let insideOb: Obstacle | null = null;
+    for (const ob of world.obstacles) {
+      if (!ob.polygon) continue;
+      if (px < ob.minX || px > ob.maxX || py < ob.minY || py > ob.maxY) continue;
+      if (pointInPolygon(px, py, ob.polygon)) { insideOb = ob; break; }
+    }
+    if (!insideOb) continue;
+    // Dump mass to local ambient (mass-conserving). For molecule-
+    // tagged particles iterate the molecules map; for single-chem
+    // particles compute mass from radius+density.
+    const base = ambientBaseAt(world, px, py);
+    const mol = store.molecules[i];
+    if (mol) {
+      for (let k = 0; k < NAMED_CHEMICALS.length; k++) {
+        const v = mol[NAMED_CHEMICALS[k]];
+        if (v > 0) ambient[base + k] += v;
+      }
+    } else {
+      const r = store.r[i];
+      const density = store.density[i] !== 0 ? store.density[i] : 1;
+      const mass = density * FOUR_THIRDS_PI * r * r * r;
+      const chemId = store.chemId[i];
+      ambient[base + chemId] += mass;
+    }
+    removeParticleAt(world, i);
+  }
+  // Creatures. Polygon-based push: find nearest edge point, teleport
+  // to a safe distance past it.
+  for (const c of world.creatures) {
+    const cx = c.x, cy = c.y;
+    let insideOb: Obstacle | null = null;
+    for (const ob of world.obstacles) {
+      if (!ob.polygon) continue;
+      if (cx < ob.minX || cx > ob.maxX || cy < ob.minY || cy > ob.maxY) continue;
+      if (pointInPolygon(cx, cy, ob.polygon)) { insideOb = ob; break; }
+    }
+    if (!insideOb) continue;
+    const np = nearestPolygonEdgePoint(cx, cy, insideOb.polygon!);
+    const dx = np.x - cx, dy = np.y - cy;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      // Direction from inside-point to the edge IS the outward
+      // direction; teleport `margin` past the edge along it.
+      const margin = c.r + 2;
+      const ux = dx / d, uy = dy / d;
+      c.x = np.x + ux * margin;
+      c.y = np.y + uy * margin;
+      // Kill any inward velocity that would push the creature right
+      // back into the rock on the next physics tick.
+      const vDotU = c.vx * ux + c.vy * uy;
+      if (vDotU > 0) {
+        c.vx -= vDotU * ux;
+        c.vy -= vDotU * uy;
+      }
+    }
+  }
+}
+
+// Closest point on a polygon's boundary to (qx, qy). Walks every
+// edge and projects the query onto each segment; returns the
+// projection nearest in Euclidean distance.
+function nearestPolygonEdgePoint(
+  qx: number, qy: number, poly: { x: number; y: number }[],
+): { x: number; y: number } {
+  let bestX = poly[0].x, bestY = poly[0].y, bestD = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const ax = poly[j].x, ay = poly[j].y;
+    const bx = poly[i].x, by = poly[i].y;
+    const ex = bx - ax, ey = by - ay;
+    const lenSq = ex * ex + ey * ey;
+    let t = 0;
+    if (lenSq > 1e-12) {
+      t = ((qx - ax) * ex + (qy - ay) * ey) / lenSq;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+    }
+    const px = ax + ex * t, py = ay + ey * t;
+    const dx = px - qx, dy = py - qy;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; bestX = px; bestY = py; }
+  }
+  return { x: bestX, y: bestY };
 }
 
 function resolveObstacleCollisions(world: World): void {
@@ -1685,6 +1898,8 @@ export function createWorld(
     disturbanceStartedAt: 0,
     disturbanceUntil: 0,
     nextDisturbanceAt: 60 + simRng() * 240,
+    wind: 0,
+    windTarget: 0,
     currentAmp: CURRENT_AMP,
     vmInstrBudget: DEFAULT_VM_INSTR_BUDGET,
     obstacles: [],
@@ -1983,9 +2198,10 @@ function spawnFounder(world: World): Creature | null {
 function seedInitialParticles(world: World): void {
   const spawnOne = (spec: SpawnChemSpec): void => {
     const r = 1 + simRng() * 1.5;
+    const pos = spawnPosForChem(world, r, spec.chemId);
     pushParticle(world, {
-      ...randomWaterPos(world, r),
-      vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
+      x: pos.x, y: pos.y, z: pos.z,
+      vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
       r,
       chemId: spec.chemId,
       density: rollChemDensity(spec),
@@ -2010,8 +2226,11 @@ function seedInitialParticles(world: World): void {
 // the ramp keeps going until the visible count reaches particleTarget,
 // then latches done forever (nothing respawns afterward -- the pool is
 // fixed for the rest of the run). Founders are gated on this completing.
-const SEED_RAMP_PERIOD_SEC = 10;
-const SEED_RAMP_BATCH = 1000;
+// Faster ramp (was 10s / 1000 batch). Top-drop spawning fills the
+// world visibly in ~15-20 sim seconds rather than ~30, which reads
+// as "rain pouring in" instead of "world slowly populating".
+const SEED_RAMP_PERIOD_SEC = 2;
+const SEED_RAMP_BATCH = 400;
 // Hard time cap on the ramp: stop seeding after this many sim-seconds
 // even if particleTarget was never reached, then latch done forever.
 const SEED_RAMP_MAX_T = 180;
@@ -2045,9 +2264,10 @@ function seedRamp(world: World, dt: number): void {
     for (let i = 0; i < n; i++) {
       const spec = pickSpawnSpec();
       const r = spawnRadius(spec.chemId);
+      const pos = spawnPosForChem(world, r, spec.chemId);
       pushParticle(world, {
-        ...randomWaterPos(world, r),
-        vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
         r,
         chemId: spec.chemId,
         density: rollChemDensity(spec),
@@ -2065,13 +2285,10 @@ function seedRamp(world: World, dt: number): void {
 function randomWaterPos(
   world: World, r: number,
 ): { x: number; y: number; z: number } {
-  // Reject positions that would land a particle inside rock. Particles
-  // spawned there get bounced around by the obstacle collision pass --
-  // sometimes never escaping -- and visually they read as "stuff
-  // floating inside the cliff", which is what we don't want.
-  // Bounded retry: founderTerrainBlocked is a fast lobe sweep over
-  // ~5 obstacles, and the rock occupies a small fraction of the
-  // world, so it rarely takes more than a couple of attempts.
+  // Reject positions that would land a particle inside rock. Bounded
+  // retry: founderTerrainBlocked is a fast lobe sweep over ~5
+  // obstacles, and the rock occupies a small fraction of the world,
+  // so it rarely takes more than a couple of attempts.
   let x = 0, y = 0;
   for (let attempt = 0; attempt < 8; attempt++) {
     x = simRng() * world.width;
@@ -2082,6 +2299,50 @@ function randomWaterPos(
     x, y,
     z: r + simRng() * (world.depth - 2 * r),
   };
+}
+
+// Top-of-water spawn. Drops particles in a thin band just below the
+// surface so they fall under gravity and find their natural resting
+// place. Rejects x columns where rock pokes above (or near) the
+// surface so non-gas particles don't spawn on top of a cliff. Used
+// for solids/organics; gases keep randomWaterPos because they'd
+// just escape immediately anyway.
+function topSpawnPos(
+  world: World, r: number,
+): { x: number; y: number; z: number; vy: number } {
+  let x = 0;
+  const surfaceY = world.surfaceY;
+  // Skip columns where rock is at or near the surface (the top-left
+  // cliff in the layout). Without the check, particles spawn on the
+  // rock's underside and bounce around uselessly.
+  const heightmap = world.terrainHeightmap;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    x = simRng() * world.width;
+    if (!heightmap || heightmap.length === 0) break;
+    const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
+    const topY = heightmap[ix];
+    // Accept the column if the rock top is well below the spawn band
+    // (or there's no rock at this column).
+    if (topY > surfaceY + r * 8 || topY === Number.POSITIVE_INFINITY) break;
+  }
+  const y = surfaceY + r + simRng() * (r * 3);
+  return {
+    x, y,
+    z: r + simRng() * (world.depth - 2 * r),
+    vy: 5 + simRng() * 10,  // small downward seed
+  };
+}
+
+// Pick the spawn position for `chemId`. Gases keep the uniform-water
+// path (they'd just escape from the top anyway, and aeration is
+// their primary inlet); everything else top-drops.
+function spawnPosForChem(
+  world: World, r: number, chemId: number,
+): { x: number; y: number; z: number; vy?: number } {
+  if (chemId === CHEM_O2 || chemId === CHEM_CO2) {
+    return randomWaterPos(world, r);
+  }
+  return topSpawnPos(world, r);
 }
 
 // Particle spawn radius. All particles -- mineral, organic, gas --
@@ -4325,7 +4586,7 @@ export function step(world: World, dt: number): void {
   world.liveLineageRoots.clear();
   for (const c of world.creatures) world.liveLineageRoots.add(c.lineageRoot);
   advanceDayCycle(world, dt);
-  advanceDisturbance(world, dt);
+  advanceWind(world, dt);
   const p = world.profile;
   if (p) {
     let m = performance.now();
@@ -4352,6 +4613,7 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     n = performance.now(); p.sedimentColl += n - m; m = n;
     resolveObstacleCollisions(world);
+    evacuateRocks(world);
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
@@ -4394,6 +4656,7 @@ export function step(world: World, dt: number): void {
     );
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
+    evacuateRocks(world);
     applyWalls(world);
     sampleRegionTemps(world);
     seedRamp(world, dt);
@@ -4522,9 +4785,10 @@ function replenishParticles(world: World, dt: number): void {
   for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
+    const pos = spawnPosForChem(world, r, spec.chemId);
     pushParticle(world, {
-      ...randomWaterPos(world, r),
-      vx: 0, vy: 0, vz: (simRng() - 0.5) * 20,
+      x: pos.x, y: pos.y, z: pos.z,
+      vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
       r,
       chemId: spec.chemId,
       density: rollChemDensity(spec),
@@ -7812,6 +8076,9 @@ export function takeSnapshot(world: World): RenderSnapshot {
     tempPatchLength: world.tempPatchLength,
     tempPatchPeriod: world.tempPatchPeriod,
     dayPhase: world.dayPhase,
+    wind: world.wind,
+    windExposureFromLeft: world.windExposureFromLeft,
+    windExposureFromRight: world.windExposureFromRight,
     vent: world.vent ? { ...world.vent } : undefined,
     particleTarget: world.particleTarget,
     extinctionCount: world.extinctionCount,
