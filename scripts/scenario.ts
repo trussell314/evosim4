@@ -504,11 +504,12 @@ const SCENARIOS: Record<string, Scenario> = {
     coStock: [],
     describe:
       "NO aa feeding. Temp field tuned so the 15C isotherm (genome's " +
-      "act_thermo null) is at a LIT depth: tempSurface=17 bottom=1 " +
-      "patch=0 -> T=15 at y~=101 (light ~0.67). Cells spread in " +
-      "depth; should self-sort to ~y101 and self-sustain. CO2=50/" +
-      "MIN=50 chemostat, permanent midday. mActTh->0 + mY->~101 if " +
-      "thermal sorting works.",
+      "act_thermo null) is at MID-water depth (~y=300): tempSurface=20 " +
+      "bottom=10 patch=0 -> T=15 at y~=300 (lit zone, ~light 0.30). " +
+      "Cells spread in depth; most start within ~150px of the " +
+      "isotherm so the test is 'do they converge tightly?' not 'can " +
+      "they migrate 300px through dark?'. CO2=50/MIN=50 chemostat, " +
+      "permanent midday. mActTh->0 + mY->~300 if thermal sorting works.",
     setup: (w, cells) => {
       w.dayPhase = 0.25;
       w.dayPeriod = 1e9;
@@ -516,8 +517,8 @@ const SCENARIOS: Record<string, Scenario> = {
         tempSurface: number; tempBottom: number; tempPatchAmp: number;
         surfaceY: number;
       };
-      wEnv.tempSurface = 17;
-      wEnv.tempBottom = 1;
+      wEnv.tempSurface = 20;
+      wEnv.tempBottom = 10;
       wEnv.tempPatchAmp = 0; // clean horizontal isotherm
       setAmbientAll(w, CHEM_CO2, 50);
       setAmbientAll(w, CHEM_MIN, 50);
