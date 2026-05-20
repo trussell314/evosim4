@@ -143,7 +143,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // clear columns won the retry race; the single-roll form is
     // uniform across all clear columns (rocky columns just generate
     // no spawn on that call -- the next call gets a fresh sample).
-    const GOLDEN = "c9811b12";
+    // Bumped: brownian decay constant 200 -> 400. Deep-water sediment
+    // now drifts visibly instead of looking glued to the rock; mid-
+    // water mixing also up a little. Determinism + mass-conservation
+    // still green.
+    const GOLDEN = "766b10b8";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

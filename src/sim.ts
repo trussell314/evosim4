@@ -5220,12 +5220,12 @@ export function applyParticleForcesRange(
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
-    // Brownian noise decays with depth like the wave forces. Without
-    // this, noise at the bottom (~7-8 px/s RMS on a small particle)
-    // keeps deep-water grains above the sleep threshold and churning.
-    // Decay constant sits between surfaceDecay (fast) and swellDecay
-    // (slow) so mid-water still mixes but the floor calms.
-    const noiseEnv = Math.exp(-depth / 200);
+    // Brownian noise decays with depth like the wave forces, but more
+    // gently than waves so deep-water sediment still drifts visibly
+    // (rock pockets and deep basins now hold particles where the old
+    // pebble-bed world dumped everything to the floor). At depth=400
+    // noiseEnv ~= 0.37, down to ~0.14 at depth=800.
+    const noiseEnv = Math.exp(-depth / 400);
     const noiseX = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const noiseY = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
@@ -5392,12 +5392,12 @@ function applyForces(world: World, dt: number): void {
     const updraft = -updraftAmp * updraftEnv * Math.sin(kU * xi + wU * t);
     const depthFrac = depth / colDepth;
     const current = currentAmp * Math.cos(Math.PI * depthFrac) * currentDrift;
-    // Brownian noise decays with depth like the wave forces. Without
-    // this, noise at the bottom (~7-8 px/s RMS on a small particle)
-    // keeps deep-water grains above the sleep threshold and churning.
-    // Decay constant sits between surfaceDecay (fast) and swellDecay
-    // (slow) so mid-water still mixes but the floor calms.
-    const noiseEnv = Math.exp(-depth / 200);
+    // Brownian noise decays with depth like the wave forces, but more
+    // gently than waves so deep-water sediment still drifts visibly
+    // (rock pockets and deep basins now hold particles where the old
+    // pebble-bed world dumped everything to the floor). At depth=400
+    // noiseEnv ~= 0.37, down to ~0.14 at depth=800.
+    const noiseEnv = Math.exp(-depth / 400);
     const noiseX = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const noiseY = bAmp * noiseEnv * (simRng() - 0.5) * 2;
     const ax = surface + swell + current + noiseX;
