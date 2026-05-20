@@ -184,7 +184,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // bits of k -- slot 37 collided with slot 5, and the consumer
     // loop fired 8 phantom syntheses per expressed slot). Fixing it
     // removes the phantom AA/MIN/ATP drain.
-    const GOLDEN = "27ceefa9";
+    // Bumped again: founder spawn now seeds 0.5 of each receptor
+    // (photo/mech/thermo/magneto). The post-fix catalyst tax was
+    // bankrupting sense-dependent archetypes before they could grow
+    // receptors from substrate; the chicken-and-egg (need photoreceptor
+    // to sense light to migrate to light to photosynth) had no entry
+    // point with zero starting receptors.
+    const GOLDEN = "c1893521";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

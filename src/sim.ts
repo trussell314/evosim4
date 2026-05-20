@@ -2688,11 +2688,22 @@ function makeCreature(
       // a tick-1 starvation while the baseline chemistry warms up.
       chlorophyll: 0.5,
       enzyme: 0.5,
-      // Founders start with ZERO receptors -- sensing is earned. A
-      // lineage that runs biosynth (SYNTH_BIO bit) replenishes its
-      // receptor pool via reaction slots 12..15. A cell that doesn't
-      // ramp up biosynth in time stays blind and likely starves;
-      // that's the selection pressure.
+      // Starter receptor pools. The post-bitmask-fix catalyst tax
+      // bankrupted sense-dependent archetypes (phototaxis, thermophile,
+      // etc.) before they could grow receptors from substrate -- the
+      // sense -> migrate -> reach light -> photosynth -> aa loop has
+      // no entry point without a nonzero receptor pool to seed the
+      // sense step. Tiny but nonzero starter so first-tick sensing
+      // can fire; the cell still has to keep maintenance + biosynth
+      // ahead of decay to be viable. Lineages that don't invest in
+      // SYNTH CAT for receptor slots lose their sense capacity within
+      // a few seconds (CAT_DECAY_PER_SEC + receptor maintenance).
+      photoreceptorVisible: 0.5,
+      photoreceptorLong: 0.5,
+      photoreceptorSurface: 0.5,
+      mechanoreceptor: 0.5,
+      thermoreceptor: 0.5,
+      magnetoreceptor: 0.5,
     },
   });
   // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
