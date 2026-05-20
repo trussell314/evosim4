@@ -29,6 +29,7 @@ import {
 } from "./sim/chem-ids";
 import {
   TRANSPORT_ATP_SLOT,
+  TRANSPORT_GLU_SLOT,
   RX_SLOT_RESPIRATION,
   RX_SLOT_PHOTOSYNTH,
   RX_SLOT_SYNTH_AA,
@@ -47,10 +48,10 @@ import {
 // INGEST. ING_DETRITUS=1 -> ~0.02: eats biopolymer/glu/fa/aa/waste
 // and energy-bearing generics, but excludes zero-bond inorganics
 // (MIN/O2/CO2) -- the staple heterotroph/detritivore diet.
-// ING_ANY=0 -> threshold 0: engulfs anything, including the
-// zero-bond O2 particles a mitochondrion grabs as electron acceptor.
+// (ING_ANY=0 -> threshold 0: would engulf anything including zero-bond
+// chems; previously used by the mito archetype but retired when mito
+// dropped INGEST entirely in favor of the glucose translocase pathway.)
 const ING_DETRITUS = 1;
-const ING_ANY = 0;
 
 // Inert trailing cassette. stress-amp's SPLICE_DUP/DEL must target a
 // non-essential region (offset 0 corrupts the SYNTH kit and shifts
@@ -348,13 +349,12 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, two INGESTs (substrate + electron acceptor), respiration + digestion catalyst boosts so it actually runs the ATP-producing reaction faster than baseline, and the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) that exports CHEM_ATP across the vacuolar membrane down its concentration gradient. ATP flows organelle->host whenever the mito is respiration-richer than the host -- emergent, mass-exact, never a scripted hand-off. Returns CO2 to the shared pool. Sized to be ~1/10 the host's mass (mature mass ~3 vs host ~30) -- still an order of magnitude bigger than a real mito (which is ~1/3000 of its host's volume) but small enough that a single host can carry many mitos without being out-massed by its own organelles.",
+      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, respiration + digestion catalyst boosts, the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) exporting ATP across the vacuolar membrane, and a GLUCOSE TRANSPORTER (SYNTH CAT TRANSPORT_GLU_SLOT) importing glucose from the host pool (real mitos import pyruvate via inner-membrane carriers, not by phagocytosis). With glucose permeability=0, an engulfed mito MUST express the glucose carrier to feed; a free mito has no glucose source (no host, no ambient glu field) and starves -- the obligate-symbiont property modern mitos display (Rickettsia/Wolbachia analog). ATP flows organelle->host whenever the mito is respiration-richer than the host. Sized to be ~1/10 the host's mass (mature mass ~3 vs host ~30).",
       prog: [
         ["SYNTH", "CAT", RX_SLOT_RESPIRATION],     // respire faster than baseline
         ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],     // digest host biopolymer faster
         ["SYNTH", "CAT", TRANSPORT_ATP_SLOT],      // ATP translocase (ANT analog)
-        ["PUSH8", ING_DETRITUS], ["INGEST"], // substrate from the host pool
-        ["PUSH8", ING_ANY], ["INGEST"], // electron acceptor (respiration)
+        ["SYNTH", "CAT", TRANSPORT_GLU_SLOT],      // glucose importer (pyruvate-carrier analog)
         ["THRUST"], // drift to a host during the free-living phase
         ["PUSH8", 8],
         ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool

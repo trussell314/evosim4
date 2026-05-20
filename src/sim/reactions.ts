@@ -195,6 +195,13 @@ export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_TARGETS.length;
 // ATP translocase (ANT). It is the last slot of the transport band.
 export const TRANSPORT_ATP_SLOT =
   TRANSPORT_SLOT_BASE + TRANSPORT_TARGETS.length - 1;
+// Glucose transport slot -- the mito's substrate-import carrier
+// analog (real mitos receive pyruvate via inner-membrane carriers
+// since they can't ingest particles). With glucose permeability=0
+// passive diffusion across the vacuolar membrane is blocked, so an
+// engulfed mito needs this catalyst to draw glucose from the host
+// pool. Index matches TRANSPORT_TARGETS.indexOf(CHEM_GLU) = 2.
+export const TRANSPORT_GLU_SLOT = TRANSPORT_SLOT_BASE + 2;
 
 // Named reaction slots, exported for use by archetypes / scenarios that
 // want to BOOST a specific bootstrap reaction via `SYNTH CAT <slot>`.
