@@ -437,9 +437,12 @@ const SCENARIOS: Record<string, Scenario> = {
       setAmbientAll(w, CHEM_MIN, 50);
       for (let k = 0; k < cells.length; k++) {
         const c = cells[k];
-        // Deep + spread: low light so the migrate branch engages,
-        // but not so deep that photosynthesis can't fund the climb.
-        c.y = w.height * (0.4 + 0.45 * ((k + 0.5) / cells.length));
+        // Mid + spread: low light so the migrate branch engages,
+        // but shallow enough that photosynthesis can fund the climb.
+        // Tightened from y 0.40-0.85 -> 0.20-0.55 after the catalyst
+        // bitmask fix exposed that the old depth was unwinnable with
+        // 1x (not 8x phantom) catalyst-synth rate.
+        c.y = w.height * (0.2 + 0.35 * ((k + 0.5) / cells.length));
         c.x = w.width * (0.06 + 0.88 * (((k * 7) % cells.length) / cells.length));
         c.store.chemCols[CHEM_CO2][c.idx] = 20;
         c.store.chemCols[CHEM_ADP][c.idx] = 30;
