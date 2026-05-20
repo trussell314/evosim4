@@ -1297,12 +1297,6 @@ export interface World {
   // founder-placement fast path. Empty array for worlds without
   // terrain. Populated by generateObstacles.
   terrainHeightmap?: Float32Array;
-  // Per-column wave-clip y, indexed by integer x. For columns where a
-  // rock cliff pierces the still water surface, this holds the
-  // deepest y the cliff occupies so the wavy surface clamps to it
-  // (water can't poke through solid rock). +Inf for columns with no
-  // cliff. Read by surfaceYAt. Empty array for worlds without terrain.
-  waveClipY?: Float32Array;
   // Hydrothermal vent. Optional: tests build worlds without one. The
   // vent runs an eruption schedule, emits hot particles upward during
   // eruptions, and contributes a localized temperature bubble that

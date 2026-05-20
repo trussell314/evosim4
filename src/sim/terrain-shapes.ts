@@ -68,26 +68,27 @@ export const ROCK_TOP_LEFT: NormPolygon = {
     { x: 0.67, y: 0.23 },
     { x: 0.64, y: 0.26 },
     { x: 0.61, y: 0.28 },
-    // Underside of the rock: gentle wave with overhang feel.
-    { x: 0.58, y: 0.30 },
-    { x: 0.54, y: 0.31 },
-    { x: 0.50, y: 0.31 },
-    { x: 0.46, y: 0.32 },
-    { x: 0.42, y: 0.33 },
-    { x: 0.38, y: 0.35 },
-    { x: 0.34, y: 0.37 },
-    { x: 0.30, y: 0.39 },
-    { x: 0.26, y: 0.41 },
-    { x: 0.22, y: 0.42 },
-    { x: 0.18, y: 0.42 },
-    { x: 0.14, y: 0.41 },
-    { x: 0.11, y: 0.39 },
-    { x: 0.09, y: 0.36 },
-    { x: 0.07, y: 0.33 },
-    { x: 0.05, y: 0.31 },
-    { x: 0.03, y: 0.32 },
-    { x: 0.01, y: 0.35 },
-    { x: 0.00, y: 0.38 },
+    // Underside of the rock: slopes UP toward the right tip (rock
+    // tapers thinner as it juts out into the water), then curves
+    // down to a fatter lower belly anchored at the left wall.
+    { x: 0.58, y: 0.27 },
+    { x: 0.55, y: 0.26 },
+    { x: 0.52, y: 0.26 },
+    { x: 0.48, y: 0.27 },
+    { x: 0.44, y: 0.30 },
+    { x: 0.40, y: 0.33 },
+    { x: 0.36, y: 0.36 },
+    { x: 0.32, y: 0.39 },
+    { x: 0.28, y: 0.41 },
+    { x: 0.24, y: 0.43 },
+    { x: 0.20, y: 0.44 },
+    { x: 0.16, y: 0.44 },
+    { x: 0.12, y: 0.43 },
+    { x: 0.09, y: 0.41 },
+    { x: 0.06, y: 0.39 },
+    { x: 0.03, y: 0.40 },
+    { x: 0.01, y: 0.42 },
+    { x: 0.00, y: 0.44 },
     // Down the left edge to the corner where the rock returns to
     // the wall, then back to the top-left.
     { x: 0.00, y: 0.30 },
@@ -119,6 +120,27 @@ export const ROCK_RIGHT_MID: NormPolygon = {
     { x: 0.90, y: 0.78 },
     { x: 0.95, y: 0.78 },
     { x: 1.00, y: 0.78 },
+  ],
+};
+
+// 2b. Right-side spur. A thin tongue of rock protruding from the
+// right wall between the mid bulge and the low outcropping --
+// missed in the v2 trace. Smaller than the bulges; juts further
+// left as a narrow wedge.
+export const ROCK_RIGHT_SPUR: NormPolygon = {
+  points: [
+    { x: 1.00, y: 0.78 },
+    { x: 0.93, y: 0.78 },
+    { x: 0.86, y: 0.79 },
+    { x: 0.80, y: 0.80 },
+    { x: 0.75, y: 0.81 },
+    { x: 0.72, y: 0.82 },
+    { x: 0.74, y: 0.83 },
+    { x: 0.79, y: 0.83 },
+    { x: 0.85, y: 0.82 },
+    { x: 0.92, y: 0.81 },
+    { x: 0.97, y: 0.80 },
+    { x: 1.00, y: 0.80 },
   ],
 };
 
@@ -201,6 +223,7 @@ export const ROCK_SEAFLOOR: NormPolygon = {
 export const ROCK_POLYGONS: NormPolygon[] = [
   ROCK_TOP_LEFT,
   ROCK_RIGHT_MID,
+  ROCK_RIGHT_SPUR,
   ROCK_RIGHT_LOW,
   ROCK_SEAFLOOR,
 ];

@@ -2361,6 +2361,17 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
+  // Surface highlight stroke. Drawn BEFORE the terrain blit so the
+  // rock bitmap paints over it where rock pierces the surface --
+  // visually the wave line then stops cleanly at the rock-water
+  // interface instead of slicing through solid stone.
+  ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, surfaceYAt(snapshot, 0));
+  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
+  ctx.stroke();
+
   // Static terrain. Pre-baked once into terrainBitmap (an offscreen
   // canvas sized to the world); we just blit it per frame.
   if (!terrainBitmap) buildTerrainBitmap();
@@ -2379,14 +2390,6 @@ function render(): void {
     for (let gy = 0; gy <= height; gy += REGION_PX) { ctx.moveTo(0, gy); ctx.lineTo(width, gy); }
     ctx.stroke();
   }
-
-  // Highlight along the surface line.
-  ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, surfaceYAt(snapshot, 0));
-  for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
-  ctx.stroke();
 
   for (const b of SUB_BUCKETS) b.length = 0;
   for (const b of TOXIC_BUCKETS) b.length = 0;
@@ -3071,66 +3074,103 @@ function buildTerrainBitmap(): void {
     topY[x] = foundY;
   }
 
-  // Pass 2: per-rock-pixel coloring. Iterate the buffer once and
-  // rewrite every alpha != 0 pixel. Base tone is a warm dark gray
-  // (matches the obstacle's ob.color but we don't pull from it --
-  // procedural texture provides all the per-pixel variation).
-  const BASE_R = 74, BASE_G = 64, BASE_B = 56; // ~#4a4038
-  // Noise amplitude per channel. Big enough to read as "rock", small
-  // enough to stay in the dark-brown band.
-  const NOISE_AMP = 22;
-  // Lighting: pixels within LIGHT_FALLOFF px below the local top get
-  // a highlight; below that, the rock fades to shadow. LIGHT_MAX is
-  // the max upward-facing brightness boost; SHADOW_MAX is the
-  // downward-facing darkening.
-  const LIGHT_FALLOFF = 18;
-  const LIGHT_MAX = 36;
-  const SHADOW_MAX = 28;
+  // Pass 2: per-rock-pixel coloring. The texture stacks four signals:
+  //
+  //   - Smoothed multi-octave value noise (bilinear-interpolated
+  //     lattice samples, not bit-shifted hashes) -- gives the body a
+  //     natural rough grain without the cell-of-checkerboard look
+  //     the bit-shift noise produced.
+  //   - A separate low-freq COLOR-TONE field that nudges hue between
+  //     warm brown, cool grey and near-black across the rock body.
+  //   - A directional STREAK pattern (thresholded value noise sampled
+  //     along a non-axis-aligned vector) -- reads as fault lines and
+  //     stratification rather than the previous dot-grid fissures.
+  //   - Top-band rim lighting + lower-band shadow.
+  //
+  // The two base palette anchors give the texture its character; the
+  // noise + tone fields interpolate between them per-pixel.
+  const PAL_DARK  = [42, 38, 36];   // near-black, slightly warm
+  const PAL_MID   = [80, 70, 60];   // warm brown body
+  const PAL_LIGHT = [128, 116, 100]; // top-lit highlight
+  const LIGHT_FALLOFF = 22;
+  const LIGHT_MAX = 0.55;   // 0..1 lerp toward PAL_LIGHT for top pixels
+  const SHADOW_MAX = 0.45;  // 0..1 lerp toward PAL_DARK for deep pixels
+  // Smoothed 2D value noise. Hash the integer lattice at scale `s`,
+  // bilinearly blend the surrounding four samples. Output range
+  // ~[-0.5, 0.5]. s controls the patch size in pixels.
+  const sn2 = (x: number, y: number, s: number): number => {
+    const fx = x / s, fy = y / s;
+    const ix = Math.floor(fx), iy = Math.floor(fy);
+    const tx = fx - ix, ty = fy - iy;
+    const a = hash2D(ix, iy);
+    const b = hash2D(ix + 1, iy);
+    const c = hash2D(ix, iy + 1);
+    const d = hash2D(ix + 1, iy + 1);
+    // Smoothstep on tx/ty so the bilinear blend doesn't show grid
+    // lattice creases. Cheap analytic smoothstep: t*t*(3-2t).
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+  };
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
       if (buf[idx + 3] === 0) continue;
-      // Multi-octave value noise on (x, y). hash2D is cheap and
-      // produces uncorrelated values; smoothing isn't needed for
-      // texture (we WANT high-frequency grain at the pixel level).
-      const n1 = hash2D(x, y);              // -0.5..0.5
-      const n2 = hash2D(x >> 2, y >> 2);    // coarser, lower-freq mottling
-      const n3 = hash2D(x >> 5, y >> 5);    // very low freq, big patches
-      const noise = (n1 * 0.5 + n2 * 0.35 + n3 * 0.6) * NOISE_AMP;
-      // Lighting. depthFromTop = how far below the local rock surface
-      // this pixel is. Negative shouldn't happen (we sampled topY
-      // from the same alpha mask), but clamp defensively.
+      // Body noise. Three octaves of smoothed value noise summed at
+      // halving amplitude / doubling frequency; total range ~[-0.5,
+      // 0.5]. Scales chosen so the largest features look like fist-
+      // sized boulders, smallest like sand grain.
+      const n = sn2(x, y, 28) * 0.55
+              + sn2(x, y, 9)  * 0.30
+              + sn2(x, y, 3)  * 0.15;
+      // Independent low-freq color-tone field. Maps to a -0.5..0.5
+      // shift along the warm<->cool axis (controls how much the body
+      // pulls toward PAL_DARK vs PAL_MID at this pixel).
+      const tone = sn2(x + 7919, y + 3527, 60);
+      // Diagonal streaks. Sample noise at points along a shear axis
+      // (x + 0.7y, y - 0.4x) and threshold; produces curving dark
+      // lines that look like joints/strata. The chained sn2 gives
+      // them organic curve instead of axis-aligned stripes.
+      const sx2 = x * 0.92 + y * 0.38;
+      const sy2 = y * 0.92 - x * 0.30;
+      const streak = sn2(sx2, sy2, 18);
+      const streakDark = Math.abs(streak) < 0.06 ? -22 : 0;
+      // Lighting: smooth highlight band over the topmost LIGHT_FALLOFF
+      // pixels of every column, then a slow shadow falloff into the
+      // interior. Expressed as a 0..1 lerp weight toward PAL_LIGHT
+      // (positive) or PAL_DARK (negative); avoids the channel-clip
+      // artifacts the additive-offset version had.
       const surf = topY[x];
       const depthFromTop = Math.max(0, y - surf);
-      let lighting = 0;
+      let lightW = 0;  // toward PAL_LIGHT
+      let shadeW = 0;  // toward PAL_DARK
       if (depthFromTop < LIGHT_FALLOFF) {
-        // Upward-facing: brighter. Quadratic falloff feels more like
-        // rim-light than linear.
         const t = 1 - depthFromTop / LIGHT_FALLOFF;
-        lighting = LIGHT_MAX * t * t;
+        lightW = LIGHT_MAX * t * t;
       } else {
-        // Below the lit band, darken proportionally with depth but
-        // saturate at SHADOW_MAX so deep interiors aren't pitch black.
-        const t = Math.min(1, (depthFromTop - LIGHT_FALLOFF) / 60);
-        lighting = -SHADOW_MAX * t;
+        const t = Math.min(1, (depthFromTop - LIGHT_FALLOFF) / 80);
+        shadeW = SHADOW_MAX * t;
       }
-      // Cracks/fissures. Use a thresholded noise channel so the
-      // darkening only triggers on a sparse subset of pixels. Two
-      // overlapping low-freq fields ORed -> short curving cracks.
-      // crackVal close to 0.5 means edges of two noise fields meet
-      // -- those become the crack pixels.
-      const c1 = Math.abs(hash2D(x >> 1, y >> 3));
-      const c2 = Math.abs(hash2D(x >> 3, y >> 1));
-      let crackDark = 0;
-      if (c1 < 0.06 || c2 < 0.06) crackDark = -34;
-      // Compose. Clamp to [0,255]; the base + noise + lighting +
-      // crack can over/underflow the byte range on extreme inputs.
-      const r = clamp255(BASE_R + noise + lighting + crackDark);
-      const g = clamp255(BASE_G + noise * 0.9 + lighting * 0.95 + crackDark);
-      const b = clamp255(BASE_B + noise * 0.8 + lighting * 0.85 + crackDark);
-      buf[idx] = r;
-      buf[idx + 1] = g;
-      buf[idx + 2] = b;
+      // Compose. body = lerp(PAL_DARK, PAL_MID, 0.5 + n + tone*0.3);
+      // then push toward PAL_LIGHT by lightW, toward PAL_DARK by
+      // shadeW, then apply streak darkening as a flat per-channel.
+      const mix = Math.max(0, Math.min(1, 0.5 + n + tone * 0.30));
+      let rC = PAL_DARK[0] + (PAL_MID[0] - PAL_DARK[0]) * mix;
+      let gC = PAL_DARK[1] + (PAL_MID[1] - PAL_DARK[1]) * mix;
+      let bC = PAL_DARK[2] + (PAL_MID[2] - PAL_DARK[2]) * mix;
+      if (lightW > 0) {
+        rC += (PAL_LIGHT[0] - rC) * lightW;
+        gC += (PAL_LIGHT[1] - gC) * lightW;
+        bC += (PAL_LIGHT[2] - bC) * lightW;
+      }
+      if (shadeW > 0) {
+        rC += (PAL_DARK[0] - rC) * shadeW;
+        gC += (PAL_DARK[1] - gC) * shadeW;
+        bC += (PAL_DARK[2] - bC) * shadeW;
+      }
+      buf[idx]     = clamp255(rC + streakDark);
+      buf[idx + 1] = clamp255(gC + streakDark);
+      buf[idx + 2] = clamp255(bC + streakDark);
       // alpha already 255 from the fill
     }
   }

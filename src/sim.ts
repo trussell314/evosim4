@@ -990,11 +990,6 @@ export interface WorldEnv {
   // like temperatureAt see; vents contribute heat through this so the
   // helper doesn't need a full World.
   vent?: import("./sim/core").VentState;
-  // Per-column wave-clip y -- where a rock cliff pierces the still
-  // surface, this holds the deepest y of the cliff so the wavy water
-  // surface gets clamped against rock instead of sliding through it.
-  // Optional; surfaceYAt no-ops when absent.
-  waveClipY?: Float32Array;
 }
 
 export function surfaceActivity(world: WorldEnv): number {
@@ -1029,19 +1024,13 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   // Coupling to the vertical mixing field: where updraft is pushing
   // water up (negative ay in applyForces), the surface bulges up.
   dy -= 0.8 * A * Math.sin(kU * x + wU * t);
-  const wave = world.surfaceY + dy;
-  // Rock-vs-wave: where a rock cliff pierces the still water surface,
-  // the water can't be shallower than the cliff's bottom -- the wave
-  // line gets clamped to the rock's underside. world.waveClipY (when
-  // present) carries the deepest cliff-bottom y per column; columns
-  // with no cliff store +Inf so the Math.max collapses to a no-op.
-  // Worlds without terrain leave waveClipY undefined and skip the
-  // lookup entirely (tests, headless scenarios).
-  const wc = world.waveClipY;
-  if (!wc || wc.length === 0) return wave;
-  const ix = Math.max(0, Math.min(wc.length - 1, Math.floor(x)));
-  const clip = wc[ix];
-  return clip === Number.POSITIVE_INFINITY ? wave : Math.max(wave, clip);
+  // Plain wave -- the rock-vs-wave interaction is handled at render
+  // time (rock bitmap paints over the water fill, masking the wave
+  // line behind solid rock) and at obstacle-collision time (particles
+  // and creatures clamped to the wave then get pushed out of any rock
+  // they overlap). No analytic clip needed; trying to do it here
+  // produced hard vertical jumps in the wave line at bay edges.
+  return world.surfaceY + dy;
 }
 
 // Per-tick surface-height lookup. surfaceYAt() is ~5 Math.sin calls;
@@ -1165,7 +1154,6 @@ const TERRAIN_ENABLED = true;
 export function generateObstacles(world: World): void {
   world.obstacles = [];
   world.terrainHeightmap = undefined;
-  world.waveClipY = undefined;
   if (!TERRAIN_ENABLED) return;
   const W = world.width;
   const H = world.height;
@@ -1221,61 +1209,7 @@ export function generateObstacles(world: World): void {
     }
   }
 
-  // Wave clip map: for each column where a rock CLIFF pierces the
-  // still water surface (the rock extends from y=0 down past
-  // surfaceY), the wave can't move freely; it gets clamped to the
-  // rock's bottom-of-cliff y so it doesn't slide through solid stone.
-  // We approximate by: a column has a "cliff" if its TERRAIN_HEIGHTMAP
-  // top is at y=0 (rock touches the air boundary). For such columns
-  // we scan every obstacle's polygon at this x and find the deepest
-  // y where the rock still covers (x, *) -- that's where water can
-  // actually start. Columns with no cliff get +Infinity, which the
-  // wave function reads as "no clip".
-  const stillSurfaceY = H * SURFACE_Y_FRAC;
-  const waveClip = new Float32Array(heightmap.length);
-  waveClip.fill(Number.POSITIVE_INFINITY);
-  for (let x = 0; x < heightmap.length; x++) {
-    if (heightmap[x] > 1) continue; // not a cliff: skip
-    // Find deepest y this x is still inside any rock polygon. Scan
-    // every obstacle that horizontally covers x.
-    let deepest = stillSurfaceY;
-    for (const ob of world.obstacles) {
-      if (!ob.polygon) continue;
-      if (x < ob.minX || x > ob.maxX) continue;
-      // Find max-y edge crossing at this x while the polygon at y=0
-      // covers x (the cliff portion). Easiest: walk edges, track all
-      // y crossings, take the max that's contiguous with y=0.
-      const poly = ob.polygon;
-      const crossings: number[] = [];
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const xi = poly[i].x, yi = poly[i].y;
-        const xj = poly[j].x, yj = poly[j].y;
-        if ((xi <= x && xj >= x) || (xj <= x && xi >= x)) {
-          if (xi === xj) {
-            crossings.push(yi);
-            crossings.push(yj);
-          } else {
-            const t = (x - xi) / (xj - xi);
-            crossings.push(yi + (yj - yi) * t);
-          }
-        }
-      }
-      crossings.sort((a, b) => a - b);
-      // Pair-wise: (crossings[0], crossings[1]) is a polygon interior
-      // span at this x; (crossings[2], crossings[3]) is the next, etc.
-      // The cliff span is whichever pair starts at y~=0. Take its
-      // upper bound (deepest y of that span).
-      for (let k = 0; k + 1 < crossings.length; k += 2) {
-        if (crossings[k] <= 1) {
-          if (crossings[k + 1] > deepest) deepest = crossings[k + 1];
-        }
-      }
-    }
-    waveClip[x] = deepest;
-  }
-
   world.terrainHeightmap = heightmap;
-  world.waveClipY = waveClip;
 
   // Vent: anchor it at the normalized VENT_ORIGIN inside the seafloor
   // notch. Per-world vent state (next eruption time, current phase)
@@ -1316,8 +1250,8 @@ function runVent(world: World, dt: number): void {
 // Per-world derived terrain maps. Stored on World so test scaffolds
 // that swap worlds across describe blocks don't leak stale terrain
 // state into a quietWorld() that should be open water everywhere.
-// generateObstacles populates world.terrainHeightmap and
-// world.waveClipY; callers below read directly from the world.
+// generateObstacles populates world.terrainHeightmap; callers below
+// read directly from the world.
 
 // True if a candidate body of radius `bodyR` centered at (x, y) would
 // overlap any rock. Conservative: tests the candidate disc against
@@ -1380,8 +1314,12 @@ function pushTerrainPolygon(world: World, polygon: { x: number; y: number }[], c
 // the polygon -- particles never tunnel through, but a particle can
 // graze a polygon corner without contact. Acceptable for terrain.
 function lobesFromTerrainPolygon(polygon: { x: number; y: number }[]): ObstacleLobe[] {
-  const LOBE_R = 9;
-  const LOBE_PITCH = 12;
+  // Finer pitch + smaller radius => denser interior fill, so a
+  // particle pushed into a corner by another body has more nearby
+  // lobes to bounce off and won't drift through the lobe gaps that
+  // a 12-pitch grid leaves around concave bends.
+  const LOBE_R = 7;
+  const LOBE_PITCH = 8;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const v of polygon) {
     if (v.x < minX) minX = v.x;
@@ -2127,9 +2065,21 @@ function seedRamp(world: World, dt: number): void {
 function randomWaterPos(
   world: World, r: number,
 ): { x: number; y: number; z: number } {
+  // Reject positions that would land a particle inside rock. Particles
+  // spawned there get bounced around by the obstacle collision pass --
+  // sometimes never escaping -- and visually they read as "stuff
+  // floating inside the cliff", which is what we don't want.
+  // Bounded retry: founderTerrainBlocked is a fast lobe sweep over
+  // ~5 obstacles, and the rock occupies a small fraction of the
+  // world, so it rarely takes more than a couple of attempts.
+  let x = 0, y = 0;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    x = simRng() * world.width;
+    y = world.surfaceY + simRng() * (world.height - world.surfaceY);
+    if (!founderTerrainBlocked(world, x, y, r)) break;
+  }
   return {
-    x: simRng() * world.width,
-    y: world.surfaceY + simRng() * (world.height - world.surfaceY),
+    x, y,
     z: r + simRng() * (world.depth - 2 * r),
   };
 }
@@ -7863,7 +7813,6 @@ export function takeSnapshot(world: World): RenderSnapshot {
     tempPatchPeriod: world.tempPatchPeriod,
     dayPhase: world.dayPhase,
     vent: world.vent ? { ...world.vent } : undefined,
-    waveClipY: world.waveClipY,
     particleTarget: world.particleTarget,
     extinctionCount: world.extinctionCount,
     engulfedCount,
