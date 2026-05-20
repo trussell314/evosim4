@@ -137,7 +137,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // One end-of-tick pass is enough now that the evacuator is
     // polygon-gated and rare. The skipped intra-tick pass shifts a
     // few particles' lifetime by 1 tick; deterministic, mass-conserving.
-    const GOLDEN = "c5727a90";
+    // Bumped: topSpawnPos no longer retries 32x against the heightmap;
+    // a single uniform-x roll either spawns or skips. The previous
+    // retry loop biased the long-run x distribution toward whichever
+    // clear columns won the retry race; the single-roll form is
+    // uniform across all clear columns (rocky columns just generate
+    // no spawn on that call -- the next call gets a fresh sample).
+    const GOLDEN = "c9811b12";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

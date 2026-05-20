@@ -2461,42 +2461,47 @@ function randomWaterPos(
 
 // Top-of-water spawn. Drops particles in a thin band just below the
 // surface so they fall under gravity and find their natural resting
-// place. Rejects x columns where rock pokes above (or near) the
-// surface so non-gas particles don't spawn on top of a cliff. Returns
-// null when every retry failed (caller skips the spawn this tick
-// rather than dumping the particle into rock).
+// place. Spawn x is sampled uniformly across the full width; if the
+// rock pierces near the surface at the chosen column, the spawn y
+// snaps DOWN to land in clear water at that column rather than
+// rejecting the x and re-rolling. That keeps the long-run x
+// distribution uniform across the world even when significant
+// rock columns extend near the waterline.
+//
+// Returns null only for the pathological case where rock fills the
+// column from the surface all the way past a reasonable spawn band
+// (a narrow cave ceiling at the very top).
 function topSpawnPos(
   world: World, r: number,
 ): { x: number; y: number; z: number; vy: number } | null {
   const surfaceY = world.surfaceY;
   const heightmap = world.terrainHeightmap;
-  // Without terrain, any column is fine.
+  const x = simRng() * world.width;
+  const z = r + simRng() * (world.depth - 2 * r);
+  const baseY = surfaceY + r + simRng() * (r * 3);
   if (!heightmap || heightmap.length === 0) {
-    return {
-      x: simRng() * world.width,
-      y: surfaceY + r + simRng() * (r * 3),
-      z: r + simRng() * (world.depth - 2 * r),
-      vy: 5 + simRng() * 10,
-    };
+    return { x, y: baseY, z, vy: 5 + simRng() * 10 };
   }
-  // Stricter retry (32 attempts, ~5e-5 fail rate at 50% rock columns).
-  // Threshold also tightened: rock top must be at least one
-  // particle-radius below the deepest spawn-jitter point, so a
-  // bumpy near-surface rock doesn't pinch the spawn band closed.
-  const yMax = surfaceY + r * 5;
-  for (let attempt = 0; attempt < 32; attempt++) {
-    const x = simRng() * world.width;
-    const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
-    const topY = heightmap[ix];
-    if (topY > yMax || topY === Number.POSITIVE_INFINITY) {
-      return {
-        x,
-        y: surfaceY + r + simRng() * (r * 3),
-        z: r + simRng() * (world.depth - 2 * r),
-        vy: 5 + simRng() * 10,
-      };
+  const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
+  const topY = heightmap[ix];
+  // Column is clear in the surface band: drop a particle there directly.
+  if (topY === Number.POSITIVE_INFINITY || topY > baseY + r) {
+    return { x, y: baseY, z, vy: 5 + simRng() * 10 };
+  }
+  // Rock is at or near the surface in this column. If rock starts BELOW
+  // the surface, there's a narrow band between surface and rock-top
+  // that's still clear; spawn there (common case: a submerged shelf).
+  if (topY > surfaceY + r * 2) {
+    const y = topY - r - 1 - simRng() * (r * 2);
+    if (y > surfaceY + r) {
+      return { x, y, z, vy: 5 + simRng() * 10 };
     }
   }
+  // Pathological: rock pierces the surface here. Skip this spawn rather
+  // than dropping into rock or, worse, retrying with a new x (the old
+  // 32-retry loop concentrated spawns into the clear columns, breaking
+  // the long-run uniform-x property). The next spawn call gets a fresh
+  // uniform x sample.
   return null;
 }
 
