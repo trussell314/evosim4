@@ -203,7 +203,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // 50 -> 100, adp 30 -> 60) to widen the migration bootstrap
     // window further; sense-archetypes still lost most of their
     // founders before reaching the lit zone at glu=50/adp=30.
-    const GOLDEN = "3b887ae6";
+    // Bumped again: CHEM_GLUCOSE membrane permeability 0.6 -> 0.05.
+    // The old value let glucose passively diffuse symmetrically
+    // across both outer and vacuolar membranes, so an engulfed
+    // chloroplast's gift to its host immediately leaked to ambient
+    // and any free cell could free-ride -- the public-goods failure
+    // that broke chloro-symbiosis + chloro-engulfed. 0.05 makes
+    // glucose mostly internal (mirroring ATP's perm=0 + ANT
+    // translocase asymmetry) while still permitting slow equilibration.
+    const GOLDEN = "f44bda3e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
