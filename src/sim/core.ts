@@ -1299,6 +1299,15 @@ export interface World {
   // Empty for worlds without terrain.
   windExposureFromLeft?: Float32Array;
   windExposureFromRight?: Float32Array;
+  // Per-region effective temperature (state-bearing field, stepped by
+  // sampleRegionTemps each tick: diffuses neighbour heat, relaxes
+  // toward the analytical baseline temperatureAt, integrates vent
+  // source). Row-major regionCols x regionRows; allocated lazily on
+  // first sampleRegionTemps call. regionTempNext is the per-tick
+  // scratch buffer. Both live on the world (not module scope) so
+  // independent worlds don't share thermal state.
+  regionTemp: Float32Array;
+  regionTempNext: Float32Array;
   // VM ops budget per creature per tick. Lower = cheaper; cells just
   // take more ticks to finish a full pass through their genome.
   vmInstrBudget: number;

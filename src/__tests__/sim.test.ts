@@ -148,6 +148,8 @@ function quietWorld(): World {
     wind: 0,
     windTarget: 0,
     currentAmp: 0,
+    regionTemp: new Float32Array(0),
+    regionTempNext: new Float32Array(0),
     vmInstrBudget: 8,
     obstacles: [],
     atmosphere: { ...emptyMolecules(), o2: 8000, co2: 200 },

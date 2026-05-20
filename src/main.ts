@@ -2560,11 +2560,25 @@ function drawHeatmap(): void {
   const rows = Math.ceil((height - surfaceY) / cell);
   ctx.globalAlpha = HEATMAP_ALPHA;
   if (heatmapMode === "temp") {
+    // Read the diffused regional temperature field so vent heat +
+    // diffusion show up; temperatureAt(snapshot,...) would only give
+    // the analytical baseline (depth gradient + patch wave).
+    const tField = snapshot.regionTemp;
+    const rCols = Math.max(1, Math.ceil(width / REGION_PX));
+    const rRows = Math.max(1, Math.ceil(height / REGION_PX));
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const x = c * cell;
         const y = surfaceY + r * cell;
-        const t = temperatureAt(snapshot, x + cell / 2, y + cell / 2);
+        let t: number;
+        if (tField && tField.length === rCols * rRows) {
+          let rx = Math.floor((x + cell / 2) / REGION_PX); if (rx < 0) rx = 0; else if (rx >= rCols) rx = rCols - 1;
+          let ry = Math.floor((y + cell / 2) / REGION_PX); if (ry < 0) ry = 0; else if (ry >= rRows) ry = rRows - 1;
+          t = tField[ry * rCols + rx];
+        } else {
+          // Fallback: analytical baseline (no vent / diffusion shown).
+          t = temperatureAt(snapshot, x + cell / 2, y + cell / 2);
+        }
         ctx.fillStyle = heatColorTemp(t);
         ctx.fillRect(x, y, cell, cell);
       }

@@ -1087,6 +1087,12 @@ function surfaceYLUT(x: number): number {
   return a + (SURFACE_LUT[i + 1] - a) * f;
 }
 
+// Analytical baseline temperature at (x, y). Depth gradient + travelling
+// patch wave. This is the EQUILIBRIUM the regional temperature field
+// relaxes toward; it deliberately excludes vent heat, which is injected
+// into the regional field as a source term in sampleRegionTemps and
+// then diffuses through the grid. To read the actual local temperature
+// (with vent + diffusion history baked in), use regionTempAt.
 export function temperatureAt(world: WorldEnv, x: number, y: number): number {
   const span = Math.max(1, world.height - world.surfaceY);
   const depth = Math.max(0, Math.min(1, (y - world.surfaceY) / span));
@@ -1094,24 +1100,22 @@ export function temperatureAt(world: WorldEnv, x: number, y: number): number {
   const kT = (2 * Math.PI) / world.tempPatchLength;
   const wT = (2 * Math.PI) / world.tempPatchPeriod;
   const patch = world.tempPatchAmp * Math.sin(kT * x + wT * world.t);
-  // Active vent: localized Gaussian heat bubble around the vent. Zero
-  // contribution when dormant; ventHeatAt fast-rejects past ~3 radii.
-  const vent = world.vent ? ventHeatAtInline(world.vent, x, y) : 0;
-  return base + patch + vent;
+  return base + patch;
 }
 
-// Inlined hot path for vent contribution to keep temperatureAt's
-// non-vent case branch-free. Mirrors ventHeatAt in sim/vent.ts but
-// avoids the full module dependency at this hot site.
-function ventHeatAtInline(v: import("./sim/core").VentState, x: number, y: number): number {
-  if (!v.active) return 0;
-  const dx = x - v.x;
-  const dy = y - v.y;
-  const d2 = dx * dx + dy * dy;
-  const R = 90; // VENT_TEMP_RADIUS
-  const r2 = R * R;
-  if (d2 > 9 * r2) return 0;
-  return 40 * v.intensity * Math.exp(-d2 / r2);
+// Effective local temperature: reads from the diffused, state-bearing
+// regionTemp field on the world (which sampleRegionTemps steps every
+// tick). Falls back to the analytical baseline if the field hasn't
+// been initialised yet (e.g. a freshly-built world before its first
+// tick).
+export function regionTempAt(world: World, x: number, y: number): number {
+  const field = world.regionTemp;
+  if (!field || field.length === 0) return temperatureAt(world, x, y);
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  let rx = (x / REGION_PX) | 0; if (rx < 0) rx = 0; else if (rx >= cols) rx = cols - 1;
+  let ry = (y / REGION_PX) | 0; if (ry < 0) ry = 0; else if (ry >= rows) ry = rows - 1;
+  return field[ry * cols + rx];
 }
 
 // Solar light multiplier 0..1. Sin curve over dayPhase with midday at
@@ -2051,6 +2055,8 @@ export function createWorld(
     wind: 0,
     windTarget: 0,
     currentAmp: CURRENT_AMP,
+    regionTemp: new Float32Array(0),
+    regionTempNext: new Float32Array(0),
     vmInstrBudget: DEFAULT_VM_INSTR_BUDGET,
     obstacles: [],
     rng: simRng,
@@ -3021,22 +3027,92 @@ export function regionDissolvedCapacity(
     / PARTICLE_MOLECULE_MULTIPLIER;
 }
 
-// Per-region analytic temperature, sampled at region centres once per
-// tick (deterministic, cheap). Reused buffer. Filled by
-// sampleRegionTemps; consumed from Phase 1 onward.
-let REGION_TEMP = new Float32Array(0);
-function sampleRegionTemps(world: World): void {
+// Per-region temperature field. STATE-BEARING: each tick we diffuse
+// heat between neighbouring regions, relax slowly toward the analytical
+// baseline (depth gradient + patch wave from temperatureAt), and inject
+// a Gaussian source from the active vent. This is what makes vent heat
+// linger and spread instead of stamping a fixed bubble that disappears
+// the moment the eruption ends. Consumed by chemistry (dissolution
+// capacity, region dissolve thresholds), creature reads (Q10, THERMO
+// receptor), and the heatmap overlay.
+//
+// Time constants in 1/sec. DIFF spreads local hot spots; RELAX pulls
+// each region back toward its analytical equilibrium. VENT_INJECT is
+// slightly higher than RELAX so the local peak builds noticeably
+// during an eruption -- diffusion flattens the actual peak below the
+// Gaussian's nominal amplitude.
+const TEMP_DIFF_RATE = 0.4;
+const TEMP_RELAX_RATE = 0.1;
+const TEMP_VENT_INJECT_RATE = 0.15;
+const VENT_TEMP_PEAK_AMP = 40;
+const VENT_TEMP_RADIUS_PX = 90;
+function sampleRegionTemps(world: World, dt: number): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
   const n = cols * rows;
-  if (REGION_TEMP.length < n) REGION_TEMP = new Float32Array(n);
+  // First call, or dims changed: allocate world.regionTemp and seed
+  // with the analytical baseline. Skip the stepping for this tick --
+  // the field has no history yet.
+  if (world.regionTemp.length !== n) {
+    world.regionTemp = new Float32Array(n);
+    world.regionTempNext = new Float32Array(n);
+    for (let ry = 0; ry < rows; ry++) {
+      const cy = Math.min(world.height - 1, ry * REGION_PX + REGION_PX / 2);
+      for (let rx = 0; rx < cols; rx++) {
+        const cx = Math.min(world.width - 1, rx * REGION_PX + REGION_PX / 2);
+        world.regionTemp[ry * cols + rx] = temperatureAt(world, cx, cy);
+      }
+    }
+    return;
+  }
+  const cur = world.regionTemp;
+  const next = world.regionTempNext;
+  const v = world.vent;
+  const ventActive = v != null && v.active;
+  const vx = ventActive ? v!.x : 0;
+  const vy = ventActive ? v!.y : 0;
+  const vIntensity = ventActive ? v!.intensity : 0;
+  const r2 = VENT_TEMP_RADIUS_PX * VENT_TEMP_RADIUS_PX;
+  const rejectR2 = 9 * r2;
   for (let ry = 0; ry < rows; ry++) {
     const cy = Math.min(world.height - 1, ry * REGION_PX + REGION_PX / 2);
+    const rowBase = ry * cols;
     for (let rx = 0; rx < cols; rx++) {
+      const i = rowBase + rx;
+      const T = cur[i];
+      // 4-neighbour Laplacian (Neumann BC: edges use available
+      // neighbours only). Stored as the avg-vs-self difference so the
+      // rate constant is wall-time independent of cell size.
+      let nsum = 0, ncount = 0;
+      if (rx > 0)        { nsum += cur[i - 1];    ncount++; }
+      if (rx < cols - 1) { nsum += cur[i + 1];    ncount++; }
+      if (ry > 0)        { nsum += cur[i - cols]; ncount++; }
+      if (ry < rows - 1) { nsum += cur[i + cols]; ncount++; }
+      const diff = ncount > 0 ? (nsum / ncount - T) * TEMP_DIFF_RATE * dt : 0;
+      // Relax toward analytical baseline (depth gradient + patch wave;
+      // NOT vent -- that's the source term below).
       const cx = Math.min(world.width - 1, rx * REGION_PX + REGION_PX / 2);
-      REGION_TEMP[ry * cols + rx] = temperatureAt(world, cx, cy);
+      const eq = temperatureAt(world, cx, cy);
+      const relax = (eq - T) * TEMP_RELAX_RATE * dt;
+      // Vent source: Gaussian bubble * intensity, injected as a rate.
+      let vent = 0;
+      if (ventActive) {
+        const dx2 = (cx - vx) * (cx - vx);
+        const dy2 = (cy - vy) * (cy - vy);
+        const d2 = dx2 + dy2;
+        if (d2 < rejectR2) {
+          vent = VENT_TEMP_PEAK_AMP * vIntensity * Math.exp(-d2 / r2)
+            * TEMP_VENT_INJECT_RATE * dt;
+        }
+      }
+      next[i] = T + diff + relax + vent;
     }
   }
+  // Copy back into world.regionTemp; the swap-by-reference would
+  // change Float32Array identity, and any caller that captured the
+  // array reference (snapshot serializer, parallel workers) expects
+  // it to stay stable.
+  for (let i = 0; i < n; i++) cur[i] = next[i];
 }
 function regionIndexAt(world: { width: number; height: number }, x: number, y: number): number {
   const cols = regionCols(world);
@@ -3102,8 +3178,8 @@ export function diffuseReserve(world: World, dt: number): void {
   let alpha = Math.LN2 / (ticks * wmode * wmode);
   if (alpha > 0.1) alpha = 0.1; // shared stability clamp
   const tempFactor = (ri: number, rj: number): number => {
-    const tI = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
-    const tJ = REGION_TEMP.length > rj ? REGION_TEMP[rj] : TEMP_BASELINE;
+    const tI = world.regionTemp.length > ri ? world.regionTemp[ri] : TEMP_BASELINE;
+    const tJ = world.regionTemp.length > rj ? world.regionTemp[rj] : TEMP_BASELINE;
     let tf = 1 + 0.5 * (((tI + tJ) * 0.5 - TEMP_BASELINE) / TEMP_BASELINE);
     if (tf < 0.3) tf = 0.3; else if (tf > 2) tf = 2;
     return tf;
@@ -3174,7 +3250,7 @@ function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
       // Edge-symmetric, temperature-scaled coefficient per neighbour
       // (avg T of the two regions) so the Jacobi pass stays exactly
       // mass-conserving even with a temperature gradient.
-      const tI = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
+      const tI = world.regionTemp.length > ri ? world.regionTemp[ri] : TEMP_BASELINE;
       // up/down/left/right neighbour region indices (-1 = none)
       const nb0 = rx > 0 ? ri - 1 : -1;
       const nb1 = rx < cols - 1 ? ri + 1 : -1;
@@ -3183,7 +3259,7 @@ function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
       for (let pass = 0; pass < 4; pass++) {
         const nj = pass === 0 ? nb0 : pass === 1 ? nb1 : pass === 2 ? nb2 : nb3;
         if (nj < 0) continue;
-        const tJ = REGION_TEMP.length > nj ? REGION_TEMP[nj] : TEMP_BASELINE;
+        const tJ = world.regionTemp.length > nj ? world.regionTemp[nj] : TEMP_BASELINE;
         // warmer water mixes a bit faster; mild, clamped, symmetric.
         let tf = 1 + 0.5 * (((tI + tJ) * 0.5 - TEMP_BASELINE) / TEMP_BASELINE);
         if (tf < 0.3) tf = 0.3; else if (tf > 2) tf = 2;
@@ -3222,7 +3298,7 @@ function precipitateRegions(world: World): void {
   for (let ri = 0; ri < nReg; ri++) {
     const rx = ri % cols;
     const ry = (ri / cols) | 0;
-    const tReg = REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE;
+    const tReg = world.regionTemp.length > ri ? world.regionTemp[ri] : TEMP_BASELINE;
     const base = ri * AMBIENT_STRIDE;
     for (let k = 0; k < AMBIENT_STRIDE; k++) {
       const v = amb[base + k];
@@ -3654,8 +3730,9 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
     + cols[CHEM_PHOTORECEPTOR_LONG][i] * lightLong * dt;
   cols[CHEM_ACT_PHOTO_SURFACE][i] = cols[CHEM_ACT_PHOTO_SURFACE][i] * k
     + cols[CHEM_PHOTORECEPTOR_SURFACE][i] * lightSurf * dt;
-  // THERMO: receptor * (local temp - baseline).
-  const tempOff = temperatureAt(world, c.x, c.y) - TEMP_BASELINE;
+  // THERMO: receptor * (local temp - baseline). Reads the diffused
+  // regional cache so vent heat actually reaches the receptor.
+  const tempOff = regionTempAt(world, c.x, c.y) - TEMP_BASELINE;
   cols[CHEM_ACT_THERMO][i] = cols[CHEM_ACT_THERMO][i] * k
     + cols[CHEM_THERMORECEPTOR][i] * tempOff * dt;
   // MECH: receptor * (net force + velocity contribution).
@@ -3746,7 +3823,7 @@ function dissolveParticles(world: World, dt: number): void {
     // Dissolve into the LOCAL region's block, capped by that
     // region's molar-solubility capacity at its temperature.
     const ri = regionIndexAt(world, PX[i], PY[i]);
-    const cap = regionDissolvedCapacity(chemId, world, REGION_TEMP.length > ri ? REGION_TEMP[ri] : TEMP_BASELINE);
+    const cap = regionDissolvedCapacity(chemId, world, world.regionTemp.length > ri ? world.regionTemp[ri] : TEMP_BASELINE);
     if (cap <= 0) continue;
     const ak = ri * AMBIENT_STRIDE + chemId;
     // Hysteresis: only (re)start dissolving once the region is below
@@ -4799,7 +4876,7 @@ export function step(world: World, dt: number): void {
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
     n = performance.now(); p.walls += n - m; m = n;
-    sampleRegionTemps(world);
+    sampleRegionTemps(world, dt);
     seedRamp(world, dt);
     runVent(world, dt);
     aerate(world, dt);
@@ -4846,7 +4923,7 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
     applyWalls(world);
-    sampleRegionTemps(world);
+    sampleRegionTemps(world, dt);
     seedRamp(world, dt);
     runVent(world, dt);
     aerate(world, dt);
@@ -5502,7 +5579,8 @@ function updateCreatures(world: World, dt: number): void {
 
     // Temperature multiplies every enzyme-catalyzed rate (and the matching
     // idle drain) -- warm cells run hot; cold cells slow down. Q10 = 2.
-    const localTemp = temperatureAt(world, c.x, c.y);
+    // Reads regionTempAt so cells near an active vent feel its heat.
+    const localTemp = regionTempAt(world, c.x, c.y);
     const km = tempMult(localTemp);
     const dtT = dt * km;
 
@@ -8030,6 +8108,12 @@ export interface RenderSnapshot extends WorldEnv {
   // (row-major, regionCols x regionRows). For the density overlay.
   ambientPE: Float32Array;
   reservePE: Float32Array;
+  // Per-region effective temperature (state-bearing field maintained
+  // by sampleRegionTemps). Same row-major (regionCols x regionRows)
+  // layout as ambientPE. Used by the heatmap to render the actual
+  // local temperature including vent heat + diffusion, not the
+  // analytical baseline.
+  regionTemp: Float32Array;
   // Density-overlay material filter: the focused chem and its
   // per-region dissolved/reserve PE (present only when one is focused).
   densityChem?: number;
@@ -8301,6 +8385,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     chemReserveCount,
     ambientPE,
     reservePE,
+    regionTemp: world.regionTemp.slice(),
     densityChem: world.densityChem,
     densityChemAmbPE,
     densityChemResPE,

@@ -173,6 +173,18 @@ export function stepVent(
   const ledger = world.ventEmitted;
   const t = world.t;
 
+  // After the seed-ramp window closes the world is meant to be a
+  // closed substrate; the vent's role was to seed abiotic chemistry +
+  // localized heat during the initial fill. Permanently dormant from
+  // here on: any in-progress eruption ends, no new ones scheduled.
+  if (world.initialSeedDone) {
+    if (v.active) {
+      v.active = false;
+      v.intensity = 0;
+    }
+    return;
+  }
+
   // Phase transitions.
   if (!v.active && t >= v.nextEruptionAt) {
     v.active = true;

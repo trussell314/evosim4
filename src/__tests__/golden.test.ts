@@ -147,7 +147,16 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // now drifts visibly instead of looking glued to the rock; mid-
     // water mixing also up a little. Determinism + mass-conservation
     // still green.
-    const GOLDEN = "766b10b8";
+    // Bumped: regional temperature is now a state-bearing field
+    // (diffuse between neighbouring regions + slow relax toward the
+    // analytical baseline + vent source term) instead of a per-tick
+    // resample of the analytical function. Q10 + THERMO reads route
+    // through the regional cache, so they sample at region centres
+    // rather than the creature's exact x,y -- with the patch wave
+    // active that shifts rates by a small per-tick amount. Vent's
+    // contribution also moved out of temperatureAt and into the
+    // stepper as a source. Deterministic, mass-OK.
+    const GOLDEN = "87e6630e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
