@@ -211,7 +211,17 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // that broke chloro-symbiosis + chloro-engulfed. 0.05 makes
     // glucose mostly internal (mirroring ATP's perm=0 + ANT
     // translocase asymmetry) while still permitting slow equilibration.
-    const GOLDEN = "f44bda3e";
+    // Bumped again: 0.05 -> 0. The "soft asymmetry" wasn't enough --
+    // even 12x slower diffusion still let hosts overshoot their
+    // food base and the resulting carrying-capacity crash flushed
+    // the engulfed chloros to the free pool. Biologically faithful:
+    // pure-lipid-bilayer glucose permeability is ~10^-7 cm/s vs
+    // O2/CO2 ~10^-1, so 0 (i.e. transport-only via EXCRETE/INGEST)
+    // matches the literature -- glucose doesn't passively cross
+    // membranes, it moves via dedicated transporters (which the
+    // substrate models as EXCRETE for active export and INGEST for
+    // particle uptake).
+    const GOLDEN = "d38bc451";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

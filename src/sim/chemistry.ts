@@ -103,7 +103,7 @@ const SIGNAL_BASE: Omit<NamedChemSpec, "color"> = {
 const NAMED_CHEM_SPECS: ReadonlyArray<NamedChemSpec> = [
   /* o2     */ { molarMass: 1.0, density: 0.14, defaultPhase: "gas",     solubility: 0.5,  vaporPressure: 10, meltingPoint: -200, permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#3fa9f5", isSignal: false },
   /* co2    */ { molarMass: 1.0, density: 0.20, defaultPhase: "gas",     solubility: 1.8,  vaporPressure: 9,  meltingPoint: -80,  permeability: 1.0, bondEnergy: 0,    role: "none",      color: "#c4d4e6", isSignal: false },
-  /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0.05, bondEnergy: 30,   role: "none",      color: "#dbe09c", isSignal: false },
+  /* glu    */ { molarMass: 1.0, density: 1.5,  defaultPhase: "aqueous", solubility: 4.0,  vaporPressure: 0,  meltingPoint: 150,  permeability: 0,    bondEnergy: 30,   role: "none",      color: "#dbe09c", isSignal: false },
   /* aa     */ { molarMass: 1.0, density: 1.2,  defaultPhase: "aqueous", solubility: 3.0,  vaporPressure: 0,  meltingPoint: 200,  permeability: 0.5, bondEnergy: 20,   role: "none",      color: "#c9c075", isSignal: false },
   /* fa     */ { molarMass: 1.0, density: 0.9,  defaultPhase: "liquid",  solubility: 0.1,  vaporPressure: 0,  meltingPoint: 40,   permeability: 0.3, bondEnergy: 80,   role: "none",      color: "#f0d264", isSignal: false },
   /* min    */ { molarMass: 1.0, density: 2.4,  defaultPhase: "solid",   solubility: 0.02, vaporPressure: 0,  meltingPoint: 1200, permeability: 0.1, bondEnergy: 0,    role: "none",      color: "#8c8175", isSignal: false },
