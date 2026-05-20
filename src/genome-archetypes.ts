@@ -192,12 +192,21 @@ function build(): Archetype[] {
       id: "thermophile",
       label: "thermophile",
       cls: "direct",
-      desc: "Photoautotroph with a thermoreceptor-synth catalyst boost; thrust scales with the sensed thermal signal so lineages self-sort into thermal layers.",
+      desc: "Photoautotroph with a thermoreceptor-synth catalyst boost; thrust = act_thermo^3 so the cell drives hard when it's far from the isotherm (overcomes gravity) and barely thrusts when it's close (saves ATP).",
       prog: [
         ...AUTO_KIT,
         ["SYNTH", "CAT", RX_SLOT_SYNTH_THERMO], // boost thermoreceptor synth
+        // Sign-preserving cube of act_thermo. Linear thrust=(a,a) with
+        // |a|<=3 maxed at mag ~ 4.5 which is tiny vs gravity=60, so
+        // cells sank into the dark before reaching the isotherm. Cube
+        // gives ~|a|^3 magnitude: |a|=3 -> 27, enough to climb;
+        // |a|<0.3 -> <0.03, effectively a deadband near the target.
         ["SENSE_CHEMICAL", CHEM_ACT_THERMO],
-        ["SENSE_CHEMICAL", CHEM_ACT_THERMO],
+        ["DUP"],
+        ["DUP"],
+        ["MUL"], // a^2
+        ["MUL"], // a^3 (sign preserved by the linear factor)
+        ["DUP"], // THRUST consumes 2 stack values (x, y); same value both axes
         ["THRUST"],
         ...reproduceWhenGrown(40, "np"),
       ],
