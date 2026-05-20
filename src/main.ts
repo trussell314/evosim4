@@ -442,7 +442,7 @@ let resetting = false;
 // Reset uses a two-tap arm/fire pattern. confirm() turned out to be
 // silently suppressed in some iOS in-app webviews (Brave/Edge),
 // which made the button look broken. The first tap turns the button
-// label into a red "tap again to wipe" prompt that times out after
+// label into a red "confirm" prompt that times out after
 // 3s; the second tap inside that window actually clears the save
 // and reloads.
 function hardReset(): void {
@@ -1602,7 +1602,7 @@ resetBtn.addEventListener("click", () => {
   const now = performance.now();
   if (now < resetArmedUntil) { hardReset(); return; }
   resetArmedUntil = now + 3000;
-  resetBtn.textContent = "tap again to wipe";
+  resetBtn.textContent = "confirm";
   resetBtn.style.cssText = CBTN + T_RED;
   if (resetArmTimer) clearTimeout(resetArmTimer);
   resetArmTimer = setTimeout(disarmReset, 3000);
