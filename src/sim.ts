@@ -2383,10 +2383,11 @@ function seedInitialParticles(world: World): void {
 // the ramp keeps going until the visible count reaches particleTarget,
 // then latches done forever (nothing respawns afterward -- the pool is
 // fixed for the rest of the run). Founders are gated on this completing.
-// Faster ramp (was 10s / 1000 batch). Top-drop spawning fills the
-// world visibly in ~15-20 sim seconds rather than ~30, which reads
-// as "rain pouring in" instead of "world slowly populating".
-const SEED_RAMP_PERIOD_SEC = 2;
+// Slow ramp: one batch per 30s lays the substrate down over the full
+// SEED_RAMP_MAX_T window without flooding the cap. (Was 2s / 400; the
+// faster cadence dumped 15x as much mass in during the same window,
+// which the reservePass then had to demote every tick.)
+const SEED_RAMP_PERIOD_SEC = 30;
 const SEED_RAMP_BATCH = 400;
 // Hard time cap on the ramp: stop seeding after this many sim-seconds
 // even if particleTarget was never reached, then latch done forever.
