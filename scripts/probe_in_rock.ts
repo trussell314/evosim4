@@ -45,7 +45,7 @@ function countInside(w: World): { particles: number; creatures: number; firstFew
 }
 
 // Use portrait so the polygons get the same shape the user sees.
-const w = createWorld(600, 800, { seed: 1 });
+const w = createWorld(800, 600, { seed: 1 });
 for (let i = 0; i < 1800; i++) step(w, 1 / 60);
 console.log(`t=${w.t.toFixed(1)} particles=${w.particles.length} creatures=${w.creatures.length}`);
 const r = countInside(w);

@@ -1563,6 +1563,15 @@ function evacuateRocks(world: World): void {
   const cellRows = OBSTACLE_CELL_ROWS;
   const cellSize = OBSTACLE_CELL_SIZE;
   // Particles. Iterate backwards because removeParticleAt swap-pops.
+  // For each particle in a rocky cell, find both the nearest polygon
+  // edge and whether the center is inside. We dissolve in two cases:
+  //   (a) center is INSIDE any polygon -- the strict invariant.
+  //   (b) center is on/very close to a polygon edge AND the particle
+  //       is essentially at rest -- catches settled "deposits" sitting
+  //       on the rock surface that read visually as embedded in rock.
+  //       Active particles bouncing off rock blow past this test.
+  const VX = store.vx, VY = store.vy;
+  const SETTLE_VEL_SQ = 400; // (20 px/s)^2 = slow + on-rock = pile
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const px = store.x[i], py = store.y[i];
     if (cellGrid.length > 0) {
@@ -1571,16 +1580,49 @@ function evacuateRocks(world: World): void {
       if (cx < 0 || cx >= cellCols || cy < 0 || cy >= cellRows) continue;
       if (cellGrid[cy * cellCols + cx] === 0) continue;
     }
-    let insideOb: Obstacle | null = null;
+    let dissolveOb: Obstacle | null = null;
     for (const ob of world.obstacles) {
       if (!ob.polygon) continue;
-      if (px < ob.minX || px > ob.maxX || py < ob.minY || py > ob.maxY) continue;
-      if (pointInPolygon(px, py, ob.polygon)) { insideOb = ob; break; }
+      if (px < ob.minX - 4 || px > ob.maxX + 4 || py < ob.minY - 4 || py > ob.maxY + 4) continue;
+      // Walk edges once: nearest-edge distance + inside count.
+      const poly = ob.polygon;
+      const PL = poly.length;
+      let bestD2 = Infinity;
+      let crossings = 0;
+      for (let jj = PL - 1, j2 = 0; j2 < PL; jj = j2++) {
+        const ax = poly[jj].x, ay = poly[jj].y;
+        const bxp = poly[j2].x, byp = poly[j2].y;
+        const ex = bxp - ax, ey = byp - ay;
+        const lenSq = ex * ex + ey * ey;
+        let t = 0;
+        if (lenSq > 1e-12) {
+          t = ((px - ax) * ex + (py - ay) * ey) / lenSq;
+          if (t < 0) t = 0; else if (t > 1) t = 1;
+        }
+        const epx = ax + ex * t, epy = ay + ey * t;
+        const ddx = epx - px, ddy = epy - py;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 < bestD2) bestD2 = d2;
+        if ((ay > py) !== (byp > py)) {
+          const xInt = (bxp - ax) * (py - ay) / (byp - ay + 1e-12) + ax;
+          if (px < xInt) crossings++;
+        }
+      }
+      const isInside = (crossings & 1) === 1;
+      if (isInside) { dissolveOb = ob; break; }
+      const r = store.r[i];
+      const dEdge = Math.sqrt(bestD2);
+      // Surface-deposit check: a particle within ~one diameter of the
+      // polygon edge AND moving slowly is treated as a deposit and
+      // dissolved. The diameter buffer (vs the previous half-radius)
+      // catches particles sitting on a sloped rock surface where the
+      // visual disc overlaps the rock bitmap by a few px.
+      if (dEdge < r * 2 + 1) {
+        const vmag2 = VX[i] * VX[i] + VY[i] * VY[i];
+        if (vmag2 < SETTLE_VEL_SQ) { dissolveOb = ob; break; }
+      }
     }
-    if (!insideOb) continue;
-    // Dump mass to local ambient (mass-conserving). For molecule-
-    // tagged particles iterate the molecules map; for single-chem
-    // particles compute mass from radius+density.
+    if (!dissolveOb) continue;
     const base = ambientBaseAt(world, px, py);
     const mol = store.molecules[i];
     if (mol) {
