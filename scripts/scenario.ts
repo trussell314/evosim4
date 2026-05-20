@@ -105,11 +105,9 @@ const VENT = (() => {
 // gate). NOT a shipped archetype -- a scenario probe demonstrating
 // the substrate already expresses chemolithotrophy.
 const ventProbeGenome = asm([
-  ["SYNTH", "BIO", 0],
-  ["SYNTH", "MRNA", 0],
-  ["SYNTH", "FA", 0],
-  ["SYNTH", "ENZ", 0],
-  ["SYNTH", "AA", 0],
+  ["SYNTH", "CAT", 7],  // boost synth_enz (formerly SYNTH ENZ)
+  ["SYNTH", "CAT", 10], // boost biopolymer digestion (heterotroph kit)
+  ["SYNTH", "CAT", 9],  // boost synth_membrane(aa+fa)
   ["SYNTH", "CAT", VENT.energy], // abiotic-fuel -> ATP (energy module)
   ["SYNTH", "CAT", VENT.carbon], // acquirable -> GLU (carbon-fix module)
   ["PUSH8", 1], ["INGEST"], // low bond-energy threshold: eats the vent cocktail
@@ -158,11 +156,8 @@ function ventEmit(w: World, fuels: number[], target: number): void {
 // only the reproduce gate changed -- nothing else".
 function foragerProg(gate: number): Instr[] {
   return [
-    ["SYNTH", "BIO", 0],
-    ["SYNTH", "MRNA", 0],
-    ["SYNTH", "FA", 0],
-    ["SYNTH", "ENZ", 0],
-    ["SYNTH", "AA", 0],
+    ["SYNTH", "CAT", 7],  // boost synth_enz
+    ["SYNTH", "CAT", 10], // boost biopolymer digestion
     ["PUSH8", 1], ["INGEST"],
     // climbParticleGradient(CHEM_BIOPOLYMER, 30) expansion
     ["SENSE_OUT", CHEM_BIOPOLYMER],

@@ -70,24 +70,27 @@ const NOP_CASSETTE: Instr[] = Array.from(
 // by SYNTH BIO/AA/FA/ENZ/MRNA (those bits set on synthMask are read by
 // nothing). The functional way to say "this cell is a digester" is to
 // pour catalyst into the digestion + enzyme-synth slots so it digests
-// detritus faster than its neighbours.
+// detritus faster than its neighbours. KEEP THIS KIT MINIMAL: every
+// SYNTH CAT op spends aa+min+ATP per tick on its own slot's catalyst
+// protein, so a 5-slot kit drained newborns dry before they could
+// grow. 2 slots is enough to differentiate.
 const HET_KIT: Instr[] = [
   ["SYNTH", "CAT", RX_SLOT_SYNTH_ENZ],     // build digestive enzyme faster
   ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],   // digest biopolymer faster
-  ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA], // build membrane faster
 ];
 
-// Photoautotroph identity: BOOST photosynthesis + the inputs the
-// autotrophic carbon -> AA -> membrane chain needs. synth_aa is the
-// historical bottleneck for self-sufficient autotrophs (see commit
-// 84b6f4f's vmax tune). synth_chl boost amplifies the pigment that
-// gates photosynth via chlScale.
+// Photoautotroph identity: BOOST photosynthesis + the synth_aa
+// bottleneck (the historical autotroph rate-limit, see commit
+// 84b6f4f's vmax tune note). Same minimalism principle as HET_KIT --
+// every additional catalyst slot is per-tick aa+min+ATP drain. The
+// photosynth boost gets the cell's carbon-fixation moving above
+// baseline; the synth_aa boost converts that glucose into amino acid
+// faster than the constitutive rate. Everything else (chl, fa,
+// membrane, mrna) runs at baseline -- which is enough because every
+// cell already does that work.
 const AUTO_KIT: Instr[] = [
   ["SYNTH", "CAT", RX_SLOT_PHOTOSYNTH],
-  ["SYNTH", "CAT", RX_SLOT_SYNTH_CHL],
   ["SYNTH", "CAT", RX_SLOT_SYNTH_AA],
-  ["SYNTH", "CAT", RX_SLOT_SYNTH_FA],
-  ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA],
 ];
 
 // Fission gated on the structural reserve clearing a threshold --
