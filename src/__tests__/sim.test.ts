@@ -2866,6 +2866,85 @@ describe("standing transporters (Substrate B, sub-commit 1: cell<->world)", () =
   });
 });
 
+// Regression: the per-tick catalyst-synth consumer loop in
+// updateCreatures used to be `for (k < CATALYST_COUNT) if (cm & (1<<k))
+// biosynthCatalyst(c, ..., k)`. JS bitwise ops are 32-bit, so 1<<37
+// aliased 1<<5 -- expressing slot 37 would fire phantom syntheses for
+// slots 5, 37, 69, 101, 133, 165, 197, 229 every tick. The packed
+// bitmask was replaced with Uint8Array(CATALYST_COUNT); these tests
+// drive a real tick through step() with a SYNTH-CAT-37 genome and
+// verify only slot 37 grew. The behavior assertions are post-fix
+// invariants -- pre-fix code would have failed (a) by growing
+// catalystCols[5] (aliased phantom) and (b) by growing several
+// other slot columns too.
+describe("catalyst-synth consumer loop is per-slot independent (regression)", () => {
+  // Minimal genome that just expresses SYNTH CAT slot 37 on every
+  // VM cycle. 3 bytes; the PC wraps so the op runs every tick.
+  const HIGH_SLOT_GENOME = new Uint8Array([
+    OP.SYNTH, SYNTH_KIND.CAT, 37,
+  ]);
+
+  function primeSubstrates(c: Creature): void {
+    const s = c.store; const i = c.idx;
+    // Plenty of aa, min, ATP so biosynthCatalyst doesn't starve.
+    s.chemCols[CHEM_IDS.aminoAcid][i] = 200;
+    s.chemCols[CHEM_IDS.minerals][i] = 200;
+    s.chemCols[CHEM_IDS.adp][i] = 200;
+    s.energy[i] = 200;
+  }
+
+  // updateCreatures runs chem before VM, so the catalyst-synth loop
+  // reads vmOut.catSynthMask from the PREVIOUS tick. Run two ticks so
+  // tick 1's VM populates the mask and tick 2's chem consumes it.
+  function stepTwice(w: World): void {
+    step(w, 0.1);
+    step(w, 0.1);
+  }
+
+  it("SYNTH CAT 37 grows ONLY slot 37's catalyst pool (not slot 5, 69, 101, ...)", () => {
+    const w = quietWorld();
+    const c = makeCreature({ genome: HIGH_SLOT_GENOME, energy: 200 });
+    primeSubstrates(c);
+    w.creatures.push(c);
+    stepTwice(w);
+    const s = c.store; const i = c.idx;
+    expect(s.catalystCols[37][i]).toBeGreaterThan(0);
+    // Every k that aliased 37's low 5 bits under the old bitmask:
+    // slots 5, 69, 101, 133, 165, 197, 229. None should have grown.
+    expect(s.catalystCols[5][i]).toBe(0);
+    expect(s.catalystCols[69][i]).toBe(0);
+    expect(s.catalystCols[101][i]).toBe(0);
+    expect(s.catalystCols[133][i]).toBe(0);
+    expect(s.catalystCols[165][i]).toBe(0);
+    expect(s.catalystCols[197][i]).toBe(0);
+    expect(s.catalystCols[229][i]).toBe(0);
+  });
+
+  it("two distinct high-slot expressions grow exactly two distinct columns", () => {
+    // Pre-fix, SYNTH CAT 37 + SYNTH CAT 64 would have both aliased
+    // into 1 << 5 and 1 << 0, then the consumer loop would have fired
+    // for every k sharing those low bits -- 8 columns each, with
+    // collisions in the overlap. Post-fix: exactly slot 37 and slot
+    // 64 grow, nothing else.
+    const TWO_HIGH_GENOME = new Uint8Array([
+      OP.SYNTH, SYNTH_KIND.CAT, 37,
+      OP.SYNTH, SYNTH_KIND.CAT, 64,
+    ]);
+    const w = quietWorld();
+    const c = makeCreature({ genome: TWO_HIGH_GENOME, energy: 200 });
+    primeSubstrates(c);
+    w.creatures.push(c);
+    step(w, 0.1);
+    step(w, 0.1);
+    const s = c.store; const i = c.idx;
+    let nonzeroSlots = 0;
+    for (let k = 0; k < 256; k++) if (s.catalystCols[k][i] > 0) nonzeroSlots++;
+    expect(nonzeroSlots).toBe(2);
+    expect(s.catalystCols[37][i]).toBeGreaterThan(0);
+    expect(s.catalystCols[64][i]).toBeGreaterThan(0);
+  });
+});
+
 describe("standing transporters (Substrate B, sub-commit 2: host<->organelle)", () => {
   const MIN_N = TRANSPORT_CHEM_IDS.indexOf(5); // CHEM_MIN (inert: only SYNTH consumes it)
   const SLOT = TRANSPORT_SLOT_BASE + MIN_N;
