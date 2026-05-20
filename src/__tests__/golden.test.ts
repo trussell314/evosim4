@@ -190,7 +190,16 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // receptors from substrate; the chicken-and-egg (need photoreceptor
     // to sense light to migrate to light to photosynth) had no entry
     // point with zero starting receptors.
-    const GOLDEN = "c1893521";
+    // Bumped again: founder glucose 10 -> 50 and adp 5 -> 30. The
+    // smaller starter funded ~5-15 ATP of work, not enough for
+    // sense-archetypes to run the sense->thrust->migrate->photosynth
+    // loop before ATP exhaustion (thermophile-gradient cells reached
+    // the isotherm but died there; phototaxis-gradient survived
+    // only after a population bottleneck). Larger ADP pool means
+    // the founder can hold more ATP at a time; larger glucose pool
+    // means it can keep respiring for longer before relying on
+    // photosynthate or external sugar.
+    const GOLDEN = "9d55e6e7";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

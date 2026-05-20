@@ -2673,13 +2673,20 @@ function makeCreature(
       // Membrane: the structural reserve (just above
       // MIN_VIABLE_MEMBRANE).
       membrane: 1,
-      adp: 5,
+      adp: 30,
       // Enough mRNA for biosynth to run near full rate from birth
       // (rate scales with mrna/MRNA_REF; the old seed of 1 = 20%).
       mrna: 5,
       // Glucose so the cell can respire to *sustain* ATP past the
-      // one-shot energy grant (it can't make ATP without fuel).
-      glucose: 10,
+      // one-shot energy grant. Bumped from 10 -> 50 because
+      // sense-archetypes (phototaxis, thermophile) couldn't fund the
+      // migration loop on the smaller starter: enough to thrust but
+      // not enough to reach a steady photosynth+respire cycle before
+      // ATP exhaustion. 50 buys ~5x the bootstrap window without
+      // distorting the photoauto carrying capacity (the autotroph
+      // doesn't thrust, so the extra glucose just lingers until it
+      // respires through the larger ADP pool).
+      glucose: 50,
       // Small amino-acid pool so the new viability threshold
       // (MIN_VIABLE_AMINOACID) doesn't kill the founder on tick 1.
       aminoAcid: 0.5,
