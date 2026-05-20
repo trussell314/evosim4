@@ -245,7 +245,7 @@ export const ROCK_POLYGONS: NormPolygon[] = [
 ];
 
 // Vent location. Sits in the seafloor; emissions come out upward.
-export const VENT_ORIGIN: NormPoint = { x: 0.42, y: 0.96 };
+export const VENT_ORIGIN: NormPoint = { x: 0.40, y: 0.965 };
 
 // Re-anchor a polygon to the actual world width/height. Vertices at
 // or outside the [0,1] box snap exactly to the world boundary so an
