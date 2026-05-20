@@ -58,11 +58,10 @@ const TEST_DEFAULT_GENOME = new Uint8Array([
   OP.SENSE_OUT, 11,   // Phase 5: SENSE_OUT pushes [gx, gy] for biopolymer
   OP.THRUST,
   OP.PUSH8, 1, OP.INGEST, // bond-energy-threshold engulf, low threshold
-  OP.SYNTH, SYNTH_KIND.ENZ, 0,
-  OP.SYNTH, SYNTH_KIND.FA, 0,
-  OP.SYNTH, SYNTH_KIND.BIO, 0,
-  OP.SYNTH, SYNTH_KIND.MRNA, 0,
-  OP.SYNTH, SYNTH_KIND.REPAIR, 0,
+  OP.SYNTH, SYNTH_KIND.CAT, 7, // boost synth_enz
+  OP.SYNTH, SYNTH_KIND.CAT, 10, // boost biopolymer digestion
+  OP.SYNTH, SYNTH_KIND.CAT, 9, // boost synth_membrane(aa+fa)
+  OP.SYNTH, SYNTH_KIND.BOND, 0,
   OP.SYNTH, SYNTH_KIND.CAT, 0,
   OP.SELF_MEMBRANE,
   OP.PUSH8, 30,

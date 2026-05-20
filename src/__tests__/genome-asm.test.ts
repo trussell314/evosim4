@@ -34,8 +34,8 @@ describe("genome assembler", () => {
   });
 
   it("resolves SYNTH kind names to the kind byte", () => {
-    expect(Array.from(asm([["SYNTH", "CHL", 0]]))).toEqual([OP.SYNTH, 4, 0]);
-    expect(Array.from(asm([["SYNTH", "PHOTO", 1]]))).toEqual([OP.SYNTH, 6, 1]);
+    expect(Array.from(asm([["SYNTH", "CAT", 0]]))).toEqual([OP.SYNTH, 0, 0]);
+    expect(Array.from(asm([["SYNTH", "BOND", 1]]))).toEqual([OP.SYNTH, 2, 1]);
   });
 
   it("LABEL emits no bytes; backward jump offset matches VM pc rule", () => {
@@ -87,14 +87,14 @@ describe("genome assembler", () => {
 
   it("throws on unknown opcode, unknown SYNTH kind, and undefined label", () => {
     expect(() => asm([["BOGUS" as "NOP"]])).toThrow(/unknown opcode/);
-    expect(() => asm([["SYNTH", "NOPE" as "CHL", 0]])).toThrow(
+    expect(() => asm([["SYNTH", "NOPE" as "CAT", 0]])).toThrow(
       /unknown SYNTH kind/,
     );
     expect(() => asm([["JMP", "missing"]])).toThrow(/undefined label/);
   });
 
   it("assertWellFormed accepts assembled output and rejects truncation", () => {
-    const g = asm([["PUSH8", 1], ["SYNTH", "BIO", 0], ["REPRODUCE"]]);
+    const g = asm([["PUSH8", 1], ["SYNTH", "CAT", 0], ["REPRODUCE"]]);
     expect(() => assertWellFormed(g)).not.toThrow();
     expect(() => assertWellFormed(new Uint8Array([OP.PUSH8]))).toThrow(
       /truncated/,
@@ -103,7 +103,7 @@ describe("genome assembler", () => {
 
   it("assembled genomes disassemble with no unknown (db) bytes", () => {
     const g = asm([
-      ["SYNTH", "CHEMO", 0],
+      ["SYNTH", "CAT", 10],
       ["SENSE_CHEMICAL", 23],
       ["THRUST"],
       ["PUSH8", 1],

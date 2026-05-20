@@ -3897,18 +3897,26 @@ const TROPHIC_AUTO: TrophicMode = { label: "auto", bg: "#1e4d2b", fg: "#9efba8" 
 const TROPHIC_HET: TrophicMode  = { label: "het",  bg: "#1c3b5a", fg: "#9ec7ff" };
 const TROPHIC_PRED: TrophicMode = { label: "pred", bg: "#5a1c1c", fg: "#ff9e9e" };
 const TROPHIC_MIXO: TrophicMode = { label: "mixo", bg: "#5a4a1c", fg: "#ffe49e" };
+// Reaction slot IDs (mirror sim/reactions.ts -- keep in sync). Used to
+// classify a genome's trophic mode from its SYNTH CAT investments.
+const SLOT_PHOTOSYNTH_LOCAL = 3;
+const SLOT_SYNTH_CHL_LOCAL = 6;
 function trophicMode(genome: Uint8Array): TrophicMode {
-  let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
-  walkGenome(genome, (op, _pc, operand) => {
+  let hasIngest = false, hasPredate = false, hasEngulf = false;
+  let boostsPhoto = false;
+  walkGenome(genome, (op, pc, operand) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
     else if (op === OP.ENGULF) hasEngulf = true;
-    else if (op === OP.SYNTH && (operand ?? 0) % SYNTH_KIND_COUNT === SYNTH_KIND.CHL) hasChl = true;
+    else if (op === OP.SYNTH && (operand ?? 0) % SYNTH_KIND_COUNT === SYNTH_KIND.CAT) {
+      const slot = (genome[(pc + 2) % genome.length] ?? 0) % CATALYST_COUNT;
+      if (slot === SLOT_PHOTOSYNTH_LOCAL || slot === SLOT_SYNTH_CHL_LOCAL) boostsPhoto = true;
+    }
   });
   const eatsOther = hasPredate || hasEngulf;
   const eatsParticles = hasIngest;
-  if (hasChl && !eatsOther && !eatsParticles) return TROPHIC_AUTO;
-  if (hasChl && (eatsOther || eatsParticles)) return TROPHIC_MIXO;
+  if (boostsPhoto && !eatsOther && !eatsParticles) return TROPHIC_AUTO;
+  if (boostsPhoto && (eatsOther || eatsParticles)) return TROPHIC_MIXO;
   if (eatsOther) return TROPHIC_PRED;
   return TROPHIC_HET;
 }
@@ -3923,21 +3931,18 @@ function describeGenomeProse(genome: Uint8Array): string {
   let predate = false, engulf = false;
   let selfModifies = false;
   let hasJump = false, hasCmp = false;
-  // SYNTH kinds observed. PHOTO / CHEMO get per-param bits since one
-  // SYNTH op picks a specific band / target.
-  const synthSimple = new Set<number>();           // BIO/AA/FA/ENZ/CHL/MRNA/MECH/THERMO/MAGNETO/BOND/REPAIR
-  const synthPhotoBands = new Set<number>();       // 0=V, 1=L, 2=S
-  const synthChemoTargets = new Set<number>();     // 0=B, 1=M, 2=F, 3=marker0
+  // SYNTH kinds observed: BOND / COMPETENCE / PACKAGE are the
+  // single-bit kinds; CAT / INH carry a reaction-slot param.
+  let bondSet = false, competenceSet = false, packageSet = false;
   const catalystSlots = new Set<number>();
+  const inhibitorSlots = new Set<number>();
   // INGEST is the 6-slot sensor-chem id (min/biop/fa/o2/co2/glu);
   // EXCRETE is operand mod CHEMICAL_COUNT (any chem in the table).
   const ingest = new Set<number>();
   const excrete = new Set<number>();
-  // Chem ids the genome reads via SENSE_CHEMICAL. Distinct from the
-  // SYNTH side: SYNTH builds the receptor; SENSE_CHEMICAL reads the
-  // activated chem (or any other internal pool).
+  // Chem ids the genome reads via SENSE_CHEMICAL.
   const sensedChems = new Set<number>();
-  walkGenome(genome, (op, _pc, operand) => {
+  walkGenome(genome, (op, pc, operand) => {
     switch (op) {
       case OP.THRUST: thrust = true; break;
       case OP.TURN: turn = true; break;
@@ -3947,11 +3952,12 @@ function describeGenomeProse(genome: Uint8Array): string {
       case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL: selfModifies = true; break;
       case OP.SYNTH: {
         const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
-        const param = genome[(_pc + 2) % genome.length] ?? 0;
-        if (kind === SYNTH_KIND.PHOTO) synthPhotoBands.add(param % 3);
-        else if (kind === SYNTH_KIND.CHEMO) synthChemoTargets.add(param % 4);
-        else if (kind === SYNTH_KIND.CAT) catalystSlots.add(param % CATALYST_COUNT);
-        else synthSimple.add(kind);
+        const param = genome[(pc + 2) % genome.length] ?? 0;
+        if (kind === SYNTH_KIND.CAT) catalystSlots.add(param % CATALYST_COUNT);
+        else if (kind === SYNTH_KIND.INH) inhibitorSlots.add(param % CATALYST_COUNT);
+        else if (kind === SYNTH_KIND.BOND) bondSet = true;
+        else if (kind === SYNTH_KIND.COMPETENCE) competenceSet = true;
+        else if (kind === SYNTH_KIND.PACKAGE) packageSet = true;
         break;
       }
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
@@ -3962,8 +3968,6 @@ function describeGenomeProse(genome: Uint8Array): string {
     }
   });
   const gated = hasJump && hasCmp;
-  const synthChl = synthSimple.has(SYNTH_KIND.CHL);
-  const synthEnz = synthSimple.has(SYNTH_KIND.ENZ);
   const lines: string[] = [];
 
   // Ingests: trophic input. INGEST operand maps to the 6-slot sensor
@@ -3977,36 +3981,15 @@ function describeGenomeProse(genome: Uint8Array): string {
   }
   lines.push(`Ingests: ${ingestParts.length > 0 ? ingestParts.join("; ") : "nothing"}.`);
 
-  // Metabolism: catabolism (always-on given substrate), photosynth
-  // (chlorophyll-gated), biopolymer digestion (enzyme-gated), and
-  // every biosynth pathway the genome's SYNTH ops open up. The
-  // engine runs aerobic / ferment / beta-ox on every cell with the
-  // right substrate regardless of genome -- they're the "free"
-  // tier and worth surfacing so the reader sees the full picture.
-  const metab: string[] = ["aerobic+ferment+betaOx (built-in)"];
-  if (synthChl) metab.push("photosynth");
-  if (synthEnz) metab.push("digestBiop (enzyme-gated)");
-  const synthLabels: string[] = [];
-  if (synthSimple.has(SYNTH_KIND.AA)) synthLabels.push("aa");
-  if (synthSimple.has(SYNTH_KIND.FA)) synthLabels.push("fa");
-  if (synthSimple.has(SYNTH_KIND.ENZ)) synthLabels.push("enz");
-  if (synthSimple.has(SYNTH_KIND.CHL)) synthLabels.push("chl");
-  if (synthSimple.has(SYNTH_KIND.MRNA)) synthLabels.push("mrna");
-  if (synthSimple.has(SYNTH_KIND.BIO)) synthLabels.push("memb");
-  if (synthPhotoBands.size > 0) {
-    const bands = Array.from(synthPhotoBands).sort().map((b) => "VLS"[b]);
-    synthLabels.push(`photoR-{${bands.join(",")}}`);
-  }
-  if (synthChemoTargets.size > 0) {
-    const tgts = Array.from(synthChemoTargets).sort().map((t) => "BMF0"[t]);
-    synthLabels.push(`chemoR-{${tgts.join(",")}}`);
-  }
-  if (synthSimple.has(SYNTH_KIND.MECH)) synthLabels.push("mechR");
-  if (synthSimple.has(SYNTH_KIND.THERMO)) synthLabels.push("thermoR");
-  if (synthSimple.has(SYNTH_KIND.MAGNETO)) synthLabels.push("magR");
-  if (synthSimple.has(SYNTH_KIND.BOND)) synthLabels.push("bond");
-  if (synthSimple.has(SYNTH_KIND.REPAIR)) synthLabels.push("repair");
-  if (synthLabels.length > 0) metab.push(`synths {${synthLabels.join(", ")}}`);
+  // Metabolism: every named bootstrap reaction (aerobic / ferment /
+  // betaOx / photosynth / synth_* / digest_biop / membrane) fires on
+  // every cell at uncatRate by default. The genome's metabolic
+  // identity is which slots it BOOSTS above that baseline via
+  // SYNTH CAT, plus any DAMPING via SYNTH INH.
+  const metab: string[] = ["named bootstrap reactions (all run at baseline)"];
+  if (bondSet) metab.push("BOND-adhesive");
+  if (competenceSet) metab.push("COMPETENT (eDNA uptake)");
+  if (packageSet) metab.push("PACKAGE-shedding (sheds genome fragments)");
   lines.push(`Metabolism: ${metab.join(", ")}.`);
 
   // Catalysts: each SYNTH CAT <slot> boosts reaction slot N. First
@@ -4017,6 +4000,11 @@ function describeGenomeProse(genome: Uint8Array): string {
     lines.push(`Catalysts boost: ${slots.join(", ")}.`);
   } else {
     lines.push(`Catalysts boost: none.`);
+  }
+  // Inhibitors: each SYNTH INH <slot> damps reaction slot N.
+  if (inhibitorSlots.size > 0) {
+    const slots = Array.from(inhibitorSlots).sort((a, b) => a - b).map(reactionName);
+    lines.push(`Inhibitors damp: ${slots.join(", ")}.`);
   }
 
   // Excretes: EXCRETE operand mod CHEMICAL_COUNT picks any chem id.

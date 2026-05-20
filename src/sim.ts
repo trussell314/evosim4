@@ -15,12 +15,9 @@ import {
   mutateGenome,
   CATALYST_COUNT,
   N_REACTIONS,
-  OP,
   somaticMutateOnce,
   computeSenseRange,
   computeThrustAccel,
-  SYNTH_KIND,
-  SYNTH_KIND_COUNT,
   SYNTH_BIT_BOND,
   SYNTH_BIT_COMPETENCE,
   SYNTH_BIT_PACKAGE,
@@ -2623,22 +2620,15 @@ function makeCreature(
     return null;
   }
   const genome = rolled;
-  let hasEnz = false;
-  let hasChl = false;
-  for (let i = 0; i < genome.length; i++) {
-    const b = genome[i];
-    if (b === OP.SYNTH) {
-      const kind = (genome[(i + 1) % genome.length] ?? 0) % SYNTH_KIND_COUNT;
-      if (kind === SYNTH_KIND.ENZ) hasEnz = true;
-      if (kind === SYNTH_KIND.CHL) hasChl = true;
-    }
-  }
-  // Minimal cell body: biomass just above MIN_VIABLE_MEMBRANE (the
-  // membrane), a trickle of ADP and ATP to enable tick-1 chemistry,
-  // and the mandatory-multiplier molecules whose genome op the cell
-  // carries. SYNTH_MRNA is universal-required so mrna is too;
-  // chl/enz only seeded if their op is present. Nothing else --
-  // glucose, aa, fa, reserves all come from the scoop below.
+  // Minimal cell body: membrane just above MIN_VIABLE_MEMBRANE, a
+  // trickle of ADP + a starter ATP grant, and small starter pools of
+  // every chem the baseline reactions could produce. Phase 4a made
+  // the named biosynth reactions uncatRate-driven on every cell, so
+  // there's no longer a meaningful "this founder carries SYNTH X /
+  // this one doesn't" distinction at spawn time -- every founder can
+  // in principle synthesize every output. Seeding small starter
+  // pools avoids tick-1 thresholds (MIN_VIABLE_AMINOACID etc) killing
+  // a fresh cell before the baseline chemistry catches up.
   const c = newCreature(world.creatureStore, {
     x, y, z,
     r: MIN_CREATURE_R,
@@ -2651,8 +2641,8 @@ function makeCreature(
     color: genomeColor(genome),
     speciesKey: genomeKey(genome),
     molecules: {
-      // Membrane is the structural reserve now (biomass retired); MVG
-      // requires the cell to maintain it via SYNTH_BIO.
+      // Membrane: the structural reserve (just above
+      // MIN_VIABLE_MEMBRANE).
       membrane: 1,
       adp: 5,
       // Enough mRNA for biosynth to run near full rate from birth
@@ -2661,21 +2651,14 @@ function makeCreature(
       // Glucose so the cell can respire to *sustain* ATP past the
       // one-shot energy grant (it can't make ATP without fuel).
       glucose: 10,
-      // Seed a small amino acid pool so the new viability threshold
-      // (MIN_VIABLE_AMINOACID) doesn't kill founders before they have
-      // a chance to run SYNTH_AA / PREDATE / ENGULF. Maintenance
-      // decay also funnels a fraction of biomass-loss into aa each
-      // tick, but that takes a few sim-sec to accumulate.
+      // Small amino-acid pool so the new viability threshold
+      // (MIN_VIABLE_AMINOACID) doesn't kill the founder on tick 1.
       aminoAcid: 0.5,
-      // Heritable pigment: a founder whose genome expresses SYNTH_CHL
-      // inherits a small starter chlorophyll pool, exactly as enzyme
-      // users get a starter enzyme pool. Phototroph machinery is
-      // inherited, not synthesized from zero each generation; children
-      // already inherit chl via fission, so this only seeds founders.
-      // Still gated on the genome carrying SYNTH_CHL -- no free lunch
-      // for lineages that can't express the pathway.
-      chlorophyll: hasChl ? 0.5 : 0,
-      enzyme: hasEnz ? 0.5 : 0,
+      // Starter pigment + enzyme pools. Phase 4a made these
+      // synthesisable on every cell at baseline; seeding them avoids
+      // a tick-1 starvation while the baseline chemistry warms up.
+      chlorophyll: 0.5,
+      enzyme: 0.5,
       // Founders start with ZERO receptors -- sensing is earned. A
       // lineage that runs biosynth (SYNTH_BIO bit) replenishes its
       // receptor pool via reaction slots 12..15. A cell that doesn't

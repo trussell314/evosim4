@@ -1,10 +1,13 @@
 # Op redesign — universal id-addressed substrate (plan + design note)
 
-Status: **planning**. Phase 1 (abiotic energy landscape) is landed
-and validated (see `SCENARIO_RESULTS.md` → Phase 1 `vent`, and
-`COLONY_GAPS.md` GAP #6 revised). No op/ABI code written yet. This
-doc is the agreed design of record; open forks are listed at the
-end and must be resolved before Phase 2 code lands.
+Status: **shipped through Phase 5 + post-Phase cleanup.** Phases 1
+through 5 are all landed; the post-Phase cleanup that the
+individual Phase 4a / 5 commits explicitly left as follow-up (drop
+the dead SYNTH kinds + their bit exports + their archetype refs)
+is also done. SYNTH ABI is now `CAT / INH / BOND / COMPETENCE /
+PACKAGE` only; `SYNTH_KIND_COUNT = 5`. See `GENOME_ARCHETYPES.md`
+"Current SYNTH ABI" section for the live reference. This doc is
+kept as the historical design record.
 
 ## Goal
 

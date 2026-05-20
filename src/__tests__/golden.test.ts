@@ -168,7 +168,17 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // mass source. Generic chems were climbing into the hundreds of
     // millions of moles over a long run. Divide by molar mass on the
     // way in.
-    const GOLDEN = "d91b3f53";
+    // Bumped: dead SYNTH kinds (BIO/AA/FA/ENZ/CHL/MRNA/PHOTO/MECH/
+    // THERMO/MAGNETO/REPAIR/CHEMO) removed from genome.ts;
+    // SYNTH_KIND_COUNT 17 -> 5. The modulo applied to genome kind
+    // bytes shifts -- every existing SYNTH op in every test/founder
+    // genome decodes to a different live kind (CAT/INH/BOND/
+    // COMPETENCE/PACKAGE). viableGenome relaxed to just require
+    // REPRODUCE + sense + (heterotroph -> THRUST). Founders now use
+    // SYNTH CAT for differentiation. makeRandomViableGenome rebuilt
+    // around CAT boosts instead of dead SYNTH biosynth ops. Every
+    // archetype migrated. Determinism + mass-conservation green.
+    const GOLDEN = "b103d029";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

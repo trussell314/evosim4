@@ -55,12 +55,13 @@ Two different "marker" notions:
   evolvable numeric tag (256 values); `CHEM_BOND` is the enabling
   chemical.
 - **Scent / positional marker chemical — only `CHEM_MARKER0`.** The
-  one chem that is both freely excretable *and* a CHEMO target, so a
-  cell can `EXCRETE marker0` and others can sense its spatial gradient
-  via `SYNTH CHEMO 3`. Exactly one such channel — no marker1/2. Any
-  other chem can carry information via internal sensing or local
-  ambient, but only marker0 is spatially gradient-sensable as a
-  dedicated signal.
+  one chem that is both freely excretable *and* a universal-gradient
+  sense target, so a cell can `EXCRETE marker0` and others can sense
+  its spatial gradient via `SENSE_OUT CHEM_MARKER0` (Phase 3
+  universal gradient sense — no receptor required). Exactly one such
+  channel — no marker1/2. Any other chem can carry information via
+  internal sensing or local ambient, but only marker0 is the canonical
+  spatially-gradient-sensable signal.
 - Surface fingerprint exists but is engine-internal and **not
   VM-addressable**.
 

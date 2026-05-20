@@ -20,18 +20,9 @@ import {
   SYNTH_KIND,
   SYNTH_KIND_COUNT,
   CATALYST_COUNT,
-  SYNTH_BIT_BIO,
-  SYNTH_BIT_AA,
-  SYNTH_BIT_FA,
-  SYNTH_BIT_ENZ,
-  SYNTH_BIT_CHL,
-  SYNTH_BIT_MRNA,
-  SYNTH_BIT_PHOTO_BASE,
-  SYNTH_BIT_MECH,
-  SYNTH_BIT_THERMO,
-  SYNTH_BIT_MAGNETO,
   SYNTH_BIT_BOND,
-  SYNTH_BIT_REPAIR,
+  SYNTH_BIT_COMPETENCE,
+  SYNTH_BIT_PACKAGE,
   GENE_FRAGMENT_CAP,
   appendGenomeBytes,
 } from "../genome";
@@ -442,15 +433,18 @@ describe("mutateGenome", () => {
 describe("genome decoding: known byte sequences", () => {
   // The SYNTH op is 3 bytes: [SYNTH, kindByte, paramByte]. The live
   // VM is the source of truth for what a cell actually expresses.
+  // After Phase 4a the only kinds with runtime effect are CAT, INH,
+  // BOND, COMPETENCE, PACKAGE.
   describe("dynamic VM (runTick) -- the executed contract", () => {
-    it("[SYNTH, BIO, 0] sets the BIO synth bit", () => {
-      const { out } = exec([OP.SYNTH, SYNTH_KIND.BIO, 0]);
-      expect(out.synthMask & (1 << SYNTH_BIT_BIO)).toBeTruthy();
+    it("[SYNTH, CAT, 3] sets bit 3 of catSynthMask (photosynth slot)", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 3]);
+      expect(out.catSynthMask & (1 << 3)).toBeTruthy();
+      expect(out.inhSynthMask).toBe(0);
     });
-    it("[SYNTH, FA, 0] sets the FA synth bit, not BIO", () => {
-      const { out } = exec([OP.SYNTH, SYNTH_KIND.FA, 0]);
-      expect(out.synthMask & (1 << SYNTH_BIT_FA)).toBeTruthy();
-      expect(out.synthMask & (1 << SYNTH_BIT_BIO)).toBeFalsy();
+    it("[SYNTH, INH, 4] sets bit 4 of inhSynthMask (synth_aa slot)", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.INH, 4]);
+      expect(out.inhSynthMask & (1 << 4)).toBeTruthy();
+      expect(out.catSynthMask).toBe(0);
     });
     it("[SYNTH, BOND, 200] sets BOND bit AND exposes marker 200", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.BOND, 200]);
@@ -461,7 +455,15 @@ describe("genome decoding: known byte sequences", () => {
       expect(exec([OP.SYNTH, SYNTH_KIND.BOND, 7]).out.bondMarker).toBe(7);
     });
     it("no SYNTH BOND -> bondMarker stays -1 (not adhesive)", () => {
-      expect(exec([OP.SYNTH, SYNTH_KIND.BIO, 0]).out.bondMarker).toBe(-1);
+      expect(exec([OP.SYNTH, SYNTH_KIND.CAT, 0]).out.bondMarker).toBe(-1);
+    });
+    it("[SYNTH, COMPETENCE, 0] sets the COMPETENCE bit", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]);
+      expect(out.synthMask & (1 << SYNTH_BIT_COMPETENCE)).toBeTruthy();
+    });
+    it("[SYNTH, PACKAGE, 0] sets the PACKAGE bit", () => {
+      const { out } = exec([OP.SYNTH, SYNTH_KIND.PACKAGE, 0]);
+      expect(out.synthMask & (1 << SYNTH_BIT_PACKAGE)).toBeTruthy();
     });
     it("kindByte is taken mod SYNTH_KIND_COUNT (wraps)", () => {
       // SYNTH_KIND_COUNT + BOND == BOND after the mod, still bond.
@@ -489,27 +491,29 @@ describe("genome decoding: known byte sequences", () => {
       expect(v).toBe(42);
     });
     it("exposes the first operand byte (kind) of SYNTH", () => {
-      // Static decoders (genomeSynthMask/viableGenome/trophicMode) all
-      // read this to learn which chem a cell builds. SYNTH has two
-      // operand bytes; the first is the kind.
+      // Static decoders (genomeSynthMask/summarizeGenome) read this
+      // to learn what a SYNTH op does. SYNTH has two operand bytes;
+      // the first is the kind.
       let kindByte: number | undefined = -999;
-      walkGenome(new Uint8Array([OP.SYNTH, SYNTH_KIND.FA, 7]),
+      walkGenome(new Uint8Array([OP.SYNTH, SYNTH_KIND.BOND, 7]),
         (op, _pc, operand) => { if (op === OP.SYNTH) kindByte = operand; });
-      expect(kindByte).toBe(SYNTH_KIND.FA);
+      expect(kindByte).toBe(SYNTH_KIND.BOND);
     });
   });
 
-  // genomeSynthMask: static "what could this genome build" used for
-  // engulfed cells whose VM doesn't run, and as the genotype classifier.
+  // genomeSynthMask: static "what could this genome do via SYNTH" used
+  // for engulfed cells whose VM doesn't run. Only carries BOND /
+  // COMPETENCE / PACKAGE (the non-CAT/INH kinds with a runtime
+  // effect); CAT and INH go through their own parallel masks.
   describe("genomeSynthMask static synth intent", () => {
-    it("[SYNTH BIO][SYNTH FA] -> BIO and FA bits set", () => {
+    it("[SYNTH BOND][SYNTH PACKAGE] -> BOND and PACKAGE bits set", () => {
       const g = new Uint8Array([
-        OP.SYNTH, SYNTH_KIND.BIO, 0,
-        OP.SYNTH, SYNTH_KIND.FA, 0,
+        OP.SYNTH, SYNTH_KIND.BOND, 0,
+        OP.SYNTH, SYNTH_KIND.PACKAGE, 0,
       ]);
       const m = genomeSynthMask(g);
-      expect(m & (1 << SYNTH_BIT_BIO)).toBeTruthy();
-      expect(m & (1 << SYNTH_BIT_FA)).toBeTruthy();
+      expect(m & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+      expect(m & (1 << SYNTH_BIT_PACKAGE)).toBeTruthy();
     });
     it("a SYNTH BOND op is detectable in the static mask", () => {
       const g = new Uint8Array([OP.SYNTH, SYNTH_KIND.BOND, 123]);
@@ -518,11 +522,18 @@ describe("genome decoding: known byte sequences", () => {
     it("no SYNTH ops -> empty mask", () => {
       expect(genomeSynthMask(new Uint8Array([OP.THRUST, OP.REPRODUCE]))).toBe(0);
     });
+    it("SYNTH CAT / INH are NOT in the synthMask (use parallel masks)", () => {
+      const g = new Uint8Array([
+        OP.SYNTH, SYNTH_KIND.CAT, 3,
+        OP.SYNTH, SYNTH_KIND.INH, 4,
+      ]);
+      expect(genomeSynthMask(g)).toBe(0);
+    });
     it("matches the VM's bit for the same well-aligned op", () => {
-      const bytes = [OP.SYNTH, SYNTH_KIND.FA, 0];
+      const bytes = [OP.SYNTH, SYNTH_KIND.BOND, 0];
       const dyn = exec(bytes).out.synthMask;
       const stat = genomeSynthMask(new Uint8Array(bytes));
-      expect(stat & (1 << SYNTH_BIT_FA)).toBe(dyn & (1 << SYNTH_BIT_FA));
+      expect(stat & (1 << SYNTH_BIT_BOND)).toBe(dyn & (1 << SYNTH_BIT_BOND));
     });
   });
 
@@ -654,36 +665,19 @@ describe("VM op coverage: every defined op", () => {
     });
   });
 
-  describe("SYNTH: every kind sets its documented bit", () => {
+  describe("SYNTH: every live kind sets its documented bit", () => {
+    // synthMask-bit-setting kinds (the ones with a runtime effect that
+    // ISN'T CAT/INH -- those go to their own parallel masks).
     const bitOf: Array<[number, number]> = [
-      [SYNTH_KIND.BIO, SYNTH_BIT_BIO],
-      [SYNTH_KIND.AA, SYNTH_BIT_AA],
-      [SYNTH_KIND.FA, SYNTH_BIT_FA],
-      [SYNTH_KIND.ENZ, SYNTH_BIT_ENZ],
-      [SYNTH_KIND.CHL, SYNTH_BIT_CHL],
-      [SYNTH_KIND.MRNA, SYNTH_BIT_MRNA],
-      [SYNTH_KIND.MECH, SYNTH_BIT_MECH],
-      [SYNTH_KIND.THERMO, SYNTH_BIT_THERMO],
-      [SYNTH_KIND.MAGNETO, SYNTH_BIT_MAGNETO],
       [SYNTH_KIND.BOND, SYNTH_BIT_BOND],
-      [SYNTH_KIND.REPAIR, SYNTH_BIT_REPAIR],
+      [SYNTH_KIND.COMPETENCE, SYNTH_BIT_COMPETENCE],
+      [SYNTH_KIND.PACKAGE, SYNTH_BIT_PACKAGE],
     ];
     for (const [kind, bit] of bitOf) {
       it(`kind ${kind} -> synthMask bit ${bit}`, () => {
         expect(exec([OP.SYNTH, kind, 0, HALT_MARK]).out.synthMask).toBe(1 << bit);
       });
     }
-    it("PHOTO param selects the band bit (param % 3)", () => {
-      for (let p = 0; p < 5; p++) {
-        expect(exec([OP.SYNTH, SYNTH_KIND.PHOTO, p, HALT_MARK]).out.synthMask)
-          .toBe(1 << (SYNTH_BIT_PHOTO_BASE + (p % 3)));
-      }
-    });
-    it("CHEMO is a Phase-5 no-op (subsumed by SENSE_OUT <chemId>)", () => {
-      for (let p = 0; p < 6; p++) {
-        expect(exec([OP.SYNTH, SYNTH_KIND.CHEMO, p, HALT_MARK]).out.synthMask).toBe(0);
-      }
-    });
     it("CAT routes to catSynthMask, not synthMask (param = slot)", () => {
       const { out } = exec([OP.SYNTH, SYNTH_KIND.CAT, 3, HALT_MARK]);
       expect(out.synthMask).toBe(0);
@@ -696,8 +690,8 @@ describe("VM op coverage: every defined op", () => {
       expect(out.inhSynthMask).toBe(1 << (7 % CATALYST_COUNT));
     });
     it("kindByte wraps mod SYNTH_KIND_COUNT", () => {
-      expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.AA, 0, HALT_MARK]).out.synthMask)
-        .toBe(1 << SYNTH_BIT_AA);
+      expect(exec([OP.SYNTH, SYNTH_KIND_COUNT + SYNTH_KIND.BOND, 0, HALT_MARK]).out.synthMask)
+        .toBe(1 << SYNTH_BIT_BOND);
     });
   });
 });

@@ -95,60 +95,45 @@ export const OP = {
 // bit in VMOutputs.synthMask (or, for multi-param kinds like PHOTO
 // and CHEMO, sets one of several bits keyed on param). CAT routes
 // to VMOutputs.catSynthMask separately. K-4 of the chemistry overhaul.
+// SYNTH kinds the VM actually consumes. After Phase 4a the named
+// biosynth/receptor kinds (BIO/AA/FA/ENZ/CHL/MRNA/PHOTO/CHEMO/MECH/
+// THERMO/MAGNETO/REPAIR) were retired -- their reactions now run on
+// every cell at uncatRate so the "declare the pathway" gate no
+// longer exists. CAT / INH / BOND / COMPETENCE / PACKAGE are the
+// only kinds that still produce a runtime effect, so they're the
+// only kinds left. SYNTH_KIND_COUNT is the modulo applied to the
+// genome's kind byte; shrinking it reroutes mutation pressure away
+// from the dead surface.
 export const SYNTH_KIND = {
-  BIO:     0,  // membrane synth (was SYNTH_BIO)
-  AA:      1,
-  FA:      2,
-  ENZ:     3,
-  CHL:     4,
-  MRNA:    5,
-  PHOTO:   6,  // param: band 0..2 (visible / long / surface)
-  CHEMO:   7,  // param: target 0..3 (biopolymer / minerals / fa / marker0)
-  MECH:    8,
-  THERMO:  9,
-  MAGNETO: 10,
-  BOND:    11,
-  REPAIR:  12,
-  CAT:     13, // param: catalyst slot 0..255
-  // Competence: expressed on a tick to take up a nearby extracellular
-  // DNA fragment (HGT) or one in the host-scoped buffer (EGT). The
-  // uptake/integration is physical (see eDnaUptakePass); this op only
-  // marks the cell competent this tick, like every other SYNTH gate.
-  COMPETENCE: 14,
-  // Active packaging: expressed on a tick to encapsulate a fragment of
-  // the cell's OWN genome and shed it as a free-floating carrier (the
-  // donor-side virus/plasmid/conjugation strategy). Modeled like an
-  // ATP-costed secretion -- emphatically not a targeted "inject"
-  // verb: the donor cannot address a recipient. Who, if anyone, takes
-  // it up is decided by the physical carrier + recipient competence.
-  PACKAGE: 15,
+  // Boost reaction slot <param> above its uncatRate baseline. The
+  // primary differentiation mechanism: every "what kind of cell is
+  // this" question is now "which slots is it pouring catalyst into."
+  CAT: 0, // param: reaction slot 0..255
   // Allosteric inhibitor for reaction slot <param>. Dual of CAT --
-  // the genome SYNTHs an inhibitor protein that multiplies the slot's
-  // effective rate DOWN (1 - INH_K * inhPool / CAT_REF). Paid + decaying;
-  // it is the off-switch for the bootstrap floor reactions that run
-  // unconditionally now that the synthMask enable-gate has been retired.
-  INH: 16,
+  // multiplies the slot's effective rate down (1 - INH_K * inhPool
+  // / CAT_REF). Paid + decaying; it's the off-switch for the
+  // constitutive bootstrap floor (Phase 4b).
+  INH: 1, // param: reaction slot 0..255
+  // Adhesion marker (greenbeard). Param byte is the lineage tag;
+  // cells with matching tags bond. Inherited by clones at fission.
+  BOND: 2,
+  // Competence (HGT uptake): expressed on a tick to take up a
+  // nearby extracellular DNA fragment or one from the host-scoped
+  // buffer. Uptake/integration is physical (see eDnaUptakePass);
+  // this op only marks the cell competent for the tick.
+  COMPETENCE: 3,
+  // Active packaging (HGT shed): expressed on a tick to encapsulate
+  // a fragment of the cell's OWN genome and ship it as a free-
+  // floating carrier (donor-side virus/plasmid/conjugation). Donor
+  // cannot address a recipient; uptake is the recipient's call.
+  PACKAGE: 4,
 } as const;
-export const SYNTH_KIND_COUNT = 17;
-// synthMask bit positions. Per-kind bits 0..5 + 13..17 use one bit
-// each; PHOTO occupies bits 6..8 (one per band), CHEMO occupies
-// bits 9..12 (one per target). 18 bits total.
-export const SYNTH_BIT_BIO = 0;
-export const SYNTH_BIT_AA = 1;
-export const SYNTH_BIT_FA = 2;
-export const SYNTH_BIT_ENZ = 3;
-export const SYNTH_BIT_CHL = 4;
-export const SYNTH_BIT_MRNA = 5;
-export const SYNTH_BIT_PHOTO_BASE = 6;     // +0..+2
-// SYNTH_BIT_CHEMO_BASE retired (Phase 5): chemo activation collapsed
-// onto SENSE_OUT, SYNTH CHEMO is a no-op. Bits 9-12 are unallocated.
-export const SYNTH_BIT_MECH = 13;
-export const SYNTH_BIT_THERMO = 14;
-export const SYNTH_BIT_MAGNETO = 15;
-export const SYNTH_BIT_BOND = 16;
-export const SYNTH_BIT_REPAIR = 17;
-export const SYNTH_BIT_COMPETENCE = 18;
-export const SYNTH_BIT_PACKAGE = 19;
+export const SYNTH_KIND_COUNT = 5;
+// synthMask bit positions. One bit per kind that has a non-CAT/INH
+// effect (those two use the parallel catSynthMask / inhSynthMask).
+export const SYNTH_BIT_BOND = 0;
+export const SYNTH_BIT_COMPETENCE = 1;
+export const SYNTH_BIT_PACKAGE = 2;
 
 // Number of catalyst slots. Kept in genome.ts (not sim.ts) because
 // the VM dispatch mods the operand by this -- it's part of the
@@ -492,35 +477,19 @@ export function runTick(
         vmPush(stack, _GRAD[1]);
         break;
       }
-      // Unified SYNTH op (Tier 3 K-4). Two-byte operand: kind, param.
-      // Kind selects the chem family; param picks band (PHOTO) /
-      // target (CHEMO) / catalyst slot (CAT). Other kinds ignore
-      // param. Each kind sets one bit in synthMask; per-cell
-      // chemoreceptor target is implicit in the bit position.
+      // Unified SYNTH op. Two-byte operand: kind, param. Kind picks
+      // CAT/INH/BOND/COMPETENCE/PACKAGE (the only kinds with runtime
+      // effect after Phase 4a); param picks catalyst slot (CAT/INH)
+      // or adhesion marker (BOND). Unrecognized kinds (post-mod) are
+      // impossible since the modulo is the count.
       case OP.SYNTH: {
         const kindByte = genome[state.pc % L]; state.pc++;
         const param = genome[state.pc % L]; state.pc++;
         const kind = kindByte % SYNTH_KIND_COUNT;
         switch (kind) {
-          case SYNTH_KIND.BIO:    out.synthMask |= 1 << SYNTH_BIT_BIO; break;
-          case SYNTH_KIND.AA:     out.synthMask |= 1 << SYNTH_BIT_AA; break;
-          case SYNTH_KIND.FA:     out.synthMask |= 1 << SYNTH_BIT_FA; break;
-          case SYNTH_KIND.ENZ:    out.synthMask |= 1 << SYNTH_BIT_ENZ; break;
-          case SYNTH_KIND.CHL:    out.synthMask |= 1 << SYNTH_BIT_CHL; break;
-          case SYNTH_KIND.MRNA:   out.synthMask |= 1 << SYNTH_BIT_MRNA; break;
-          case SYNTH_KIND.PHOTO:  out.synthMask |= 1 << (SYNTH_BIT_PHOTO_BASE + (param % 3)); break;
-          // Phase 5: SYNTH CHEMO is a no-op. Chemo receptor sense
-          // collapsed into the universal SENSE_OUT <chemId> op; this
-          // case is kept so SYNTH_KIND_COUNT stays stable for the
-          // mutation-byte distribution.
-          case SYNTH_KIND.CHEMO:  break;
-          case SYNTH_KIND.MECH:   out.synthMask |= 1 << SYNTH_BIT_MECH; break;
-          case SYNTH_KIND.THERMO: out.synthMask |= 1 << SYNTH_BIT_THERMO; break;
-          case SYNTH_KIND.MAGNETO: out.synthMask |= 1 << SYNTH_BIT_MAGNETO; break;
-          case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
-          case SYNTH_KIND.REPAIR: out.synthMask |= 1 << SYNTH_BIT_REPAIR; break;
           case SYNTH_KIND.CAT:    out.catSynthMask |= 1 << (param % CATALYST_COUNT); break;
           case SYNTH_KIND.INH:    out.inhSynthMask |= 1 << (param % CATALYST_COUNT); break;
+          case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
           case SYNTH_KIND.COMPETENCE: out.synthMask |= 1 << SYNTH_BIT_COMPETENCE; break;
           case SYNTH_KIND.PACKAGE: out.synthMask |= 1 << SYNTH_BIT_PACKAGE; break;
         }
@@ -644,18 +613,14 @@ export interface GenomeSummary {
   selfModifies: boolean;
   sensors: string[];
   capabilities: string[];
-  // Metabolism / chemistry axis. Populated by walking SYNTH_* ops
-  // and trophic ops. Used for the new "Metabolism" bullet + top-line
-  // summary + warnings section.
-  synthBio: boolean;
-  synthAA: boolean;
-  synthFA: boolean;
-  synthEnz: boolean;
-  synthChl: boolean;
-  synthRibo: boolean;
-  // Catalyst slots SYNTH_CAT will populate if it fires at the listed
-  // PCs. Best-effort static analysis: operand byte mod CATALYST_COUNT.
-  // Doesn't catch runtime PC drift; gives an honest "likely portfolio".
+  // Catalyst / inhibitor slots SYNTH CAT / SYNTH INH will populate if
+  // they fire at the listed PCs. Best-effort static analysis: operand
+  // byte mod CATALYST_COUNT. Doesn't catch runtime PC drift; gives an
+  // honest "likely portfolio" view of the cell's metabolic identity.
+  // After Phase 4a these are how a cell differentiates -- every named
+  // bootstrap reaction fires at uncatRate on every cell, so the only
+  // genome-controlled axis is which slots get boosted (CAT) or damped
+  // (INH) above/below that baseline.
   catalystSlots: number[];
   inhibitorSlots: number[];
   metabolism: string;       // one-line classification
@@ -678,8 +643,6 @@ export function summarizeGenome(
   let selfModifies = false;
   let hasJump = false, hasCmp = false;
   let executableOps = 0, unknownBytes = 0;
-  let synthBio = false, synthAA = false, synthFA = false;
-  let synthEnz = false, synthChl = false, synthRibo = false;
   const catalystSlots: number[] = [];
   const inhibitorSlots: number[] = [];
 
@@ -715,28 +678,19 @@ export function summarizeGenome(
         // operand here is the first operand byte (kind). The param
         // byte is at genome[pc+2] (one past the kind).
         const kind = (operand ?? 0) % SYNTH_KIND_COUNT;
-        switch (kind) {
-          case SYNTH_KIND.BIO:    synthBio = true; break;
-          case SYNTH_KIND.AA:     synthAA = true; break;
-          case SYNTH_KIND.FA:     synthFA = true; break;
-          case SYNTH_KIND.ENZ:    synthEnz = true; break;
-          case SYNTH_KIND.CHL:    synthChl = true; break;
-          case SYNTH_KIND.MRNA:   synthRibo = true; break;
-          case SYNTH_KIND.CAT: {
-            const param = genome[(i + 2) % genome.length] ?? 0;
-            const slot = param % CATALYST_COUNT;
-            if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
-            break;
-          }
-          case SYNTH_KIND.INH: {
-            const param = genome[(i + 2) % genome.length] ?? 0;
-            const slot = param % CATALYST_COUNT;
-            if (!inhibitorSlots.includes(slot)) inhibitorSlots.push(slot);
-            break;
-          }
-          // Tier 3 sense-related SYNTH kinds don't get summary flags
-          // yet; HUD will pick them up via the chem-pool inspector.
+        if (kind === SYNTH_KIND.CAT) {
+          const param = genome[(i + 2) % genome.length] ?? 0;
+          const slot = param % CATALYST_COUNT;
+          if (!catalystSlots.includes(slot)) catalystSlots.push(slot);
+        } else if (kind === SYNTH_KIND.INH) {
+          const param = genome[(i + 2) % genome.length] ?? 0;
+          const slot = param % CATALYST_COUNT;
+          if (!inhibitorSlots.includes(slot)) inhibitorSlots.push(slot);
         }
+        // BOND / COMPETENCE / PACKAGE kinds have effects but no slot,
+        // so the summary picks them up via the capability axis below
+        // (BOND => bondMarker; COMPETENCE / PACKAGE => HGT
+        // capabilities). Not flagged here.
         break;
       }
       case OP.JZ: case OP.JNZ: hasJump = true; break;
@@ -814,10 +768,37 @@ export function summarizeGenome(
     ? `Reads ${sensors.join(", ")}, but with no JZ/JNZ + comparison the readings don't gate any decision -- actions fire reflexively.`
     : `Yes -- reads ${sensors.join(", ")}, and has JZ/JNZ + comparison gating its actions.`));
 
+  // Catalyst-slot interpretation. Mirror of sim/reactions.ts named
+  // installs -- keep in sync if those renumber. Used by the metabolism
+  // classifier below to read "this cell boosts photosynth + synth_aa"
+  // as "is an autotroph", without inventing dead SYNTH-kind flags.
+  const SLOT_PHOTOSYNTH = 3;
+  const SLOT_SYNTH_AA = 4;
+  const SLOT_SYNTH_CHL = 6;
+  const SLOT_SYNTH_ENZ = 7;
+  const SLOT_SYNTH_MEM_AAFA = 9;
+  const SLOT_DIGEST_BIOP = 10;
+  const SLOT_SYNTH_MEM_FA = 11;
+  const SLOT_NAMES: Record<number, string> = {
+    0: "respiration", 1: "fermentation", 2: "beta-ox",
+    3: "photosynth", 4: "synth_aa", 5: "synth_fa",
+    6: "synth_chl", 7: "synth_enz", 8: "synth_ribo",
+    9: "synth_membrane(aa+fa)", 10: "digest_biopolymer",
+    11: "synth_membrane(fa)", 12: "synth_photo_v",
+    19: "synth_mech", 20: "synth_thermo", 21: "synth_magneto",
+  };
+  const boostsPhotosynth = catalystSlots.includes(SLOT_PHOTOSYNTH);
+  const boostsChl = catalystSlots.includes(SLOT_SYNTH_CHL);
+  const boostsDigest = catalystSlots.includes(SLOT_DIGEST_BIOP);
+  const boostsMembrane = catalystSlots.includes(SLOT_SYNTH_MEM_AAFA)
+    || catalystSlots.includes(SLOT_SYNTH_MEM_FA);
+  const isHetero = ingests || predate || engulf;
+  const isPhotoauto = (boostsPhotosynth || boostsChl) && !isHetero;
+
   // Net behavior: short verdict + likely fate in this environment.
   let netClass: string;
   if (!anyAction) netClass = "An inert blob.";
-  else if (synthChl && synthBio && reproduce) netClass = "A photoautotroph that builds biomass from light and divides.";
+  else if (isPhotoauto && reproduce) netClass = "A photoautotroph: boosts photosynth/chl above baseline, no INGEST, divides.";
   else if (predate || engulf) netClass = "A predator.";
   else if (thrust && ingests && reproduce) netClass = "A complete loop: senses, swims, eats, divides.";
   else if (ingests && reproduce) netClass = "A passive eater that divides -- doesn't steer toward food.";
@@ -827,63 +808,56 @@ export function summarizeGenome(
   else if (reproduce) netClass = "Tries to divide but can't sustain itself (no eat path).";
   else netClass = "Has actions, but no eat path.";
 
-  // Metabolism axis. Based on which trophic + synth ops are present;
-  // doesn't simulate runtime so a SYNTH_* op buried after a never-
-  // taken branch still "counts" -- intentional, we want to surface
-  // anything the genome could in principle do.
-  const isHetero = ingests || predate || engulf;
+  // Metabolism axis. Every cell metabolizes at baseline (post-Phase-4a
+  // uncatRate floor); a cell's "identity" now lives in which reaction
+  // slots it boosts via SYNTH CAT. Read those + the trophic ops to
+  // describe the cell.
   let metabolism: string;
-  if (synthChl && isHetero) {
-    metabolism = "predatory autotroph (photosynth + extracts from prey)";
-  } else if (synthChl) {
-    metabolism = synthAA && synthFA
-      ? "complete photoautotroph"
-      : "incomplete photoautotroph (missing aa/fa synthesis)";
+  if (isPhotoauto && (predate || engulf)) {
+    metabolism = "predatory autotroph (boosts photosynth + extracts from prey)";
+  } else if (isPhotoauto) {
+    const haveAa = catalystSlots.includes(SLOT_SYNTH_AA);
+    metabolism = haveAa
+      ? "photoautotroph (boosts photosynth + synth_aa)"
+      : "photoautotroph (boosts photosynth but not synth_aa -- aa supply rate-limited at baseline)";
   } else if ((predate || engulf) && !ingests) {
     metabolism = "obligate predator";
   } else if (predate || engulf) {
     metabolism = "predator-grazer hybrid";
   } else if (ingests) {
-    metabolism = synthEnz
-      ? "heterotroph (digests reserves into molecules)"
-      : "molecule-grazer (no SYNTH_ENZ -- can only consume tagged corpse particles, not raw substrate)";
+    const haveDigest = boostsDigest;
+    const haveEnz = catalystSlots.includes(SLOT_SYNTH_ENZ);
+    metabolism = (haveDigest || haveEnz)
+      ? "heterotroph (boosts digestion / enzyme synth)"
+      : "heterotroph (runs digestion at baseline only)";
+  } else if (catalystSlots.length > 0) {
+    metabolism = "specialist (boosts " + catalystSlots.slice(0, 3).map((s) => SLOT_NAMES[s] ?? `slot ${s}`).join(", ") + ")";
   } else {
     metabolism = "no trophic input -- can't acquire mass";
   }
   bullets.push("- Metabolism: " + metabolism + ".");
 
-  const builds: string[] = [];
-  if (synthBio) builds.push("biomass");
-  if (synthAA) builds.push("amino acid");
-  if (synthFA) builds.push("fatty acid");
-  if (synthEnz) builds.push("enzyme");
-  if (synthChl) builds.push("chlorophyll");
-  if (synthRibo) builds.push("mRNA");
-  bullets.push("- Builds: " + (builds.length > 0 ? builds.join(", ") : "nothing (no SYNTH_* ops present)") + ".");
-
   bullets.push("- Catalysts: " + (catalystSlots.length > 0
-    ? `SYNTH_CAT targets slot${catalystSlots.length === 1 ? "" : "s"} ${catalystSlots.slice(0, 8).sort((a, b) => a - b).join(", ")}${catalystSlots.length > 8 ? `, +${catalystSlots.length - 8} more` : ""}.`
-    : "no SYNTH_CAT; inherits whatever the parent split provided."));
+    ? `boosts slot${catalystSlots.length === 1 ? "" : "s"} ${catalystSlots.slice(0, 8).sort((a, b) => a - b).map((s) => `${s}${SLOT_NAMES[s] ? ` (${SLOT_NAMES[s]})` : ""}`).join(", ")}${catalystSlots.length > 8 ? `, +${catalystSlots.length - 8} more` : ""}.`
+    : "no SYNTH CAT -- runs every reaction at baseline only."));
+  if (inhibitorSlots.length > 0) {
+    bullets.push("- Inhibitors: damps slot" + (inhibitorSlots.length === 1 ? "" : "s") + " " + inhibitorSlots.slice(0, 8).sort((a, b) => a - b).map((s) => `${s}${SLOT_NAMES[s] ? ` (${SLOT_NAMES[s]})` : ""}`).join(", ") + ".");
+  }
 
   // Warnings: structural issues that make the lineage doomed under
   // the current biology. Quiet (no warnings line) if the genome
   // checks out.
   const warnings: string[] = [];
-  if (synthBio && !synthRibo) {
-    warnings.push("SYNTH_BIO without SYNTH_MRNA -- mRNA decay and biosynth stalls.");
+  if (isHetero && !thrust) {
+    warnings.push("heterotroph without THRUST -- can't chase new food patches once the local pool is exhausted.");
   }
-  if (synthChl && !isHetero && !synthAA) {
-    warnings.push("pure autotroph without SYNTH_AA -- aa supply will run out.");
+  if (isPhotoauto && !boostsMembrane && !boostsDigest) {
+    // Photoautotroph without any biosynth boost -- everything runs at
+    // uncatRate floor; the cell can survive but won't outcompete a
+    // baseline cell.
+    warnings.push("photoautotroph with no growth-pathway boost -- metabolizes at baseline only; no genome-specific edge.");
   }
-  if (synthChl && !isHetero && !synthFA) {
-    warnings.push("pure autotroph without SYNTH_FA -- fa supply will run out.");
-  }
-  if (isHetero && !synthEnz) {
-    warnings.push("heterotroph without SYNTH_ENZ -- reserves don't count as fuel (MIN_USABLE_ENZYME).");
-  }
-  if (!synthAA && !predate && !engulf) {
-    warnings.push("no amino-acid source (SYNTH_AA / PREDATE / ENGULF) -- can't sustain growth ops.");
-  }
+  void boostsDigest; void boostsMembrane;
   if (warnings.length > 0) {
     bullets.push("- Warnings: " + warnings.join(" "));
   }
@@ -930,7 +904,6 @@ export function summarizeGenome(
     thrust, turn, ingests, excreteMaterials,
     reproduce, predate, engulf, selfModifies,
     sensors, capabilities,
-    synthBio, synthAA, synthFA, synthEnz, synthChl, synthRibo,
     catalystSlots, inhibitorSlots, metabolism, warnings, oneLine,
     verdict: lines.join("\n"),
   };
@@ -1018,36 +991,18 @@ export function computeThrustAccel(_genome: Uint8Array): number {
 // spawn time saves us from watching long sterile lives.
 
 // Static synthMask derived from genome op set. Used for engulfed
-// cells whose VM doesn't run -- their biosynthesis intent is locked
-// to whichever SYNTH kinds happen to appear in their genome. K-4
-// rewrite: walk every SYNTH op, decode kind, set the matching bit.
+// cells whose VM doesn't run -- their HGT / adhesion intent is locked
+// to whichever non-CAT/INH SYNTH kinds happen to appear in their
+// genome. (CAT and INH use parallel masks; they're not represented
+// in synthMask.)
 export function genomeSynthMask(genome: Uint8Array): number {
   let mask = 0;
   walkGenome(genome, (op, _pc, operand) => {
     if (op !== OP.SYNTH || operand === undefined) return;
     const kind = operand % SYNTH_KIND_COUNT;
-    // PHOTO/CHEMO use param too; for static-mask purposes we OR all
-    // band/target bits since we don't know which the cell will fire.
-    switch (kind) {
-      case SYNTH_KIND.BIO:    mask |= 1 << SYNTH_BIT_BIO; break;
-      case SYNTH_KIND.AA:     mask |= 1 << SYNTH_BIT_AA; break;
-      case SYNTH_KIND.FA:     mask |= 1 << SYNTH_BIT_FA; break;
-      case SYNTH_KIND.ENZ:    mask |= 1 << SYNTH_BIT_ENZ; break;
-      case SYNTH_KIND.CHL:    mask |= 1 << SYNTH_BIT_CHL; break;
-      case SYNTH_KIND.MRNA:   mask |= 1 << SYNTH_BIT_MRNA; break;
-      case SYNTH_KIND.PHOTO:
-        mask |= (1 << SYNTH_BIT_PHOTO_BASE) | (1 << (SYNTH_BIT_PHOTO_BASE + 1)) | (1 << (SYNTH_BIT_PHOTO_BASE + 2));
-        break;
-      // Phase 5: SYNTH CHEMO is a no-op; see runtime switch.
-      case SYNTH_KIND.CHEMO: break;
-      case SYNTH_KIND.MECH:    mask |= 1 << SYNTH_BIT_MECH; break;
-      case SYNTH_KIND.THERMO:  mask |= 1 << SYNTH_BIT_THERMO; break;
-      case SYNTH_KIND.MAGNETO: mask |= 1 << SYNTH_BIT_MAGNETO; break;
-      case SYNTH_KIND.BOND:    mask |= 1 << SYNTH_BIT_BOND; break;
-      case SYNTH_KIND.REPAIR:  mask |= 1 << SYNTH_BIT_REPAIR; break;
-      case SYNTH_KIND.COMPETENCE: mask |= 1 << SYNTH_BIT_COMPETENCE; break;
-      case SYNTH_KIND.PACKAGE: mask |= 1 << SYNTH_BIT_PACKAGE; break;
-    }
+    if (kind === SYNTH_KIND.BOND) mask |= 1 << SYNTH_BIT_BOND;
+    else if (kind === SYNTH_KIND.COMPETENCE) mask |= 1 << SYNTH_BIT_COMPETENCE;
+    else if (kind === SYNTH_KIND.PACKAGE) mask |= 1 << SYNTH_BIT_PACKAGE;
   });
   return mask;
 }
@@ -1087,69 +1042,44 @@ const SENSE_OPS: ReadonlySet<number> = new Set([
 //                    few seconds; without movement the cell can't
 //                    refill its pool from elsewhere. Photoautotrophs
 //                    are exempt (sun reaches them where they sit).
-//  Photoautotroph-only (SYNTH_CHL, no INGEST/PREDATE/ENGULF):
-//    - hasAA:        SYNTH_AA -- cell makes its own amino acid from
-//                    photosynth glucose. SYNTH_FA is already
-//                    required universally above.
+// After Phase 4a all named biosynth reactions (synth_bio/aa/fa/enz/chl/
+// mrna/photo*/thermo/mech/magneto) run on every cell at uncatRate
+// unconditionally. There is no longer a SYNTH op that "declares the
+// pathway" -- the cell either has the SUBSTRATES at hand (which is the
+// trophic question) or it doesn't. Photosynthesis specifically still
+// needs intracellular chl, but chl synth itself fires at baseline, so
+// presence-of-SYNTH-CHL is not a viability gate either.
+//
+// The actual viability requirements collapse to:
+//   - hasReproduce: REPRODUCE op. A cell that can never fission is
+//     evolutionarily dead.
+//   - hasSense:     any SENSE_* / SELF_* op. A cell that can't read
+//                   state can only emit constant behavior.
+//   - has-a-mass-source: INGEST/PREDATE/ENGULF for heterotrophy, OR
+//                        nothing -- photosynth runs at baseline on any
+//                        cell, so "sit and photosynthesise" is a valid
+//                        strategy with no genome ops required.
+//   - heterotroph + THRUST: motile mass acquisition. Without THRUST a
+//                           heterotroph can't chase a new food patch
+//                           once it's exhausted the local ambient.
+//                           (Autotrophs are exempt -- sun reaches them
+//                           where they sit.)
 export function viableGenome(genome: Uint8Array): boolean {
-  let hasIngest = false, hasPredate = false, hasEngulf = false, hasChl = false;
+  let hasIngest = false, hasPredate = false, hasEngulf = false;
   let hasReproduce = false;
-  let hasBio = false, hasMrna = false;
-  let hasAA = false, hasFA = false, hasEnz = false;
   let hasSense = false;
   let hasThrust = false;
-  walkGenome(genome, (op, _pc, operand) => {
+  walkGenome(genome, (op) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
     else if (op === OP.ENGULF) hasEngulf = true;
     else if (op === OP.REPRODUCE) hasReproduce = true;
     else if (op === OP.THRUST) hasThrust = true;
-    else if (op === OP.SYNTH && operand !== undefined) {
-      const kind = operand % SYNTH_KIND_COUNT;
-      if (kind === SYNTH_KIND.BIO) hasBio = true;
-      else if (kind === SYNTH_KIND.MRNA) hasMrna = true;
-      else if (kind === SYNTH_KIND.AA) hasAA = true;
-      else if (kind === SYNTH_KIND.FA) hasFA = true;
-      else if (kind === SYNTH_KIND.ENZ) hasEnz = true;
-      else if (kind === SYNTH_KIND.CHL) hasChl = true;
-    }
     if (!hasSense && SENSE_OPS.has(op)) hasSense = true;
   });
+  if (!hasReproduce || !hasSense) return false;
   const isHeterotroph = hasIngest || hasPredate || hasEngulf;
-  const hasMass = isHeterotroph || hasChl;
-  if (!hasMass || !hasReproduce || !hasBio || !hasMrna || !hasSense) return false;
-  // SYNTH_FA is universally required now. Both membrane-synth
-  // reactions consume fatty acid; without an internal route to fa
-  // the cell's structural reserve (membrane) starves whenever
-  // biopolymer flow stops. Heterotrophs can dribble fa in via
-  // biopolymer digestion, but that's not enough on its own.
-  if (!hasFA) return false;
-  // Heterotrophs need digestive enzymes to convert biopolymer into glu/aa/fa.
-  if (isHeterotroph && !hasEnz) return false;
-  // Heterotrophs also need THRUST -- without movement they can't
-  // chase a new food patch after exhausting their founder scoop and
-  // local ambient. Photoautotrophs can sit still and photosynthesize
-  // so movement isn't strictly required for them.
   if (isHeterotroph && !hasThrust) return false;
-  // Pure photoautotrophs need their own building-block factory.
-  // (SYNTH_FA is already required universally above; SYNTH_AA stays
-  // a pure-autotroph requirement.)
-  if (hasChl && !isHeterotroph && !hasAA) return false;
-  // Amino-acid acquisition path. Required so that any growth op that
-  // costs amino acid (planned: per-op aa cost on SYNTH_*/REPRODUCE/
-  // splice) has a viable supply. Sources:
-  //   - SYNTH_AA: internal synthesis from non-aa precursors (exempt
-  //     from the per-op aa cost itself; it's the producer).
-  //   - PREDATE/ENGULF: extract the prey's free aa directly.
-  // INGEST is NOT counted: seeded particles carry only generic
-  // chemistry, not named molecules like aminoAcid. A pure-INGEST
-  // lineage that doesn't also synth or predate has no path to aa
-  // and would starve under the per-op cost rule.
-  // None of these sources go through the mrna (which itself
-  // requires aa to synth under the cost rule), so there's no
-  // chicken-and-egg lock -- audit suggestion #2.
-  const hasAaSource = hasAA || hasPredate || hasEngulf;
-  if (!hasAaSource) return false;
   return true;
 }
 
@@ -1173,23 +1103,38 @@ const ADHESION_PREVALENCE: number = (() => {
 
 function randomGenomeSize(rng: () => number): number {
   const u = rng();
-  // Triangular falloff on [24, 100]; clamping handles the math.
+  // Triangular falloff on [16, 100]; clamping handles the math.
   const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(24, Math.min(100, k));
+  return Math.max(16, Math.min(100, k));
 }
 
-// Viable-by-construction founder genome. Instead of rejection-sampling
-// against viableGenome (which a purely random genome essentially never
-// passes), we assemble the required ops as atomic tokens, shuffle their
-// order, and pad to a random size with junk filler. Every founder is a
-// distinct genome (token order, operands, size, and trailing junk all
-// randomized) yet guaranteed to satisfy the heterotroph viability
-// rules. No curated/hand-built genome is involved. Never returns null;
-// the `| null` return is kept so callers' skip-path stays valid.
+// Catalyst slots a founder might invest in -- the post-Phase-4a
+// equivalent of "what kind of cell is this." Importing the numeric
+// values directly to keep this module free of the sim/reactions
+// import cycle (genome.ts is consumed by sim.ts -- a back-edge would
+// make startup order load-bearing). Mirror these by hand if reactions
+// renumber; assertions in tests guard the mapping.
+const FOUNDER_CAT_SLOTS = [
+  3,  // photosynth: only meaningful if cell has chl (which it makes at baseline)
+  4,  // synth_aa
+  5,  // synth_fa
+  6,  // synth_chl
+  7,  // synth_enz
+  9,  // synth_membrane (aa+fa)
+  10, // biopolymer digestion
+  11, // synth_membrane (fa-only)
+] as const;
+
+// Viable-by-construction founder genome. After Phase 4a a viable cell
+// just needs REPRODUCE + a SENSE op (+ THRUST for heterotrophs). We
+// assemble those, plus a randomized handful of `SYNTH CAT <slot>`
+// boosts that give each founder some metabolic identity, plus
+// optional adhesion + HGT toggles. Every founder is a distinct genome
+// (token order, picked slots, gate threshold, size, junk filler all
+// randomized).
 export function makeRandomViableGenome(
   rng: () => number = Math.random,
 ): Uint8Array | null {
-  const b = (): number => Math.floor(rng() * 256);
   // Gated REPRODUCE: instead of a bare (unconditional) REPRODUCE that
   // fires every tick and makes every new lineage balloon then
   // boom/bust, wrap it in a randomized resource gate:
@@ -1200,27 +1145,21 @@ export function makeRandomViableGenome(
   // randomized per founder, and mutation/selection tune it from there.
   const repSensor = rng() < 0.5 ? OP.SELF_ENERGY : OP.SELF_MEMBRANE;
   const repThresh = 8 + Math.floor(rng() * 40); // 8..47, positive i8
-  // Required tokens for a viable heterotroph (see viableGenome):
-  // reproduce, ingest, thrust, a SENSE op, and SYNTH for
-  // bio/mrna/fa/enz/aa. Operands randomized for diversity.
   const tokens: number[][] = [
     [repSensor, OP.PUSH8, repThresh, OP.GT, OP.JZ, 1, OP.REPRODUCE],
-    [OP.PUSH8, 4, OP.INGEST],                    // low bond-energy threshold -> eats detritus
+    [OP.PUSH8, 4, OP.INGEST], // low bond-energy threshold -> eats detritus
     [OP.THRUST],
     [OP.SENSE_CHEMICAL, Math.floor(rng() * CHEMICAL_COUNT)],
-    [OP.SYNTH, SYNTH_KIND.BIO, b()],
-    [OP.SYNTH, SYNTH_KIND.MRNA, b()],
-    [OP.SYNTH, SYNTH_KIND.FA, b()],
-    [OP.SYNTH, SYNTH_KIND.ENZ, b()],
-    [OP.SYNTH, SYNTH_KIND.AA, b()],
   ];
-  // ~10% of founders are chlorophyll synthesizers (mixotrophs): they
-  // keep the heterotroph kit but also build chlorophyll, so they can
-  // run photosynthesis (fix carbon, release O2). Mixotroph rather than
-  // pure autotroph keeps viableGenome happy without special-casing the
-  // pure-autotroph branch; pure photoautotrophs can still evolve from
-  // these by losing INGEST via mutation.
-  if (rng() < 0.50) tokens.push([OP.SYNTH, SYNTH_KIND.CHL, b()]);
+  // 2..4 random catalyst boosts -- the cell's metabolic identity. Each
+  // boost picks one slot from FOUNDER_CAT_SLOTS uniformly with
+  // replacement (overlap is fine; doubling up on a slot just means
+  // more catalyst protein for that reaction).
+  const nCat = 2 + Math.floor(rng() * 3);
+  for (let i = 0; i < nCat; i++) {
+    const slot = FOUNDER_CAT_SLOTS[Math.floor(rng() * FOUNDER_CAT_SLOTS.length)];
+    tokens.push([OP.SYNTH, SYNTH_KIND.CAT, slot]);
+  }
   // A fraction of founders are adhesive. The SYNTH BOND param byte is
   // the cell's greenbeard marker: a random tag here, inherited by the
   // whole clonal lineage (fission copies the genome) so descendants
@@ -1229,21 +1168,13 @@ export function makeRandomViableGenome(
   // drifts the tag, letting colonies speciate into tribes over time.
   // Prevalence is env-overridable (ADH_PREV, 0..1) purely so the
   // long-run probe can A/B it; default is the shipped value.
-  if (rng() < ADHESION_PREVALENCE) tokens.push([OP.SYNTH, SYNTH_KIND.BOND, b()]);
-  // Every founder builds 1-2 sensory receptors. Founders used to start
-  // blind (zero receptors) -- SENSE_CHEMICAL is inert without a
-  // receptor chem -- so they drifted until sensing happened to evolve.
-  // Give each a random 1-2 from the receptor set so they can actually
-  // navigate from birth. Kind + param randomized for diversity.
-  const RECEPTOR_KINDS = [
-    SYNTH_KIND.CHEMO, SYNTH_KIND.PHOTO, SYNTH_KIND.MECH,
-    SYNTH_KIND.THERMO, SYNTH_KIND.MAGNETO,
-  ];
-  const nRecept = 1 + (rng() < 0.5 ? 1 : 0);
-  for (let r = 0; r < nRecept; r++) {
-    const kind = RECEPTOR_KINDS[Math.floor(rng() * RECEPTOR_KINDS.length)];
-    tokens.push([OP.SYNTH, kind, b()]);
+  if (rng() < ADHESION_PREVALENCE) {
+    tokens.push([OP.SYNTH, SYNTH_KIND.BOND, Math.floor(rng() * 256)]);
   }
+  // Rare HGT: a small fraction get competence (uptake) or package
+  // (shed) so eDNA flow is a present-but-rare baseline strategy.
+  if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]);
+  if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.PACKAGE, 0]);
   // Fisher-Yates shuffle so structure differs founder to founder.
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -1257,7 +1188,7 @@ export function makeRandomViableGenome(
   const target = Math.max(core.length, randomGenomeSize(rng));
   const out = new Uint8Array(target);
   for (let i = 0; i < core.length; i++) out[i] = core[i];
-  for (let i = core.length; i < target; i++) out[i] = b();
+  for (let i = core.length; i < target; i++) out[i] = Math.floor(rng() * 256);
   return out;
 }
 

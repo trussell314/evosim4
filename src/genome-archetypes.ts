@@ -27,7 +27,21 @@ import {
   CHEM_WASTE,
   CHEM_MARKER0,
 } from "./sim/chem-ids";
-import { TRANSPORT_ATP_SLOT } from "./sim/reactions";
+import {
+  TRANSPORT_ATP_SLOT,
+  RX_SLOT_RESPIRATION,
+  RX_SLOT_PHOTOSYNTH,
+  RX_SLOT_SYNTH_AA,
+  RX_SLOT_SYNTH_FA,
+  RX_SLOT_SYNTH_CHL,
+  RX_SLOT_SYNTH_ENZ,
+  RX_SLOT_SYNTH_MEM_AAFA,
+  RX_SLOT_DIGEST_BIOP,
+  RX_SLOT_SYNTH_MEM_FA,
+  RX_SLOT_SYNTH_PHOTO_V,
+  RX_SLOT_SYNTH_THERMO,
+  RX_SLOT_SYNTH_MAGNETO,
+} from "./sim/reactions";
 
 // INGEST now pops a bond-energy threshold off the stack (engulf any
 // contacted particle with CHEM_BOND_POTENTIAL >= threshold *
@@ -50,24 +64,30 @@ const NOP_CASSETTE: Instr[] = Array.from(
   () => ["NOP"] as Instr,
 );
 
-// Universal heterotroph build kit (see viableGenome): membrane,
-// mRNA, fatty acid, digestive enzyme, amino-acid synthesis.
-const HET_SYNTH: Instr[] = [
-  ["SYNTH", "BIO", 0],
-  ["SYNTH", "MRNA", 0],
-  ["SYNTH", "FA", 0],
-  ["SYNTH", "ENZ", 0],
-  ["SYNTH", "AA", 0],
+// Heterotroph identity: BOOST biopolymer digestion + the enzyme that
+// gates it. After Phase 4a every cell metabolizes at baseline via the
+// reactions' uncatRate floor, so a "heterotroph" is no longer declared
+// by SYNTH BIO/AA/FA/ENZ/MRNA (those bits set on synthMask are read by
+// nothing). The functional way to say "this cell is a digester" is to
+// pour catalyst into the digestion + enzyme-synth slots so it digests
+// detritus faster than its neighbours.
+const HET_KIT: Instr[] = [
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_ENZ],     // build digestive enzyme faster
+  ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],   // digest biopolymer faster
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA], // build membrane faster
 ];
 
-// Pure-photoautotroph build kit: chlorophyll is the mandatory
-// photosynth multiplier; AA is the pure-autotroph requirement.
-const AUTO_SYNTH: Instr[] = [
-  ["SYNTH", "CHL", 0],
-  ["SYNTH", "BIO", 0],
-  ["SYNTH", "MRNA", 0],
-  ["SYNTH", "FA", 0],
-  ["SYNTH", "AA", 0],
+// Photoautotroph identity: BOOST photosynthesis + the inputs the
+// autotrophic carbon -> AA -> membrane chain needs. synth_aa is the
+// historical bottleneck for self-sufficient autotrophs (see commit
+// 84b6f4f's vmax tune). synth_chl boost amplifies the pigment that
+// gates photosynth via chlScale.
+const AUTO_KIT: Instr[] = [
+  ["SYNTH", "CAT", RX_SLOT_PHOTOSYNTH],
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_CHL],
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_AA],
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_FA],
+  ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA],
 ];
 
 // Fission gated on the structural reserve clearing a threshold --
@@ -137,10 +157,9 @@ function build(): Archetype[] {
       id: "photoautotroph",
       label: "photoautotroph",
       cls: "direct",
-      desc: "Sessile primary producer: chlorophyll + visible-band photosynthesis, no INGEST/THRUST. Divides when its structural reserve is high.",
+      desc: "Sessile primary producer: pours catalyst into photosynthesis + chlorophyll synthesis + amino-acid + fatty-acid + membrane synthesis. No INGEST/THRUST. Divides when its structural reserve is high.",
       prog: [
-        ...AUTO_SYNTH,
-        ["SYNTH", "PHOTO", 0], // band 0 = visible
+        ...AUTO_KIT,
         ...reproduceWhenGrown(40, "np"),
       ],
     },
@@ -148,11 +167,11 @@ function build(): Archetype[] {
       id: "phototaxis",
       label: "phototaxis",
       cls: "direct",
-      desc: "Photoautotroph that swims along the magnetic axis when light is scarce (emergent depth-keeping / vertical migration).",
+      desc: "Photoautotroph that swims along the magnetic axis when light is scarce (emergent depth-keeping / vertical migration). Adds a magnetoreceptor-synth catalyst boost so its compass builds faster than baseline.",
       prog: [
-        ...AUTO_SYNTH,
-        ["SYNTH", "PHOTO", 0],
-        ["SYNTH", "MAGNETO", 0],
+        ...AUTO_KIT,
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_PHOTO_V], // boost visible photoreceptor (signal for the dark-check)
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MAGNETO], // boost magnetoreceptor (the compass)
         ["SENSE_CHEMICAL", CHEM_ACT_PHOTO_VISIBLE],
         // Threshold sized to the engine's realized act_photo_visible
         // range: measured <=~3.4 even at the surface in full midday,
@@ -172,10 +191,10 @@ function build(): Archetype[] {
       id: "thermophile",
       label: "thermophile",
       cls: "direct",
-      desc: "Photoautotroph with a thermoreceptor; thrust scales with the sensed thermal signal so lineages self-sort into thermal layers.",
+      desc: "Photoautotroph with a thermoreceptor-synth catalyst boost; thrust scales with the sensed thermal signal so lineages self-sort into thermal layers.",
       prog: [
-        ...AUTO_SYNTH,
-        ["SYNTH", "THERMO", 0],
+        ...AUTO_KIT,
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_THERMO], // boost thermoreceptor synth
         ["SENSE_CHEMICAL", CHEM_ACT_THERMO],
         ["SENSE_CHEMICAL", CHEM_ACT_THERMO],
         ["THRUST"],
@@ -186,9 +205,9 @@ function build(): Archetype[] {
       id: "forager",
       label: "chemo forager",
       cls: "direct",
-      desc: "Honest baseline heterotroph: chemoreceptor for bulk organic, climbs the food gradient, ingests, digests, divides on reserve.",
+      desc: "Honest baseline heterotroph: catalyses biopolymer digestion + enzyme synthesis + membrane synth above baseline, climbs the food-particle gradient, ingests, divides on reserve.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ...reproduceWhenGrown(30, "np"),
@@ -200,7 +219,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Roaming predator: climbs the bulk-organic gradient into food/prey-dense regions (prey don't emit a marker to home on), ingests to bulk up past the predation size gate, and PREDATEs on contact.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 40),
         ["PREDATE"],
@@ -211,14 +230,17 @@ function build(): Archetype[] {
       id: "armored",
       label: "armored tank",
       cls: "direct",
-      desc: "Indigestible prey strategy: pours synthesis into membrane (breach cost scales with membrane), grazes slowly, divides only when very large. RETAINED BUT UI-DISABLED: controlled 2x2 (SCENARIO_RESULTS.md) showed the apparent predation-resistance edge is the high reproduce gate (deferred division -> size refuge past the 1.14x breach gate), NOT the membrane investment -- armor is not a separately selectable axis. Kept for scenarios/tests; not user-spawnable.",
+      desc: "Indigestible prey strategy: pours additional catalyst into the two membrane-synth slots so its structural reserve builds faster (breach cost scales with membrane), grazes slowly, divides only when very large. RETAINED BUT UI-DISABLED: controlled 2x2 (SCENARIO_RESULTS.md) showed the apparent predation-resistance edge is the high reproduce gate (deferred division -> size refuge past the 1.14x breach gate), NOT the membrane investment -- armor is not a separately selectable axis. Kept for scenarios/tests; not user-spawnable.",
       uiHidden: true,
       prog: [
-        ...HET_SYNTH,
-        ["SYNTH", "BIO", 0],
-        ["SYNTH", "BIO", 0],
-        ["SYNTH", "BIO", 0],
-        ["SYNTH", "BIO", 0],
+        ...HET_KIT,
+        // Extra membrane investment: both aa+fa->mem and fa-only->mem
+        // slots get an additional catalyst dose on top of HET_KIT's
+        // single boost. With 3 SYNTH-CAT ticks per membrane reaction
+        // the cell pours real flux into structural reserve.
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_FA],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 12),
         ...reproduceWhenGrown(80, "np"),
@@ -230,7 +252,7 @@ function build(): Archetype[] {
       cls: "seed",
       desc: "Seed: forager that also SYNTHs a BOND marker so clones adhere (greenbeard). Colony advantage emerges only over generations.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["SYNTH", "BOND", 7], // marker tag 7, inherited by the clone
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
@@ -243,8 +265,7 @@ function build(): Archetype[] {
       cls: "seed",
       desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle.",
       prog: [
-        ...AUTO_SYNTH,
-        ["SYNTH", "PHOTO", 0],
+        ...AUTO_KIT,
         // Only shed glucose when structurally healthy -- an
         // unconditional leak self-starves a slow autotroph.
         ["SELF_MEMBRANE"],
@@ -267,7 +288,7 @@ function build(): Archetype[] {
       cls: "seed",
       desc: "Seed: heterotroph that climbs into organic/prey-dense regions and engulfs RARELY (a persistent register counter gates ENGULF to ~1/127 VM passes). SELF_ENERGY gating was ineffective -- realized ATP (~165-250) is far above any sane threshold, so engulf fired unconditionally and the lineage cannibalised itself to collapse (farmer-solo 30->9 vs near-identical engulf-less forager 30->110). A rarity gate caps the kin-cannibalism rate below the reproduction rate so the host self-sustains, while engulf/farming still occurs (tandem). Relies on internal division of its captives; farming emerges from the shared cytoplasm.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 35),
         // Rarity-gated ENGULF (register oscillator, bet-hedger
@@ -300,13 +321,8 @@ function build(): Archetype[] {
       id: "endoparasite",
       label: "endoparasite",
       cls: "seed",
-      desc: "Seed: minimal soma, leaks a marker0 lure, low membrane (cheap to engulf). Wants to be eaten, then blooms inside the host (engulfed internal division is uncapped). Reproduces aggressively but gated on a low membrane floor so it doesn't self-lyse before a host takes it up.",
+      desc: "Seed: minimal soma, leaks a marker0 lure, low membrane (cheap to engulf). Wants to be eaten, then blooms inside the host (engulfed internal division is uncapped). Reproduces aggressively but gated on a low membrane floor so it doesn't self-lyse before a host takes it up. No catalyst kit -- a parasite that bulks up costs more to engulf, defeating the strategy.",
       prog: [
-        ["SYNTH", "BIO", 0],
-        ["SYNTH", "MRNA", 0],
-        ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0],
-        ["SYNTH", "AA", 0],
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ["THRUST"],
         ["PUSH8", 6],
@@ -320,14 +336,11 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). ATP is now a first-class chemical (CHEM_ATP), so this is the real mechanism, not a workaround. Minimal soma, low membrane (cheap to engulf), marker0 engulf-lure, ENZ+biopolymer bootstrap so it survives free-living long enough to be engulfed. Once inside a host it digests host-pool biopolymer -> glu, ingests O2, RESPIRES internally (out[0]: glu+O2 -> CO2 + ATP raising its own CHEM_ATP), and exports that ATP to the host via a SYNTH'd ATP TRANSLOCASE (ANT analog: SYNTH CAT param=TRANSPORT_ATP_SLOT -- a normal CHEM_ATP transporter, vacuolar-membrane only, facilitated/down-gradient). So ATP flows organelle->host ONLY while the mito is respiration-richer than the host -- emergent, mass-exact, never a scripted hand-off. Returns CO2 to the shared pool; slow internal division (gate 45) keeps it ~proportional to host fission (tandem).",
+      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, two INGESTs (substrate + electron acceptor), respiration + digestion catalyst boosts so it actually runs the ATP-producing reaction faster than baseline, and the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) that exports CHEM_ATP across the vacuolar membrane down its concentration gradient. ATP flows organelle->host whenever the mito is respiration-richer than the host -- emergent, mass-exact, never a scripted hand-off. Returns CO2 to the shared pool; slow internal division (gate 45) keeps it ~proportional to host fission (tandem).",
       prog: [
-        ["SYNTH", "BIO", 0], // single -> low membrane, cheap to engulf
-        ["SYNTH", "MRNA", 0],
-        ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0], // digests host-pool biopolymer -> glu
-        ["SYNTH", "AA", 0],
-        ["SYNTH", "CAT", TRANSPORT_ATP_SLOT], // build the ATP translocase (ANT)
+        ["SYNTH", "CAT", RX_SLOT_RESPIRATION],     // respire faster than baseline
+        ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],     // digest host biopolymer faster
+        ["SYNTH", "CAT", TRANSPORT_ATP_SLOT],      // ATP translocase (ANT analog)
         ["PUSH8", ING_DETRITUS], ["INGEST"], // substrate from the host pool
         ["PUSH8", ING_ANY], ["INGEST"], // electron acceptor (respiration)
         ["THRUST"], // drift to a host during the free-living phase
@@ -335,10 +348,6 @@ function build(): Archetype[] {
         ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
-        // 18 -> 45: slow division. One lever fixes two failures --
-        // curbs internal overgrowth (stays ~proportional to host =
-        // tandem, not bloat-and-kill) AND curbs free-living bloom so
-        // "engulfed" is the stable niche, not independence.
         ...reproduceWhenGrown(45, "np"),
       ],
     },
@@ -348,7 +357,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Heritable size plasticity: SPLICE_DUP an inert trailing cassette when ATP is low (amplify), SPLICE_DEL it when fat (streamline). Splices only ever touch the appended NOP cassette, never the functional head.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         // Splice offset = CASSETTE_OFF, the start of the trailing NOP
@@ -380,7 +389,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Non-genetic switching: a register oscillator drives POKE_BYTE to rewrite a byte of its own genome, toggling phenotype across ticks.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["LOAD", 0],
@@ -401,7 +410,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Chemical warfare: aggressively excretes waste + CO2 to push local ambient over toxify thresholds and damage neighbours.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["PUSH8", 50],
@@ -417,7 +426,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Emits a marker0 plume every tick: substrate for emergent aggregation, trail-following, luring and quorum-like behavior in other lineages.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ["PUSH8", 30],
@@ -429,13 +438,8 @@ function build(): Archetype[] {
       id: "virus",
       label: "true virus",
       cls: "seed",
-      desc: "Seed: minimal soma that SYNTHs PACKAGE, shedding fragments of its own genome as decaying eDNA carriers. Spread needs competent victims + a long run.",
+      desc: "Seed: minimal soma that SYNTHs PACKAGE, shedding fragments of its own genome as decaying eDNA carriers. Spread needs competent victims + a long run. No catalyst kit -- a virus that bulks up costs more to engulf and replicates less efficiently.",
       prog: [
-        ["SYNTH", "BIO", 0],
-        ["SYNTH", "MRNA", 0],
-        ["SYNTH", "FA", 0],
-        ["SYNTH", "ENZ", 0],
-        ["SYNTH", "AA", 0],
         ["SYNTH", "PACKAGE", 0], // shed self-genome carriers
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ["THRUST"],
@@ -455,7 +459,7 @@ function build(): Archetype[] {
       cls: "direct",
       desc: "Sea-floor decomposer: chemotaxes the settled bulk-organic (marine-snow detritus that sinks and pools on the floor), ingests it, runs heterotroph synthesis, and excretes metabolic CO2 back into the medium. Benthic position is emergent (follows sinking food), not scripted.",
       prog: [
-        ...HET_SYNTH,
+        ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 12),
         ["SENSE_CHEMICAL", CHEM_CO2], // own CO2 pool -> excretion amount

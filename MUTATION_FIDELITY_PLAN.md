@@ -1,7 +1,17 @@
 # Evolvable Mutation Fidelity & Realistic DNA Repair — Design Note
 
-Status: **deferred / not started**. Captured so it isn't lost while
-colony testing continues. No code written yet.
+Status: **deferred / not started**, and **partially blocked by ABI
+changes**. Captured so it isn't lost while colony testing continues.
+No code written yet.
+
+**ABI note (post Phase 4a/5).** The plan references `SYNTH REPAIR`,
+`SYNTH_BIT_REPAIR`, and `CHEM_REPAIR` as gating mechanisms. The
+`SYNTH REPAIR` op was retired alongside the rest of the named
+biosynth/receptor kinds; the bit export is gone too. When this plan
+is picked up the gating mechanism needs to be reformulated — most
+likely as `SYNTH CAT 23` (the named slot for the repair-chem
+biosynth reaction) plus the `CHEM_REPAIR` pool that's still in the
+chem table.
 
 ## Motivation
 

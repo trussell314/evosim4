@@ -19,21 +19,60 @@ founder whose payoff is an emergent multi-generation / multi-cell
 outcome — one click is one cell. This doc still also informs backlog
 priorities.
 
+## Current SYNTH ABI (post Phase 4a/4b/5)
+
+**Read this before reading the archetype descriptions below.** The op
+set went through a redesign that retired most of the named SYNTH
+kinds. There are now only **five live `SYNTH <kind>` values**:
+
+- **`SYNTH CAT <slot>`** — synthesise catalyst protein for reaction
+  slot `<slot>`. Multiplies that reaction's effective rate *above*
+  the constitutive `uncatRate` floor. The primary differentiation
+  mechanism: every "what kind of cell is this?" question is now
+  "which slots is it pouring catalyst into?"
+- **`SYNTH INH <slot>`** — synthesise allosteric inhibitor for slot
+  `<slot>`. Damps the slot's effective rate *below* the floor. The
+  off-switch dual of CAT.
+- **`SYNTH BOND <marker>`** — set the cell's greenbeard adhesion tag.
+- **`SYNTH COMPETENCE`** — express the eDNA-uptake competence flag
+  this tick (HGT inbound).
+- **`SYNTH PACKAGE`** — express the genome-shedding flag this tick
+  (HGT outbound).
+
+The named kinds `BIO/AA/FA/ENZ/CHL/MRNA/PHOTO/CHEMO/MECH/THERMO/MAGNETO/REPAIR`
+**no longer exist.** Phase 4a retired the synthMask enable-gate, so
+the bootstrap reactions they used to gate now fire on every cell at
+`uncatRate` regardless of genome. A cell still synthesises mRNA,
+membrane, fatty acid, photoreceptor, etc — it just does so at the
+constitutive floor instead of being declared by a genome op.
+
+**Named reaction slot numbers** (used as the `<slot>` byte for
+`SYNTH CAT/INH`): respiration=0, ferment=1, beta-ox=2, photosynth=3,
+synth_aa=4, synth_fa=5, synth_chl=6, synth_enz=7, synth_ribo=8,
+synth_membrane(aa+fa)=9, digest_biopolymer=10, synth_membrane(fa)=11,
+photoreceptor_visible=12, _long=13, _surface=14, mechanoreceptor=19,
+thermoreceptor=20, magnetoreceptor=21, bond=22, repair=23,
+ATP_translocase=TRANSPORT_ATP_SLOT (last transport-band slot).
+Exported as named constants from `src/sim/reactions.ts`.
+
 ## Toolkit recap
 
-Sensing is indirect: `SYNTH` a receptor (PHOTO band / CHEMO target /
-MECH / THERMO / MAGNETO) so the activation pass fills the matching
-`activated_*` chem, then `SENSE_CHEMICAL <id>` reads it. Effectors:
-`THRUST/TURN`, `INGEST`, `PREDATE`, `ENGULF`, `EXCRETE <chem>`,
-`REPRODUCE <frac>`, `SYNTH <kind,param>`, plus self-modification
+Sensing reads either an internal pool (`SENSE_CHEMICAL <id>`, with the
+relevant activated chem populated by the activation pass once the
+cell has the matching receptor — receptors are synthesised at
+baseline, no genome op needed) or the spatial gradient of a chem
+particle field directly (`SENSE_OUT <chemId>`, Phase-3 universal
+gradient sense). Effectors: `THRUST/TURN`, `INGEST`, `PREDATE`,
+`ENGULF`, `EXCRETE <chem>`, `TRANSPORT <chem>`, `REPRODUCE <frac>`,
+`SYNTH <kind,param>` (see ABI above), plus self-modification
 (`POKE_BYTE`, `SPLICE_DUP/DEL`). 16 persistent registers give
 timers / oscillators / memory. Metabolism is the reaction table
-(respiration, β-ox, photosynthesis, photophosphorylation, biosynth,
-biopolymer digestion, generic catalyst-gated reactions). Predation
-gate is physical: `attacker.r ≥ 1.14·target.r`, with cost ∝ target
-mass + membrane (armor) + cohesion (bondChem × bond count). Engulf →
-the prey runs its full VM as an endosymbiont (internal division
-uncapped); predate → absorb pools.
+(respiration, β-ox, photosynthesis, biosynth, biopolymer digestion,
+generic catalyst-gated reactions). Predation gate is physical:
+`attacker.r ≥ 1.14·target.r`, with cost ∝ target mass + membrane
+(armor) + cohesion (bondChem × bond count). Engulf → the prey runs
+its full VM as an endosymbiont (internal division uncapped); predate
+→ absorb pools.
 
 Substrate additions (this round — see the gaps section, all now
 resolved):
@@ -59,29 +98,33 @@ resolved):
 ## Autotrophs
 
 1. **Complete photoautotroph (sessile primary producer).**
-   `SYNTH CHL`, `SYNTH PHOTO 0`, `SYNTH AA/FA/MRNA/BIO`. No
-   INGEST/THRUST. Photophosphorylation funds carbon fixation → glu →
-   aa/fa/membrane; gate `REPRODUCE` on `SELF_MEMBRANE > k`; dump
-   surplus glu → biopolymer to seed the web. Probes stable primary
-   production. **Fully expressible.**
-2. **Phototactic / diel vertical migrator.** Add `SYNTH PHOTO 0`+`1`
-   and `SYNTH MAGNETO`; THRUST toward `act_mag` when `act_photo`
-   low, descend when high. Probes emergent depth-keeping. **Fully
+   `SYNTH CAT 3` (photosynth) + `SYNTH CAT 4/5/6` (aa/fa/chl synth) +
+   `SYNTH CAT 9` (membrane). No INGEST/THRUST. Photosynthesis funds
+   carbon fixation → glu → aa/fa/membrane; gate `REPRODUCE` on
+   `SELF_MEMBRANE > k`. Probes stable primary production. **Fully
    expressible.**
-3. **Thermophile band-tracker.** `SYNTH THERMO`; THRUST to null the
-   `act_thermo` offset → cells self-sort into thermal layers. **Fully
+2. **Phototactic / diel vertical migrator.** As #1 plus `SYNTH CAT 12`
+   (visible photoreceptor) + `SYNTH CAT 21` (magnetoreceptor) +
+   `SENSE_CHEMICAL act_photo_visible` for the gate, climb the
+   activated magnetic gradient when dark. Probes emergent
+   depth-keeping. **Fully expressible.**
+3. **Thermophile band-tracker.** As #1 plus `SYNTH CAT 20`
+   (thermoreceptor) + `SENSE_CHEMICAL act_thermo`; THRUST to null the
+   offset → cells self-sort into thermal layers. **Fully
    expressible.**
 
 ## Heterotrophs / predators
 
-4. **Chemotactic forager (honest baseline).** `SYNTH CHEMO 0` +
-   `SYNTH ENZ`, `INGEST biop`; THRUST up `act_chemo_biopolymer`,
-   digest (out[10]), gate REPRODUCE on membrane. **Fully
-   expressible.**
-5. **Size-bully predator.** `PREDATE` + heavy storage to inflate
-   radius and stay above the predation size gate; roam and predate
-   opportunistically. **Fully expressible.**
-6. **Armored "tank" prey.** Max `SYNTH BIO` (membrane); high membrane
+4. **Chemotactic forager (honest baseline).** `SYNTH CAT 7`
+   (synth_enz) + `SYNTH CAT 10` (biopolymer digestion) + `SYNTH CAT 9`
+   (membrane), `INGEST` detritus, `climbParticleGradient(CHEM_BIOPOLYMER, …)`.
+   **Fully expressible.**
+5. **Size-bully predator.** Forager kit + `PREDATE` + heavy membrane
+   storage to inflate radius past the predation size gate; roam and
+   predate opportunistically. **Fully expressible.**
+6. **Armored "tank" prey.** Extra `SYNTH CAT 9` and `SYNTH CAT 11`
+   (both membrane-synth slots) on top of the forager kit; high
+   membrane
    makes you expensive-to-impossible to breach (cost ∝ target
    membrane). Survive by being indigestible, not by fleeing.
    Exercises the emergent grow-big-vs-grow-armor axis. **Expressible,
@@ -159,10 +202,11 @@ resolved):
 13. **Allelopath.** Aggressively `EXCRETE waste/co2` to push local
     ambient over toxify thresholds and damage neighbors. Emergent
     chemical warfare.
-14. **Marker beacon / lure.** `EXCRETE marker0`; other lineages that
-    `SYNTH CHEMO 3` sense the `act_chemo_marker0` gradient. Substrate
-    for emergent aggregation, trail-following, prey luring,
-    quorum-like behavior — none of it scripted.
+14. **Marker beacon / lure.** `EXCRETE marker0`; other lineages
+    `SENSE_OUT CHEM_MARKER0` to read the spatial gradient directly
+    (Phase 3 universal gradient sense, no SYNTH-receptor needed).
+    Substrate for emergent aggregation, trail-following, prey
+    luring, quorum-like behavior — none of it scripted.
 
 ## Benthic / sediment niche
 

@@ -5,6 +5,14 @@ description of where the simulation's chemistry layer is going; revise
 in place as decisions land. Branch: `claude/chemistry-overhaul` off
 `claude/fix-cross-origin-isolated-f5VyU`.
 
+**Status note (post Phase 4a/4b/5 cleanup).** Sections below that
+reference `OP.SYNTH_BIO/AA/FA/ENZ/CHL/MRNA/CAT` as separate ops
+predate the K-4 unified-`SYNTH` op rewrite *and* the Phase 4a/4b/5
+retirement of the named kinds. The current live ABI has only one
+SYNTH op with five live kinds (CAT / INH / BOND / COMPETENCE /
+PACKAGE) — see `GENOME_ARCHETYPES.md` → "Current SYNTH ABI". Older
+sections here are kept as the historical design record.
+
 ## Goal
 
 The simulation is a biology sim. It should replicate the spirit of the

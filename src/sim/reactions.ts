@@ -195,6 +195,33 @@ export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_TARGETS.length;
 // ATP translocase (ANT). It is the last slot of the transport band.
 export const TRANSPORT_ATP_SLOT =
   TRANSPORT_SLOT_BASE + TRANSPORT_TARGETS.length - 1;
+
+// Named reaction slots, exported for use by archetypes / scenarios that
+// want to BOOST a specific bootstrap reaction via `SYNTH CAT <slot>`.
+// After Phase 4a these named reactions all fire at uncatRate
+// unconditionally on every cell; CAT/INH per slot are the only way a
+// genome influences their rates. Slots match installNamedReactions
+// indices in this file -- keep in sync if you renumber.
+export const RX_SLOT_RESPIRATION    = 0;  // glu+o2 -> co2 + atp
+export const RX_SLOT_FERMENT        = 1;  // glu -> co2+waste + atp
+export const RX_SLOT_BETA_OX        = 2;  // fa+o2 -> co2 + atp
+export const RX_SLOT_PHOTOSYNTH     = 3;  // co2 -> glu+o2 (light, chl)
+export const RX_SLOT_SYNTH_AA       = 4;
+export const RX_SLOT_SYNTH_FA       = 5;
+export const RX_SLOT_SYNTH_CHL      = 6;
+export const RX_SLOT_SYNTH_ENZ      = 7;
+export const RX_SLOT_SYNTH_MRNA     = 8;
+export const RX_SLOT_SYNTH_MEM_AAFA = 9;  // aa+fa -> membrane
+export const RX_SLOT_DIGEST_BIOP    = 10; // biopolymer -> glu+aa+fa
+export const RX_SLOT_SYNTH_MEM_FA   = 11; // fa -> membrane
+export const RX_SLOT_SYNTH_PHOTO_V  = 12; // visible photoreceptor
+export const RX_SLOT_SYNTH_PHOTO_L  = 13; // long photoreceptor
+export const RX_SLOT_SYNTH_PHOTO_S  = 14; // surface photoreceptor
+export const RX_SLOT_SYNTH_MECH     = 19;
+export const RX_SLOT_SYNTH_THERMO   = 20;
+export const RX_SLOT_SYNTH_MAGNETO  = 21;
+export const RX_SLOT_SYNTH_BOND     = 22;
+export const RX_SLOT_SYNTH_REPAIR   = 23;
 // Facilitated permeability scaler at full catalyst pool (analogous to
 // a generic reaction's vmax). Net flux also scales with the cross-
 // membrane concentration gap, the catalyst pool, and cell surface.
