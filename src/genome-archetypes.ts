@@ -273,23 +273,25 @@ function build(): Archetype[] {
       id: "chloroplast",
       label: "chloroplast",
       cls: "seed",
-      desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle.",
+      desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle. Sized to be roughly an order of magnitude smaller than its farmer host (mass at maturity ~6 vs host ~30) so a host can carry many plastids without being out-massed by its own organelles -- closer to the chloroplast/plant-cell ratio in nature (~1/500 volume, 10-100 per cell) than the prior mature ~45 mass which made one chloro larger than the host itself.",
       prog: [
         ...AUTO_KIT,
         // Only shed glucose when structurally healthy -- an
-        // unconditional leak self-starves a slow autotroph.
+        // unconditional leak self-starves a slow autotroph. Gate
+        // scaled with the smaller mass threshold (was > 10, now > 2).
         ["SELF_MEMBRANE"],
-        ["PUSH8", 10],
+        ["PUSH8", 2],
         ["GT"],
         ["JZ", "noLeak"],
-        ["PUSH8", 6],
+        ["PUSH8", 2],
         ["EXCRETE", CHEM_GLU], // bleed surplus fixed carbon to the pool
         ["LABEL", "noLeak"],
-        // High internal-division gate: an engulfed chloroplast that
-        // divides too eagerly blooms inside the host (glucose flood,
-        // host population thrash). Raised to the mito-validated band
-        // so the plastid stays tandem-proportional to its host.
-        ...reproduceWhenGrown(45, "np"),
+        // Internal-division gate scaled to biology: daughter mass ~3,
+        // mature mass ~6 = ~1/5 host volume. Means engulfment is
+        // trivially within the 1.14x radius gate (host at mass 30 is
+        // ~1.7x the chloro radius) and a host can carry several
+        // plastids without being out-massed.
+        ...reproduceWhenGrown(6, "np"),
       ],
     },
     {
@@ -346,7 +348,7 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, two INGESTs (substrate + electron acceptor), respiration + digestion catalyst boosts so it actually runs the ATP-producing reaction faster than baseline, and the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) that exports CHEM_ATP across the vacuolar membrane down its concentration gradient. ATP flows organelle->host whenever the mito is respiration-richer than the host -- emergent, mass-exact, never a scripted hand-off. Returns CO2 to the shared pool; slow internal division (gate 45) keeps it ~proportional to host fission (tandem).",
+      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, two INGESTs (substrate + electron acceptor), respiration + digestion catalyst boosts so it actually runs the ATP-producing reaction faster than baseline, and the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) that exports CHEM_ATP across the vacuolar membrane down its concentration gradient. ATP flows organelle->host whenever the mito is respiration-richer than the host -- emergent, mass-exact, never a scripted hand-off. Returns CO2 to the shared pool. Sized to be ~1/10 the host's mass (mature mass ~3 vs host ~30) -- still an order of magnitude bigger than a real mito (which is ~1/3000 of its host's volume) but small enough that a single host can carry many mitos without being out-massed by its own organelles.",
       prog: [
         ["SYNTH", "CAT", RX_SLOT_RESPIRATION],     // respire faster than baseline
         ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],     // digest host biopolymer faster
@@ -358,7 +360,11 @@ function build(): Archetype[] {
         ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
-        ...reproduceWhenGrown(45, "np"),
+        // Scaled to biology: mature mass ~3 = ~1/10 host volume.
+        // A 30-mass host has radius ~2.15x mito's, easily clearing
+        // the 1.14x engulf gate; the host can carry dozens of mitos
+        // before its own size approaches the cap.
+        ...reproduceWhenGrown(3, "np"),
       ],
     },
     {

@@ -1134,6 +1134,26 @@ function nHostsCarrying(hostRoots: Set<number>, symRoots: Set<number>): number {
   }
   return n;
 }
+// Max symbionts found in any single host. Used to spot whether
+// the eng:host AVERAGE hides a few mega-carrier hosts vs an even
+// distribution. Returns 0 when no host carries any symbiont.
+function maxSymPerHost(hostRoots: Set<number>, symRoots: Set<number>): number {
+  let max = 0;
+  const count = (list: WithContents[]): number => {
+    let n = 0;
+    for (const inner of list) {
+      if (symRoots.has(rootOf(inner))) n++;
+      if (inner.contents && inner.contents.length) n += count(inner.contents);
+    }
+    return n;
+  };
+  for (const c of w.creatures) {
+    if (!hostRoots.has(rootOf(c))) continue;
+    const n = count((c as unknown as WithContents).contents ?? []);
+    if (n > max) max = n;
+  }
+  return max;
+}
 
 // Endosymbiosis report: hosts (free farmer lineages), free mito,
 // engulfed mito (recursed), hosts carrying >=1 mito, and the
@@ -1174,6 +1194,7 @@ function symReport(): string {
   const freeM = nFree(focalRoots);
   const engM = nEngulfed(focalRoots);
   const hostsW = nHostsCarrying(coStockRoots, focalRoots);
+  const maxSym = maxSymPerHost(coStockRoots, focalRoots);
   const ratio = hosts > 0 ? (engM / hosts).toFixed(2) : "-";
   const e = engMitoEnclosure();
   return (
@@ -1182,7 +1203,8 @@ function symReport(): string {
     `engSym=${String(engM).padStart(4)} ` +
     `[inHost=${e.inHost} inSym=${e.inMito} inOther=${e.inOther}] ` +
     `hostsW/Sym=${String(hostsW).padStart(3)} ` +
-    `eng:host=${ratio}`
+    `eng:host=${ratio} ` +
+    `maxSym=${String(maxSym).padStart(3)}`
   );
 }
 
