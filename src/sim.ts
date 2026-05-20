@@ -2431,7 +2431,11 @@ function seedInitialParticles(world: World): void {
 // faster cadence dumped 15x as much mass in during the same window,
 // which the reservePass then had to demote every tick.)
 const SEED_RAMP_PERIOD_SEC = 30;
-const SEED_RAMP_BATCH = 400;
+// 10x the prior per-batch amount (400 -> 4000). Frequency unchanged.
+// During SETTLE_NO_CAP_SEC the particle cap is Infinity, so the full
+// batch lands and the dissolved-field equilibrium settles ~10x higher
+// before reservePass demotes back to particleTarget after settle.
+const SEED_RAMP_BATCH = 4000;
 // Hard time cap on the ramp: stop seeding after this many sim-seconds
 // even if particleTarget was never reached, then latch done forever.
 const SEED_RAMP_MAX_T = 180;
