@@ -1563,15 +1563,14 @@ function evacuateRocks(world: World): void {
   const cellRows = OBSTACLE_CELL_ROWS;
   const cellSize = OBSTACLE_CELL_SIZE;
   // Particles. Iterate backwards because removeParticleAt swap-pops.
-  // For each particle in a rocky cell, find both the nearest polygon
-  // edge and whether the center is inside. We dissolve in two cases:
-  //   (a) center is INSIDE any polygon -- the strict invariant.
-  //   (b) center is on/very close to a polygon edge AND the particle
-  //       is essentially at rest -- catches settled "deposits" sitting
-  //       on the rock surface that read visually as embedded in rock.
-  //       Active particles bouncing off rock blow past this test.
-  const VX = store.vx, VY = store.vy;
-  const SETTLE_VEL_SQ = 400; // (20 px/s)^2 = slow + on-rock = pile
+  // For each particle in a rocky cell, walk the polygon edges once
+  // to compute both the nearest-edge distance AND the inside/outside
+  // crossing count. Dissolve when either:
+  //   (a) center is INSIDE any polygon, OR
+  //   (b) center is within (r + 2) of the polygon edge -- the visual
+  //       disc would overlap the rock bitmap. Velocity is NOT
+  //       consulted: even fast-moving particles grazing rock get
+  //       cleared rather than briefly flashing on the rock surface.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const px = store.x[i], py = store.y[i];
     if (cellGrid.length > 0) {
@@ -1612,15 +1611,13 @@ function evacuateRocks(world: World): void {
       if (isInside) { dissolveOb = ob; break; }
       const r = store.r[i];
       const dEdge = Math.sqrt(bestD2);
-      // Surface-deposit check: a particle within ~one diameter of the
-      // polygon edge AND moving slowly is treated as a deposit and
-      // dissolved. The diameter buffer (vs the previous half-radius)
-      // catches particles sitting on a sloped rock surface where the
-      // visual disc overlaps the rock bitmap by a few px.
-      if (dEdge < r * 2 + 1) {
-        const vmag2 = VX[i] * VX[i] + VY[i] * VY[i];
-        if (vmag2 < SETTLE_VEL_SQ) { dissolveOb = ob; break; }
-      }
+      // Strict touch rule: a particle whose center is within (r + 2)
+      // of the polygon edge has its visible disc overlapping the
+      // rock bitmap. Dissolve it -- velocity is not consulted, so
+      // even an actively bouncing particle that grazes rock at
+      // snapshot time gets cleared. The collision pass keeps things
+      // out of rock during physics; this is the visual guarantee.
+      if (dEdge < r + 2) { dissolveOb = ob; break; }
     }
     if (!dissolveOb) continue;
     const base = ambientBaseAt(world, px, py);
