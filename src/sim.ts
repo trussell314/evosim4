@@ -1713,25 +1713,82 @@ function collideObstaclesSoaSingle(
     const ob = obs[i];
     if (ox + rk < ob.minX || ox - rk > ob.maxX) continue;
     if (oy + rk < ob.minY || oy - rk > ob.maxY) continue;
-    const lobes = ob.lobes;
-    for (let j = 0; j < lobes.length; j++) {
-      const l = lobes[j];
-      const dx = ox - l.x;
-      const dy = oy - l.y;
-      const minDist = rk + l.r;
-      const d2 = dx * dx + dy * dy;
-      if (d2 >= minDist * minDist) continue;
-      let d = Math.sqrt(d2);
-      let nx = 0, ny = -1;
-      if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
-      else { nx = dx / d; ny = dy / d; }
-      const overlap = minDist - d;
-      ox += nx * overlap;
-      oy += ny * overlap;
+    const poly = ob.polygon;
+    if (poly) {
+      const lobes = ob.lobes;
+      let nearLobe = false;
+      for (let j = 0; j < lobes.length; j++) {
+        const l = lobes[j];
+        const dx = ox - l.x;
+        const dy = oy - l.y;
+        const minDist = rk + l.r;
+        if (dx * dx + dy * dy < minDist * minDist) { nearLobe = true; break; }
+      }
+      if (!nearLobe) continue;
+      let bestX = 0, bestY = 0, bestD2 = Infinity;
+      let crossings = 0;
+      const PL = poly.length;
+      for (let jj = PL - 1, j2 = 0; j2 < PL; jj = j2++) {
+        const ax = poly[jj].x, ay = poly[jj].y;
+        const bxp = poly[j2].x, byp = poly[j2].y;
+        const ex = bxp - ax, ey = byp - ay;
+        const lenSq = ex * ex + ey * ey;
+        let t = 0;
+        if (lenSq > 1e-12) {
+          t = ((ox - ax) * ex + (oy - ay) * ey) / lenSq;
+          if (t < 0) t = 0; else if (t > 1) t = 1;
+        }
+        const epx = ax + ex * t, epy = ay + ey * t;
+        const ddx = epx - ox, ddy = epy - oy;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 < bestD2) { bestD2 = d2; bestX = epx; bestY = epy; }
+        if ((ay > oy) !== (byp > oy)) {
+          const xInt = (bxp - ax) * (oy - ay) / (byp - ay + 1e-12) + ax;
+          if (ox < xInt) crossings++;
+        }
+      }
+      const isInside = (crossings & 1) === 1;
+      const d = Math.sqrt(bestD2);
+      if (!isInside && d >= rk) continue;
+      let nx, ny, depth;
+      if (d < 1e-6) { nx = 1; ny = 0; depth = isInside ? rk : 0; }
+      else if (isInside) {
+        nx = (bestX - ox) / d;
+        ny = (bestY - oy) / d;
+        depth = rk + d;
+      } else {
+        nx = (ox - bestX) / d;
+        ny = (oy - bestY) / d;
+        depth = rk - d;
+      }
+      ox += nx * depth;
+      oy += ny * depth;
       const vN = ovx * nx + ovy * ny;
       if (vN < 0) {
         ovx -= (1 + e) * vN * nx;
         ovy -= (1 + e) * vN * ny;
+      }
+    } else {
+      const lobes = ob.lobes;
+      for (let j = 0; j < lobes.length; j++) {
+        const l = lobes[j];
+        const dx = ox - l.x;
+        const dy = oy - l.y;
+        const minDist = rk + l.r;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minDist * minDist) continue;
+        let d = Math.sqrt(d2);
+        let nx = 0, ny = -1;
+        if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
+        else { nx = dx / d; ny = dy / d; }
+        const overlap = minDist - d;
+        ox += nx * overlap;
+        oy += ny * overlap;
+        const vN = ovx * nx + ovy * ny;
+        if (vN < 0) {
+          ovx -= (1 + e) * vN * nx;
+          ovy -= (1 + e) * vN * ny;
+        }
       }
     }
   }
@@ -1789,25 +1846,92 @@ function collideObstaclesSoa(
       const ob = obs[i];
       if (ox + rk < ob.minX || ox - rk > ob.maxX) continue;
       if (oy + rk < ob.minY || oy - rk > ob.maxY) continue;
-      const lobes = ob.lobes;
-      for (let j = 0; j < lobes.length; j++) {
-        const l = lobes[j];
-        const dx = ox - l.x;
-        const dy = oy - l.y;
-        const minDist = rk + l.r;
-        const d2 = dx * dx + dy * dy;
-        if (d2 >= minDist * minDist) continue;
-        let d = Math.sqrt(d2);
-        let nx = 0, ny = -1;
-        if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
-        else { nx = dx / d; ny = dy / d; }
-        const overlap = minDist - d;
-        ox += nx * overlap;
-        oy += ny * overlap;
+      const poly = ob.polygon;
+      if (poly) {
+        // Polygon-edge collision: gives smooth contour-following rest
+        // positions, vs the lobe-grid quantization that left particles
+        // pinned at fixed y-levels regardless of the actual rock
+        // shape. The lobes still drive the spatial index; we use them
+        // only as a fast reject before the O(V) polygon walk.
+        const lobes = ob.lobes;
+        let nearLobe = false;
+        for (let j = 0; j < lobes.length; j++) {
+          const l = lobes[j];
+          const dx = ox - l.x;
+          const dy = oy - l.y;
+          const minDist = rk + l.r;
+          if (dx * dx + dy * dy < minDist * minDist) { nearLobe = true; break; }
+        }
+        if (!nearLobe) continue;
+        // Walk the polygon's edges to find the nearest edge point AND
+        // count horizontal-ray crossings for an inside/outside test in
+        // the same pass. Inside particles (from a between-tick step
+        // that landed in rock) get pushed OUT through the nearest edge.
+        let bestX = 0, bestY = 0, bestD2 = Infinity;
+        let crossings = 0;
+        const PL = poly.length;
+        for (let jj = PL - 1, j2 = 0; j2 < PL; jj = j2++) {
+          const ax = poly[jj].x, ay = poly[jj].y;
+          const bxp = poly[j2].x, byp = poly[j2].y;
+          const ex = bxp - ax, ey = byp - ay;
+          const lenSq = ex * ex + ey * ey;
+          let t = 0;
+          if (lenSq > 1e-12) {
+            t = ((ox - ax) * ex + (oy - ay) * ey) / lenSq;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+          }
+          const epx = ax + ex * t, epy = ay + ey * t;
+          const ddx = epx - ox, ddy = epy - oy;
+          const d2 = ddx * ddx + ddy * ddy;
+          if (d2 < bestD2) { bestD2 = d2; bestX = epx; bestY = epy; }
+          if ((ay > oy) !== (byp > oy)) {
+            const xInt = (bxp - ax) * (oy - ay) / (byp - ay + 1e-12) + ax;
+            if (ox < xInt) crossings++;
+          }
+        }
+        const isInside = (crossings & 1) === 1;
+        const d = Math.sqrt(bestD2);
+        if (!isInside && d >= rk) continue;
+        let nx, ny, depth;
+        if (d < 1e-6) { nx = 1; ny = 0; depth = isInside ? rk : 0; }
+        else if (isInside) {
+          nx = (bestX - ox) / d;
+          ny = (bestY - oy) / d;
+          depth = rk + d;
+        } else {
+          nx = (ox - bestX) / d;
+          ny = (oy - bestY) / d;
+          depth = rk - d;
+        }
+        ox += nx * depth;
+        oy += ny * depth;
         const vN = ovx * nx + ovy * ny;
         if (vN < 0) {
           ovx -= (1 + e) * vN * nx;
           ovy -= (1 + e) * vN * ny;
+        }
+      } else {
+        // Fallback: no polygon outline -> use lobe pushback as before.
+        const lobes = ob.lobes;
+        for (let j = 0; j < lobes.length; j++) {
+          const l = lobes[j];
+          const dx = ox - l.x;
+          const dy = oy - l.y;
+          const minDist = rk + l.r;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= minDist * minDist) continue;
+          let d = Math.sqrt(d2);
+          let nx = 0, ny = -1;
+          if (d < 1e-6) { d = 1; nx = 1; ny = 0; }
+          else { nx = dx / d; ny = dy / d; }
+          const overlap = minDist - d;
+          ox += nx * overlap;
+          oy += ny * overlap;
+          const vN = ovx * nx + ovy * ny;
+          if (vN < 0) {
+            ovx -= (1 + e) * vN * nx;
+            ovy -= (1 + e) * vN * ny;
+          }
         }
       }
     }

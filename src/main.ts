@@ -2584,7 +2584,6 @@ function drawHeatmap(): void {
   // per-chem per-region field (present once the worker has applied
   // the same focus chem -- snapshot.densityChem echoes it).
   const matSel = densityChemSel;
-  const matName = matSel < 0 ? "all" : chemName(matSel);
   const dens = new Float32Array(cols * rows);
   if (densRend) {
     for (const p of snapshot.particles) {
@@ -2659,11 +2658,8 @@ function drawHeatmap(): void {
     }
   }
   ctx.globalAlpha = 1;
-  ctx.fillStyle = "rgba(255,255,255,0.65)";
-  ctx.font = UI_CANVAS_FONT;
-  const srcs = [densRend && "visible", densDiss && "dissolved", densResv && "simulated", densVivo && "in vivo"].filter(Boolean).join("+") || "none";
-  ctx.fillText(`heatmap: density [${srcs}] · mat:${matName} (max ${maxC.toFixed(0)}/cell)`, 8, surfaceY + 14);
-    return;
+  // (Heatmap label removed per user request -- the legend text used
+  // to read "heatmap: density [...] mat:X (max Y/cell)" here.)
   }
 }
 
