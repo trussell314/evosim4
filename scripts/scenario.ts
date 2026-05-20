@@ -778,7 +778,66 @@ const SCENARIOS: Record<string, Scenario> = {
     report: () => symReport(),
   },
 
-  // #6 armored: indigestible-prey strategy. Ideal conditions = a
+  // #12 chloroplast, PRE-ENGULFED variant: each host starts with 1
+  // chloroplast already in its contents. Mirrors mito-engulfed but
+  // for the C-leaking plastid line. Near-surface lit zone so the
+  // engulfed chloro photosynthesises using the host's depth-light;
+  // glucose is a native transferable chem so leakage into the shared
+  // cytoplasm needs no translocase analog. Tests persistence + tandem
+  // reproduction of an existing plastid-host symbiosis.
+  "chloro-engulfed": {
+    id: "chloroplast",
+    count: 40,
+    coStock: [{ id: "farmer", count: 40 }],
+    describe:
+      "PRE-ENGULFED: 40 farmer hosts each pre-loaded with 1 chloro in " +
+      "contents (engine engulf invariant). NEAR-SURFACE lit + permanent " +
+      "midday, ambient CO2=50/MIN=50 + biopolymer chemostat ~1500 " +
+      "(farmer food). Engulfed chloro leaks glucose to the shared host " +
+      "pool via native transfer. Tests persistence + tandem reproduction " +
+      "of an existing plastid-host symbiosis.",
+    setup: (w, chloros, hosts) => {
+      w.dayPhase = 0.25;
+      w.dayPeriod = 1e9;
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+      const surfaceY = (w as unknown as { surfaceY: number }).surfaceY;
+      // Cluster hosts near the surface so the engulfed plastid actually
+      // fixes C on host depth-light. Free chloros (unused after engulf)
+      // get placed near the surface too in case any survive to bloom.
+      const place = (arr: Cre[], spread: number): void => {
+        for (let k = 0; k < arr.length; k++) {
+          arr[k].y = surfaceY + 5 + (k % spread) * 3;
+          arr[k].x = w.width * (0.06 + 0.88 * ((k + 0.5) / arr.length));
+        }
+      };
+      place(chloros, 8);
+      place(hosts, 8);
+      const creatures = (w as unknown as { creatures: unknown[] }).creatures;
+      let ci = 0;
+      for (const h of hosts) {
+        const host = h as unknown as { contents: unknown[] };
+        for (let j = 0; j < 1 && ci < chloros.length; j++, ci++) {
+          const cp = chloros[ci] as unknown as {
+            genome: Uint8Array; organelleSynthMask: number;
+          };
+          // engine engulf invariant: alive in host.contents, masked,
+          // and NOT in the free world.creatures list.
+          cp.organelleSynthMask = genomeSynthMask(cp.genome);
+          host.contents.push(cp);
+          const idx = creatures.indexOf(chloros[ci]);
+          if (idx >= 0) creatures.splice(idx, 1);
+        }
+      }
+    },
+    perStep: (w) => {
+      setAmbientAll(w, CHEM_CO2, 50);
+      setAmbientAll(w, CHEM_MIN, 50);
+      topUpBiopolymer(w, 1500);
+    },
+    report: () => symReport(),
+  },
   // food-replete world under sustained predator pressure (size-bully
   // co-stocked). Armor only matters if there is something to defend
   // against, so predators are essential to the test, not optional.
