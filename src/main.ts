@@ -2363,10 +2363,7 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Surface highlight stroke. Drawn BEFORE the terrain blit so the
-  // rock bitmap paints over it where rock pierces the surface --
-  // visually the wave line then stops cleanly at the rock-water
-  // interface instead of slicing through solid stone.
+  // Surface highlight stroke.
   ctx.strokeStyle = "rgba(170, 220, 240, 0.45)";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -2374,13 +2371,11 @@ function render(): void {
   for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.stroke();
 
-  // Static terrain. Pre-baked once into terrainBitmap (an offscreen
-  // canvas sized to the world); we just blit it per frame.
+  // Pre-bake terrain bitmap if needed; the blit happens later so rock
+  // paints over particles that would otherwise visibly overlap the
+  // surface. Particles are physically pushed out by collision; this
+  // is the visual confirmation of impenetrability.
   if (!terrainBitmap) buildTerrainBitmap();
-  if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
-
-  // Vent: dark mouth in the rock + active eruption shimmer overlaid.
-  if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
 
   // Wind streaks: short horizontal slashes drifting through the air
   // band, intensity scaling with |wind|, faded out where rock occupies
@@ -2486,6 +2481,12 @@ function render(): void {
   }
   ctx.filter = "none";
   ctx.globalAlpha = 1;
+
+  // Rock terrain composited on top of particles + vent overlay. Anything
+  // painted earlier that overlaps a rock column gets hidden, matching
+  // the physical impenetrability the collision code enforces.
+  if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
+  if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
 
   const selId = selectedCellId;
   // When a cell is selected (its follow-tooltip is up), ring every
