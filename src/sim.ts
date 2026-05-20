@@ -1565,9 +1565,6 @@ function evacuateRocks(world: World): void {
   // Particles. Iterate backwards because removeParticleAt swap-pops.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const px = store.x[i], py = store.y[i];
-    // Fast-reject via the rock-cell bitmap. ~80% of particles are
-    // floating in open water nowhere near rock; we skip them with a
-    // single byte read.
     if (cellGrid.length > 0) {
       const cx = Math.floor(px / cellSize);
       const cy = Math.floor(py / cellSize);
@@ -2220,9 +2217,10 @@ function spawnFounder(world: World): Creature | null {
 
 
 function seedInitialParticles(world: World): void {
-  const spawnOne = (spec: SpawnChemSpec): void => {
+  const spawnOne = (spec: SpawnChemSpec): boolean => {
     const r = 1 + simRng() * 1.5;
     const pos = spawnPosForChem(world, r, spec.chemId);
+    if (!pos) return false;
     pushParticle(world, {
       x: pos.x, y: pos.y, z: pos.z,
       vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
@@ -2230,6 +2228,7 @@ function seedInitialParticles(world: World): void {
       chemId: spec.chemId,
       density: rollChemDensity(spec),
     });
+    return true;
   };
   // Unified seed: the spawn `weight` IS the distribution. Guarantee
   // >=1 of every chemical (deterministic representation, independent
@@ -2241,7 +2240,12 @@ function seedInitialParticles(world: World): void {
     if (world.particles.length >= target) break;
     spawnOne(spec);
   }
-  while (world.particles.length < target) spawnOne(pickSpawnSpec());
+  // Bounded loop: with topSpawnPos rejecting rocky columns, spawnOne
+  // can return false; pick fresh specs until the population reaches
+  // target. Cap iterations so a pathological terrain (all rock) can't
+  // hang -- in practice this loop finishes in ~target attempts.
+  let safety = target * 4;
+  while (world.particles.length < target && safety-- > 0) spawnOne(pickSpawnSpec());
 }
 
 // One-shot startup ramp (production worlds). Once per sim-second, inject
@@ -2289,6 +2293,7 @@ function seedRamp(world: World, dt: number): void {
       const spec = pickSpawnSpec();
       const r = spawnRadius(spec.chemId);
       const pos = spawnPosForChem(world, r, spec.chemId);
+      if (!pos) continue;
       pushParticle(world, {
         x: pos.x, y: pos.y, z: pos.z,
         vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
@@ -2328,41 +2333,51 @@ function randomWaterPos(
 // Top-of-water spawn. Drops particles in a thin band just below the
 // surface so they fall under gravity and find their natural resting
 // place. Rejects x columns where rock pokes above (or near) the
-// surface so non-gas particles don't spawn on top of a cliff. Used
-// for solids/organics; gases keep randomWaterPos because they'd
-// just escape immediately anyway.
+// surface so non-gas particles don't spawn on top of a cliff. Returns
+// null when every retry failed (caller skips the spawn this tick
+// rather than dumping the particle into rock).
 function topSpawnPos(
   world: World, r: number,
-): { x: number; y: number; z: number; vy: number } {
-  let x = 0;
+): { x: number; y: number; z: number; vy: number } | null {
   const surfaceY = world.surfaceY;
-  // Skip columns where rock is at or near the surface (the top-left
-  // cliff in the layout). Without the check, particles spawn on the
-  // rock's underside and bounce around uselessly.
   const heightmap = world.terrainHeightmap;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    x = simRng() * world.width;
-    if (!heightmap || heightmap.length === 0) break;
+  // Without terrain, any column is fine.
+  if (!heightmap || heightmap.length === 0) {
+    return {
+      x: simRng() * world.width,
+      y: surfaceY + r + simRng() * (r * 3),
+      z: r + simRng() * (world.depth - 2 * r),
+      vy: 5 + simRng() * 10,
+    };
+  }
+  // Stricter retry (32 attempts, ~5e-5 fail rate at 50% rock columns).
+  // Threshold also tightened: rock top must be at least one
+  // particle-radius below the deepest spawn-jitter point, so a
+  // bumpy near-surface rock doesn't pinch the spawn band closed.
+  const yMax = surfaceY + r * 5;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const x = simRng() * world.width;
     const ix = Math.max(0, Math.min(heightmap.length - 1, Math.floor(x)));
     const topY = heightmap[ix];
-    // Accept the column if the rock top is well below the spawn band
-    // (or there's no rock at this column).
-    if (topY > surfaceY + r * 8 || topY === Number.POSITIVE_INFINITY) break;
+    if (topY > yMax || topY === Number.POSITIVE_INFINITY) {
+      return {
+        x,
+        y: surfaceY + r + simRng() * (r * 3),
+        z: r + simRng() * (world.depth - 2 * r),
+        vy: 5 + simRng() * 10,
+      };
+    }
   }
-  const y = surfaceY + r + simRng() * (r * 3);
-  return {
-    x, y,
-    z: r + simRng() * (world.depth - 2 * r),
-    vy: 5 + simRng() * 10,  // small downward seed
-  };
+  return null;
 }
 
 // Pick the spawn position for `chemId`. Gases keep the uniform-water
 // path (they'd just escape from the top anyway, and aeration is
-// their primary inlet); everything else top-drops.
+// their primary inlet); everything else top-drops. Returns null when
+// the spawn would land in rock; callers skip those.
 function spawnPosForChem(
   world: World, r: number, chemId: number,
-): { x: number; y: number; z: number; vy?: number } {
+): { x: number; y: number; z: number; vy?: number } | null {
   if (chemId === CHEM_O2 || chemId === CHEM_CO2) {
     return randomWaterPos(world, r);
   }
@@ -4637,9 +4652,13 @@ export function step(world: World, dt: number): void {
     resolveCreatureSedimentCollisions(world);
     n = performance.now(); p.sedimentColl += n - m; m = n;
     resolveObstacleCollisions(world);
-    evacuateRocks(world);
     n = performance.now(); p.obstacleColl += n - m; m = n;
     applyWalls(world);
+    // Evacuation runs AFTER applyWalls so anything the wall clamp
+    // pushed into rock (particles compressed against the left wall
+    // at columns where rock touches y=0) gets destroyed before the
+    // next tick rather than persisting visibly for one frame.
+    evacuateRocks(world);
     n = performance.now(); p.walls += n - m; m = n;
     sampleRegionTemps(world);
     seedRamp(world, dt);
@@ -4667,6 +4686,8 @@ export function step(world: World, dt: number): void {
     m = performance.now();
     pruneSpecies(world);
     n = performance.now(); p.prune += n - m;
+    // Final evacuation pass: see comment in the non-profile branch.
+    evacuateRocks(world);
     p.ticks++;
   } else {
     applyBondSprings(world, dt);
@@ -4680,8 +4701,8 @@ export function step(world: World, dt: number): void {
     );
     resolveCreatureSedimentCollisions(world);
     resolveObstacleCollisions(world);
-    evacuateRocks(world);
     applyWalls(world);
+    evacuateRocks(world);
     sampleRegionTemps(world);
     seedRamp(world, dt);
     runVent(world, dt);
@@ -4699,6 +4720,11 @@ export function step(world: World, dt: number): void {
     advanceFadingGhosts(world, dt);
     advanceEDnaCarriers(world, dt);
     pruneSpecies(world);
+    // Final evacuation pass: catches anything that spawn / aerate /
+    // vent / decay paths produced inside rock since the
+    // applyWalls-time evacuation. End-of-tick guarantee: when the
+    // snapshot is taken nothing is inside rock.
+    evacuateRocks(world);
   }
   // Count lineage extinctions. Any lineageRoot that was alive at the
   // *start* of this step but isn't alive now has gone extinct in this
@@ -4810,6 +4836,7 @@ function replenishParticles(world: World, dt: number): void {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
     const pos = spawnPosForChem(world, r, spec.chemId);
+    if (!pos) continue;
     pushParticle(world, {
       x: pos.x, y: pos.y, z: pos.z,
       vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
