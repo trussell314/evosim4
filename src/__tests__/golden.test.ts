@@ -160,7 +160,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // hangover from the pre-rework wave coupling -- the analytical
     // term still showed up on the temperature overlay as wavy stripes
     // unrelated to anything physical. Zeroed by default.
-    const GOLDEN = "8245be01";
+    // Bumped: evacuateRocks was adding particle PHYSICAL MASS directly
+    // into the ambient MOLES field for non-molecule particles. For any
+    // chem with molarMass != 1 (every generic chem) this inflated the
+    // amount by a factor of molarMass per evacuation, and combined
+    // with precipitate's particle-spawning created an autocatalytic
+    // mass source. Generic chems were climbing into the hundreds of
+    // millions of moles over a long run. Divide by molar mass on the
+    // way in.
+    const GOLDEN = "d91b3f53";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

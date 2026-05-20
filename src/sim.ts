@@ -1599,10 +1599,18 @@ function evacuateRocks(world: World): void {
       }
     } else {
       const r = store.r[i];
-      const density = store.density[i] !== 0 ? store.density[i] : 1;
-      const mass = density * FOUR_THIRDS_PI * r * r * r;
       const chemId = store.chemId[i];
-      ambient[base + chemId] += mass;
+      const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[chemId];
+      // ambient stores AMOUNT (moles), particle holds PHYSICAL MASS.
+      // Convert mass -> moles via molar mass on the way in. Skipping the
+      // conversion meant every evacuation cycle inflated ambient by a
+      // factor of molarMass; combined with precipitate re-spawning
+      // particles that the next evacuator pass could re-ingest, this
+      // was an autocatalytic mass source for any chem with molarMass != 1
+      // (i.e. every generic chem).
+      const mass = density * FOUR_THIRDS_PI * r * r * r;
+      const mm = CHEM_MM[chemId] || 1;
+      ambient[base + chemId] += mass / mm;
     }
     removeParticleAt(world, i);
   }
