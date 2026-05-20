@@ -128,7 +128,7 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // overlap, particles bounce off rock) and the vent's eruption
     // schedule consumes RNG draws -- both shift the fingerprint
     // deterministically. Determinism + mass-conservation still green.
-    const GOLDEN = "cee5ff0e";
+    const GOLDEN = "d57f567e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

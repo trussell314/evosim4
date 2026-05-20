@@ -1424,12 +1424,13 @@ function pushTerrainPolygon(world: World, polygon: { x: number; y: number }[], c
 // the polygon -- particles never tunnel through, but a particle can
 // graze a polygon corner without contact. Acceptable for terrain.
 function lobesFromTerrainPolygon(polygon: { x: number; y: number }[]): ObstacleLobe[] {
-  // Finer pitch + smaller radius => denser interior fill, so a
-  // particle pushed into a corner by another body has more nearby
-  // lobes to bounce off and won't drift through the lobe gaps that
-  // a 12-pitch grid leaves around concave bends.
-  const LOBE_R = 7;
-  const LOBE_PITCH = 8;
+  // Coarse-ish lobe packing -- evacuateRocks is the definitive
+  // "inside rock" check via polygon point-in-polygon, so the lobes
+  // only need to handle the cheap radial-pushback case for bodies
+  // skimming the boundary. Anything that gets all the way inside a
+  // polygon is dealt with by the evacuation pass.
+  const LOBE_R = 9;
+  const LOBE_PITCH = 12;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const v of polygon) {
     if (v.x < minX) minX = v.x;
@@ -1553,9 +1554,26 @@ function evacuateRocks(world: World): void {
   const ambient = world.ambient;
   const store = world.particleStore;
   const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  // Cell-bitmap fast-reject: if the particle's cell is marked clear
+  // of rock, skip the polygon test. The bitmap is built with a small
+  // margin around each obstacle so anything that could possibly be
+  // inside still gets the full test.
+  const cellGrid = OBSTACLE_CELL_GRID;
+  const cellCols = OBSTACLE_CELL_COLS;
+  const cellRows = OBSTACLE_CELL_ROWS;
+  const cellSize = OBSTACLE_CELL_SIZE;
   // Particles. Iterate backwards because removeParticleAt swap-pops.
   for (let i = world.particles.length - 1; i >= 0; i--) {
     const px = store.x[i], py = store.y[i];
+    // Fast-reject via the rock-cell bitmap. ~80% of particles are
+    // floating in open water nowhere near rock; we skip them with a
+    // single byte read.
+    if (cellGrid.length > 0) {
+      const cx = Math.floor(px / cellSize);
+      const cy = Math.floor(py / cellSize);
+      if (cx < 0 || cx >= cellCols || cy < 0 || cy >= cellRows) continue;
+      if (cellGrid[cy * cellCols + cx] === 0) continue;
+    }
     let insideOb: Obstacle | null = null;
     for (const ob of world.obstacles) {
       if (!ob.polygon) continue;
@@ -1586,6 +1604,12 @@ function evacuateRocks(world: World): void {
   // to a safe distance past it.
   for (const c of world.creatures) {
     const cx = c.x, cy = c.y;
+    if (cellGrid.length > 0) {
+      const ccx = Math.floor(cx / cellSize);
+      const ccy = Math.floor(cy / cellSize);
+      if (ccx < 0 || ccx >= cellCols || ccy < 0 || ccy >= cellRows) continue;
+      if (cellGrid[ccy * cellCols + ccx] === 0) continue;
+    }
     let insideOb: Obstacle | null = null;
     for (const ob of world.obstacles) {
       if (!ob.polygon) continue;
