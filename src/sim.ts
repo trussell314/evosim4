@@ -2705,15 +2705,12 @@ function makeCreature(
       // electron acceptor, so it's not wasted.
       o2: 8,
       // Glucose so the cell can respire to *sustain* ATP past the
-      // one-shot energy grant. Bumped twice now (10 -> 50 -> 100) to
-      // widen the bootstrap window for sense-archetypes: thermo at
-      // glu=50 survived 30 -> 2 -> 3 -> 2 with 29 mem-deaths in the
-      // first ~120s before the surviving lineage found the isotherm
-      // and grew to division. Bigger pool means fewer founders lose
-      // the migration race outright; the photoauto carrying capacity
-      // is unaffected (no thrust, so extra glucose just respires
-      // through the larger ADP pool at the same per-cell rate).
-      glucose: 100,
+      // one-shot energy grant. Reduced 100 -> 50 for buoyancy: glucose
+      // (density 1.5) was the dominant driver keeping fresh founders
+      // above neutral and sinking. With FOUNDER_SEED_ATP now 80 the
+      // total starting energy buffer stays ample (80 ATP + 50 glucose),
+      // while the lighter glucose load brings founders nearer neutral.
+      glucose: 50,
       // Small amino-acid pool so the new viability threshold
       // (MIN_VIABLE_AMINOACID) doesn't kill the founder on tick 1.
       aminoAcid: 0.5,

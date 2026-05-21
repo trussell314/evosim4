@@ -239,7 +239,8 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: VM instr budget reverted 16 -> 8.
     // Bumped again: founders no longer scoop / draw-reserve chems denser
     // than FOUNDER_SCOOP_MAX_DENSITY (buoyancy), changing seed composition.
-    const GOLDEN = "34c72f9e";
+    // Bumped again: founder seed glucose 100 -> 50 (buoyancy).
+    const GOLDEN = "70d97869";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
