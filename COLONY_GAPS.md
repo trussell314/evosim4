@@ -232,3 +232,53 @@ emitter** (currently only in the `vent` scenario) + the
 chemolithoautotroph archetype (HET viability kit + `SYNTH CAT
 <energy slot>` + `SYNTH CAT <one of these carbon slots>` + `INGEST`).
 The chemistry no longer blocks it.
+
+## GAP #7 — metabolic staple bottleneck audit (RECORDED 2026-05-21)
+
+Having relieved glucose, the obvious follow-up: which *other* staples
+are thin? Ran the same analysis (named routes + generic reactions that
+make the chem from world-acquirable substrates) across the whole
+biosynthesis chain. The named chain is **glucose-rooted** — `GLU → AA →
+{CHL, ENZ, MRNA}`, `GLU → FA`, `{AA, FA} → MEMBRANE` — so fixing
+glucose relieved the chain *for glucose-using cells*. The residual
+risk is concentrated in two places.
+
+Route coverage (named bootstrap routes / generic-from-acquirable-input
+routes), measured against the live table 2026-05-21:
+
+| staple | named | generic-from-acquirable | note |
+|---|---|---|---|
+| GLU | 2 | 9 | resolved (GAP #6) |
+| **MRNA** | **1** | **0** | translation capacity; needed by *all* biosynth |
+| **AA** | 2 | **1** | hub → chl/enz/mrna/membrane |
+| FA | 2 | 2 | membrane precursor (historically bit autotrophs) |
+| MEMBRANE | 2 | 2 | structure |
+| CHL | 1 | 3 | photosynthesis cofactor (specialist) |
+| ENZ | 1 | 9 | digestion cofactor |
+
+- **mRNA is the sharpest chokepoint — structurally worse than glucose
+  ever was.** One slow named route (`synth_ribo`, vmax 0.15), *zero*
+  acquirable-input generic alternatives, and it is `mrnaScale`
+  **mandatory on every biosynth reaction**, **autocatalytic** (mRNA is
+  an input to making mRNA), and mRNA=0 is an **absorbing death state**.
+  Observed biting the differentiated-colony soma (bud off mRNA-poor,
+  struggle to recover). **Caveat: partly intentional** — mRNA models
+  ribosome/translation capacity, the deliberate growth rate-limiter.
+  Adding routes would erase a real constraint, so this is a design
+  judgment, not a clear bug. Leave unless we explicitly want growth
+  less constrained.
+- **AA is the next concern.** Only one acquirable-input generic route
+  besides the named `GLU + MIN → AA`. Fine for a glucose-fed cell, but
+  it gates *alternative-diet* lifestyles that try to build amino acids
+  without routing through glucose (a nitrogen-fixer analog). That niche
+  is currently near-inexpressible. **Candidate cheap fix:** a few
+  graded AA routes from acquirable inputs, mirroring the GAP #6 glucose
+  work — opens the alt-autotroph niche without touching the mRNA
+  limiter.
+- **FA** is milder and already mitigated once (membrane-failure
+  die-offs fixed by raising `synth_fa`); two acquirable generic routes
+  now. **CHL / ENZ / MEMBRANE** are adequately covered.
+
+Not actioned — recorded for when we revisit. ATP / CO₂ / MIN are *not*
+bottlenecks (ATP: 91 exergonic generics + 3 named energy reactions;
+MIN: high-spawn-weight world input; CO₂: respiration byproduct).
