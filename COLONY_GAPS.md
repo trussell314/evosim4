@@ -116,7 +116,7 @@ procedurally-generated generic ones.
   reactions + **9 transporters** (`TRANSPORT_SLOT_BASE = 247`), the
   generics with random substrates/products over the full 96-chem
   space, `atpDelta = Σ s.bondPotential − Σ p.bondPotential`. The split
-  is **42% exergonic** (92/221) / 57% endergonic (125) / 4 ≈zero — a
+  is **~41% exergonic** (91/221) / 57% endergonic (126) / 4 ≈zero — a
   modest endergonic skew, with no built-in exergonic bias (the reverse
   reaction negates `atpDelta`, closed cycles telescope to zero). The
   221 generics carry `uncatRate: 0`, so they are inert **until the cell
@@ -146,20 +146,15 @@ lineage **reproduces** (0→20 births once the carbon catalyst is
 added). It is not yet self-sustaining (40→10) because it is
 **carbon-limited, not energy-limited**.
 
-**The actual residual gap (precise, re-verified 2026-05-21):** four
-generic reactions produce the heterotroph carbon staple `GLU` (slots
-68, 144, 185, 206), but **exactly one runs on an acquirable input** —
-slot 185, fed by the generic chem `c35`, slow (`vmax` 0.766,
-`atpDelta` +0.065 ≈0). The other three are dead ends for a free-living
-cell: slot 68 needs `membrane` + `mechanoreceptor` + `minerals`, slot
-206 needs `activatedChemoFaY`, and slot 144 needs `bondChem` and is
-light-driven — i.e. they consume *internal cell-machinery* chems the
-cell would have to synthesize first (circular), not anything it can
-ingest. So the single usable route is also slow and competes for its
-one fuel chem. Chemolitho**autotrophy** is therefore *expressible* but
-*throughput-starved*: the scarcity is **evolvable carbon-fixation
-routes from acquirable inorganic inputs**, not energy and not
-"genome-selectability."
+**The residual gap as originally found (now resolved — see
+"Resolution" below):** the seeded table produced four `GLU` reactions
+but **exactly one ran on an acquirable input** (slot 185, generic
+`c35`, slow); the other three were circular dead ends needing internal
+cell-machinery chems (`membrane`/`mechanoreceptor`, `activatedChemoFaY`,
+`bondChem`) a free cell can't ingest. So chemolitho**autotrophy** was
+*expressible* but *throughput-starved* — the scarcity was **evolvable
+carbon-fixation routes from acquirable inorganic inputs**, not energy
+and not "genome-selectability." That scarcity has since been closed.
 
 **Implications for the planned work:**
 
@@ -174,89 +169,66 @@ routes from acquirable inorganic inputs**, not energy and not
   and should not be justified by it.
 - New design question this raised: carbon-fixation route richness.
   Either (a) accept it as an emergent bottleneck (selection favors
-  the rare GLU route — arguably correct/realistic), or (b) add
-  carbon-fixation capacity. See "Current state + proposed fix" below.
+  the rare GLU route — arguably correct/realistic), or (b) enrich the
+  table with more carbon-fixation routes. We took (b). See
+  "Resolution" below.
 
 #16 (detritivore) is unaffected. #17 is no longer "inexpressible" —
-it is expressible but currently non-self-sustaining for the
-carbon-throughput reason above; reclassify from "blocked" to
-"expressible, carbon-limited."
+it is expressible, and the carbon-throughput scarcity is now resolved
+in-substrate (below); the remaining work to *ship* a self-sustaining
+#17 is a world vent fuel source + the archetype, not the chemistry.
 
-### Current state + proposed fix (2026-05-21)
+### Resolution — graded carbon-fixation routes (implemented 2026-05-21)
 
-**State.** *Energy* from abiotic fuel is solved in-substrate — no
-engine change needed (the 92 exergonic generics + `SYNTH CAT` already
-let a lineage harvest ATP 100+ from a vent cocktail). *Carbon* is the
-sole remaining blocker: one usable, slow (`vmax` 0.766), fuel-contested
-GLU route (slot 185). The `vent` fuel source exists only as a probe
-scenario (`scripts/scenario.ts`), not a shipped world feature, and
-there is **no shipped #17 chemolithoautotroph archetype**. Net: the
-niche is reachable by selection in principle but throughput-starved, so
-a *seeded* chemolithoautotroph cannot self-sustain.
+**What landed.** `installCarbonFixReactions` (`src/sim/reactions.ts`)
+injects **8 procedurally-generated `GLU`-producing reactions** into the
+generic band, each a catalyst-gated door (`uncatRate: 0`), all fixing
+carbon from acquirable **CO₂** (ambient + the detritivore's `EXCRETE`d
+CO₂ cross-feed). Together with the surviving slot 185, that is **9
+usable acquirable-input carbon routes** where there was one. To hold
+the table at 256, each new reaction overwrites the lowest-"interest"
+generic slot (an `interest()` heuristic: substrate acquirability +
+valuable product + |atpDelta| + vmax); the three circular GLU dead ends
+are force-retired first. `NAMED_REACTION_COUNT` is unchanged at 26 (the
+new routes are *generic* slots, not named bootstrap reactions).
 
-**Decision.** Option (a) — let selection find slot 185 — is realistic
-but, given that single route's rate and fuel contention, unlikely to
-yield a self-sustaining lineage unaided. We favor a **narrow (b)**: add
-ONE catalyst-gated **dark-carbon-fixation door** (optionally two),
-modeled exactly like photosynthesis (`out[3]`) but ATP-driven instead
-of light-driven. This is a *door, not a script* — the engine offers
-the reaction; a cell runs it only if it evolves `SYNTH CAT <slot>`,
-nothing forces chemoautotrophy. It mirrors the existing precedent that
-photosynthesis is itself an engine-provided carbon-fix door gated on
-evolving chlorophyll.
+**This differs from the layout proposed above** (one ATP-driven *named*
+reaction). The procedural-generic approach was chosen because it (a)
+gives the requested *variety* of mechanisms for evolution to discover,
+(b) keeps them true doors (`uncatRate 0`) rather than a
+free-to-everyone named baseline, and (c) needs no `NAMED_REACTION_COUNT`
+bump.
 
-**Proposed layout** (`installNamedReactions`, `src/sim/reactions.ts`):
+**The effort/yield gradient** (`CARBON_FIX_TIERS`), so different niches
+favor different routes:
 
-1. Bump `NAMED_REACTION_COUNT` 26 → 27 (→ 28 if both reactions).
-   Named reactions overwrite the *first* N already-generated slots, and
-   the rng draw order fills all 256 slots first, so this only converts
-   the generic content of slot 26 (and 27); slots 27/28+ keep
-   byte-identical generic content. **Determinism blast radius = the
-   converted slot(s) only.**
+- **Easy — common substrate, low yield, fast.** e.g. `CO2 → 0.34 glu
+  + 0.66 o2` (`vmax` ~1.4) and `CO2 + 2 min → glu + waste`. Cheap to
+  evolve and run, little carbon per turn.
+- **Mid — a generic reductant, medium yield.** e.g. `CO2 + c3c → ~3.5
+  glu + waste`; one is **light-assisted** (`lightIn` > 0, no
+  chlorophyll needed — a distinct mechanism from photosynthesis).
+- **Complex — rare substrate(s), multi-input, high yield.** e.g. `2 CO2
+  + c3d + c3c → ~7 glu`, and the top route `3 CO2 + (rare) c5a + 2 fa →
+  ~7.6 glu`, which is **exergonic** (the energy-rich fatty-acid
+  reductant pays for building glucose). The rare reductants come off
+  the tail of `GENERIC_SPAWN_ORDER`, so high yield is gated on a scarce
+  chem a lineage must find, hoard, or cross-feed.
 
-2. New reaction — **dark carbon fixation** (the chemoautotroph's
-   Calvin/RuBisCO analog), a TRUE door (`uncatRate: 0`):
+Net: glucose yield spans **0.34 → 7.6** per unit and effective
+throughput (yield × vmax) **~0.5 → ~3.8** across the set.
+`atpDelta` is bond-potential-derived as for every generic, so the
+energetics fall out of the chemistry (cheap routes mildly endergonic,
+the rich-reductant routes neutral-to-exergonic).
 
-   ```ts
-   // CO2 -> 0.5 glu + 0.5 o2, costs ~6 ATP, NO light, catalyst-gated.
-   out[26] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5],
-                -6, 1.5, { atpFloor: true });
-   ```
+**Validated.** `npx tsc`, full `vitest` (364 pass), `vite build` all
+green; mass-conservation green (every route is mass-balanced);
+determinism byte-identical; the golden seed run is unchanged (no cell
+in that 4 s trajectory catalyzes a converted slot). `SAVE_SCHEMA`
+bumped 21 → 22.
 
-   - Substrate `CO2`: abundant + acquirable (ambient, and the benthic
-     detritivore already `EXCRETE`s it — the authored cross-feed seed).
-     A *different, uncontested* input from slot 185's `c35`, so carbon
-     fixation no longer competes with the energy reaction's fuel.
-   - Endergonic (`atpDelta -6`, a starting value to tune in `vent`):
-     fixing carbon COSTS ATP, paid from what the cell harvests off the
-     exergonic vent-fuel reaction — real chemolithoautotrophy (chemical
-     energy drives CO₂ fixation). `atpFloor: true` blocks it when the
-     cell is ATP-broke.
-   - `uncatRate: 0` (UNLIKE the other named reactions, which get a free
-     baseline `uncatRate: rate`): zero free baseline, inert until
-     `SYNTH CAT 26`. `vmax 1.5` lets a committed chemoautotroph fix
-     carbon ~2× the lone generic route.
-   - Stoichiometry mirrors photosynthesis `out[3]` (`CO2 -> 0.5 glu +
-     0.5 o2`, already mass-balance-validated). If O₂-evolution in the
-     dark reads wrong, swap the O₂ product for a reductant-coupled form
-     (item 3) or `CHEM_WASTE`.
-
-3. (Optional) second door — **reductant-coupled fixation** for a
-   single-step chemolithoautotroph (energy + carbon in one reaction):
-   `CO2 + <reduced generic fuel> -> GLU + <oxidized>` with `atpDelta`
-   ~0. Higher realism, avoids O₂-in-the-dark, but harder to balance and
-   more pathway-specific. Defer unless the ATP-driven door alone proves
-   insufficient.
-
-4. **Wire it (CLAUDE.md "no semantic drift"):** add a named slot
-   constant (`RX_SLOT_CARBON_FIX = 26`) in `rxn-ids.ts`; update the
-   disasm/summary label tables; author the #17 chemolithoautotroph
-   archetype (HET viability kit + `SYNTH CAT <vent-energy slot>` +
-   `SYNTH CAT 26` + `INGEST`); and promote the bounded **vent fuel
-   emitter** from the `vent` scenario to a real world source.
-
-5. **Validate:** the `vent` scenario should now show a self-sustaining
-   lineage (births ≥ deaths past carbon-fix onset, ATP stable); bump
-   `SAVE_SCHEMA` and re-baseline the golden test (the converted slot
-   changes the table); confirm determinism + mass-conservation stay
-   green.
+**Still open to ship #17 as a seed:** a bounded **world vent fuel
+emitter** (currently only in the `vent` scenario) + the
+chemolithoautotroph archetype (HET viability kit + `SYNTH CAT
+<energy slot>` + `SYNTH CAT <one of these carbon slots>` + `INGEST`).
+The chemistry no longer blocks it.

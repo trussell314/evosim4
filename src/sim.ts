@@ -7742,7 +7742,7 @@ function applyWalls(world: World): void {
 // emission ledger are not yet persisted, so reloaded saves restart
 // the vent dormant. Old saves without rock terrain would land cells
 // inside the new rocks, so we invalidate them via the schema bump.
-export const SAVE_SCHEMA = `evosim4:21:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:22:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {

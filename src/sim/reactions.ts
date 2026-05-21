@@ -20,7 +20,7 @@ import {
   CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR, CHEM_BOND, CHEM_REPAIR,
   CHEM_ATP,
 } from "./chem-ids";
-import { CHEMICALS, CHEM_BOND_POTENTIAL } from "./chemistry";
+import { CHEMICALS, CHEM_BOND_POTENTIAL, GENERIC_SPAWN_ORDER } from "./chemistry";
 import { N_REACTIONS } from "../genome";
 
 export interface Reaction {
@@ -65,6 +65,12 @@ export interface Reaction {
   // the atpDelta field is reserved for future active/uphill pumping.
   transport?: number;
 }
+
+// Named reactions occupy the first NAMED_HEAD slots (re-exported below
+// as NAMED_REACTION_COUNT). Defined here, pre-build, so the table
+// builder can address the generic region without tripping the temporal
+// dead zone on the export const.
+const NAMED_HEAD = 26;
 
 function buildReactionTable(): Reaction[] {
   const rng = mulberry32(0xE2C4_BEEF);
@@ -155,7 +161,140 @@ function buildReactionTable(): Reaction[] {
   // generics.
   installNamedReactions(out);
   installTransporters(out);
+  installCarbonFixReactions(out, rng);
   return out;
+}
+
+// ---------------------------------------------------------------------
+// Carbon-fixation enrichment (COLONY_GAPS GAP #6). The procedural table
+// seeds only ONE glucose route from an acquirable input, so a non-photic
+// autotroph is carbon-throughput-starved. Inject a graded set of
+// catalyst-gated (uncatRate 0) GLU-producing reactions -- all fixing
+// carbon from acquirable CO2 -- spanning an effort/yield gradient: cheap
+// routes on common substrates with low glucose yield, up through
+// rare-substrate, multi-input routes with high yield (a scarce reductant
+// pays the cost of building energy-dense glucose). Each overwrites the
+// lowest-"interest" generic slot, so the 256-slot table size is
+// unchanged. These are DOORS, not scripts: a lineage runs one only by
+// evolving SYNTH CAT <its slot>; the variety exists for evolution to
+// discover, nothing seeds it.
+const CARBON_FIX_COUNT = 8;
+
+interface CarbonFixTier {
+  extra: number[];   // substrates besides CO2 (the carbon source)
+  gluShare: number;  // fraction of product MASS that is glucose (== yield)
+  vmaxLo: number;
+  vmaxHi: number;
+  byproduct: number; // oxidized/waste product carrying the non-glucose mass
+  light: number;     // ambient light units required (0 = dark)
+  co2: number;       // CO2 substrate count (bigger reaction -> more glucose)
+}
+
+// Generic substrates picked by spawn rarity (GENERIC_SPAWN_ORDER rank 0
+// = most-seeded). High-yield routes hang off the rare tail, so they are
+// gated on a scarce reductant a cell must find, hoard, or cross-feed.
+const CF_RARE = GENERIC_SPAWN_ORDER.length - 1;
+const CARBON_FIX_TIERS: CarbonFixTier[] = [
+  // Easy -- common substrates, low yield, fast.
+  { extra: [],                                  gluShare: 0.35, vmaxLo: 1.1, vmaxHi: 1.6, byproduct: CHEM_O2,    light: 0,   co2: 1 },
+  { extra: [CHEM_MIN],                          gluShare: 0.42, vmaxLo: 0.9, vmaxHi: 1.3, byproduct: CHEM_WASTE, light: 0,   co2: 1 },
+  { extra: [GENERIC_SPAWN_ORDER[0]],            gluShare: 0.48, vmaxLo: 0.8, vmaxHi: 1.1, byproduct: CHEM_O2,    light: 0.8, co2: 1 }, // light-assisted, no chlorophyll
+  // Mid -- a generic reductant, medium yield.
+  { extra: [GENERIC_SPAWN_ORDER[12]],           gluShare: 0.60, vmaxLo: 0.60, vmaxHi: 0.90, byproduct: CHEM_WASTE, light: 0, co2: 1 },
+  { extra: [CHEM_MIN, GENERIC_SPAWN_ORDER[18]], gluShare: 0.66, vmaxLo: 0.55, vmaxHi: 0.80, byproduct: CHEM_WASTE, light: 0, co2: 2 },
+  // Complex -- rare substrates, high yield, slow.
+  { extra: [GENERIC_SPAWN_ORDER[CF_RARE]],                              gluShare: 0.80, vmaxLo: 0.40, vmaxHi: 0.60, byproduct: CHEM_WASTE, light: 0, co2: 2 },
+  { extra: [GENERIC_SPAWN_ORDER[CF_RARE - 1], GENERIC_SPAWN_ORDER[12]], gluShare: 0.88, vmaxLo: 0.40, vmaxHi: 0.55, byproduct: CHEM_WASTE, light: 0, co2: 2 },
+  { extra: [GENERIC_SPAWN_ORDER[CF_RARE - 2], CHEM_FA],                 gluShare: 0.95, vmaxLo: 0.35, vmaxHi: 0.50, byproduct: CHEM_WASTE, light: 0, co2: 3 }, // FA = energy-rich reductant
+];
+
+function buildCarbonFixReaction(tier: CarbonFixTier, rng: () => number): Reaction {
+  const sChemA = [CHEM_CO2, ...tier.extra];
+  // CO2 count from the tier; each extra reductant 1..2 (procedural jitter).
+  const sCountA = sChemA.map((_, i) => (i === 0 ? tier.co2 : 1 + (rng() < 0.5 ? 0 : 1)));
+  let sMass = 0;
+  for (let j = 0; j < sChemA.length; j++) sMass += sCountA[j] * CHEMICALS[sChemA[j]].molarMass;
+  // Glucose carries `gluShare` of the substrate mass, the byproduct the
+  // remainder -- so yield scales with both gluShare and reaction size.
+  const share = Math.min(0.98, Math.max(0.2, tier.gluShare + (rng() - 0.5) * 0.04));
+  const gluMass = share * sMass;
+  const bpMass = sMass - gluMass;
+  const pChemA = [CHEM_GLU];
+  const pCountA = [gluMass / CHEMICALS[CHEM_GLU].molarMass];
+  if (bpMass > 1e-3) {
+    pChemA.push(tier.byproduct);
+    pCountA.push(bpMass / CHEMICALS[tier.byproduct].molarMass);
+  }
+  // atpDelta from bond potential (conservative, as for every generic):
+  // a rich reductant offsets the cost of building energy-dense glucose,
+  // so the rare/complex routes are cheaper per unit than the cheap ones.
+  let sBondE = 0;
+  for (let j = 0; j < sChemA.length; j++) sBondE += sCountA[j] * CHEM_BOND_POTENTIAL[sChemA[j]];
+  let pBondE = 0;
+  for (let j = 0; j < pChemA.length; j++) pBondE += pCountA[j] * CHEM_BOND_POTENTIAL[pChemA[j]];
+  const vmax = Math.exp(Math.log(tier.vmaxLo) + rng() * (Math.log(tier.vmaxHi) - Math.log(tier.vmaxLo)));
+  return {
+    sChem: new Uint8Array(sChemA),
+    sCount: new Float32Array(sCountA),
+    pChem: new Uint8Array(pChemA),
+    pCount: new Float32Array(pCountA),
+    atpDelta: sBondE - pBondE,
+    lightIn: tier.light,
+    vmax,
+    uncatRate: 0,
+    surfaceScale: false,
+    atpFloor: true,
+    mrnaScale: false,
+    chlScale: false,
+    enzScale: false,
+  };
+}
+
+// Interest heuristic for retiring generic slots: a reaction scores low
+// when it cannot run for a free-living cell (substrates not world-
+// acquirable), makes nothing valuable, moves little energy, and is slow.
+// Overwriting the lowest CARBON_FIX_COUNT generics removes the redundant
+// dead ends -- including the circular GLU routes that need internal
+// machinery chems as inputs -- and keeps the table size fixed.
+function installCarbonFixReactions(out: Reaction[], rng: () => number): void {
+  const acquirable = new Set<number>([
+    CHEM_CO2, CHEM_O2, CHEM_MIN, CHEM_FA, CHEM_ADP, CHEM_BIOPOLYMER,
+    CHEM_GLU, CHEM_AA, CHEM_WASTE,
+  ]);
+  for (const g of GENERIC_SPAWN_ORDER) acquirable.add(g);
+  const valuable = new Set<number>([
+    CHEM_GLU, CHEM_AA, CHEM_FA, CHEM_ATP, CHEM_MEMBRANE, CHEM_BIOPOLYMER,
+    CHEM_CHL, CHEM_ENZ, CHEM_MRNA,
+  ]);
+  const interest = (r: Reaction): number => {
+    let runnable = true;
+    for (const s of r.sChem) if (!acquirable.has(s)) runnable = false;
+    let makesValue = false;
+    let makesGlu = false;
+    for (const p of r.pChem) {
+      if (valuable.has(p)) makesValue = true;
+      if (p === CHEM_GLU) makesGlu = true;
+    }
+    // Retire first: the pre-existing circular GLU routes that "produce"
+    // glucose only from internal-machinery chems a free cell cannot
+    // acquire -- redundant now that the graded acquirable-input routes
+    // below replace them.
+    if (makesGlu && !runnable) return -1;
+    return (
+      (runnable ? 2 : 0) +
+      (makesValue ? 2 : 0) +
+      Math.min(2, Math.abs(r.atpDelta) * 3) +
+      Math.min(1, r.vmax)
+    );
+  };
+  // Rank the generic region (named head + transport tail excluded) by
+  // interest, ascending; overwrite the least-interesting slots.
+  const slots: number[] = [];
+  for (let s = NAMED_HEAD; s < TRANSPORT_SLOT_BASE; s++) slots.push(s);
+  slots.sort((a, b) => interest(out[a]) - interest(out[b]) || a - b);
+  for (let k = 0; k < CARBON_FIX_COUNT; k++) {
+    out[slots[k]] = buildCarbonFixReaction(CARBON_FIX_TIERS[k], rng);
+  }
 }
 
 // Standing transporters (Substrate B): the core small-molecule
@@ -252,7 +391,7 @@ export const REACTIONS: Reaction[] = buildReactionTable();
 // D added slots 10 (biopolymer-digest) and 11 (membrane-synth). Phase
 // H2 adds slots 12..15 (receptor biosynth). Exported so HUD /
 // disassembler can label catalyst slots by their bootstrap pathway.
-export const NAMED_REACTION_COUNT = 26;
+export const NAMED_REACTION_COUNT = NAMED_HEAD;
 
 // Stoichiometric coefficients mirror the previously hand-coded reaction
 // functions. Mass conservation is handled implicitly: substrates +

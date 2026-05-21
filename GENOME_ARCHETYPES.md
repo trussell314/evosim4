@@ -265,21 +265,24 @@ confirmed substrate gap (see below + `COLONY_GAPS.md` GAP #6).
     "negatively-buoyant / THRUST to stay low" framing was wrong —
     creatures are water-neutral with no passive sink; the working
     mechanism is food-tropism, which is cleaner / more emergent.)
-17. **Benthic chemolithotroph / cross-feeder.** *Expressible,
-    carbon-limited* (reclassified — the earlier "blocked /
-    inexpressible" was retracted; see `COLONY_GAPS.md` GAP #6
-    revised). The reaction table has ~230 procedurally-generated
-    generic reactions (≈half exergonic) that are inert until a
-    genome evolves `SYNTH CAT <slot>`, so catabolic strategy **is**
-    genome-selectable and non-photic energy **is** harvestable. The
-    Phase-1 `vent` scenario (bounded abiotic fuel seep, no engine
-    change) shows a probe genome sustains ATP 100+ purely from
-    abiotic fuel and reproduces once a carbon-fix catalyst is added.
-    It is not yet self-sustaining: the bottleneck is **carbon
-    fixation** (exactly one slow GLU-producing reaction from
-    acquirable inputs), not energy. Next lever is a world fuel
-    source (validated, low-risk) + the carbon-route question in
-    GAP #6 — not a new ATP reaction.
+17. **Benthic chemolithotroph / cross-feeder.** *Expressible;
+    chemistry no longer the blocker* (reclassified — the earlier
+    "blocked / inexpressible" was retracted, then the carbon-throughput
+    scarcity was closed; see `COLONY_GAPS.md` GAP #6). The reaction
+    table has 221 procedurally-generated generic reactions (~41%
+    exergonic) that are inert until a genome evolves `SYNTH CAT
+    <slot>`, so catabolic strategy **is** genome-selectable and
+    non-photic energy **is** harvestable. The Phase-1 `vent` scenario
+    (bounded abiotic fuel seep, no engine change) shows a probe genome
+    sustains ATP 100+ purely from abiotic fuel and reproduces once a
+    carbon-fix catalyst is added. Carbon fixation used to be the
+    bottleneck (one slow GLU route from acquirable inputs); the table
+    now seeds **9 acquirable-input carbon routes** on an effort/yield
+    gradient (`installCarbonFixReactions`, 8 graded CO₂→glucose doors +
+    the original), cheap-low-yield through rare-substrate-high-yield.
+    Remaining work to ship a self-sustaining seed is a world vent fuel
+    source (validated, low-risk) + the archetype itself — not a
+    chemistry change.
 
 ## Substrate gaps → what each unlocks (the guide)
 

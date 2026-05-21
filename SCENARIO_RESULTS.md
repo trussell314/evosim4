@@ -364,3 +364,10 @@ needs only a world fuel source, no ABI change). Refined gap: scarce
 evolvable carbon-fixation routes from inorganic inputs — see
 COLONY_GAPS GAP #6 (revised). Not tuned further on purpose: forcing
 self-sustenance by hand would script the substrate.
+
+**Update (2026-05-21):** the "exactly ONE acquirable-input GLU route"
+measured above is no longer current. `installCarbonFixReactions`
+(`src/sim/reactions.ts`) now seeds **9 acquirable-input carbon routes**
+(8 graded CO₂→glucose doors + the original slot 185), so this scenario
+should be re-run — the carbon-throughput limit that capped it at 40→10
+has been removed in-substrate. See COLONY_GAPS GAP #6 → "Resolution."
