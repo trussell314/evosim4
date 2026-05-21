@@ -2548,8 +2548,11 @@ function render(): void {
   // Rock terrain composited on top of particles + vent overlay. Anything
   // painted earlier that overlaps a rock column gets hidden, matching
   // the physical impenetrability the collision code enforces.
-  if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
+  // Vent jet is drawn BEFORE the terrain bitmap so the rock occludes
+  // its base -- the stream emerges from the notch rather than painting
+  // over the chimney.
   if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
+  if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
 
   const selId = selectedCellId;
   // When a cell is selected (its follow-tooltip is up), ring every
@@ -3344,79 +3347,58 @@ function drawVent(
   // so the animation never goes dead between eruptions.
   const erupt = vent.active ? vent.intensity : 0;
   const eff = VENT_BASE_INTENSITY + (1 - VENT_BASE_INTENSITY) * erupt;
-  const erupting = erupt > 0.02;
 
   c.save();
   c.translate(vent.x, vent.y);
 
-  // --- Heat shimmer column: faint, always-rising wavering bands that
-  // refract the background (drawn as soft additive vertical streaks
-  // swaying with t). Height + opacity scale with effective heat. ---
-  const colH = 60 + 180 * eff;
+  // Narrow rising jet: a tight, mostly-vertical stream with one coherent
+  // gentle waver (not wide turbulence). Shorter than a billowing plume.
+  const jetH = 34 + 48 * eff;          // modest height
+  const halfW = 2.0 + 1.4 * eff;       // narrow throat width
+  const swayTop = Math.sin(t * 2.2) * (2 + 2 * eff);
   c.globalCompositeOperation = "lighter";
-  for (let s = 0; s < 5; s++) {
-    const seed = s * 1.37;
-    const sway = Math.sin(t * 1.3 + seed) * (3 + 5 * eff);
-    const x = (s - 2) * 4 + sway;
-    const a = 0.05 * eff * (1 - s / 6);
-    c.beginPath();
-    c.moveTo(x - 2, -4);
-    c.quadraticCurveTo(x + sway * 0.6, -colH * 0.5, x + sway, -colH);
-    c.quadraticCurveTo(x - sway * 0.6, -colH * 0.5, x + 2, -4);
-    c.fillStyle = `rgba(255, 220, 180, ${a.toFixed(3)})`;
-    c.fill();
-  }
+  c.beginPath();
+  c.moveTo(-halfW, -5);
+  c.quadraticCurveTo(swayTop * 0.5, -jetH * 0.55, swayTop, -jetH);
+  c.quadraticCurveTo(swayTop * 0.5, -jetH * 0.55, halfW, -5);
+  const jet = c.createLinearGradient(0, -5, 0, -jetH);
+  jet.addColorStop(0, `rgba(255, 210, 160, ${(0.22 * eff).toFixed(3)})`);
+  jet.addColorStop(1, "rgba(210, 180, 150, 0)");
+  c.fillStyle = jet;
+  c.fill();
 
-  // --- Rising smoke/mineral puffs: stacked blobs that climb, widen,
-  // sway, and fade. Tinted hot near the mouth -> dusky mineral grey
-  // higher up (a "black-smoker" plume). Phase from t for continuous
-  // motion; an extra burst rides on top during an eruption. ---
-  const nPuff = erupting ? 7 : 4;
-  const phase = (t * (0.5 + 0.5 * eff)) % 1;
-  for (let i = 0; i < nPuff; i++) {
-    const k = (i + phase) % 1;            // 0 at mouth -> 1 at top
-    const rise = k * (70 + 150 * eff);
-    const sway = Math.sin(t * 1.1 + i * 1.9) * (6 + 14 * k) * (0.5 + eff);
-    const w = 7 + k * (22 + 26 * eff);
-    const h = 5 + k * (14 + 16 * eff);
-    const fade = (1 - k) * (1 - k);       // fade out toward the top
-    const a = (0.06 + 0.30 * eff) * fade;
-    // Hot orange low, cooling to grey mineral smoke as it rises.
-    const r = Math.round(255 - 150 * k);
-    const g = Math.round(150 - 70 * k);
-    const b = Math.round(80 + 40 * k);
+  // Evenly-spaced rising specks along the centerline -> a consistent
+  // stream rather than discrete puffs. Tight waver, slight growth, fade.
+  const n = 6;
+  const phase = (t * (0.9 + 0.6 * eff)) % 1;
+  for (let i = 0; i < n; i++) {
+    const k = (i + phase) / n;          // 0 at mouth -> 1 at jet top
+    const y = -6 - k * jetH;
+    const x = Math.sin(t * 2.2 + k * 3.0) * (1.4 + 2.6 * k);
+    const rr = 1.1 + k * 1.9;
+    const a = (0.10 + 0.26 * eff) * (1 - k);
+    const g = Math.round(160 - 60 * k); // hot -> dusky mineral as it rises
     c.beginPath();
-    c.ellipse(sway, -8 - rise, w, h, 0, 0, Math.PI * 2);
-    c.fillStyle = `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
+    c.ellipse(x, y, rr, rr * 1.15, 0, 0, Math.PI * 2);
+    c.fillStyle = `rgba(255, ${g}, 90, ${a.toFixed(3)})`;
     c.fill();
   }
   c.globalCompositeOperation = "source-over";
 
-  // --- Glowing mound + mouth: a heat-lit rock lip with a bright,
-  // pulsing throat. Always lit by the base heat; flares on eruption. ---
+  // Chimney lip + pulsing incandescent throat. No wide halo -- the rock
+  // bitmap drawn over this frames the mouth in the notch.
   const pulse = 0.85 + 0.15 * Math.sin(t * 4);
-  // Outer heat glow bleeding onto the surrounding rock.
-  const halo = c.createRadialGradient(0, -2, 1, 0, -2, 26 + 18 * eff);
-  halo.addColorStop(0, `rgba(255, 120, 50, ${(0.30 * eff * pulse).toFixed(3)})`);
-  halo.addColorStop(1, "rgba(120, 30, 0, 0)");
-  c.fillStyle = halo;
   c.beginPath();
-  c.ellipse(0, -2, 26 + 18 * eff, 16 + 10 * eff, 0, 0, Math.PI * 2);
-  c.fill();
-
-  // Dark rock lip of the chimney.
-  c.beginPath();
-  c.ellipse(0, -3, 10, 5, 0, 0, Math.PI * 2);
+  c.ellipse(0, -3, 8, 4, 0, 0, Math.PI * 2);
   c.fillStyle = "rgba(10, 7, 5, 0.95)";
   c.fill();
-  // Incandescent throat.
-  const throat = c.createRadialGradient(0, -3, 0, 0, -3, 8);
-  const tg = 0.45 + 0.5 * eff * pulse;
+  const throat = c.createRadialGradient(0, -3, 0, 0, -3, 7);
+  const tg = 0.5 + 0.45 * eff * pulse;
   throat.addColorStop(0, `rgba(255, 240, 200, ${tg.toFixed(3)})`);
-  throat.addColorStop(0.45, `rgba(255, 130, 50, ${(tg * 0.8).toFixed(3)})`);
+  throat.addColorStop(0.5, `rgba(255, 130, 50, ${(tg * 0.75).toFixed(3)})`);
   throat.addColorStop(1, "rgba(60, 12, 0, 0)");
   c.beginPath();
-  c.ellipse(0, -3, 7, 3.5, 0, 0, Math.PI * 2);
+  c.ellipse(0, -3, 6, 3, 0, 0, Math.PI * 2);
   c.fillStyle = throat;
   c.fill();
 
