@@ -317,9 +317,9 @@ function build(): Archetype[] {
         ["ADD"],
         ["STORE", 0], // reg0++ (free-running counter)
         ["LOAD", 0],
-        ["PUSH8", 127],
-        ["MOD"], // reg0 % 127
-        ["JNZ", "noEngulf"], // != 0 -> skip; engulf only ~1/127 passes
+        ["PUSH8", 25],
+        ["MOD"], // reg0 % 25
+        ["JNZ", "noEngulf"], // != 0 -> skip; engulf only ~1/25 passes
         ["ENGULF"],
         ["LABEL", "noEngulf"],
         // 40 -> 28: forager (near-identical genome) only self-sustains
