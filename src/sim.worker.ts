@@ -24,6 +24,7 @@ import {
   step,
   takeSnapshot,
   setParticleTarget,
+  setParallelMin,
   spawnSpeciesInstance,
   spawnCompositeInstance,
   pickClumpCenter,
@@ -78,6 +79,7 @@ type WorkerInbound =
   | { type: "applySaved"; json: string }
   | { type: "requestSave" }
   | { type: "setPinnedSpecies"; keys: string[] }
+  | { type: "setParallelMin"; n: number }
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
   | { type: "setSeeding"; on: boolean }
@@ -161,6 +163,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setParticleCap":
       if (world) setParticleTarget(world, m.cap);
+      break;
+    case "setParallelMin":
+      if (world) setParallelMin(world, m.n);
       break;
     case "setFoundersEnabled":
       if (world) world.foundersEnabled = m.on;

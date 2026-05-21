@@ -1136,6 +1136,9 @@ export interface World {
   creatures: Creature[];
   creatureStore: CreatureStore;
   particleTarget: number;
+  // Particle count at/above which collision + force passes dispatch to
+  // the worker pool (runtime-tunable from the UI; see setParallelMin).
+  parallelMin: number;
   particleSpawnRate: number;
   // One-shot startup seeding. When useSeedRamp is true the world is
   // born empty and seedRamp() adds a fixed batch of particles once per

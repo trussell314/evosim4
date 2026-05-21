@@ -85,6 +85,7 @@ import {
   genomeTag,
   PARTICLE_TARGET_STEP,
   PARTICLE_TARGET_MIN,
+  PARALLEL_MIN_RANGE,
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
@@ -525,6 +526,10 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     if (snapshot.particleTarget !== particleCap) {
       particleCap = snapshot.particleTarget;
       renderCapLabel();
+    }
+    if (snapshot.parallelMin !== parallelMinUI) {
+      parallelMinUI = snapshot.parallelMin;
+      renderParLabel();
     }
     syncFoundersBtn(snapshot.foundersEnabled !== false);
     syncSeedingBtn(snapshot.ongoingSeeding === true);
@@ -1722,7 +1727,35 @@ capMinus.addEventListener("click", () => nudgeCap(-PARTICLE_TARGET_STEP));
 capPlus.addEventListener("click", () => nudgeCap(PARTICLE_TARGET_STEP));
 renderCapLabel();
 capWrap.append(capTitle, capMinus, capValue, capPlus);
-gWorld.append(foundersBtn, seedingBtn, capWrap);
+
+// Parallel-dispatch threshold: particle count at/above which collision +
+// force passes run on the worker pool. Tunable live to find the
+// crossover where parallelizing beats serial dispatch overhead.
+let parallelMinUI = 4000;
+const parWrap = document.createElement("div");
+parWrap.style.cssText = capWrap.style.cssText;
+parWrap.title = "Particle count at/above which physics dispatches to worker threads. " +
+  "Lower it to parallelize smaller worlds; raise it if dispatch overhead costs more than it saves.";
+const parTitle = document.createElement("span");
+parTitle.textContent = "par≥"; parTitle.style.cssText = "opacity:0.7;";
+const parValue = document.createElement("span");
+parValue.style.cssText = "font-weight:bold;min-width:5ch;text-align:right;color:#cfe;";
+const parMinus = mkBtn("−", `Lower the parallel threshold by ${PARALLEL_MIN_RANGE.step}`);
+const parPlus = mkBtn("+", `Raise the parallel threshold by ${PARALLEL_MIN_RANGE.step}`);
+parMinus.style.cssText = CBTN + "padding:1px 9px;";
+parPlus.style.cssText = CBTN + "padding:1px 9px;";
+function renderParLabel(): void { parValue.textContent = String(parallelMinUI); }
+function nudgePar(delta: number): void {
+  parallelMinUI = Math.max(PARALLEL_MIN_RANGE.min, Math.min(PARALLEL_MIN_RANGE.max, parallelMinUI + delta));
+  renderParLabel();
+  simWorker.postMessage({ type: "setParallelMin", n: parallelMinUI });
+}
+parMinus.addEventListener("click", () => nudgePar(-PARALLEL_MIN_RANGE.step));
+parPlus.addEventListener("click", () => nudgePar(PARALLEL_MIN_RANGE.step));
+renderParLabel();
+parWrap.append(parTitle, parMinus, parValue, parPlus);
+
+gWorld.append(foundersBtn, seedingBtn, capWrap, parWrap);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density";

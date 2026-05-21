@@ -2022,6 +2022,7 @@ export function createWorld(
     creatures: [],
     creatureStore: new CreatureStore(512),
     particleTarget,
+    parallelMin: PARALLEL_PARTICLE_MIN_DEFAULT,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     // Production (delayedSpawn) uses the one-shot ramp; tests / direct
     // callers keep the legacy "fully seeded up front + continuous
@@ -5454,7 +5455,20 @@ export function buildParticleForceParams(world: World): ParticleForceParams {
 // well above the typical mid-game particle count -- the pool is only
 // a clear win at multi-thousand-particle loads on hardware with
 // non-trivial wake latency.
-const PARALLEL_PARTICLE_MIN = 4000;
+// Default particle count at/above which collision + force passes
+// dispatch to the worker pool. Now a runtime knob (world.parallelMin)
+// so it can be tuned live from the UI: below the threshold the passes
+// run serially on the sim worker (no dispatch overhead), above it they
+// parallelize. Lower it to parallelize smaller worlds; raise it if
+// dispatch overhead outweighs the win.
+const PARALLEL_PARTICLE_MIN_DEFAULT = 4000;
+export const PARALLEL_MIN_RANGE = { min: 500, max: 50000, step: 500 } as const;
+export function setParallelMin(world: World, n: number): void {
+  world.parallelMin = Math.max(
+    PARALLEL_MIN_RANGE.min,
+    Math.min(PARALLEL_MIN_RANGE.max, Math.round(n)),
+  );
+}
 // Dispatcher is fire-only: it kicks the workers and returns a wait
 // function. Callers run concurrent CPU work (creature loop, creature
 // collisions) and invoke the wait fn when they need particle results
@@ -5478,7 +5492,7 @@ function applyForces(world: World, dt: number): void {
   // below on the sim worker. Wait for the barrier just before returning
   // so any code after applyForces observes settled particle state.
   let forceWait: (() => void) | null = null;
-  if (particleForceDispatcher && np >= PARALLEL_PARTICLE_MIN) {
+  if (particleForceDispatcher && np >= world.parallelMin) {
     forceWait = particleForceDispatcher(np, params);
   } else {
     applyParticleForcesRange(
@@ -7319,7 +7333,7 @@ function resolveCollisions(
     // at entry and returns a no-op wait fn when the pool is torn down,
     // so we still get through the rest of this iteration cleanly.
     const dispatch = collisionPhaseDispatcher;
-    if (dispatch && n >= PARALLEL_PARTICLE_MIN) {
+    if (dispatch && n >= world.parallelMin) {
       const wait0 = dispatch(cols, rows, 0, e);
       // Run hooks on the first iter only; subsequent iters have no
       // useful work to hide and we want hook side-effects to happen
@@ -7777,6 +7791,7 @@ interface SavedWorld {
   // chosen budget survives a browser refresh. Optional: older saves
   // without it keep the current/default target.
   particleTarget?: number;
+  parallelMin?: number;
   // Founder generation toggle. Absent (old saves) = enabled.
   foundersEnabled?: boolean;
   // Ongoing resource-replenishment toggle. Absent (old saves) = off.
@@ -7890,6 +7905,7 @@ export function serializeWorld(w: World): string {
     extinctionCount: w.extinctionCount,
     founderTarget: w.founderTarget,
     particleTarget: w.particleTarget,
+    parallelMin: w.parallelMin,
     foundersEnabled: w.foundersEnabled,
     ongoingSeeding: w.ongoingSeeding,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
@@ -8029,6 +8045,10 @@ export function applySavedWorld(world: World, json: string): boolean {
   // and clamps to the valid range. Older saves omit it -> keep default.
   if (typeof saved.particleTarget === "number") {
     setParticleTarget(world, saved.particleTarget);
+  }
+  // Parallel-dispatch threshold: older saves omit it -> keep default.
+  if (typeof saved.parallelMin === "number") {
+    setParallelMin(world, saved.parallelMin);
   }
   // Absent in older saves -> founders enabled (prior behavior).
   world.foundersEnabled = saved.foundersEnabled !== false;
@@ -8221,6 +8241,7 @@ export interface RenderSnapshot extends WorldEnv {
   width: number;
   depth: number;
   particleTarget: number;
+  parallelMin: number;
   extinctionCount: number;
   // Lineage roots whose founder is still alive. Main thread uses this
   // to count "lineages that outlived the founder cull": a lineage with
@@ -8504,6 +8525,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     windExposureFromRight: world.windExposureFromRight,
     vent: world.vent ? { ...world.vent } : undefined,
     particleTarget: world.particleTarget,
+    parallelMin: world.parallelMin,
     extinctionCount: world.extinctionCount,
     engulfedCount,
     engulfedOnlySpeciesCount,
