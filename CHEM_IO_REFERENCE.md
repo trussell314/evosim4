@@ -87,4 +87,27 @@ mapping is deterministic (seeded table), fixed across runs, so a
 lineage can evolve to discover and lock in whichever generic
 reactions are profitable for its niche.
 
+## Temperature & thermal stress
+
+Local water temperature (the diffused regional field: depth gradient
+12 °C floor → 28 °C surface, plus the always-on hydrothermal vent's hot
+zone) affects cells two ways:
+
+- **Metabolic rate (Q10).** Reaction rates scale by
+  `2^((T−20)/10)`, hard-clamped to **0.25×–4.0×**. The 4× ceiling is
+  reached at **40 °C**; above that there is no further rate gain.
+- **Thermal denaturation.** Above a per-cell **tolerance ceiling**,
+  membrane lipid denatures to waste (`RX_THERMAL_DENATURE`,
+  mass-conserving) at `(T − ceiling) × 0.08`/s, eroding the cell toward
+  the `MIN_VIABLE_MEMBRANE` death floor. Ceiling =
+  **42 °C + 30 °C × `CHEM_REPAIR` pool** (capped at +45 °C). So
+  `CHEM_REPAIR` is dual-purpose — the stress-chaperone protein that
+  both suppresses somatic mutation *and* raises the heat ceiling
+  (real heat-shock proteins are general chaperones). Heat tolerance is
+  therefore an evolvable, synthesized, graded trait: only the vent
+  core (>42 °C) applies pressure, and a cell survives it by investing
+  in `SYNTH CAT 23` (the repair-chem reaction). Nowhere else in a
+  default world exceeds 42 °C, so thermal stress is a vent-local
+  selective filter.
+
 _Status: reference. Reflects engine as implemented._
