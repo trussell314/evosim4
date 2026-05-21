@@ -422,7 +422,7 @@ function build(): Archetype[] {
       id: "bet-hedger",
       label: "bet-hedger",
       cls: "direct",
-      desc: "Non-genetic switching: a register oscillator drives POKE_BYTE to rewrite a byte of its own genome, toggling phenotype across ticks.",
+      desc: "Non-genetic switching: a register oscillator drives POKE_BYTE to rewrite the first SYNTH's catalyst-slot param each tick, toggling which reaction it boosts (phenotype) across ticks.",
       prog: [
         ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
@@ -434,7 +434,11 @@ function build(): Archetype[] {
         ["LOAD", 0],
         ["PUSH8", 16],
         ["MOD"], // value byte to write (0..15), oscillates
-        ["PUSH8", 2], // genome byte index to poke
+        // Byte index of the first SYNTH's param. frameProg prepends
+        // [NOP, NOP, GENE] (+3), so the param that sat at raw index 2 is
+        // at framed index 5. (Poking index 2 would overwrite the GENE
+        // start codon and render the cell inert -- never reproduces.)
+        ["PUSH8", 5],
         ["POKE_BYTE"], // pops (idx, val)
         ...reproduceWhenGrown(34, "np"),
       ],
