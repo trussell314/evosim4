@@ -33,7 +33,7 @@ export { genomeTag, genomeKey, genomeDistance, genomeColor };
 import {
   RX_MAINT_MEMBRANE, RX_MAINT_ENZ, RX_MAINT_CHL, RX_MAINT_MRNA,
   RX_MAINT_RECEPTOR, RX_MAINT_CATALYST, RX_TOXIFY, RX_DEATH_CATDENATURE,
-  RX_DENATURE_WASTE, RX_SYNTH_CATALYST, RX_BIOGENESIS,
+  RX_DENATURE_WASTE, RX_SYNTH_CATALYST, RX_BIOGENESIS, RX_THERMAL_DENATURE,
   NREACT, RX_LOC_CELL, RX_LOC_FIELD, rxIdx,
   ATP_IDLE, ATP_VM, ATP_THRUST, ATP_EXCRETE, ATP_INGEST, ATP_ENGULF,
   ATP_PREDATE, ATP_REPRODUCE, ATP_RXN_ENDO, ATP_RXN_EXO, ATP_OTHER,
@@ -467,6 +467,7 @@ export function reactionCatalog(): ReactionInfo[] {
   syn(RX_MAINT_RECEPTOR, "maint receptors", RECEPTORS.map((c) => ({ chem: c, coef: 1 })), aaMin);
   syn(RX_MAINT_CATALYST, "maint catalyst", [], aaMin);
   syn(RX_TOXIFY, "toxify", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_WASTE, coef: 1 }]);
+  syn(RX_THERMAL_DENATURE, "thermal denature", [{ chem: CHEM_MEMBRANE, coef: 1 }], [{ chem: CHEM_WASTE, coef: 1 }]);
   syn(RX_DEATH_CATDENATURE, "death catalyst denature", [], aaMin);
   syn(RX_DENATURE_WASTE, "waste denature", [{ chem: CHEM_WASTE, coef: 1 }], [{ chem: CHEM_CO2, coef: 1 }]);
   syn(RX_SYNTH_CATALYST, "synth catalyst", aaMin, [{ chem: CHEM_ADP, coef: CAT_ATP_COST }]);
@@ -3137,8 +3138,9 @@ const TEMP_VENT_INJECT_RATE = 0.15;
 const VENT_TEMP_PEAK_AMP = 100;
 const VENT_TEMP_RADIUS_PX = 95;
 // Standing heat the vent emits between eruptions (fraction of full
-// intensity). Eruptions ramp from this base up to 1 and back.
-const VENT_BASE_INTENSITY = 0.4;
+// intensity). Eruptions ramp from this base up to 1 and back. Exported
+// so the renderer animates the persistent plume off the same value.
+export const VENT_BASE_INTENSITY = 0.4;
 function sampleRegionTemps(world: World, dt: number): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
@@ -4832,6 +4834,39 @@ function toxify(c: Creature, dt: number): void {
   recordRxn(RX_TOXIFY, RX_LOC_CELL, 0);
 }
 
+// Thermal stress. Water hotter than a cell's tolerance ceiling denatures
+// its membrane lipid (-> waste, mass-conserving), eroding it toward the
+// MIN_VIABLE_MEMBRANE death floor. The ceiling is BASE plus a bonus that
+// scales with the cell's CHEM_REPAIR pool -- the same stress-chaperone
+// protein that suppresses somatic mutation (real heat-shock proteins are
+// general stress chaperones). So heat tolerance is an evolvable,
+// synthesized, graded trait, not a fixed engine number: the vent core
+// selects for cells that invest in chaperones; nothing forces it. A
+// door, not a script. With no chaperones a cell cooks above
+// THERMAL_SAFE_BASE; a fully-invested one survives the eruption core.
+const THERMAL_SAFE_BASE = 42;             // °C tolerated with zero chaperones
+const THERMAL_TOLERANCE_PER_REPAIR = 30;  // °C ceiling added per unit CHEM_REPAIR
+const THERMAL_TOLERANCE_MAX = 45;         // cap on the chaperone bonus (°C)
+const THERMAL_DAMAGE_PER_DEG_PER_SEC = 0.08; // membrane lost / °C over ceiling / s
+function thermalStress(c: Creature, dt: number, world: World): void {
+  const s = c.store; const i = c.idx;
+  const memb = s.m_membrane[i];
+  if (memb <= 0) return;
+  const T = regionTempAt(world, c.x, c.y);
+  if (T <= THERMAL_SAFE_BASE) return; // fast path: most of the world is cool
+  const tol = Math.min(
+    THERMAL_TOLERANCE_MAX,
+    s.chemCols[CHEM_REPAIR][i] * THERMAL_TOLERANCE_PER_REPAIR,
+  );
+  const over = T - (THERMAL_SAFE_BASE + tol);
+  if (over <= 0) return;
+  const want = over * THERMAL_DAMAGE_PER_DEG_PER_SEC * dt;
+  const damage = want < memb ? want : memb;
+  s.m_membrane[i] = memb - damage;
+  s.m_waste[i] += damage;
+  recordRxn(RX_THERMAL_DENATURE, RX_LOC_CELL, 0);
+}
+
 function spawnExcretedParticle(
   c: Creature,
   world: World,
@@ -5815,6 +5850,10 @@ function updateCreatures(world: World, dt: number): void {
 
     // Toxic damage from any waste / CO2 the cell couldn't pump out.
     toxify(c, dt);
+
+    // Thermal damage if the local water exceeds the cell's heat-shock
+    // tolerance ceiling (raised by holding CHEM_REPAIR chaperones).
+    thermalStress(c, dt, world);
 
     // Somatic DNA damage: probability rises quadratically with age, so old
     // cells slowly become genetic mosaics of their original self. Doesn't

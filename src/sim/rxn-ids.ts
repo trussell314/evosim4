@@ -27,7 +27,10 @@ export const RX_SYNTH_CATALYST = RX_BASE + 9;
 // external input -- recorded here so ATP/materials are never silently
 // conjured.
 export const RX_BIOGENESIS = RX_BASE + 10;
-export const RX_SYNTH_COUNT = 11;
+// Thermal denaturation: water hotter than the cell's tolerance ceiling
+// breaks down membrane lipid (-> waste). Mirrors toxify, keyed on heat.
+export const RX_THERMAL_DENATURE = RX_BASE + 11;
+export const RX_SYNTH_COUNT = 12;
 export const NREACT = N_REACTIONS + RX_SYNTH_COUNT;
 
 // rxn buckets: [id][loc 0=cell 1=field][cat 0=uncat 1=catalyzed]
