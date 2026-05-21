@@ -179,6 +179,11 @@ const inspectorProse = document.createElement("div");
 inspectorProse.style.cssText =
   "padding:6px 9px;color:#bcd;display:none;" + HUD_FONT;
 
+// Health + reproduce-readiness meters, shown at the top of the
+// Inspector for the selected cell. Filled by updateInspector.
+const inspectorMeters = document.createElement("div");
+inspectorMeters.style.cssText = "padding:6px 9px;display:none;" + HUD_FONT;
+
 // "genome" (was "disasm") stays a collapsible sub-section inside the
 // Inspector tab, with a copy-to-clipboard button (one op per line).
 // The whole bar is hidden by updateInspector when no cell is selected.
@@ -727,9 +732,13 @@ analysisBody.style.cssText =
 const inspectorPane = document.createElement("div");
 inspectorPane.style.cssText =
   "padding:6px 4px 10px;overflow:auto;display:none;" + PANE_MAXH;
-inspectorPane.appendChild(inspector);
+// Order: pin control, the two meters (health + reproduce), the
+// gene-aware genome description, then the resource/stats block, then
+// the collapsible genome disassembly.
 inspectorPane.appendChild(pinSpeciesBtn);
+inspectorPane.appendChild(inspectorMeters);
 inspectorPane.appendChild(inspectorProse);
+inspectorPane.appendChild(inspector);
 inspectorPane.appendChild(disasmBar);
 inspectorPane.appendChild(disasmBody);
 // Genome pane: the population genome-size histogram canvas.
@@ -1997,20 +2006,14 @@ function flushTooltip(): void {
   const divLine = c.division
     ? `\ndividing ${(c.division.progress * 100).toFixed(0)}%`
     : "";
-  // Full-width reproduce-readiness bar: how close the cell is to firing
-  // its REPRODUCE gate, evaluating the genome's gate comparisons against
-  // the cell's current values. Hidden for sterile genomes (no gate).
+  // Health bar (above) + reproduce-readiness bar (below). Health is the
+  // weakest viability metric; readiness is how close the REPRODUCE gate
+  // is to firing (hidden for sterile genomes).
+  const health = cellHealth(c);
   const readiness = reproduceReadiness(c.genome, c);
-  let barHtml = "";
-  if (readiness !== null) {
-    const pct = Math.max(0, Math.min(100, Math.round(readiness * 100)));
-    const col = readiness >= 1 ? "#4caf50" : "#6fae6f";
-    barHtml =
-      `<div style="margin-top:5px;opacity:.8;">reproduce readiness ${pct}%</div>` +
-      `<div style="margin-top:2px;height:6px;background:#0a1a22;border:1px solid #1a3340;` +
-      `border-radius:3px;overflow:hidden;">` +
-      `<div style="height:100%;width:${pct}%;background:${col};"></div></div>`;
-  }
+  let barHtml = `<div style="margin-top:5px;">` + meterHtml("health", health, healthColor(health));
+  if (readiness !== null) barHtml += meterHtml("reproduce", readiness, readiness >= 1 ? "#4caf50" : "#6fae6f");
+  barHtml += `</div>`;
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
@@ -3542,6 +3545,7 @@ function updateInspector(): void {
   const c = selectedCell();
   if (!c) {
     pinSpeciesBtn.style.display = "none";
+    inspectorMeters.style.display = "none";
     inspectorProse.style.display = "none";
     disasmBar.style.display = "none";
     disasmBody.style.display = "none";
@@ -3557,6 +3561,15 @@ function updateInspector(): void {
       `${isPinned ? "★" : "☆"}</span>` +
       `<span style="color:${col};">${isPinned ? "unpin" : "pin"} species ` +
       `<b>${genomeTag(c.genome)}</b></span>`;
+  }
+  // Meters at the top: health + reproduce readiness.
+  inspectorMeters.style.display = "";
+  {
+    const health = cellHealth(c);
+    const readiness = reproduceReadiness(c.genome, c);
+    let h = meterHtml("health", health, healthColor(health));
+    if (readiness !== null) h += meterHtml("reproduce readiness", readiness, readiness >= 1 ? "#4caf50" : "#6fae6f");
+    inspectorMeters.innerHTML = h;
   }
   inspectorProse.style.display = "";
   inspectorProse.innerHTML = describeGenomeRich(c.genome);
@@ -4255,6 +4268,42 @@ function readinessInGene(
   let r = 1;
   for (const g of covering) if (g.prog) r = Math.min(r, g.prog());
   return r;
+}
+
+// Cell health: 0..1, the weakest of the metrics that actually cause
+// (non-predation) death -- ATP, structural membrane, mRNA, amino acid.
+// A cell dies the instant ANY of these crosses its viability floor, so
+// health is the MIN of the per-metric safeties. Each safety saturates
+// exponentially: 0 at the death floor, ~0.63 one "comfort scale" above
+// it, ~0.95 at three scales -- so 100% means a deep, safe buffer rather
+// than a hard cap.
+function cellHealth(c: CellVals): number {
+  const sat = (v: number, floor: number, scale: number): number => {
+    const x = (v - floor) / scale;
+    return x <= 0 ? 0 : 1 - Math.exp(-x);
+  };
+  const m = c.molecules;
+  return Math.min(
+    sat(c.energy, 0, 20),          // ATP (starve at <=0)
+    sat(m.membrane, 0.5, 8),       // structural membrane
+    sat(m.mrna, 0.01, 2),          // ribosome/translation
+    sat(m.aminoAcid, 0.001, 1),    // amino-acid pool
+  );
+}
+
+// Full-width labeled meter as an HTML string (dark track + colored fill).
+function meterHtml(label: string, frac: number, color: string): string {
+  const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+  return (
+    `<div style="opacity:.8;">${label} ${pct}%</div>` +
+    `<div style="margin-top:2px;margin-bottom:5px;height:6px;background:#0a1a22;` +
+    `border:1px solid #1a3340;border-radius:3px;overflow:hidden;">` +
+    `<div style="height:100%;width:${pct}%;background:${color};"></div></div>`
+  );
+}
+// Health bar color shifts red->amber->green with the value.
+function healthColor(frac: number): string {
+  return frac < 0.25 ? "#d0524c" : frac < 0.6 ? "#d0a24c" : "#4caf50";
 }
 
 function reproduceReadiness(genome: Uint8Array, c: CellVals): number | null {
