@@ -158,13 +158,21 @@ resolved):
     of #7's "division of labor is evolvable" note as an injectable seed:
     boosts the adhesion-molecule slot (`SYNTH CAT 22`) on top of the
     greenbeard tag so a cluster physically coheres, then `PARTITION
-    glu`s nearly all glucose into the daughter at each fission. Daughters
-    emerge carbon-RICH and act as germ (divide again, spending the
-    dowry); the carbon-POOR mother reads its own low `SENSE_CHEMICAL glu`
-    and drops to a soma role (keeps foraging + adhering, does not divide
-    until refilled). One genome, two phenotypes, switched on inherited
-    cytoplasm — the only archetype that exercises `PARTITION`. Payoff is
-    emergent over generations.
+    mrna`s the translation-capacity pool toward the MOTHER at each
+    fission. The mother keeps the ribosome cache and stays germ (high
+    biosynthesis → keeps growing + dividing); each daughter buds off
+    mRNA-poor and reads its own low `SENSE_CHEMICAL mrna` to drop into a
+    soma role (forages + adheres, doesn't divide, slowly rebuilds mRNA).
+    mRNA is chosen over a glucose dowry deliberately: glucose is burned
+    to zero so the determinant signal vanishes, whereas mRNA is a
+    maintained catalytic pool (every biosynth reaction scales on it), so
+    the germ/soma spread *persists* across the cluster. The bias is
+    toward the mother, not the daughter, because `synth_ribo` is itself
+    mRNA-scaled — mRNA=0 is an absorbing death state, so the deprived
+    daughter must keep a nonzero fraction (default child share 0.6 × a
+    −1 bias → ~0.1) to recover. One genome, two phenotypes, switched on
+    inherited cytoplasm — the only archetype that exercises `PARTITION`.
+    Payoff is emergent over generations.
 
 ## Endosymbiosis candidates
 

@@ -25,6 +25,7 @@ import {
   CHEM_GLU,
   CHEM_CO2,
   CHEM_WASTE,
+  CHEM_MRNA,
   CHEM_MARKER0,
 } from "./sim/chem-ids";
 import {
@@ -290,27 +291,29 @@ function build(): Archetype[] {
       id: "differentiated-colony",
       label: "germ/soma colony",
       cls: "seed",
-      desc: "Seed: emergent multicellularity with division of labour from ONE genome. Adheres to clonal kin (greenbeard tag) and pours catalyst into the adhesion-molecule slot (aa+fa->CHEM_BOND) so a cluster physically coheres into a body. At every fission it PARTITIONs glucose almost entirely into the daughter -- so daughters emerge carbon-RICH and act as 'germ' (divide again immediately, spending the dowry), while the carbon-POOR mother drops to a 'soma' role: it keeps foraging and adhering for the colony but does not divide until it has refilled. A single genome reads its own inherited cytoplasm (SENSE_CHEMICAL glu) and switches phenotype -- germ vs soma -- with no engine rule forcing either. The PARTITION primitive (asymmetric determinant segregation) is what no other archetype exercises; the colony-vs-solitary payoff is emergent, so spawn many and let it run.",
+      desc: "Seed: emergent multicellularity with division of labour from ONE genome. Adheres to clonal kin (greenbeard tag) and pours catalyst into the adhesion-molecule slot (aa+fa->CHEM_BOND) so a cluster physically coheres into a body. The germ/soma determinant is mRNA -- the cell's translation capacity (every biosynthesis reaction scales with the mRNA pool), the textbook maternal-effect determinant. At each fission it PARTITIONs mRNA toward the MOTHER, so she keeps the ribosome cache (germ: high biosynthesis, keeps growing + dividing) while each daughter buds off mRNA-POOR (soma: low biosynthesis, can't grow fast, so it forages + adheres for the colony instead of dividing, slowly rebuilding its own mRNA over time). Unlike a glucose dowry -- which the cell burns to zero so the signal vanishes -- mRNA is a maintained catalytic pool, so the germ/soma spread persists across the cluster. The cell reads its own inherited cytoplasm (SENSE_CHEMICAL mrna) and switches phenotype with no engine rule forcing either; PARTITION (asymmetric determinant segregation) is the primitive no other archetype exercises. Payoff is emergent -- spawn many (clump placement) and let it run.",
       prog: [
         // Cohesion: clonal greenbeard tag + boosted CHEM_BOND pool so
         // bonds form readily and hold (slot 22 = aa+fa -> CHEM_BOND).
         ["SYNTH", "CAT", RX_SLOT_SYNTH_BOND],
         ["SYNTH", "BOND", 11], // tag inherited by clones -> kin recognise kin
-        // Every cell can feed; the soma does the colony's foraging while
-        // the germ coasts on its inherited carbon dowry.
+        // Every cell forages; the soma does the colony's feeding while
+        // the germ keeps dividing on its retained ribosome cache.
         ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 25),
-        // Asymmetric division: shunt the carbon determinant to the
-        // daughter. An integer bias of 1 squashes to ~+0.5 on the child
-        // share, so the daughter takes nearly all glucose (germ-rich) and
-        // the mother is left carbon-poor (becomes soma until it refills).
-        ["PUSH8", 1],
-        ["PARTITION", CHEM_GLU],
-        // Role switch on the inherited determinant (own glucose pool).
-        ["SENSE_CHEMICAL", CHEM_GLU],
-        ["PUSH8", 12],
-        ["GT"], // glucose-rich -> germ; else fall through to soma (no division)
+        // Asymmetric division: shunt the mRNA (translation-capacity)
+        // determinant toward the MOTHER. The default child share is 0.6
+        // (parentShare 0.4); a bias of -1 squashes to -0.5, giving the
+        // daughter ~0.1 of the mRNA -- low (soma) but NONZERO, so it can
+        // still slowly rebuild via synth_ribo and isn't trapped at the
+        // mRNA=0 absorbing state. The mother keeps ~0.9 (germ).
+        ["PUSH8", -1],
+        ["PARTITION", CHEM_MRNA],
+        // Role switch on the inherited determinant (own mRNA pool).
+        ["SENSE_CHEMICAL", CHEM_MRNA],
+        ["PUSH8", 3], // ~0.6*MRNA_REF: germ cells sit well above, fresh soma well below
+        ["GT"], // mRNA-rich -> germ; else fall through to soma (forage, no division)
         ["JZ", "soma"],
         ...reproduceWhenGrown(30, "germ"),
         ["LABEL", "soma"],
