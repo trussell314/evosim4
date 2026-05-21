@@ -243,7 +243,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: INGEST + founder scoop now use the particle bucket
     // grid (forParticlesNear); the bin/order scan eats a different
     // particle when several are in range, shifting the trajectory.
-    const GOLDEN = "7977e25f";
+    // Bumped again: the vent is now an always-on heat source (persistent
+    // base intensity + eruption spikes) and runs hotter, so the regional
+    // temperature field is warm near the vent from t=0 instead of cold
+    // until the first eruption -- Q10 metabolism + dissolution capacity
+    // near the floor shift from tick 0. Intended behavior change;
+    // determinism + mass-conservation re-verified green.
+    const GOLDEN = "a108afe7";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

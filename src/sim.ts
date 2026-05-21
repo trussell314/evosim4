@@ -3120,15 +3120,25 @@ export function regionDissolvedCapacity(
 // receptor), and the heatmap overlay.
 //
 // Time constants in 1/sec. DIFF spreads local hot spots; RELAX pulls
-// each region back toward its analytical equilibrium. VENT_INJECT is
-// slightly higher than RELAX so the local peak builds noticeably
-// during an eruption -- diffusion flattens the actual peak below the
-// Gaussian's nominal amplitude.
-const TEMP_DIFF_RATE = 0.4;
+// each region back toward its analytical equilibrium -- and is the
+// distributed heat SINK that keeps the bulk water at its depth-gradient
+// baseline no matter how hard the vent injects (so a hotter vent can't
+// boil the whole world, only its local zone). VENT_INJECT sets how fast
+// the local peak builds.
+//
+// The vent is an ALWAYS-ON heat source: a persistent base intensity
+// (VENT_BASE_INTENSITY) keeps a standing hot zone around the mouth at
+// all times, and an eruption envelope spikes on top. RELAX is slow
+// enough that the zone lingers rather than dissipating the moment the
+// puff ends.
+const TEMP_DIFF_RATE = 0.35;
 const TEMP_RELAX_RATE = 0.1;
 const TEMP_VENT_INJECT_RATE = 0.15;
-const VENT_TEMP_PEAK_AMP = 40;
-const VENT_TEMP_RADIUS_PX = 90;
+const VENT_TEMP_PEAK_AMP = 100;
+const VENT_TEMP_RADIUS_PX = 95;
+// Standing heat the vent emits between eruptions (fraction of full
+// intensity). Eruptions ramp from this base up to 1 and back.
+const VENT_BASE_INTENSITY = 0.4;
 function sampleRegionTemps(world: World, dt: number): void {
   const cols = regionCols(world);
   const rows = regionRows(world);
@@ -3151,10 +3161,14 @@ function sampleRegionTemps(world: World, dt: number): void {
   const cur = world.regionTemp;
   const next = world.regionTempNext;
   const v = world.vent;
-  const ventActive = v != null && v.active;
-  const vx = ventActive ? v!.x : 0;
-  const vy = ventActive ? v!.y : 0;
-  const vIntensity = ventActive ? v!.intensity : 0;
+  const hasVent = v != null;
+  const vx = hasVent ? v!.x : 0;
+  const vy = hasVent ? v!.y : 0;
+  // Always-on heat: persistent base + the eruption envelope on top.
+  const eruptI = hasVent && v!.active ? v!.intensity : 0;
+  const vIntensity = hasVent
+    ? VENT_BASE_INTENSITY + (1 - VENT_BASE_INTENSITY) * eruptI
+    : 0;
   const r2 = VENT_TEMP_RADIUS_PX * VENT_TEMP_RADIUS_PX;
   const rejectR2 = 9 * r2;
   for (let ry = 0; ry < rows; ry++) {
@@ -3179,7 +3193,7 @@ function sampleRegionTemps(world: World, dt: number): void {
       const relax = (eq - T) * TEMP_RELAX_RATE * dt;
       // Vent source: Gaussian bubble * intensity, injected as a rate.
       let vent = 0;
-      if (ventActive) {
+      if (hasVent) {
         const dx2 = (cx - vx) * (cx - vx);
         const dy2 = (cy - vy) * (cy - vy);
         const d2 = dx2 + dy2;
