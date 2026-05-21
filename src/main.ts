@@ -618,6 +618,18 @@ function selectedCell(): CreatureSnapshot | null {
 let activeDisasm = "";
 // One op per line, unformatted -- what the copy button hands over.
 let activeDisasmRaw = "";
+// Per-frame render caches (perf). The HUD distinct-genome counts walk
+// genomeCodingKey over every creature; recompute at most a few times a
+// second rather than every frame. The inspector disasm + gene-aware
+// description are O(genome) string builds; rebuild them only when the
+// selected cell's genome actually changes (id + exact speciesKey), not
+// every frame.
+let lastHudCountT = -1e9;
+let cachedSpeciesCount = 0;
+let cachedCodingCount = 0;
+const HUD_COUNT_INTERVAL_MS = 333;
+let lastInspectedGenomeVer = "";
+let inspectorProseCache = "";
 function refreshActiveDisasm(): void {
   const sel = selectedCell();
   if (sel) {
@@ -3513,19 +3525,28 @@ function updateInspector(): void {
   //                       extinction count.
   // world.species.size would over-count -- it includes extinct
   // species still in the prune grace window.
-  const liveSpecies = new Set<string>();
-  const liveCoding = new Set<string>();
-  for (const c of snapshot.creatures) {
-    liveSpecies.add(c.speciesKey);
-    liveCoding.add(genomeCodingKey(c.genome));
+  // Distinct species + coding-genome counts walk every creature (the
+  // coding count hashes each genome), so throttle to a few times/sec
+  // and cache; pop/parts/extinct below stay per-frame fresh.
+  const nowHud = performance.now();
+  if (nowHud - lastHudCountT > HUD_COUNT_INTERVAL_MS) {
+    lastHudCountT = nowHud;
+    const liveSpecies = new Set<string>();
+    const liveCoding = new Set<string>();
+    for (const c of snapshot.creatures) {
+      liveSpecies.add(c.speciesKey);
+      liveCoding.add(genomeCodingKey(c.genome));
+    }
+    cachedSpeciesCount = liveSpecies.size;
+    cachedCodingCount = liveCoding.size;
   }
   // Top HUD: population-related counts only. "genomes" counts distinct
   // CODING genomes (gene bytes only -- intron drift ignored); "extinct"
   // is the lifetime count of coding genomes that have died out.
   hudStats.textContent =
     `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
-    `species/engulfed=${liveSpecies.size}/${snapshot.engulfedOnlySpeciesCount}  ` +
-    `genomes/extinct=${liveCoding.size}/${snapshot.extinctionCount}  ` +
+    `species/engulfed=${cachedSpeciesCount}/${snapshot.engulfedOnlySpeciesCount}  ` +
+    `genomes/extinct=${cachedCodingCount}/${snapshot.extinctionCount}  ` +
     `parts=${snapshot.particles.length}/${snapshot.particleTarget}`;
   // Bottom HUD: clock / perf / build, fixed order.
   bottomHud.textContent =
@@ -3539,11 +3560,10 @@ function updateInspector(): void {
   // population summary and the pin control hides. Selection only
   // changes when the user clicks a cell (or it's cleared on death by
   // clearSelectionIfDead).
-  // Always re-disassemble: the selected cell's genome can change between
-  // frames from somatic mutation, so a cached string would go stale.
-  refreshActiveDisasm();
   const c = selectedCell();
   if (!c) {
+    refreshActiveDisasm(); // clears the cached disasm when nothing is selected
+    lastInspectedGenomeVer = "";
     pinSpeciesBtn.style.display = "none";
     inspectorMeters.style.display = "none";
     inspectorProse.style.display = "none";
@@ -3551,6 +3571,19 @@ function updateInspector(): void {
     disasmBody.style.display = "none";
     inspector.textContent = `${statsLine()}  (click a cell)`;
     return;
+  }
+  // The disasm + gene-aware description are O(genome) string builds.
+  // Rebuild them only when the selected genome actually changes -- a
+  // new cell selected, or somatic mutation altering the bytes (the
+  // exact speciesKey shifts). The meters + resource stats below still
+  // refresh every frame off the live snapshot.
+  const genomeVer = `${c.id}:${c.speciesKey}`;
+  if (genomeVer !== lastInspectedGenomeVer) {
+    lastInspectedGenomeVer = genomeVer;
+    refreshActiveDisasm();
+    inspectorProseCache = describeGenomeRich(c.genome);
+    inspectorProse.innerHTML = inspectorProseCache;
+    disasmBody.textContent = activeDisasm;
   }
   {
     const isPinned = pinnedSpecies.has(c.speciesKey);
@@ -3571,8 +3604,9 @@ function updateInspector(): void {
     if (readiness !== null) h += meterHtml("reproduce readiness", readiness, readiness >= 1 ? "#4caf50" : "#6fae6f");
     inspectorMeters.innerHTML = h;
   }
+  // Content (innerHTML / disasm text) is set in the genome-change guard
+  // above; here just ensure visibility every frame.
   inspectorProse.style.display = "";
-  inspectorProse.innerHTML = describeGenomeRich(c.genome);
   disasmBar.style.display = "flex";
   disasmBody.style.display = disasmExpanded ? "" : "none";
   let molMass = c.energy;
@@ -3601,7 +3635,6 @@ function updateInspector(): void {
     `bond=${fmt(m.bondChem)} repair=${fmt(m.repairChem)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b`;
-  disasmBody.textContent = activeDisasm;
 }
 
 // Sim runs flat-out in simWorker; the renderer is just an rAF loop
