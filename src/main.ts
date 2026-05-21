@@ -4283,8 +4283,18 @@ function cellHealth(c: CellVals): number {
     return x <= 0 ? 0 : 1 - Math.exp(-x);
   };
   const m = c.molecules;
+  // ATP at/below 0 is only fatal when the cell ALSO has no fuel to burn
+  // (engine: starve = energy<=0 AND noFuel). So count convertible
+  // reserves toward the energy buffer, mirroring noFuel(): glucose +
+  // fattyAcid are direct fuels, biopolymer counts if there's enzyme,
+  // and a photosynth-capable cell (chlorophyll + CO2) can regenerate
+  // ATP from light. Without this, a well-fed cell idling at ATP~0
+  // wrongly read 0% health.
+  let fuel = m.glucose + m.fattyAcid;
+  if (m.enzyme >= 0.1) fuel += m.biopolymer;
+  if (m.chlorophyll > 0.5 && m.co2 > 0.5) fuel += 20;
   return Math.min(
-    sat(c.energy, 0, 20),          // ATP (starve at <=0)
+    sat(c.energy + fuel, 0, 20),   // ATP + convertible fuel buffer
     sat(m.membrane, 0.5, 8),       // structural membrane
     sat(m.mrna, 0.01, 2),          // ribosome/translation
     sat(m.aminoAcid, 0.001, 1),    // amino-acid pool
