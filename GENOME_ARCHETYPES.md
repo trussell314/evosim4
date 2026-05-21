@@ -170,9 +170,15 @@ resolved):
     toward the mother, not the daughter, because `synth_ribo` is itself
     mRNA-scaled — mRNA=0 is an absorbing death state, so the deprived
     daughter must keep a nonzero fraction (default child share 0.6 × a
-    −1 bias → ~0.1) to recover. One genome, two phenotypes, switched on
-    inherited cytoplasm — the only archetype that exercises `PARTITION`.
-    Payoff is emergent over generations.
+    −1 bias → ~0.1) to recover. A **bloom brake** gates germ division on
+    being both large (membrane > 50) and energy-flush (ATP > 40): the
+    bigger size makes each soma daughter big enough to coast while it
+    rebuilds mRNA (so soma recover instead of being a pure death sink),
+    and the energy gate throttles division as the cluster depletes local
+    food — without it the germ line over-divides and the colony
+    bloom-crashes. One genome, two phenotypes, switched on inherited
+    cytoplasm — the only archetype that exercises `PARTITION`. Payoff is
+    emergent over generations.
 
 ## Endosymbiosis candidates
 

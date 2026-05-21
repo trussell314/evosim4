@@ -315,7 +315,20 @@ function build(): Archetype[] {
         ["PUSH8", 3], // ~0.6*MRNA_REF: germ cells sit well above, fresh soma well below
         ["GT"], // mRNA-rich -> germ; else fall through to soma (forage, no division)
         ["JZ", "soma"],
-        ...reproduceWhenGrown(30, "germ"),
+        // Bloom brake. A germ divides only when it is BOTH large and
+        // energy-flush. The larger size gate (50, up from 30) slows the
+        // division cadence AND makes each soma daughter big enough (it
+        // takes the 0.6 child share -> ~30 membrane) to coast while it
+        // rebuilds mRNA back over the germ threshold -- so soma stop
+        // being a pure death sink and many recover. The energy gate
+        // throttles division as a growing cluster depletes local food,
+        // so the colony settles near carrying capacity instead of
+        // overshooting and crashing the soma caste.
+        ["SELF_ENERGY"],
+        ["PUSH8", 40],
+        ["GT"],
+        ["JZ", "soma"],
+        ...reproduceWhenGrown(50, "germ"),
         ["LABEL", "soma"],
       ],
     },
