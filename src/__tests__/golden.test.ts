@@ -237,7 +237,9 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // 40 -> 80, starter mrna 5 -> 8, chlorophyll/enzyme 0.5 -> 1.0, and
     // a buoyant O2=8 seed -- shift the seeded run's trajectory.
     // Bumped again: VM instr budget reverted 16 -> 8.
-    const GOLDEN = "bfa3521d";
+    // Bumped again: founders no longer scoop / draw-reserve chems denser
+    // than FOUNDER_SCOOP_MAX_DENSITY (buoyancy), changing seed composition.
+    const GOLDEN = "34c72f9e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

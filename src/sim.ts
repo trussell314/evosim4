@@ -2247,6 +2247,11 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
     // founder scoop is for building materials, not byproducts. (Newborns
     // dying early were dumping a reserve-fed waste slug right back.)
     if (k === CHEM_WASTE || k === CHEM_CO2) continue;
+    // Same buoyancy guard as the particle scoop: don't draw dense chems
+    // (minerals 2.4, glucose 1.5, aa 1.2) into a fresh founder, or it
+    // spawns heavier than water and sinks. Light building materials
+    // (biopolymer, fa, adp) still come through.
+    if (CHEM_BASE_DENSITY[k] > FOUNDER_SCOOP_MAX_DENSITY) continue;
     let take = 0;
     const lv = res[localBase + k];
     if (lv > 0) { take = lv < CAP ? lv : CAP; res[localBase + k] = lv - take; }
@@ -2635,6 +2640,15 @@ function pickSpawnSpec(): SpawnChemSpec {
 // stay tiny, others land in a particle-rich patch and start fat.
 const FOUNDER_SCOOP_R_MIN = 14;
 const FOUNDER_SCOOP_R_MAX = 50;
+// Founders only scoop particles at-or-below this chem density. Dense
+// chems (minerals 2.4, glucose 1.5, amino acid 1.2) are what made fresh
+// founders heavier than water and sink into the dark floor before they
+// could bootstrap; leaving them in the world keeps the founder near
+// neutral buoyancy. Biopolymer (1.05) and lighter (fa, gases) still get
+// scooped, so the food/building-block pickup mostly survives. The cell
+// can still acquire dense chems later via INGEST/TRANSPORT once it can
+// afford the ballast.
+const FOUNDER_SCOOP_MAX_DENSITY = 1.1;
 function makeCreature(
   world: World, x: number, y: number, z: number, genomeOverride?: Uint8Array,
 ): Creature | null {
@@ -2744,6 +2758,9 @@ function makeCreature(
     const dy = p.y - y;
     const dz = p.z - z;
     if (dx * dx + dy * dy + dz * dz >= rSq) continue;
+    // Skip dense particles so the founder doesn't spawn heavier than
+    // water (left in the world for later INGEST/TRANSPORT).
+    if (CHEM_BASE_DENSITY[p.chemId] > FOUNDER_SCOOP_MAX_DENSITY) continue;
     cstore.chemCols[p.chemId][cidx] += mass(p) / CHEM_MM[p.chemId];
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
