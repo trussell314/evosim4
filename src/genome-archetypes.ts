@@ -42,6 +42,7 @@ import {
   RX_SLOT_SYNTH_THERMO,
   RX_SLOT_SYNTH_MAGNETO,
   RX_SLOT_SYNTH_BOND,
+  RX_SLOT_SYNTH_REPAIR,
 } from "./sim/reactions";
 
 // INGEST now pops a bond-energy threshold off the stack (engulf any
@@ -210,10 +211,11 @@ function build(): Archetype[] {
       id: "thermophile",
       label: "thermophile",
       cls: "direct",
-      desc: "Photoautotroph with a thermoreceptor-synth catalyst boost; thrust = act_thermo^3 so the cell drives hard when it's far from the isotherm (overcomes gravity) and barely thrusts when it's close (saves ATP).",
+      desc: "Photoautotroph with a thermoreceptor-synth catalyst boost; thrust = act_thermo^3 so the cell drives hard when it's far from the isotherm (overcomes gravity) and barely thrusts when it's close (saves ATP). Also synthesizes the heat-shock/repair chaperone (CHEM_REPAIR) so it tolerates the hot vent zone -- the same pool raises its thermal-denaturation ceiling, making it a genuine heat specialist rather than just heat-seeking.",
       prog: [
         ...AUTO_KIT,
         ["SYNTH", "CAT", RX_SLOT_SYNTH_THERMO], // boost thermoreceptor synth
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_REPAIR], // heat-shock chaperone -> thermal tolerance
         // Sign-preserving cube of act_thermo. Linear thrust=(a,a) with
         // |a|<=3 maxed at mag ~ 4.5 which is tiny vs gravity=60, so
         // cells sank into the dark before reaching the isotherm. Cube
