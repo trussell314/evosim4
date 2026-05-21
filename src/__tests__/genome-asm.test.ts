@@ -104,13 +104,19 @@ describe("genome assembler", () => {
   });
 
   it("assembled genomes disassemble with no unknown (db) bytes", () => {
+    // Framed so the disassembler decodes inside the gene (consuming
+    // multi-byte operands); an unframed sequence would be walked as
+    // introns byte-by-byte and a SYNTH param byte could alias an
+    // undefined opcode and render as `db`.
     const g = asm([
+      ["GENE"],
       ["SYNTH", "CAT", 10],
       ["SENSE_CHEMICAL", 23],
       ["THRUST"],
       ["PUSH8", 1],
       ["INGEST"],
       ["REPRODUCE"],
+      ["END"],
     ]);
     expect(disassemble(g)).not.toMatch(/db 0x/);
   });

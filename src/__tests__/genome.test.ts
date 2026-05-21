@@ -382,18 +382,31 @@ describe("VM edge cases", () => {
 });
 
 describe("disassemble", () => {
-  it("renders known opcodes by lowercase name", () => {
-    // HALT was retired; the byte 0xFF disassembles as a `db 0xff`
-    // (raw byte fallback) since it has no opcode label.
-    const text = disassemble(new Uint8Array([OP.NOP, OP.REPRODUCE]));
+  it("renders known opcodes by lowercase name (inside a gene)", () => {
+    const text = disassemble(framed([OP.NOP, OP.REPRODUCE]));
     expect(text).toContain("nop");
     expect(text).toContain("reproduce");
+    // gene framing codons are rendered as flush markers
+    expect(text).toContain("gene");
+    expect(text).toContain("end");
+  });
+  it("renders SYNTH with kind name + param", () => {
+    expect(disassemble(framed([OP.SYNTH, SYNTH_KIND.CAT, 7]))).toContain("synth cat 7");
+    expect(disassemble(framed([OP.SYNTH, SYNTH_KIND.BOND, 200]))).toContain("synth bond 200");
+  });
+  it("flags intron bytes with an ; intron marker outside any gene", () => {
+    // No GENE codon -> every byte is an intron, shown byte-by-byte with
+    // an ; intron marker (op mnemonic if known, else db 0xNN).
+    const text = disassemble(new Uint8Array([OP.NOP, OP.REPRODUCE]));
+    expect(text).toContain("; intron");
+    // reproduce appears, but flagged as non-coding (not an executed op)
+    expect(text).toMatch(/reproduce\s+; intron/);
   });
   it("renders PUSH8 with signed operand", () => {
-    expect(disassemble(new Uint8Array([OP.PUSH8, 200, HALT_MARK]))).toContain("push8 -56");
+    expect(disassemble(framed([OP.PUSH8, 200, HALT_MARK]))).toContain("push8 -56");
   });
   it("renders JMP/JZ/JNZ signed operands", () => {
-    const text = disassemble(new Uint8Array([OP.JMP, 5, OP.JZ, 0xFE, OP.JNZ, 0]));
+    const text = disassemble(framed([OP.JMP, 5, OP.JZ, 0xFE, OP.JNZ, 0]));
     expect(text).toContain("jmp 5");
     expect(text).toContain("jz -2");
     expect(text).toContain("jnz 0");
@@ -401,23 +414,24 @@ describe("disassemble", () => {
   it("renders material operand by name when provided", () => {
     const names = ["rock", "sand", "clay", "organic", "lipid", "gas"];
     // EXCRETE still passes through the material-operand naming map.
-    // With operand 7 mod 6 = 1, the name is "sand". (INGEST is now
-    // zero-operand -- a bond-energy threshold off the stack -- so it
-    // is no longer a material-operand op.)
-    const text = disassemble(new Uint8Array([OP.EXCRETE, 7, HALT_MARK]), names);
+    // With operand 7 mod 6 = 1, the name is "sand".
+    const text = disassemble(framed([OP.EXCRETE, 7, HALT_MARK]), names);
     expect(text).toContain("excrete sand");
   });
   it("renders material operand by index without names", () => {
-    expect(disassemble(new Uint8Array([OP.EXCRETE, 2, HALT_MARK]))).toContain("excrete 2");
+    expect(disassemble(framed([OP.EXCRETE, 2, HALT_MARK]))).toContain("excrete 2");
   });
   it("renders unknown bytes as db 0xNN", () => {
-    expect(disassemble(new Uint8Array([0x7A]))).toContain("db 0x7a");
+    // A defined-but-unaligned byte inside a gene falls to the db branch.
+    expect(disassemble(framed([0x7A]))).toContain("db 0x7a");
   });
-  it("4-digit hex offsets per instruction", () => {
-    const lines = disassemble(new Uint8Array([OP.NOP, OP.PUSH8, 1, HALT_MARK])).split("\n");
-    expect(lines[0].startsWith("0000:")).toBe(true);
-    expect(lines[1].startsWith("0001:")).toBe(true);
-    expect(lines[2].startsWith("0003:")).toBe(true);
+  it("4-digit hex offsets per instruction, skipping operands", () => {
+    // framed: [GENE, NOP, PUSH8, 1, 0xFF, END]
+    const lines = disassemble(framed([OP.NOP, OP.PUSH8, 1, HALT_MARK])).split("\n");
+    expect(lines[0].startsWith("0000:")).toBe(true); // gene
+    expect(lines[1].startsWith("0001:")).toBe(true); // nop
+    expect(lines[2].startsWith("0002:")).toBe(true); // push8 (1-byte operand)
+    expect(lines[3].startsWith("0004:")).toBe(true); // 0xff -- operand at 0003 skipped
   });
 });
 

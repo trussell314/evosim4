@@ -141,6 +141,14 @@ export const SYNTH_KIND = {
   PACKAGE: 4,
 } as const;
 export const SYNTH_KIND_COUNT = 5;
+// Reverse map (kind byte -> short name) for the disassembler / prose.
+export const SYNTH_KIND_NAME: Record<number, string> = {
+  [SYNTH_KIND.CAT]: "cat",
+  [SYNTH_KIND.INH]: "inh",
+  [SYNTH_KIND.BOND]: "bond",
+  [SYNTH_KIND.COMPETENCE]: "competence",
+  [SYNTH_KIND.PACKAGE]: "package",
+};
 // synthMask bit positions. One bit per kind that has a non-CAT/INH
 // effect (those two use the parallel catSynthMask / inhSynthMask).
 export const SYNTH_BIT_BOND = 0;
@@ -982,17 +990,46 @@ export function summarizeGenome(
   };
 }
 
+// Gene-aware disassembly. The VM only executes bytes inside a GENE..END
+// span, so the listing mirrors that: GENE/END are flush markers, gene-
+// body ops are indented and operand-decoded, and intron bytes (outside
+// any gene) are shown raw as `db 0xNN  ; intron` byte-by-byte -- exactly
+// how the scanner steps over them. SYNTH renders both operands.
 export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<string>): string {
   const lines: string[] = [];
   let i = 0;
+  let executing = false;
   while (i < genome.length) {
     const op = genome[i];
+    const off = i.toString(16).padStart(4, "0") + ": ";
+    if (!executing) {
+      // Scanning region (intron). Only GENE has meaning here; every
+      // other byte is skipped one at a time (operands are NOT consumed
+      // since nothing executes), so render byte-by-byte. Known op bytes
+      // still show their mnemonic + an "; intron" marker; truly unknown
+      // bytes fall back to `db`.
+      if (op === OP.GENE) { lines.push(off + "gene"); executing = true; }
+      else {
+        const nm = NAME_BY_OP[op];
+        lines.push(off + "  " + (nm ? nm.toLowerCase() : "db 0x" + op.toString(16).padStart(2, "0")) + "  ; intron");
+      }
+      i += 1;
+      continue;
+    }
+    // Inside a gene.
+    if (op === OP.END) { lines.push(off + "end"); executing = false; i += 1; continue; }
+    if (op === OP.GENE) { lines.push(off + "gene"); i += 1; continue; }
     const name = NAME_BY_OP[op];
     const operandLen = OPERANDS[op];
-    let s = i.toString(16).padStart(4, "0") + ": ";
+    let s = off + "  ";
     if (name) {
       s += name.toLowerCase();
-      if (operandLen === 1 && i + 1 < genome.length) {
+      if (op === OP.SYNTH) {
+        const kind = i + 1 < genome.length ? genome[i + 1] : 0;
+        const param = i + 2 < genome.length ? genome[i + 2] : 0;
+        const kindName = SYNTH_KIND_NAME[kind % SYNTH_KIND_COUNT] ?? String(kind);
+        s += " " + kindName + " " + param;
+      } else if (operandLen === 1 && i + 1 < genome.length) {
         const arg = genome[i + 1];
         if (op === OP.PUSH8 || op === OP.JMP || op === OP.JZ || op === OP.JNZ) {
           s += " " + i8(arg);

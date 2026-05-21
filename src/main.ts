@@ -91,7 +91,7 @@ import {
   type InnerCreatureSnapshot,
   type SpeciesSnapshot,
 } from "./sim";
-import { disassemble, walkGenome, OP, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
+import { disassemble, walkGenome, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -1997,6 +1997,20 @@ function flushTooltip(): void {
   const divLine = c.division
     ? `\ndividing ${(c.division.progress * 100).toFixed(0)}%`
     : "";
+  // Full-width reproduce-readiness bar: how close the cell is to firing
+  // its REPRODUCE gate, evaluating the genome's gate comparisons against
+  // the cell's current values. Hidden for sterile genomes (no gate).
+  const readiness = reproduceReadiness(c.genome, c);
+  let barHtml = "";
+  if (readiness !== null) {
+    const pct = Math.max(0, Math.min(100, Math.round(readiness * 100)));
+    const col = readiness >= 1 ? "#4caf50" : "#6fae6f";
+    barHtml =
+      `<div style="margin-top:5px;opacity:.8;">reproduce readiness ${pct}%</div>` +
+      `<div style="margin-top:2px;height:6px;background:#0a1a22;border:1px solid #1a3340;` +
+      `border-radius:3px;overflow:hidden;">` +
+      `<div style="height:100%;width:${pct}%;background:${col};"></div></div>`;
+  }
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
@@ -2004,7 +2018,7 @@ function flushTooltip(): void {
     `ATP=${c.energy.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
     `r=${c.r.toFixed(1)}  spd=${speed.toFixed(0)}  z=${c.z.toFixed(0)}\n` +
     `${sameSpecies} in species, ${sameLineage} in lineage` +
-    divLine + kitLine + assocLine;
+    divLine + kitLine + assocLine + barHtml;
   tooltip.style.display = "block";
   // Anchor at the cell's projected screen position with edge-flipping
   // so the box never spills off the visible viewport. visualViewport
@@ -3543,7 +3557,7 @@ function updateInspector(): void {
       `<b>${genomeTag(c.genome)}</b></span>`;
   }
   inspectorProse.style.display = "";
-  inspectorProse.textContent = describeGenomeProse(c.genome);
+  inspectorProse.innerHTML = describeGenomeRich(c.genome);
   disasmBar.style.display = "flex";
   disasmBody.style.display = disasmExpanded ? "" : "none";
   let molMass = c.energy;
@@ -3784,9 +3798,43 @@ function togglePin(key: string, genome: Uint8Array, color: string, peakBio: numb
 
 // One species card. rankLabel is "#1" etc for ranked tabs, "" for
 // flat lists. status text is precomputed by the caller.
+// A small two-click-confirm button (mirrors the run-panel reset). First
+// click arms (shows the confirm label in red) for 3s; a second click
+// within that window fires onConfirm. Used for destructive list actions
+// (clear-all, per-item remove) so a stray click can't wipe pins.
+function makeConfirmButton(
+  label: string, confirmLabel: string, onConfirm: () => void,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  const base =
+    `margin-top:4px;padding:2px 8px;border:1px solid #1a3340;border-radius:3px;` +
+    `cursor:pointer;font-size:${UI_FONT_PX}px;`;
+  let armedUntil = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const disarm = (): void => {
+    armedUntil = 0;
+    btn.textContent = label;
+    btn.style.cssText = base + "background:rgba(0,0,0,.4);color:#e88;";
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const now = performance.now();
+    if (now < armedUntil) { if (timer) clearTimeout(timer); onConfirm(); return; }
+    armedUntil = now + 3000;
+    btn.textContent = confirmLabel;
+    btn.style.cssText = base + "background:rgba(90,0,0,.55);color:#f88;font-weight:bold;";
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(disarm, 3000);
+  });
+  disarm();
+  return btn;
+}
+
 function buildSpeciesCard(
   genome: Uint8Array, color: string,
   rankLabel: string, status: string, statsLine: string,
+  onRemove?: () => void,
 ): HTMLDivElement {
   const block = document.createElement("div");
   block.style.cssText = "padding:6px 0;border-bottom:1px solid #1a3340;white-space:pre-wrap;line-height:1.4;";
@@ -3828,6 +3876,13 @@ function buildSpeciesCard(
   block.appendChild(statsDiv);
   block.appendChild(proseDiv);
   block.appendChild(spawnBtn);
+  // Per-item remove (pinned list only). Two-click confirm so a stray
+  // tap can't drop a pin.
+  if (onRemove) {
+    const removeBtn = makeConfirmButton("Remove", "Confirm remove", onRemove);
+    removeBtn.style.cssText += "margin-left:6px;";
+    block.appendChild(removeBtn);
+  }
   return block;
 }
 
@@ -3858,8 +3913,19 @@ function renderAnalysisPanel(): void {
     ? [...src.values()].sort((a, b) => b.at - a.at)
     : [...src.values()].sort((a, b) => b.peakBio - a.peakBio);
   header.textContent = analysisTab === "pinned"
-    ? `Pinned species (${entries.length}) -- founders cull-exempt`
+    ? `Pinned species (${entries.length})`
     : `Notable: best ${entries.length} ever seen`;
+  // Clear-all (two-click confirm) -- only when there's something to clear.
+  if (entries.length > 0) {
+    const isPinned = analysisTab === "pinned";
+    const clearBtn = makeConfirmButton("Clear all", "Confirm clear all", () => {
+      src.clear();
+      if (isPinned) { persistMarked(PIN_KEY, pinnedSpecies); syncPinnedToWorker(); }
+      renderAnalysisPanel();
+    });
+    clearBtn.style.cssText += "float:right;margin-top:0;";
+    header.appendChild(clearBtn);
+  }
   if (entries.length === 0) {
     const empty = document.createElement("div");
     empty.style.cssText = "padding:10px 0;opacity:0.7;";
@@ -3875,8 +3941,18 @@ function renderAnalysisPanel(): void {
       ? `ALIVE (${live.alive} cells)`
       : `EXTINCT`;
     const stats = `peakBio=${e.peakBio.toFixed(0)}  noted@t=${formatAge(e.at)}`;
+    // Pinned items get a per-item remove; notable entries don't (they
+    // re-accrue automatically as the sim runs, so removal is moot).
+    const onRemove = analysisTab === "pinned"
+      ? () => {
+          pinnedSpecies.delete(e.key);
+          persistMarked(PIN_KEY, pinnedSpecies);
+          syncPinnedToWorker();
+          renderAnalysisPanel();
+        }
+      : undefined;
     analysisBody.appendChild(
-      buildSpeciesCard(Uint8Array.from(e.genome), e.color, "", status, stats),
+      buildSpeciesCard(Uint8Array.from(e.genome), e.color, "", status, stats, onRemove),
     );
   }
 }
@@ -3919,6 +3995,283 @@ function trophicMode(genome: Uint8Array): TrophicMode {
   if (boostsPhoto && (eatsOther || eatsParticles)) return TROPHIC_MIXO;
   if (eatsOther) return TROPHIC_PRED;
   return TROPHIC_HET;
+}
+
+// ---- Rich, gene-aware genome description (inspector top) ----
+// Walks the genome's GENE..END spans and, per gene, runs a small
+// symbolic stack interpreter to recover the CONDITION guarding each
+// action -- so the readout says "Reproduces when membrane > 30 and
+// ATP > 15", not just "divides conditionally". Statically-dead gates
+// (a constant comparison that can never be true) flag the action as
+// short-circuited (rendered orange). Functions the genome lacks are
+// omitted, except notable absences (no reproduction).
+
+const i8s = (b: number): number => (b > 127 ? b - 256 : b);
+
+interface SymTerm { s: string; k?: number; t?: 0 | 1 }
+interface Guard { label: string; start: number; end: number; dead: boolean }
+interface RichAction { text: string; pc: number; cat?: number; inh?: number }
+
+// Decode one gene's ops (already past GENE, up to END) into the action
+// list + guard intervals via symbolic execution. Linear walk (jumps are
+// not followed -- we read structure, not run it), which matches the
+// dominant "sensor; PUSH k; CMP; JZ; action" gating shape.
+function analyzeGene(genome: Uint8Array, start: number, end: number): {
+  actions: RichAction[]; guards: Guard[];
+} {
+  const stack: SymTerm[] = [];
+  const pop = (): SymTerm => stack.pop() ?? { s: "0", k: 0, t: 0 };
+  const guards: Guard[] = [];
+  const actions: RichAction[] = [];
+  let i = start;
+  while (i < end) {
+    const op = genome[i];
+    const operandLen = OPERANDS[op];
+    const a1 = i + 1 < genome.length ? genome[i + 1] : 0;
+    const a2 = i + 2 < genome.length ? genome[i + 2] : 0;
+    const next = i + 1 + operandLen;
+    switch (op) {
+      case OP.PUSH8: stack.push({ s: String(i8s(a1)), k: i8s(a1) }); break;
+      case OP.SELF_ENERGY: stack.push({ s: "ATP" }); break;
+      case OP.SELF_MEMBRANE: stack.push({ s: "membrane" }); break;
+      case OP.SELF_MASS: stack.push({ s: "mass" }); break;
+      case OP.SENSE_CHEMICAL: stack.push({ s: chemName(a1 % 96) }); break;
+      case OP.SENSE_OUT: stack.push({ s: `∇${chemName(a1 % 96)}.x` }); stack.push({ s: `∇${chemName(a1 % 96)}.y` }); break;
+      case OP.DUP: { const x = pop(); stack.push(x); stack.push(x); break; }
+      case OP.SWAP: { const b = pop(), a = pop(); stack.push(b); stack.push(a); break; }
+      case OP.POP: pop(); break;
+      case OP.GT: case OP.LT: case OP.EQ: {
+        const b = pop(), a = pop();
+        const sym = op === OP.GT ? ">" : op === OP.LT ? "<" : "=";
+        let t: 0 | 1 | undefined;
+        if (a.k !== undefined && b.k !== undefined) {
+          t = (op === OP.GT ? a.k > b.k : op === OP.LT ? a.k < b.k : a.k === b.k) ? 1 : 0;
+        }
+        stack.push({ s: `${a.s} ${sym} ${b.s}`, t });
+        break;
+      }
+      case OP.AND: case OP.OR: {
+        const b = pop(), a = pop();
+        const word = op === OP.AND ? "and" : "or";
+        let t: 0 | 1 | undefined;
+        if (a.t !== undefined && b.t !== undefined) {
+          t = (op === OP.AND ? a.t && b.t : a.t || b.t) ? 1 : 0;
+        }
+        stack.push({ s: `${a.s} ${word} ${b.s}`, t });
+        break;
+      }
+      case OP.NOT: { const a = pop(); stack.push({ s: `not(${a.s})`, t: a.t === undefined ? undefined : (a.t ? 0 : 1) }); break; }
+      case OP.ADD: case OP.SUB: case OP.MUL: case OP.DIV: {
+        const b = pop(), a = pop();
+        const sym = op === OP.ADD ? "+" : op === OP.SUB ? "-" : op === OP.MUL ? "×" : "/";
+        const k = (a.k !== undefined && b.k !== undefined)
+          ? (op === OP.ADD ? a.k + b.k : op === OP.SUB ? a.k - b.k : op === OP.MUL ? a.k * b.k : (b.k ? a.k / b.k : 0))
+          : undefined;
+        stack.push({ s: `(${a.s} ${sym} ${b.s})`, k });
+        break;
+      }
+      case OP.JZ: case OP.JNZ: {
+        const cond = pop();
+        const target = next + i8s(a1);
+        // JZ skips [next, target) when cond is FALSE -> region runs when
+        // cond TRUE (guard = cond). JNZ is the mirror (guard = not cond).
+        const isJZ = op === OP.JZ;
+        const label = isJZ ? cond.s : `not(${cond.s})`;
+        const dead = cond.t !== undefined && (isJZ ? cond.t === 0 : cond.t === 1);
+        if (target > next) guards.push({ label, start: next, end: target, dead });
+        break;
+      }
+      case OP.REPRODUCE: actions.push({ text: "Reproduces", pc: i }); break;
+      case OP.INGEST: actions.push({ text: "Ingests food particles", pc: i }); break;
+      case OP.PREDATE: actions.push({ text: "Predates other cells", pc: i }); break;
+      case OP.ENGULF: actions.push({ text: "Engulfs other cells", pc: i }); break;
+      case OP.THRUST: actions.push({ text: "Swims (thrust)", pc: i }); break;
+      case OP.TURN: actions.push({ text: "Turns", pc: i }); break;
+      case OP.EXCRETE: actions.push({ text: `Excretes ${chemName(a1 % 96)}`, pc: i }); break;
+      case OP.TRANSPORT: actions.push({ text: `Transports ${chemName(a1 % 96)}`, pc: i }); break;
+      case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL:
+        actions.push({ text: "Self-modifies its genome", pc: i }); break;
+      case OP.SYNTH: {
+        const kind = a1 % SYNTH_KIND_COUNT;
+        if (kind === SYNTH_KIND.CAT) actions.push({ text: "", pc: i, cat: a2 % CATALYST_COUNT });
+        else if (kind === SYNTH_KIND.INH) actions.push({ text: "", pc: i, inh: a2 % CATALYST_COUNT });
+        else if (kind === SYNTH_KIND.BOND) actions.push({ text: "Adhesive — bonds to matching-marker kin (BOND)", pc: i });
+        else if (kind === SYNTH_KIND.COMPETENCE) actions.push({ text: "Takes up environmental DNA (competence)", pc: i });
+        else if (kind === SYNTH_KIND.PACKAGE) actions.push({ text: "Sheds genome fragments (package/HGT)", pc: i });
+        break;
+      }
+    }
+    i = next;
+  }
+  return { actions, guards };
+}
+
+function describeGenomeRich(genome: Uint8Array): string {
+  const esc = (s: string): string => s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+  // Collect genes (GENE..END spans) and intron byte total.
+  let nGenes = 0, intronBytes = 0;
+  const allActions: Array<{ text: string; guard: string; dead: boolean; cat?: number; inh?: number }> = [];
+  let i = 0;
+  let inGene = false, geneStart = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    if (!inGene) {
+      if (op === OP.GENE) { inGene = true; geneStart = i + 1; nGenes++; }
+      else intronBytes++;
+      i += 1;
+      continue;
+    }
+    if (op === OP.END) {
+      const { actions, guards } = analyzeGene(genome, geneStart, i);
+      for (const a of actions) {
+        const covering = guards.filter((g) => a.pc >= g.start && a.pc < g.end);
+        const guard = covering.map((g) => g.label).join(" and ");
+        const dead = covering.some((g) => g.dead);
+        allActions.push({ text: a.text, guard, dead, cat: a.cat, inh: a.inh });
+      }
+      inGene = false;
+      i += 1;
+      continue;
+    }
+    i += 1 + OPERANDS[op];
+  }
+
+  const lines: string[] = [];
+  const orange = (s: string): string => `<span style="color:#e8a13a;">${s}</span>`;
+  const gate = (g: string): string => (g ? ` <span style="opacity:.75;">when ${esc(g)}</span>` : ` <span style="opacity:.55;">(every tick)</span>`);
+
+  // Behaviour actions (non-SYNTH-cat/inh) grouped, conditions shown.
+  const behaviours = allActions.filter((a) => a.text !== "");
+  // De-dupe identical (text+guard+dead) lines so repeated genes collapse.
+  const seen = new Set<string>();
+  const reproduces = behaviours.some((a) => a.text === "Reproduces" && !a.dead);
+  for (const a of behaviours) {
+    const key = a.text + "|" + a.guard + "|" + a.dead;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (a.dead) {
+      lines.push("• " + orange(`${a.text} — never (gate "${esc(a.guard)}" is always false)`));
+    } else {
+      lines.push("• " + esc(a.text) + gate(a.guard));
+    }
+  }
+  // Metabolic identity: catalyst boosts / inhibitor damps.
+  const cats = [...new Set(allActions.filter((a) => a.cat !== undefined).map((a) => a.cat as number))].sort((x, y) => x - y);
+  const inhs = [...new Set(allActions.filter((a) => a.inh !== undefined).map((a) => a.inh as number))].sort((x, y) => x - y);
+  if (cats.length) lines.push("• Boosts: " + esc(cats.map(reactionName).join(", ")));
+  if (inhs.length) lines.push("• Damps: " + esc(inhs.map(reactionName).join(", ")));
+
+  // Notable absence: a genome with no live REPRODUCE is sterile.
+  if (!reproduces) {
+    lines.push("• " + orange("Never reproduces — lineage is sterile"));
+  }
+  if (behaviours.length === 0 && cats.length === 0 && inhs.length === 0) {
+    lines.push(orange("No expressed functions (no genes, or all ops in introns)."));
+  }
+
+  const head =
+    `<div style="opacity:.7;padding-bottom:3px;">` +
+    `${nGenes} gene${nGenes === 1 ? "" : "s"}, ${intronBytes} intron byte${intronBytes === 1 ? "" : "s"}` +
+    `</div>`;
+  return head + lines.join("<br>");
+}
+
+// Reproduce-readiness: 0..1 estimate of how close a cell is to firing
+// its REPRODUCE gate, derived by symbolically evaluating the gate's
+// comparisons against the cell's CURRENT values. Returns null if the
+// genome has no reproduce op. A reflexive (ungated) REPRODUCE -> 1.
+// Comparisons it can't bind to a live value (e.g. a SENSE_CHEMICAL
+// threshold) are treated as already-satisfied so the bar reflects the
+// resource gates (membrane/ATP/mass) that dominate founder genomes.
+interface CellVals { energy: number; molecules: CreatureSnapshot["molecules"] }
+interface RTerm { val?: () => number; prog?: () => number }
+
+function readinessInGene(
+  genome: Uint8Array, start: number, end: number, c: CellVals, total: number,
+): number | null {
+  const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+  const stack: RTerm[] = [];
+  const pop = (): RTerm => stack.pop() ?? { val: () => 0 };
+  const guards: Array<{ start: number; end: number; prog?: () => number }> = [];
+  let reproPc = -1;
+  let i = start;
+  while (i < end) {
+    const op = genome[i];
+    const operandLen = OPERANDS[op];
+    const a1 = i + 1 < genome.length ? genome[i + 1] : 0;
+    const next = i + 1 + operandLen;
+    switch (op) {
+      case OP.PUSH8: { const k = i8s(a1); stack.push({ val: () => k }); break; }
+      case OP.SELF_ENERGY: stack.push({ val: () => c.energy }); break;
+      case OP.SELF_MEMBRANE: stack.push({ val: () => c.molecules.membrane }); break;
+      case OP.SELF_MASS: stack.push({ val: () => total }); break;
+      case OP.DUP: { const x = pop(); stack.push(x); stack.push(x); break; }
+      case OP.SWAP: { const b = pop(), a = pop(); stack.push(b); stack.push(a); break; }
+      case OP.POP: pop(); break;
+      case OP.GT: case OP.LT: {
+        const b = pop(), a = pop();
+        const av = a.val, bv = b.val;
+        const prog = (av && bv)
+          ? (): number => {
+              const x = av(), y = bv();
+              return op === OP.GT
+                ? (y > 0 ? clamp01(x / y) : (x > 0 ? 1 : 0))
+                : (x < y ? 1 : (x > 0 ? clamp01(y / x) : 1));
+            }
+          : undefined;
+        stack.push({ prog });
+        break;
+      }
+      case OP.AND: {
+        const b = pop(), a = pop();
+        const prog = (a.prog && b.prog) ? (): number => Math.min(a.prog!(), b.prog!()) : (a.prog ?? b.prog);
+        stack.push({ prog });
+        break;
+      }
+      case OP.OR: {
+        const b = pop(), a = pop();
+        const prog = (a.prog && b.prog) ? (): number => Math.max(a.prog!(), b.prog!()) : (a.prog ?? b.prog);
+        stack.push({ prog });
+        break;
+      }
+      case OP.JZ: case OP.JNZ: {
+        const cond = pop();
+        const target = next + i8s(a1);
+        if (target > next) {
+          let prog = cond.prog;
+          if (op === OP.JNZ && prog) { const p = prog; prog = (): number => 1 - p(); }
+          guards.push({ start: next, end: target, prog });
+        }
+        break;
+      }
+      case OP.REPRODUCE: reproPc = i; break;
+    }
+    i = next;
+  }
+  if (reproPc < 0) return null;
+  const covering = guards.filter((g) => reproPc >= g.start && reproPc < g.end);
+  if (covering.length === 0) return 1; // reflexive: always ready
+  let r = 1;
+  for (const g of covering) if (g.prog) r = Math.min(r, g.prog());
+  return r;
+}
+
+function reproduceReadiness(genome: Uint8Array, c: CellVals): number | null {
+  let total = c.energy;
+  for (const k of MOLECULE_IDS) total += c.molecules[k];
+  let found: number | null = null;
+  let i = 0, inGene = false, gStart = 0;
+  while (i < genome.length) {
+    const op = genome[i];
+    if (!inGene) { if (op === OP.GENE) { inGene = true; gStart = i + 1; } i += 1; continue; }
+    if (op === OP.END) {
+      const r = readinessInGene(genome, gStart, i, c, total);
+      if (r !== null) found = found === null ? r : Math.max(found, r);
+      inGene = false; i += 1; continue;
+    }
+    i += 1 + OPERANDS[op];
+  }
+  return found;
 }
 
 // Walk a genome and describe it as a structured list aligned with the
