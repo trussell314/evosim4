@@ -228,7 +228,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // boundary, the instr budget rose 8 -> 16, and the genome
     // replication tax fell 0.02 -> 0.01/byte. All of that changes the
     // seeded run's trajectory, so the fingerprint moves.
-    const GOLDEN = "d3b5915e";
+    // Bumped again: founder immigration switched from "rare rescue
+    // below a floor, one at a time, every 15s" to "active top-up of
+    // 20% of the remaining deficit toward founderTarget every 7.5s,
+    // no particle cap". More founders spawn within the seeded window,
+    // moving the fingerprint.
+    const GOLDEN = "512c7663";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

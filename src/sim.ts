@@ -2151,18 +2151,14 @@ export function createWorld(
 // FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
 // batch" constants any more.
 const FOUNDER_TARGET = 50;
-// Rare-immigration model. Founders are NOT a population subsidy that
-// refills to FOUNDER_TARGET every step -- they are a rare external
-// rescue. Spawning is gated two ways: (1) only when the live lineage
-// pool has collapsed below FOUNDER_RESCUE_FLOOR (a self-sufficient
-// ecosystem sustains itself on descendants and never triggers it),
-// and (2) at most one new founder per FOUNDER_TRICKLE_INTERVAL_SEC
-// sim-seconds. Total extinction (zero lineages) still gets an
-// immediate reseed so a dead world can restart. This makes "stable
-// population" mean genuine self-sufficiency rather than a hidden
-// firehose of fresh genomes.
-const FOUNDER_RESCUE_FLOOR = 10;
-const FOUNDER_TRICKLE_INTERVAL_SEC = 15;
+// Active immigration model. Each trickle interval, if the live lineage
+// pool is below FOUNDER_TARGET, spawn a fraction of the REMAINING
+// deficit (founderTarget - live) -- a geometric approach to the target
+// rather than the old "rare rescue only below a floor" trickle. No
+// resource/particle cap gates it. Total extinction (zero lineages)
+// still gets an immediate reseed so a dead world restarts promptly.
+const FOUNDER_TRICKLE_FRACTION = 0.2;
+const FOUNDER_TRICKLE_INTERVAL_SEC = 7.5;
 // (legacy note) Founder top-up previously refilled the full deficit
 // (founderTarget minus current live lineages) every step it was short.
 // Hold off all founder spawning (initial + top-up) for the first
@@ -5002,49 +4998,42 @@ export function step(world: World, dt: number): void {
     if (!currentLineages.has(id)) world.extinctionCount++;
   }
 
-  // Top up founding lineages. If the live count is below
-  // world.founderTarget, spawn fresh founders (each viability-filtered
-  // by makeRandomViableGenome) until we reach the target.
-  //
-  // The over-cap gate's permissiveness scales with how depleted the
-  // lineage pool is. At a healthy full house of lineages, enforce a
-  // 2x particle cap as a real throttle on successful runs. As
-  // lineages die off, loosen toward "no throttle" -- when the world
-  // is down to one barely-alive lineage that can't possibly drain
-  // the surplus before dying, we shouldn't be the reason recovery
-  // can't start. Death-released particles bypass the replenish/aerate
-  // caps because autolysis can't refuse to produce its mass.
+  // Top up founding lineages. Each trickle interval, if the live count
+  // is below world.founderTarget, spawn a fraction of the remaining
+  // deficit -- a geometric approach to the target. No resource/particle
+  // cap gates this (the old over-cap throttle is gone).
   const deficit = Math.max(0, world.founderTarget - currentLineages.size);
-  const capMult = 2 + deficit * 0.8;
-  const allDead = currentLineages.size === 0;
-  const overCap = world.particles.length >= world.particleTarget * capMult;
   // Suppress founder spawning until the world is ready. Ramp worlds
   // (production) hold founders back until the one-shot seed ramp has
   // finished filling the pool; legacy/test worlds use the time delay.
   const delayDone = world.useSeedRamp
     ? world.initialSeedDone
     : world.t >= FOUNDER_SPAWN_DELAY_SEC;
-  const belowFloor = currentLineages.size < FOUNDER_RESCUE_FLOOR;
   const wasEmpty = currentLineages.size === 0;
-  // Rare immigration: only rescue when the lineage pool has collapsed
-  // below the floor, and then only a trickle. Total extinction bypasses
-  // the interval so a fully dead world restarts promptly; otherwise at
-  // most one new founder per FOUNDER_TRICKLE_INTERVAL_SEC.
+  // Total extinction bypasses the interval so a fully dead world
+  // restarts promptly; otherwise spawn at most once per interval.
   const trickleDue = wasEmpty
     || world.t - world.lastFounderTrickleT >= FOUNDER_TRICKLE_INTERVAL_SEC;
   if (
     delayDone && world.foundersEnabled !== false && world.founderTarget > 0
-    && (allDead || !overCap) && belowFloor && trickleDue
+    && deficit > 0 && trickleDue
   ) {
-    const f = spawnFounder(world);
-    if (f) {
+    // 20% of the remaining cap each time (at least one). A freshly
+    // empty world seeds a single founder that re-anchors the palette.
+    const nSpawn = wasEmpty ? 1 : Math.max(1, Math.ceil(deficit * FOUNDER_TRICKLE_FRACTION));
+    let first: Creature | null = null;
+    for (let i = 0; i < nSpawn; i++) {
+      const f = spawnFounder(world);
+      if (f && first === null) first = f;
+    }
+    if (first) {
       world.lastFounderTrickleT = world.t;
-      // When the world had just gone fully empty, the new founder also
+      // When the world had just gone fully empty, the first new founder
       // re-anchors the color palette so descendant coloring restarts
       // relative to this new root.
       if (wasEmpty) {
-        world.anchorGenome = new Uint8Array(f.genome);
-        f.color = genomeColor(f.genome, world.anchorGenome);
+        world.anchorGenome = new Uint8Array(first.genome);
+        first.color = genomeColor(first.genome, world.anchorGenome);
       }
     }
   }
@@ -5644,9 +5633,11 @@ function updateCreatures(world: World, dt: number): void {
     // All in-cell chemistry runs through one unified loop: named
     // reactions live at REACTIONS[0..9] with uncatRate > 0, so they
     // fire on every cell every tick; generic reactions at [10..255]
-    // only fire when the cell has built the relevant catalyst.
-    // Biosynth gateMasks honour vmOut.synthMask so SYNTH_AA / FA /
-    // BIO / CHL / ENZ / RIBO ops still gate what gets built.
+    // only fire when the cell has built the relevant catalyst. The
+    // only genome-controlled metabolic axis is which catalyst/inhibitor
+    // slots get expressed (catSynthMask/inhSynthMask, below) -- the old
+    // SYNTH_AA/FA/BIO/CHL/ENZ/RIBO synthMask bits no longer exist (the
+    // VM only sets BOND/COMPETENCE/PACKAGE on synthMask now).
     const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
     runGenericReactions(c, dtT, ambientLight);
     // Standing transporters across the outer membrane (cell<->world).
