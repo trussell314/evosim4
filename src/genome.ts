@@ -995,7 +995,16 @@ export function summarizeGenome(
 // the same genes but different non-coding filler share this key, so it
 // measures FUNCTIONAL diversity rather than neutral intron drift. A
 // genome with no genes hashes to the empty string.
+//
+// Memoized by genome OBJECT identity: a creature's genome Uint8Array is
+// stable until somatic mutation / fission replaces it with a new array,
+// so per-step (extinction + founder gate) and per-frame (HUD) callers
+// hit the cache instead of re-walking the bytes. Pure memoization --
+// same bytes always hash the same -- so no determinism impact.
+const _codingKeyCache = new WeakMap<Uint8Array, string>();
 export function genomeCodingKey(genome: Uint8Array): string {
+  const cached = _codingKeyCache.get(genome);
+  if (cached !== undefined) return cached;
   let s = "";
   let inGene = false;
   for (let i = 0; i < genome.length; i++) {
@@ -1008,6 +1017,7 @@ export function genomeCodingKey(genome: Uint8Array): string {
     if (b === OP.GENE) { s += "|"; continue; } // back-to-back gene
     s += (b < 16 ? "0" : "") + b.toString(16);
   }
+  _codingKeyCache.set(genome, s);
   return s;
 }
 

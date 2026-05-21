@@ -2263,7 +2263,11 @@ function drawFounderReserve(world: World, c: Creature, x: number, y: number): vo
 // so spawning pays for the whole seed out of the world reserve where
 // possible; the uncovered remainder is the explicit, recorded
 // external input (RX_BIOGENESIS) -- nothing is silently conjured.
-const FOUNDER_SEED_ATP = 40;
+// Bumped 40 -> 80: gene framing made founder genomes larger and spends
+// part of each tick's budget scanning introns + crossing GENE/END, so
+// founders bootstrap a touch slower. A bigger starting ATP buffer gives
+// them more runway to reach a net-positive metabolism before starving.
+const FOUNDER_SEED_ATP = 80;
 const FOUNDER_SEED_MAT: ReadonlyArray<readonly [number, number]> = [
   [CHEM_MEMBRANE, 1], [CHEM_ADP, 5], [CHEM_MRNA, 5], [CHEM_GLU, 10], [CHEM_AA, 0.5],
 ];
@@ -2677,7 +2681,16 @@ function makeCreature(
       adp: 60,
       // Enough mRNA for biosynth to run near full rate from birth
       // (rate scales with mrna/MRNA_REF; the old seed of 1 = 20%).
-      mrna: 5,
+      // Bumped 5 -> 8 as part of the founder "starter machinery" head
+      // start so first-tick biosynth runs strong while the cell is
+      // still blind + bootstrapping.
+      mrna: 8,
+      // Buoyancy aid: a starter pool of O2 (gas, density 0.14) offsets
+      // the dense glucose/mineral load so a fresh founder spawns nearer
+      // neutral buoyancy and doesn't immediately sink into the dark
+      // floor before it can sense + thrust. O2 is also the respiration
+      // electron acceptor, so it's not wasted.
+      o2: 8,
       // Glucose so the cell can respire to *sustain* ATP past the
       // one-shot energy grant. Bumped twice now (10 -> 50 -> 100) to
       // widen the bootstrap window for sense-archetypes: thermo at
@@ -2694,8 +2707,10 @@ function makeCreature(
       // Starter pigment + enzyme pools. Phase 4a made these
       // synthesisable on every cell at baseline; seeding them avoids
       // a tick-1 starvation while the baseline chemistry warms up.
-      chlorophyll: 0.5,
-      enzyme: 0.5,
+      // Bumped 0.5 -> 1.0 ("starter machinery" head start) so a founder
+      // can digest / photosynthesize meaningfully from birth.
+      chlorophyll: 1.0,
+      enzyme: 1.0,
       // Starter receptor pools. The post-bitmask-fix catalyst tax
       // bankrupted sense-dependent archetypes (phototaxis, thermophile,
       // etc.) before they could grow receptors from substrate -- the

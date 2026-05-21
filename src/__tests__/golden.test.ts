@@ -233,7 +233,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // 20% of the remaining deficit toward founderTarget every 7.5s,
     // no particle cap". More founders spawn within the seeded window,
     // moving the fingerprint.
-    const GOLDEN = "512c7663";
+    // Bumped again: founder-foothold seed changes -- FOUNDER_SEED_ATP
+    // 40 -> 80, starter mrna 5 -> 8, chlorophyll/enzyme 0.5 -> 1.0, and
+    // a buoyant O2=8 seed -- shift the seeded run's trajectory.
+    const GOLDEN = "4b265b88";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
