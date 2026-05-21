@@ -4537,13 +4537,11 @@ function runInnerCell(
   // frozen organelleSynthMask), plus catalyst synthesis -- exactly
   // the free-cell metabolic pipeline.
   runGenericReactions(inner, dtT, light);
-  const cm = inner.vmOut.catSynthMask;
-  for (let k = 0; k < CATALYST_COUNT; k++) {
-    if (cm[k]) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
-  }
-  const im = inner.vmOut.inhSynthMask;
-  for (let k = 0; k < CATALYST_COUNT; k++) {
-    if (im[k]) biosynthInhibitor(inner, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
+  {
+    const cl = inner.vmOut.catSynthList, cn = inner.vmOut.catSynthCount;
+    for (let i = 0; i < cn; i++) biosynthCatalyst(inner, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, cl[i]);
+    const il = inner.vmOut.inhSynthList, iN = inner.vmOut.inhSynthCount;
+    for (let i = 0; i < iN; i++) biosynthInhibitor(inner, dtT, INH_SYNTH_VMAX, INH_ATP_COST, il[i]);
   }
   maintenanceDecay(inner, dt);
   toxify(inner, dt);
@@ -5689,15 +5687,12 @@ function updateCreatures(world: World, dt: number): void {
 
     // Generic catalyst synthesis. SYNTH_CAT <id> marks slot id as
     // expressed this tick; each catalyst built is its own protein.
-    const cm = vmOut.catSynthMask;
-    for (let k = 0; k < CATALYST_COUNT; k++) {
-      if (cm[k]) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, k);
-    }
+    // Iterate the compact fired-slot list, not all CATALYST_COUNT slots.
+    const cl = vmOut.catSynthList, cn = vmOut.catSynthCount;
+    for (let i = 0; i < cn; i++) biosynthCatalyst(c, dtT, CAT_SYNTH_VMAX, CAT_ATP_COST, cl[i]);
     // Dual: SYNTH_INH <id> per-slot allosteric inhibitor.
-    const im = vmOut.inhSynthMask;
-    for (let k = 0; k < CATALYST_COUNT; k++) {
-      if (im[k]) biosynthInhibitor(c, dtT, INH_SYNTH_VMAX, INH_ATP_COST, k);
-    }
+    const il = vmOut.inhSynthList, iN = vmOut.inhSynthCount;
+    for (let i = 0; i < iN; i++) biosynthInhibitor(c, dtT, INH_SYNTH_VMAX, INH_ATP_COST, il[i]);
 
     // Structural pools turn over even when nothing else is happening.
     maintenanceDecay(c, dt);

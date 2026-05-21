@@ -373,6 +373,16 @@ export interface VMOutputs {
   // this tick. updateCreatures() runs biosynthInhibitor(slot) for each
   // nonzero entry (dual of catSynthMask -> biosynthCatalyst).
   inhSynthMask: Uint8Array;
+  // Compact lists of the slots that fired this tick (deduped via the
+  // masks above). Consumers iterate these instead of scanning all
+  // CATALYST_COUNT mask entries, and runTick clears only these entries
+  // instead of fill(0)-ing the whole mask -- so the per-cell cost is
+  // O(slots-expressed) (~handful) not O(256). The masks stay for the
+  // O(1) dedup test ("has slot k already fired this tick?").
+  catSynthList: Int32Array;
+  catSynthCount: number;
+  inhSynthList: Int32Array;
+  inhSynthCount: number;
   // Pending genome-length-change request from SPLICE_DUP / SPLICE_DEL.
   // mode 0 = none, 1 = duplicate region, 2 = delete region. Sim consumes
   // this after runTick returns: changing genome length mid-tick would
@@ -405,6 +415,10 @@ export function newOutputs(): VMOutputs {
     bondMarker: -1,
     catSynthMask: new Uint8Array(CATALYST_COUNT),
     inhSynthMask: new Uint8Array(CATALYST_COUNT),
+    catSynthList: new Int32Array(CATALYST_COUNT),
+    catSynthCount: 0,
+    inhSynthList: new Int32Array(CATALYST_COUNT),
+    inhSynthCount: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
     partitionChem: new Int16Array(PARTITION_CAP),
     partitionBias: new Float32Array(PARTITION_CAP),
@@ -443,8 +457,12 @@ export function runTick(
   out.ingestThreshold = Infinity;
   out.synthMask = 0;
   out.bondMarker = -1;
-  out.catSynthMask.fill(0);
-  out.inhSynthMask.fill(0);
+  // Clear only the slots that fired last tick (O(count)), not the whole
+  // CATALYST_COUNT-wide mask.
+  for (let i = 0; i < out.catSynthCount; i++) out.catSynthMask[out.catSynthList[i]] = 0;
+  out.catSynthCount = 0;
+  for (let i = 0; i < out.inhSynthCount; i++) out.inhSynthMask[out.inhSynthList[i]] = 0;
+  out.inhSynthCount = 0;
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
@@ -568,8 +586,16 @@ export function runTick(
         const param = genome[state.pc % L]; state.pc++;
         const kind = kindByte % SYNTH_KIND_COUNT;
         switch (kind) {
-          case SYNTH_KIND.CAT:    out.catSynthMask[param % CATALYST_COUNT] = 1; break;
-          case SYNTH_KIND.INH:    out.inhSynthMask[param % CATALYST_COUNT] = 1; break;
+          case SYNTH_KIND.CAT: {
+            const s = param % CATALYST_COUNT;
+            if (!out.catSynthMask[s]) { out.catSynthMask[s] = 1; out.catSynthList[out.catSynthCount++] = s; }
+            break;
+          }
+          case SYNTH_KIND.INH: {
+            const s = param % CATALYST_COUNT;
+            if (!out.inhSynthMask[s]) { out.inhSynthMask[s] = 1; out.inhSynthList[out.inhSynthCount++] = s; }
+            break;
+          }
           case SYNTH_KIND.BOND:   out.synthMask |= 1 << SYNTH_BIT_BOND; out.bondMarker = param; break;
           case SYNTH_KIND.COMPETENCE: out.synthMask |= 1 << SYNTH_BIT_COMPETENCE; break;
           case SYNTH_KIND.PACKAGE: out.synthMask |= 1 << SYNTH_BIT_PACKAGE; break;
@@ -669,6 +695,13 @@ export function runTick(
       default: break;
     }
   }
+  // Keep the fired-slot lists in ascending slot order so consumers run
+  // catalyst/inhibitor synthesis in the same order as the old full-mask
+  // (0..255) scan -- the order matters under substrate scarcity, so this
+  // keeps the list optimization behaviour-identical. Lists are tiny
+  // (<= instruction budget entries), so the sort is negligible.
+  if (out.catSynthCount > 1) out.catSynthList.subarray(0, out.catSynthCount).sort();
+  if (out.inhSynthCount > 1) out.inhSynthList.subarray(0, out.inhSynthCount).sort();
 }
 
 // Static analysis of a genome: which actions it can perform, which
