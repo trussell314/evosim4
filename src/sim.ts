@@ -123,11 +123,10 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // VM ops per tick per creature. 8 keeps frame cost reasonable at high
 // population. Tests override via world.vmInstrBudget when they need to
 // see the whole default-genome program execute in one step.
-// Raised 8 -> 16 alongside gene framing: a framed genome spends some
-// of each tick's budget scanning introns + crossing GENE/END codons,
-// so the extra headroom keeps the per-tick EXECUTED-op throughput
-// roughly where it was before framing.
-const DEFAULT_VM_INSTR_BUDGET = 16;
+// 8 instructions/tick. (Briefly raised to 16 to offset gene-framing
+// scan/codon overhead, but reverted to 8 for per-step performance --
+// framed genomes just cycle their genes over a few more ticks.)
+const DEFAULT_VM_INSTR_BUDGET = 8;
 
 // Initial particle cap for a fresh world. Fixed (not area-scaled) so the
 // steady-state particle budget is predictable and user-adjustable at
