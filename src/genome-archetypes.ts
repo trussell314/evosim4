@@ -44,6 +44,7 @@ import {
   RX_SLOT_SYNTH_BOND,
   RX_SLOT_SYNTH_REPAIR,
 } from "./sim/reactions";
+import { CHEMOLITH_ENERGY_SLOT, CHEMOLITH_CARBON_SLOT } from "./sim/chemolith";
 
 // INGEST now pops a bond-energy threshold off the stack (engulf any
 // contacted particle with CHEM_BOND_POTENTIAL >= threshold *
@@ -553,6 +554,25 @@ function build(): Archetype[] {
         ["SENSE_CHEMICAL", CHEM_CO2], // own CO2 pool -> excretion amount
         ["EXCRETE", CHEM_CO2],
         ...reproduceWhenGrown(30, "np"),
+      ],
+    },
+    {
+      id: "chemolithoautotroph",
+      label: "vent chemolith",
+      cls: "direct",
+      desc: "Chemosynthetic primary producer of the dark sea floor. Lives on the hydrothermal vent's reduced-fuel seep: an evolved catalyst oxidizes the abiotic fuel for ATP (energy module), a second fixes ambient CO2 into glucose paying with that ATP (carbon module) -- carbon and energy from non-living chemistry, no light, no organic food. Holds the heat-shock chaperone (CHEM_REPAIR) so it survives the scalding vent core where its fuel pools. The energy/carbon catalyst slots are auto-derived from the seeded reaction table (chemolith.ts) -- the very fuels the engine vent emits -- so the niche is the substrate's own chemistry, not a script. Spawn it on the vent.",
+      prog: [
+        ["SYNTH", "CAT", CHEMOLITH_ENERGY_SLOT], // abiotic fuel -> ATP
+        ["SYNTH", "CAT", CHEMOLITH_CARBON_SLOT], // CO2 (+fuel) -> glucose
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_REPAIR],  // heat-shock chaperone -> survive the hot vent
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA], // boost membrane synth (growth)
+        ["PUSH8", ING_DETRITUS], ["INGEST"],     // eat the reduced-fuel particles
+        // Sessile: it parks on the fuel seep and lets fuel come to it.
+        // Homing UP the marker0 gradient drove cells into the scalding
+        // vent core (and burned ATP thrusting) -> extinction; staying put
+        // in the cooler outer fuel ring sustains. The vent's marker0
+        // beacon remains as an evolvable cue for descendants to exploit.
+        ...reproduceWhenGrown(24, "np"),
       ],
     },
   ];

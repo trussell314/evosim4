@@ -12,9 +12,9 @@ import { createWorld, spawnSpeciesInstance, step } from "../sim";
 
 describe("genome archetypes", () => {
   it("the catalogue has unique ids/labels and both classes", () => {
-    expect(ARCHETYPES.length).toBe(20);
-    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(20);
-    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(20);
+    expect(ARCHETYPES.length).toBe(21);
+    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(21);
+    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(21);
     expect(ARCHETYPES.some((a) => a.cls === "direct")).toBe(true);
     expect(ARCHETYPES.some((a) => a.cls === "seed")).toBe(true);
   });
@@ -48,7 +48,10 @@ describe("genome archetypes", () => {
   // predicate. The "seed" parasite/virus are deliberately minimal and
   // exempt (they bank on a host / carrier, not solo viability).
   it("self-sufficient archetypes satisfy viableGenome", () => {
-    const exempt = new Set(["endoparasite", "virus"]);
+    // chemolithoautotroph is sessile: it ingests the vent's stationary
+    // fuel seep without thrusting (viableGenome assumes ingest => must
+    // chase food). Self-sufficient at the vent, just not by that rule.
+    const exempt = new Set(["endoparasite", "virus", "chemolithoautotroph"]);
     for (const a of ARCHETYPES) {
       if (exempt.has(a.id)) continue;
       expect(viableGenome(a.genome), `${a.id} should be viable`).toBe(true);

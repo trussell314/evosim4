@@ -249,7 +249,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // until the first eruption -- Q10 metabolism + dissolution capacity
     // near the floor shift from tick 0. Intended behavior change;
     // determinism + mass-conservation re-verified green.
-    const GOLDEN = "a108afe7";
+    // Bumped again: the vent now seeps a bounded standing pool of reduced
+    // generic fuel + a marker0 beacon near the mouth from t=0 (the
+    // chemolithoautotroph niche), adding particles the seeded run didn't
+    // have. Intended; determinism + mass-conservation green.
+    const GOLDEN = "6df6ec6f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

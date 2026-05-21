@@ -60,7 +60,7 @@ import {
   CHEM_MECHANORECEPTOR, CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
   CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
-  CHEM_BOND, CHEM_REPAIR,
+  CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
 export {
@@ -116,6 +116,7 @@ import {
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
+import { VENT_FUEL_CHEMS } from "./sim/chemolith";
 
 // WorldProfile + makeProfile/resetProfile live in ./sim/profile
 // (imported + re-exported at the top of this file).
@@ -1387,6 +1388,57 @@ function runVent(world: World, dt: number): void {
     if (world.particles.length >= cap) return;
     pushParticle(world, { x, y, z, vx, vy, vz, r, chemId, density, molecules });
   }, blocked);
+  ventFuelSeep(world);
+}
+
+// Continuous reduced-fuel seep: the vent maintains a bounded standing
+// pool of its reduced-generic fuel cocktail (CHEMOLITH's VENT_FUEL_CHEMS)
+// in a zone around the mouth, independent of the eruption cycle -- the
+// always-on chemical analog of the always-on heat. This is what makes a
+// non-photic chemolithoautotroph niche viable in the open world: dense
+// (sinks, pools on the floor) reduced chems that an evolved `SYNTH CAT`
+// energy catalyst can oxidize. Bounded by the standing target so the
+// influx never runs away; topped a little per tick as cells eat it.
+// The seep maintains the reduced-fuel cocktail PLUS a marker0 beacon: a
+// vent-only tracer chemolithoautotrophs home on (SENSE_OUT marker0) to
+// park on the fuel instead of drifting off to starve.
+const VENT_SEEP_CHEMS: number[] = [...VENT_FUEL_CHEMS, CHEM_MARKER0];
+const VENT_FUEL_SET: ReadonlySet<number> = new Set(VENT_SEEP_CHEMS);
+const VENT_FUEL_STANDING = 460;    // particles held in the seep zone
+const VENT_FUEL_ZONE_PX = 150;     // seep/count radius around the mouth
+const VENT_FUEL_DENSITY = 1.25;    // > water: fuel sinks and pools by the vent
+const VENT_FUEL_BATCH_MAX = 32;    // cap emitted per tick (ramp, not dump)
+function ventFuelSeep(world: World): void {
+  const v = world.vent;
+  if (!v || VENT_FUEL_CHEMS.length === 0) return;
+  const seepChems = VENT_SEEP_CHEMS;
+  const cap = effectiveParticleCap(world);
+  if (world.particles.length >= cap) return;
+  const zone2 = VENT_FUEL_ZONE_PX * VENT_FUEL_ZONE_PX;
+  let have = 0;
+  for (const p of world.particles) {
+    if (!VENT_FUEL_SET.has(p.chemId)) continue;
+    const dx = p.x - v.x, dy = p.y - v.y;
+    if (dx * dx + dy * dy < zone2) have++;
+  }
+  let need = VENT_FUEL_STANDING - have;
+  if (need <= 0) return;
+  if (need > VENT_FUEL_BATCH_MAX) need = VENT_FUEL_BATCH_MAX;
+  let rot = world.particles.length;
+  while (need-- > 0 && world.particles.length < cap) {
+    const r = 1 + simRng() * 0.8;
+    pushParticle(world, {
+      x: v.x + (simRng() - 0.5) * VENT_FUEL_ZONE_PX * 1.4,
+      y: v.y - 4 - simRng() * 12,
+      z: world.depth * 0.5 + (simRng() - 0.5) * 10,
+      vx: (simRng() - 0.5) * 12,
+      vy: -12 * simRng(),
+      vz: 0,
+      r,
+      chemId: seepChems[rot++ % seepChems.length],
+      density: VENT_FUEL_DENSITY,
+    });
+  }
 }
 
 
