@@ -12,6 +12,7 @@ import {
   runTick,
   makeRandomViableGenome,
   genomeSynthMask,
+  genomeCodingKey,
   mutateGenome,
   CATALYST_COUNT,
   N_REACTIONS,
@@ -2034,7 +2035,7 @@ export function createWorld(
     ongoingSeeding: false,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
-    liveLineageRoots: new Set(),
+    liveCodingKeys: new Set(),
     nextLineageRoot: 0,
     founderTarget: FOUNDER_TARGET,
     lastFounderTrickleT: -1e9,
@@ -4880,12 +4881,12 @@ export function step(world: World, dt: number): void {
   // (chemistry is single-threaded here) and roll the 60s window.
   RXN_STATS_WORLD = world;
   rollReactionWindow(world);
-  // Snapshot living lineages at the *start* of this step so we can
-  // count lineage extinctions at the end (any lineageRoot that was
-  // alive going in but isn't alive coming out has gone extinct this
-  // step). Includes lineages from cells manually pushed by tests.
-  world.liveLineageRoots.clear();
-  for (const c of world.creatures) world.liveLineageRoots.add(c.lineageRoot);
+  // Snapshot living CODING genomes at the *start* of this step so we
+  // can count genome extinctions at the end (any coding-key alive going
+  // in but not coming out has gone extinct this step). Coding key
+  // ignores introns, so neutral drift doesn't churn the count.
+  world.liveCodingKeys.clear();
+  for (const c of world.creatures) world.liveCodingKeys.add(genomeCodingKey(c.genome));
   advanceDayCycle(world, dt);
   advanceWind(world, dt);
   const p = world.profile;
@@ -4987,29 +4988,28 @@ export function step(world: World, dt: number): void {
     // when the snapshot is taken, nothing is inside rock.
     evacuateRocks(world);
   }
-  // Count lineage extinctions. Any lineageRoot that was alive at the
-  // *start* of this step but isn't alive now has gone extinct in this
-  // tick. A lone lineage dying counts as 1, a full world wipeout
-  // counts as N. Done before top-up so freshly spawned replacement
-  // founders don't show up in the post-set.
-  const currentLineages = new Set<number>();
-  for (const c of world.creatures) currentLineages.add(c.lineageRoot);
-  for (const id of world.liveLineageRoots) {
-    if (!currentLineages.has(id)) world.extinctionCount++;
+  // Count genome extinctions. Any coding genome alive at the *start* of
+  // this step but not now has gone extinct this tick. Done before
+  // top-up so freshly spawned founders don't show up in the post-set.
+  const currentCoding = new Set<string>();
+  for (const c of world.creatures) currentCoding.add(genomeCodingKey(c.genome));
+  for (const key of world.liveCodingKeys) {
+    if (!currentCoding.has(key)) world.extinctionCount++;
   }
 
-  // Top up founding lineages. Each trickle interval, if the live count
-  // is below world.founderTarget, spawn a fraction of the remaining
-  // deficit -- a geometric approach to the target. No resource/particle
-  // cap gates this (the old over-cap throttle is gone).
-  const deficit = Math.max(0, world.founderTarget - currentLineages.size);
+  // Top up immigration. Each trickle interval, if the number of DISTINCT
+  // CODING genomes alive is below world.founderTarget, spawn a fraction
+  // of the remaining deficit -- so founders inject when FUNCTIONAL
+  // diversity collapses (e.g. after a selective sweep), not merely when
+  // founder-ancestry count is low. No resource/particle cap gates this.
+  const deficit = Math.max(0, world.founderTarget - currentCoding.size);
   // Suppress founder spawning until the world is ready. Ramp worlds
   // (production) hold founders back until the one-shot seed ramp has
   // finished filling the pool; legacy/test worlds use the time delay.
   const delayDone = world.useSeedRamp
     ? world.initialSeedDone
     : world.t >= FOUNDER_SPAWN_DELAY_SEC;
-  const wasEmpty = currentLineages.size === 0;
+  const wasEmpty = world.creatures.length === 0;
   // Total extinction bypasses the interval so a fully dead world
   // restarts promptly; otherwise spawn at most once per interval.
   const trickleDue = wasEmpty
@@ -7593,7 +7593,7 @@ function applyWalls(world: World): void {
 // emission ledger are not yet persisted, so reloaded saves restart
 // the vent dormant. Old saves without rock terrain would land cells
 // inside the new rocks, so we invalidate them via the schema bump.
-export const SAVE_SCHEMA = `evosim4:20:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:21:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -7663,7 +7663,7 @@ interface SavedWorld {
   disturbanceUntil: number;
   nextDisturbanceAt: number;
   anchorGenome: number[];
-  liveLineageRoots: number[];
+  liveCodingKeys: string[];
   // UI-controlled visible particle cap. Persisted so the user's
   // chosen budget survives a browser refresh. Optional: older saves
   // without it keep the current/default target.
@@ -7805,7 +7805,7 @@ export function serializeWorld(w: World): string {
     disturbanceUntil: w.disturbanceUntil,
     nextDisturbanceAt: w.nextDisturbanceAt,
     anchorGenome: Array.from(w.anchorGenome),
-    liveLineageRoots: Array.from(w.liveLineageRoots),
+    liveCodingKeys: Array.from(w.liveCodingKeys),
     obstacles: w.obstacles,
     species: speciesList,
     particles: w.particles.map(snapshotParticle),
@@ -7934,7 +7934,7 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.disturbanceUntil = saved.disturbanceUntil;
   world.nextDisturbanceAt = saved.nextDisturbanceAt;
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
-  world.liveLineageRoots = new Set(saved.liveLineageRoots);
+  world.liveCodingKeys = new Set(saved.liveCodingKeys);
   // Terrain is procedural and deterministic-from-fresh; we don't
   // serialize it. Regenerate from the world dimensions instead of
   // restoring any obstacles the save may have carried. (Per project

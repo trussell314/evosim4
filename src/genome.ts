@@ -990,6 +990,27 @@ export function summarizeGenome(
   };
 }
 
+// Coding-only identity hash: the bytes of every GENE..END span (in
+// order, gene boundaries marked), ignoring introns. Two genomes with
+// the same genes but different non-coding filler share this key, so it
+// measures FUNCTIONAL diversity rather than neutral intron drift. A
+// genome with no genes hashes to the empty string.
+export function genomeCodingKey(genome: Uint8Array): string {
+  let s = "";
+  let inGene = false;
+  for (let i = 0; i < genome.length; i++) {
+    const b = genome[i];
+    if (!inGene) {
+      if (b === OP.GENE) { inGene = true; s += "|"; }
+      continue;
+    }
+    if (b === OP.END) { inGene = false; continue; }
+    if (b === OP.GENE) { s += "|"; continue; } // back-to-back gene
+    s += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  return s;
+}
+
 // Gene-aware disassembly. The VM only executes bytes inside a GENE..END
 // span, so the listing mirrors that: GENE/END are flush markers, gene-
 // body ops are indented and operand-decoded, and intron bytes (outside

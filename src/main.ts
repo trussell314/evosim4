@@ -91,7 +91,7 @@ import {
   type InnerCreatureSnapshot,
   type SpeciesSnapshot,
 } from "./sim";
-import { disassemble, walkGenome, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
+import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -3510,17 +3510,19 @@ function updateInspector(): void {
   //                       extinction count.
   // world.species.size would over-count -- it includes extinct
   // species still in the prune grace window.
-  const liveLineages = new Set<number>();
   const liveSpecies = new Set<string>();
+  const liveCoding = new Set<string>();
   for (const c of snapshot.creatures) {
-    liveLineages.add(c.lineageRoot);
     liveSpecies.add(c.speciesKey);
+    liveCoding.add(genomeCodingKey(c.genome));
   }
-  // Top HUD: population-related counts only.
+  // Top HUD: population-related counts only. "genomes" counts distinct
+  // CODING genomes (gene bytes only -- intron drift ignored); "extinct"
+  // is the lifetime count of coding genomes that have died out.
   hudStats.textContent =
     `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
     `species/engulfed=${liveSpecies.size}/${snapshot.engulfedOnlySpeciesCount}  ` +
-    `lineages/extinct=${liveLineages.size}/${snapshot.extinctionCount}  ` +
+    `genomes/extinct=${liveCoding.size}/${snapshot.extinctionCount}  ` +
     `parts=${snapshot.particles.length}/${snapshot.particleTarget}`;
   // Bottom HUD: clock / perf / build, fixed order.
   bottomHud.textContent =
@@ -3565,7 +3567,6 @@ function updateInspector(): void {
   const totalMass = molMass;
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
-  const stackStr = c.vmStack.map((n) => n.toFixed(1)).join(" ");
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   inspector.textContent =
     `${statsLine()}\n` +
@@ -3586,7 +3587,7 @@ function updateInspector(): void {
     `sense: mech=${fmt(m.mechanoreceptor)} thermo=${fmt(m.thermoreceptor)} mag=${fmt(m.magnetoreceptor)}\n` +
     `bond=${fmt(m.bondChem)} repair=${fmt(m.repairChem)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
-    `pc=${c.vmPc}  genome=${c.genome.length}b  stack=[${stackStr}]`;
+    `pc=${c.vmPc}  genome=${c.genome.length}b`;
   disasmBody.textContent = activeDisasm;
 }
 

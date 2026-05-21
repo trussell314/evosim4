@@ -1155,9 +1155,11 @@ export interface World {
   // (every lineage dies at once), but a single lineage going extinct
   // while others survive also counts.
   extinctionCount: number;
-  // Set of lineageRoot ids alive at the end of the previous step.
-  // Used to compute lineage extinctions per step.
-  liveLineageRoots: Set<number>;
+  // Set of distinct CODING-GENOME keys (genomeCodingKey: gene bytes
+  // only, introns ignored) alive at the start of the current step.
+  // Used to count genome extinctions per step and to gate founder
+  // immigration on functional diversity rather than founder ancestry.
+  liveCodingKeys: Set<string>;
   // Monotonic counter used to assign a fresh lineageRoot ID each time
   // a founder is spawned (initial seeding + top-up after extinctions).
   nextLineageRoot: number;
