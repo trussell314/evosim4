@@ -13,6 +13,8 @@ import {
   makeRandomViableGenome,
   genomeSynthMask,
   genomeCodingKey,
+  walkGenome,
+  OP,
   mutateGenome,
   CATALYST_COUNT,
   N_REACTIONS,
@@ -4778,12 +4780,36 @@ function digestInnerIntoHost(inner: Creature, host: Creature): void {
 // scaling with the excess. Net effect: a cell that can pay the
 // excretion ATP cost stays clean; one that can't suffers
 // proportional damage to its structural reserve.
+// Heritable toxin self-resistance, memoized by genome object. A genome
+// that EXPRESSES `EXCRETE co2`/`EXCRETE waste` (in-gene) makes the cell
+// permanently immune to that toxin's toxify -- not just on the ticks the
+// op happens to run (per-tick exemption was too intermittent under the
+// instruction budget). Bit 1 = CO2-resistant, bit 2 = waste-resistant.
+// So an allelopath tolerates its own (and kin's) chemical warfare while
+// susceptible victims that don't produce the toxin still take damage.
+const TOXIN_RESIST_CO2 = 1, TOXIN_RESIST_WASTE = 2;
+const _toxinResistCache = new WeakMap<Uint8Array, number>();
+function genomeToxinResist(genome: Uint8Array): number {
+  const cached = _toxinResistCache.get(genome);
+  if (cached !== undefined) return cached;
+  let mask = 0;
+  walkGenome(genome, (op, _pc, operand) => {
+    if (op !== OP.EXCRETE || operand === undefined) return;
+    const chem = operand % CHEMICAL_COUNT;
+    if (chem === CHEM_CO2) mask |= TOXIN_RESIST_CO2;
+    else if (chem === CHEM_WASTE) mask |= TOXIN_RESIST_WASTE;
+  }, true);
+  _toxinResistCache.set(genome, mask);
+  return mask;
+}
+
 function toxify(c: Creature, dt: number): void {
   const s = c.store; const i = c.idx;
   const co2 = s.m_co2[i], waste = s.m_waste[i], memb = s.m_membrane[i];
+  const resist = genomeToxinResist(c.genome);
   let excess = 0;
-  if (co2 > CO2_EXCRETE_THRESHOLD) excess += co2 - CO2_EXCRETE_THRESHOLD;
-  if (waste > WASTE_EXCRETE_THRESHOLD) excess += waste - WASTE_EXCRETE_THRESHOLD;
+  if (co2 > CO2_EXCRETE_THRESHOLD && !(resist & TOXIN_RESIST_CO2)) excess += co2 - CO2_EXCRETE_THRESHOLD;
+  if (waste > WASTE_EXCRETE_THRESHOLD && !(resist & TOXIN_RESIST_WASTE)) excess += waste - WASTE_EXCRETE_THRESHOLD;
   if (excess <= 0 || memb <= 0) return;
   const want = excess * TOX_DAMAGE_PER_EXCESS_PER_SEC * dt;
   const damage = want < memb ? want : memb;

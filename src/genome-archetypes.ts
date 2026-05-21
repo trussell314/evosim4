@@ -40,6 +40,7 @@ import {
   RX_SLOT_SYNTH_PHOTO_V,
   RX_SLOT_SYNTH_THERMO,
   RX_SLOT_SYNTH_MAGNETO,
+  RX_SLOT_SYNTH_BOND,
 } from "./sim/reactions";
 
 // INGEST now pops a bond-energy threshold off the stack (engulf any
@@ -286,6 +287,36 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "differentiated-colony",
+      label: "germ/soma colony",
+      cls: "seed",
+      desc: "Seed: emergent multicellularity with division of labour from ONE genome. Adheres to clonal kin (greenbeard tag) and pours catalyst into the adhesion-molecule slot (aa+fa->CHEM_BOND) so a cluster physically coheres into a body. At every fission it PARTITIONs glucose almost entirely into the daughter -- so daughters emerge carbon-RICH and act as 'germ' (divide again immediately, spending the dowry), while the carbon-POOR mother drops to a 'soma' role: it keeps foraging and adhering for the colony but does not divide until it has refilled. A single genome reads its own inherited cytoplasm (SENSE_CHEMICAL glu) and switches phenotype -- germ vs soma -- with no engine rule forcing either. The PARTITION primitive (asymmetric determinant segregation) is what no other archetype exercises; the colony-vs-solitary payoff is emergent, so spawn many and let it run.",
+      prog: [
+        // Cohesion: clonal greenbeard tag + boosted CHEM_BOND pool so
+        // bonds form readily and hold (slot 22 = aa+fa -> CHEM_BOND).
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_BOND],
+        ["SYNTH", "BOND", 11], // tag inherited by clones -> kin recognise kin
+        // Every cell can feed; the soma does the colony's foraging while
+        // the germ coasts on its inherited carbon dowry.
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 25),
+        // Asymmetric division: shunt the carbon determinant to the
+        // daughter. An integer bias of 1 squashes to ~+0.5 on the child
+        // share, so the daughter takes nearly all glucose (germ-rich) and
+        // the mother is left carbon-poor (becomes soma until it refills).
+        ["PUSH8", 1],
+        ["PARTITION", CHEM_GLU],
+        // Role switch on the inherited determinant (own glucose pool).
+        ["SENSE_CHEMICAL", CHEM_GLU],
+        ["PUSH8", 12],
+        ["GT"], // glucose-rich -> germ; else fall through to soma (no division)
+        ["JZ", "soma"],
+        ...reproduceWhenGrown(30, "germ"),
+        ["LABEL", "soma"],
+      ],
+    },
+    {
       id: "chloroplast",
       label: "chloroplast",
       cls: "seed",
@@ -447,7 +478,7 @@ function build(): Archetype[] {
       id: "allelopath",
       label: "allelopath",
       cls: "direct",
-      desc: "Chemical warfare: aggressively excretes waste + CO2 to push local ambient over toxify thresholds and damage neighbours.",
+      desc: "Chemical warfare: aggressively excretes WASTE + CO2 to push the local ambient over the toxify thresholds, corroding the membranes of neighbours that absorb the poison. The weapon is survivable only because of heritable toxin self-resistance: a genome that EXPRESSES `EXCRETE <toxin>` is immune to that toxin's toxify (the efflux machinery that exports it also protects the cell), so the allelopath -- and its clonal kin, who carry the same two excrete genes -- tolerate the shared poison while any susceptible victim that does not produce it still takes membrane damage. Excreting CO2 also vents the cell's own respiratory CO2, preventing self-toxification (an earlier waste-only version that stopped venting CO2 self-poisoned and went extinct).",
       prog: [
         ...HET_KIT,
         ["PUSH8", ING_DETRITUS], ["INGEST"],

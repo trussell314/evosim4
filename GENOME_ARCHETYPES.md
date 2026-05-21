@@ -142,16 +142,29 @@ resolved):
    spawn UI so it is not presented as a real strategy. See the
    substrate-gap note in `COLONY_GAPS.md` (predation resistance
    collapses onto body size).
-7. **Greenbeard colony.** `SYNTH BOND <markerM>`; clones bond, gaining
-   crossover at reproduction + cohesion predation-resistance. **Now
-   expressible (substrate complete).** The differentiation gap is
-   closed by other means: `PARTITION` gives genetically identical
-   bonded clones divergent cytoplasm at division, which they read via
+7. **Greenbeard colony.** *Authored* (`id: colony`, label "greenbeard
+   colony"). `SYNTH BOND <markerM>`; clones bond, gaining crossover at
+   reproduction + cohesion predation-resistance. **Now expressible
+   (substrate complete).** The differentiation gap is closed by other
+   means: `PARTITION` gives genetically identical bonded clones
+   divergent cytoplasm at division, which they read via
    `SENSE_CHEMICAL` — so true division of labor is *evolvable*. Caveat:
    the asymmetry is blind (a colony must evolve to act on its own
    divergent pools; it isn't an injected positional ID), and directed
    bond-channel transfer between roles is still leaky-diffusion only
    (COLONY_GAPS #2).
+7b. **Differentiated germ/soma colony.** *Authored* (`id:
+    differentiated-colony`, label "germ/soma colony"). The realization
+    of #7's "division of labor is evolvable" note as an injectable seed:
+    boosts the adhesion-molecule slot (`SYNTH CAT 22`) on top of the
+    greenbeard tag so a cluster physically coheres, then `PARTITION
+    glu`s nearly all glucose into the daughter at each fission. Daughters
+    emerge carbon-RICH and act as germ (divide again, spending the
+    dowry); the carbon-POOR mother reads its own low `SENSE_CHEMICAL glu`
+    and drops to a soma role (keeps foraging + adhering, does not divide
+    until refilled). One genome, two phenotypes, switched on inherited
+    cytoplasm — the only archetype that exercises `PARTITION`. Payoff is
+    emergent over generations.
 
 ## Endosymbiosis candidates
 
@@ -199,9 +212,19 @@ resolved):
 
 ## Signaling / chemical ecology (expressible, under-explored)
 
-13. **Allelopath.** Aggressively `EXCRETE waste/co2` to push local
-    ambient over toxify thresholds and damage neighbors. Emergent
-    chemical warfare.
+13. **Allelopath.** *Authored* (`id: allelopath`). Aggressively
+    `EXCRETE waste + co2` to push the local ambient over the toxify
+    thresholds and corrode the membranes of neighbors that absorb it.
+    Survivable because of **heritable toxin self-resistance**: a genome
+    that *expresses* `EXCRETE <toxin>` is immune to that toxin's toxify
+    (the efflux machinery that exports it also protects the cell — a
+    persistent, genome-derived property, not a per-tick exemption). So
+    the allelopath and its clonal kin (same two excrete genes) tolerate
+    the shared poison while any susceptible victim that does not produce
+    it still takes damage. Emergent chemical warfare with self/kin
+    immunity. (A waste-only variant that stopped venting CO₂
+    self-poisoned on its own respiratory CO₂ and went extinct — venting
+    both is what keeps it viable.)
 14. **Marker beacon / lure.** `EXCRETE marker0`; other lineages
     `SENSE_OUT CHEM_MARKER0` to read the spatial gradient directly
     (Phase 3 universal gradient sense, no SYNTH-receptor needed).
