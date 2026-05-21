@@ -274,7 +274,7 @@ function build(): Archetype[] {
       id: "chloroplast",
       label: "chloroplast",
       cls: "seed",
-      desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle. Sized to be roughly an order of magnitude smaller than its farmer host (mass at maturity ~6 vs host ~30) so a host can carry many plastids without being out-massed by its own organelles -- closer to the chloroplast/plant-cell ratio in nature (~1/500 volume, 10-100 per cell) than the prior mature ~45 mass which made one chloro larger than the host itself.",
+      desc: "Seed: a small photoautotroph that leaks SURPLUS glucose (only once its structural reserve clears a floor, so it doesn't bleed carbon to death free-living). Engulfed, it can become a farmable mutualist organelle. Sized to be roughly an order of magnitude smaller than its farmer host (mass at maturity ~4 vs host ~30, divides a touch faster than the host so plastids aren't diluted out of daughter hosts) so a host can carry many plastids without being out-massed by its own organelles -- closer to the chloroplast/plant-cell ratio in nature (~1/500 volume, 10-100 per cell) than the prior mature ~45 mass which made one chloro larger than the host itself.",
       prog: [
         ...AUTO_KIT,
         // Only shed glucose when structurally healthy -- an
@@ -287,12 +287,14 @@ function build(): Archetype[] {
         ["PUSH8", 2],
         ["EXCRETE", CHEM_GLU], // bleed surplus fixed carbon to the pool
         ["LABEL", "noLeak"],
-        // Internal-division gate scaled to biology: daughter mass ~3,
-        // mature mass ~6 = ~1/5 host volume. Means engulfment is
-        // trivially within the 1.14x radius gate (host at mass 30 is
-        // ~1.7x the chloro radius) and a host can carry several
-        // plastids without being out-massed.
-        ...reproduceWhenGrown(6, "np"),
+        // Internal-division gate scaled to biology: daughter mass ~2,
+        // mature mass ~4 = ~1/7 host volume. Tuned DOWN from 6 to
+        // divide a touch faster than the host so engulfed plastids
+        // aren't diluted out of daughter hosts (at mMem>6 the host
+        // out-divided the chloro and shed it -- chloro-engulfed ended
+        // engSym=0 despite a 1363-cell peak). Engulfment stays
+        // trivially within the 1.14x radius gate.
+        ...reproduceWhenGrown(4, "np"),
       ],
     },
     {
@@ -349,22 +351,24 @@ function build(): Archetype[] {
       id: "mitochondria",
       label: "mitochondria",
       cls: "seed",
-      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, respiration + digestion catalyst boosts, the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) exporting ATP across the vacuolar membrane, and a GLUCOSE TRANSPORTER (SYNTH CAT TRANSPORT_GLU_SLOT) importing glucose from the host pool (real mitos import pyruvate via inner-membrane carriers, not by phagocytosis). With glucose permeability=0, an engulfed mito MUST express the glucose carrier to feed; a free mito has no glucose source (no host, no ambient glu field) and starves -- the obligate-symbiont property modern mitos display (Rickettsia/Wolbachia analog). ATP flows organelle->host whenever the mito is respiration-richer than the host. Sized to be ~1/10 the host's mass (mature mass ~3 vs host ~30).",
+      desc: "Seed: true ATP-exporting endosymbiont (faithful mitochondrion). Minimal soma (low membrane = cheap to engulf), marker0 engulf-lure, respiration + digestion catalyst boosts, the ATP TRANSLOCASE (SYNTH CAT TRANSPORT_ATP_SLOT) exporting ATP across the vacuolar membrane, and a GLUCOSE TRANSPORTER (SYNTH CAT TRANSPORT_GLU_SLOT) importing glucose from the host pool (real mitos import pyruvate via inner-membrane carriers, not by phagocytosis). With glucose permeability=0, an engulfed mito MUST express the glucose carrier to feed; a free mito has no glucose source (no host, no ambient glu field) and starves -- the obligate-symbiont property modern mitos display (Rickettsia/Wolbachia analog). ATP flows organelle->host whenever the mito is respiration-richer than the host. Sized to be ~1/6 the host's mass (mature mass ~5 vs host ~30; division gate tuned to track host fission rather than out-divide and drain the shared glucose pool).",
       prog: [
         ["SYNTH", "CAT", RX_SLOT_RESPIRATION],     // respire faster than baseline
         ["SYNTH", "CAT", RX_SLOT_DIGEST_BIOP],     // digest host biopolymer faster
         ["SYNTH", "CAT", TRANSPORT_ATP_SLOT],      // ATP translocase (ANT analog)
-        ["SYNTH", "CAT", TRANSPORT_GLU_SLOT],      // glucose importer (pyruvate-carrier analog)
-        ["THRUST"], // drift to a host during the free-living phase
+        ["SYNTH", "CAT", TRANSPORT_GLU_SLOT],      // glucose importer (pyruvate-carrier analog)        ["THRUST"], // drift to a host during the free-living phase
         ["PUSH8", 8],
         ["EXCRETE", CHEM_CO2], // respiration waste back to shared pool
         ["PUSH8", 5],
         ["EXCRETE", CHEM_MARKER0], // engulf bait
-        // Scaled to biology: mature mass ~3 = ~1/10 host volume.
-        // A 30-mass host has radius ~2.15x mito's, easily clearing
-        // the 1.14x engulf gate; the host can carry dozens of mitos
-        // before its own size approaches the cap.
-        ...reproduceWhenGrown(3, "np"),
+        // Scaled to biology: daughter mass ~2.5, mature ~5 = ~1/6
+        // host volume. Tuned UP from 3 to slow internal division --
+        // at mMem>3 the mito divided to ~16 per host and drained the
+        // shared glucose pool faster than the host could refill it,
+        // collapsing the symbiosis (mito-engulfed crashed to engSym=0
+        // by t=510 despite a 334-cell peak). Still clears the 1.14x
+        // engulf gate trivially (host radius ~1.8x the mito's).
+        ...reproduceWhenGrown(5, "np"),
       ],
     },
     {
