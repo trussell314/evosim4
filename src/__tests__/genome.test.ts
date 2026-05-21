@@ -84,10 +84,22 @@ function exec(
   const state = opts.state ?? newVMState();
   const sensors = opts.sensors ?? makeSensors();
   const self = opts.self ?? makeSelf();
-  const budget = opts.budget ?? budgetToHalt(bytes);
+  // Gene framing: the VM only executes bytes inside a GENE..END span,
+  // so wrap the raw op sequence in one gene. Entering the gene costs
+  // exactly one budget step (the scan lands on GENE at pc 0), so add 1
+  // to whatever budget the test intended for its ops.
+  const framed = [OP.GENE, ...bytes, OP.END];
+  const budget = (opts.budget ?? budgetToHalt(bytes)) + 1;
   const out = newOutputs();
-  runTick(new Uint8Array(bytes), state, sensors, self, budget, out);
+  runTick(new Uint8Array(framed), state, sensors, self, budget, out);
   return { out, state };
+}
+
+// Wrap a raw op sequence in one gene (GENE..END) -- the only bytes the
+// VM / static decoders treat as expressed. Used directly by tests that
+// call runTick or the static analyzers without going through exec().
+function framed(bytes: number[]): Uint8Array {
+  return new Uint8Array([OP.GENE, ...bytes, OP.END]);
 }
 
 describe("VM stack ops", () => {
@@ -174,23 +186,26 @@ describe("VM control flow", () => {
     expect(exec([OP.PUSH8, 1, OP.JNZ, 2, OP.PUSH8, 5, OP.PUSH8, 9, HALT_MARK]).state.stack).toEqual([9]);
     expect(exec([OP.PUSH8, 0, OP.JNZ, 2, OP.PUSH8, 5, OP.PUSH8, 9, HALT_MARK]).state.stack).toEqual([5, 9]);
   });
-  it("PC wraps past end of genome", () => {
+  it("PC wraps past end of gene and re-enters, clearing the stack", () => {
+    // With per-gene isolation the stack is cleared each time the
+    // scanner re-enters the GENE on wrap, so it can't accumulate
+    // across cycles -- it never grows past one push.
     const state = newVMState();
-    exec([OP.PUSH8, 7], { state, budget: 6 });
-    expect(state.stack.length).toBe(6);
+    const { state: s } = exec([OP.PUSH8, 7], { state, budget: 6 });
+    expect(s.stack.length).toBeLessThanOrEqual(1);
   });
   it("HALT byte (0xFF) is now a NOP -- VM keeps executing past it", () => {
-    // budgetToHalt in the test helper stops counting at HALT, so by
-    // default the body executes up to the HALT and stops there. With
-    // an explicit budget the VM walks straight through.
+    // The 0xFF byte decodes to the default NOP branch, so both PUSH8s
+    // run. exec adds 1 budget for the GENE-entry step, so 3 ops budget
+    // -> 4 counted instructions (GENE + PUSH8 + NOP + PUSH8).
     const state = newVMState();
-    // 3 instructions = PUSH8 1, HALT-as-NOP, PUSH8 2.
     const { out } = exec([OP.PUSH8, 1, HALT_MARK, OP.PUSH8, 2], { state, budget: 3 });
     expect(state.stack).toEqual([1, 2]);
-    expect(out.instructions).toBe(3);
+    expect(out.instructions).toBe(4);
   });
   it("budget caps even without HALT", () => {
-    expect(exec([OP.NOP, OP.NOP, OP.NOP], { budget: 5 }).out.instructions).toBe(5);
+    // exec adds 1 for the GENE-entry step, so budget 5 -> 6 counted.
+    expect(exec([OP.NOP, OP.NOP, OP.NOP], { budget: 5 }).out.instructions).toBe(6);
   });
 });
 
@@ -201,12 +216,12 @@ describe("VM scratch registers (LOAD / STORE)", () => {
   it("registers persist across runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();
-    // Explicit budget = the number of instructions we want to run;
-    // HALT is no longer a yield.
-    runTick(new Uint8Array([OP.PUSH8, 99, OP.STORE, 3]), state, makeSensors(), makeSelf(), 2, out);
-    // Reset stack + pc to simulate a fresh tick; regs deliberately persist.
-    state.stack.length = 0; state.pc = 0;
-    runTick(new Uint8Array([OP.LOAD, 3]), state, makeSensors(), makeSelf(), 1, out);
+    // Explicit budget = ops + 1 for the GENE-entry step.
+    runTick(framed([OP.PUSH8, 99, OP.STORE, 3]), state, makeSensors(), makeSelf(), 3, out);
+    // Reset stack + pc + framing mode to simulate a fresh tick; regs
+    // deliberately persist across ticks.
+    state.stack.length = 0; state.pc = 0; state.executing = false;
+    runTick(framed([OP.LOAD, 3]), state, makeSensors(), makeSelf(), 2, out);
     expect(state.stack).toEqual([99]);
   });
   it("LOAD from an unset register reads zero", () => {
@@ -307,9 +322,9 @@ describe("VM actuators", () => {
   it("output reset between runTick calls", () => {
     const state = newVMState();
     const out = newOutputs();
-    runTick(new Uint8Array([OP.REPRODUCE, HALT_MARK]), state, makeSensors(), makeSelf(), 32, out);
+    runTick(framed([OP.REPRODUCE, HALT_MARK]), state, makeSensors(), makeSelf(), 32, out);
     expect(out.reproduce).toBe(true);
-    runTick(new Uint8Array([OP.NOP, HALT_MARK]), newVMState(), makeSensors(), makeSelf(), 32, out);
+    runTick(framed([OP.NOP, HALT_MARK]), newVMState(), makeSensors(), makeSelf(), 32, out);
     expect(out.reproduce).toBe(false);
     expect(out.thrustX).toBe(0);
     expect(out.thrustY).toBe(0);
@@ -325,33 +340,44 @@ describe("VM actuators", () => {
 
 describe("VM edge cases", () => {
   it("empty genome runs nothing", () => {
-    const { out, state } = exec([]);
+    // A truly empty genome (no GENE codon, length 0) -- the VM returns
+    // immediately. Tested directly since exec() would frame it.
+    const state = newVMState();
+    const out = newOutputs();
+    runTick(new Uint8Array([]), state, makeSensors(), makeSelf(), 5, out);
     expect(out.instructions).toBe(0);
     expect(state.pc).toBe(0);
     expect(state.stack).toEqual([]);
   });
   it("unknown opcodes act as NOP", () => {
-    // budget covers the noop byte + the PUSH8 (2 instructions)
+    // budget covers the noop byte + the PUSH8; exec adds 1 for GENE.
     const { state, out } = exec([0x7F, OP.PUSH8, 9], { budget: 2 });
     expect(state.stack).toEqual([9]);
-    expect(out.instructions).toBe(2);
+    expect(out.instructions).toBe(3);
   });
-  it("state persists across ticks", () => {
-    const genome = new Uint8Array([OP.PUSH8, 7]);
+  it("stack state persists across ticks within a gene", () => {
+    // Two PUSH8 7 in one gene, budget 2/tick. Tick 1 spends a step
+    // entering the GENE then runs the first PUSH8 (stack [7]); tick 2
+    // resumes mid-gene and runs the second PUSH8 (stack [7,7]). The
+    // stack carries across ticks because the gene is NOT re-entered (a
+    // GENE re-entry would clear it -- per-gene isolation).
+    const genome = framed([OP.PUSH8, 7, OP.PUSH8, 7]);
     const state = newVMState();
     const out = newOutputs();
-    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 2, out);
     expect(state.stack).toEqual([7]);
-    runTick(genome, state, makeSensors(), makeSelf(), 1, out);
+    runTick(genome, state, makeSensors(), makeSelf(), 2, out);
     expect(state.stack).toEqual([7, 7]);
   });
-  it("operand-only-byte at end of genome wraps", () => {
-    const { state, out } = exec([OP.PUSH8], { budget: 1 });
-    expect(out.instructions).toBe(1);
-    expect(state.stack).toEqual([OP.PUSH8]);
+  it("a PUSH8 at the end of a gene reads the following byte as operand", () => {
+    // PUSH8 is the last op before END; operand reads don't respect gene
+    // boundaries, so it takes the END codon byte (0x6B) as its operand.
+    const { state } = exec([OP.PUSH8], { budget: 1 });
+    expect(state.stack).toEqual([OP.END]);
   });
   it("negative jumps past start renormalize", () => {
-    expect(exec([OP.JMP, 0xF6], { budget: 5 }).out.instructions).toBe(5);
+    // exec adds 1 for the GENE-entry step, so budget 5 -> 6 counted.
+    expect(exec([OP.JMP, 0xF6], { budget: 5 }).out.instructions).toBe(6);
   });
 });
 
@@ -507,7 +533,7 @@ describe("genome decoding: known byte sequences", () => {
   // effect); CAT and INH go through their own parallel masks.
   describe("genomeSynthMask static synth intent", () => {
     it("[SYNTH BOND][SYNTH PACKAGE] -> BOND and PACKAGE bits set", () => {
-      const g = new Uint8Array([
+      const g = framed([
         OP.SYNTH, SYNTH_KIND.BOND, 0,
         OP.SYNTH, SYNTH_KIND.PACKAGE, 0,
       ]);
@@ -516,8 +542,14 @@ describe("genome decoding: known byte sequences", () => {
       expect(m & (1 << SYNTH_BIT_PACKAGE)).toBeTruthy();
     });
     it("a SYNTH BOND op is detectable in the static mask", () => {
-      const g = new Uint8Array([OP.SYNTH, SYNTH_KIND.BOND, 123]);
+      const g = framed([OP.SYNTH, SYNTH_KIND.BOND, 123]);
       expect(genomeSynthMask(g) & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+    });
+    it("a SYNTH BOND op buried in an INTRON is NOT expressed", () => {
+      // Outside any GENE..END span the op never executes, so the static
+      // mask must ignore it -- the whole point of framing.
+      const g = new Uint8Array([OP.SYNTH, SYNTH_KIND.BOND, 123]);
+      expect(genomeSynthMask(g) & (1 << SYNTH_BIT_BOND)).toBeFalsy();
     });
     it("no SYNTH ops -> empty mask", () => {
       expect(genomeSynthMask(new Uint8Array([OP.THRUST, OP.REPRODUCE]))).toBe(0);
@@ -532,7 +564,7 @@ describe("genome decoding: known byte sequences", () => {
     it("matches the VM's bit for the same well-aligned op", () => {
       const bytes = [OP.SYNTH, SYNTH_KIND.BOND, 0];
       const dyn = exec(bytes).out.synthMask;
-      const stat = genomeSynthMask(new Uint8Array(bytes));
+      const stat = genomeSynthMask(framed(bytes));
       expect(stat & (1 << SYNTH_BIT_BOND)).toBe(dyn & (1 << SYNTH_BIT_BOND));
     });
   });
@@ -628,38 +660,47 @@ describe("VM op coverage: every defined op", () => {
   });
 
   describe("genome self-modification", () => {
+    // Frame the op sequence (the VM only executes inside a gene) and
+    // add 1 budget for the GENE-entry step. The returned genome
+    // therefore has GENE at index 0 and END last -- self-modifying ops
+    // index into THAT framed layout.
     function run(bytes: number[], budget: number): Uint8Array {
-      const g = new Uint8Array(bytes);
+      const g = framed(bytes);
       runTick(g, newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
-        { energy: 100, mass: 0, membrane: 0 }, budget, newOutputs());
+        { energy: 100, mass: 0, membrane: 0 }, budget + 1, newOutputs());
       return g;
     }
     it("POKE_BYTE writes value to genome[idx] in place (pops idx then val)", () => {
       // stack order: push val, push idx; POKE pops idx (top) then val.
-      // Writes 42 into genome[0].
+      // Writes 42 into genome[0] (the GENE codon slot in the framed
+      // layout) -- self-modification can overwrite framing too.
       const g = run([OP.PUSH8, 42, OP.PUSH8, 0, OP.POKE_BYTE], 3);
       expect(g[0]).toBe(42);
     });
     it("POKE_BYTE masks value to 8 bits and wraps idx mod length", () => {
-      const g = run([OP.PUSH8, 1, OP.PUSH8, 100, OP.POKE_BYTE], 3);
-      // idx 100 mod 5 = 0; value 1 & 0xff = 1.
-      expect(g[0]).toBe(1);
+      // framed: [GENE, NOP, PUSH8, 9, PUSH8, 100, POKE, END], length 8.
+      // idx 100 mod 8 = 4 (the second PUSH8 opcode byte), overwritten
+      // with value 9.
+      const g = run([OP.NOP, OP.PUSH8, 9, OP.PUSH8, 100, OP.POKE_BYTE], 4);
+      expect(g.length).toBe(8);
+      expect(g[4]).toBe(9);
     });
     it("SPLICE_DUP requests a duplicate (mode 1), length capped at 32", () => {
       const out = newOutputs();
       // push offset(2) then length(100); SPLICE pops length then offset.
-      runTick(new Uint8Array([OP.PUSH8, 2, OP.PUSH8, 100, OP.SPLICE_DUP]),
+      runTick(framed([OP.PUSH8, 2, OP.PUSH8, 100, OP.SPLICE_DUP]),
         newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
-        { energy: 100, mass: 0, membrane: 0 }, 3, out);
+        { energy: 100, mass: 0, membrane: 0 }, 4, out);
       expect(out.spliceMode).toBe(1);
       expect(out.spliceLength).toBe(32);
-      expect(out.spliceOffset).toBe(2 % 5);
+      // framed genome length is 7; offset 2 mod 7 = 2.
+      expect(out.spliceOffset).toBe(2 % 7);
     });
     it("SPLICE_DEL requests a deletion (mode 2)", () => {
       const out = newOutputs();
-      runTick(new Uint8Array([OP.PUSH8, 1, OP.PUSH8, 3, OP.SPLICE_DEL]),
+      runTick(framed([OP.PUSH8, 1, OP.PUSH8, 3, OP.SPLICE_DEL]),
         newVMState(), { chemConc: new Float32Array(96), gradient: (_i,o)=>{o[0]=0;o[1]=0;} },
-        { energy: 100, mass: 0, membrane: 0 }, 3, out);
+        { energy: 100, mass: 0, membrane: 0 }, 4, out);
       expect(out.spliceMode).toBe(2);
       expect(out.spliceLength).toBe(3);
     });

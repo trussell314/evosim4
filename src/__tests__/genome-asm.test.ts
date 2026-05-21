@@ -56,6 +56,7 @@ describe("genome assembler", () => {
 
   it("a label loop actually iterates the intended number of times", () => {
     const genome = asm([
+      ["GENE"], // VM only executes inside a gene
       ["PUSH8", 5],
       ["STORE", 0], // reg0 = 5
       ["LABEL", "loop"],
@@ -71,6 +72,7 @@ describe("genome assembler", () => {
       ["JNZ", "loop"], // repeat while reg0 != 0
       ["LABEL", "end"],
       ["JMP", "end"], // park (no reg mutation) until budget runs out
+      ["END"],
     ]);
     const st = newVMState();
     runTick(genome, st, bareSensors(), bareSelf(), 5000, newOutputs());

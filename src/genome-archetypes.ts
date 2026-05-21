@@ -136,6 +136,21 @@ function climbParticleGradient(chemId: number, gain: number): Instr[] {
   ];
 }
 
+// Frame a hand-authored archetype program as a single explicit gene
+// (GENE..END) with small intron margins. Founders get the full
+// multi-gene intron-gene-intron layout (makeRandomViableGenome);
+// archetype SEEDS are framed as one gene each. This is behaviour-
+// preserving -- the whole prog still runs as before, the VM just
+// clears the stack once per cycle at the GENE codon -- and explicit
+// (no implicit "un-framed genome = one gene" fallback lives in the
+// VM). Evolved descendants diversify into multiple genes via mutation.
+// Adding the leading bytes shifts every address equally, so asm's
+// relative jump offsets are unchanged and stay in i8 range.
+const INTRON_MARGIN: Instr[] = [["NOP"], ["NOP"]];
+function frameProg(prog: Instr[]): Instr[] {
+  return [...INTRON_MARGIN, ["GENE"], ...prog, ["END"], ...INTRON_MARGIN];
+}
+
 export interface Archetype {
   id: string;
   label: string; // short, for the spawn button
@@ -490,7 +505,7 @@ function build(): Archetype[] {
   ];
   const built: Archetype[] = list.map(
     ({ id, label, desc, cls, prog, uiHidden }) => {
-      const genome = asm(prog);
+      const genome = asm(frameProg(prog));
       assertWellFormed(genome);
       return { id, label, desc, cls, genome, ...(uiHidden ? { uiHidden } : {}) };
     },

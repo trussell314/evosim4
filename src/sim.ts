@@ -122,7 +122,11 @@ const ENERGY_PER_INSTRUCTION = 0.0005;
 // VM ops per tick per creature. 8 keeps frame cost reasonable at high
 // population. Tests override via world.vmInstrBudget when they need to
 // see the whole default-genome program execute in one step.
-const DEFAULT_VM_INSTR_BUDGET = 8;
+// Raised 8 -> 16 alongside gene framing: a framed genome spends some
+// of each tick's budget scanning introns + crossing GENE/END codons,
+// so the extra headroom keeps the per-tick EXECUTED-op throughput
+// roughly where it was before framing.
+const DEFAULT_VM_INSTR_BUDGET = 16;
 
 // Initial particle cap for a fresh world. Fixed (not area-scaled) so the
 // steady-state particle budget is predictable and user-adjustable at
@@ -6394,7 +6398,11 @@ function releaseChemsAsParticles(c: Creature, world: World): void {
 // deliberately untouched. GENOME_MASS_PER_BYTE is the tuning knob: a
 // 24..100b founder pays ~0.5..2 mass (negligible), a multi-thousand-
 // byte runaway pays tens-to-hundreds (crippling).
-export const GENOME_MASS_PER_BYTE = 0.02;
+// Lowered 0.02 -> 0.01 with gene framing: framed genomes carry intron
+// bytes (neutral non-coding length), and the replication tax must stay
+// gentle enough that introns are near-neutral -- otherwise selection
+// would strip the very non-coding space the framing exists to provide.
+export const GENOME_MASS_PER_BYTE = 0.01;
 export function chargeGenomeReplication(parent: Creature, childGenome: Uint8Array): void {
   const halfDemand = 0.5 * GENOME_MASS_PER_BYTE * childGenome.length;
   const aaKey = NAMED_CHEMICALS[CHEM_AA];

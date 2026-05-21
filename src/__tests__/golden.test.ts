@@ -221,7 +221,14 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // membranes, it moves via dedicated transporters (which the
     // substrate models as EXCRETE for active export and INGEST for
     // particle uptake).
-    const GOLDEN = "d38bc451";
+    // Bumped for gene framing: founders are now laid out as
+    // intron-gene-intron-...-gene-intron (each functional token wrapped
+    // in a GENE..END span, separated by random 0-20b introns), the VM
+    // only executes inside genes and clears the stack at each gene
+    // boundary, the instr budget rose 8 -> 16, and the genome
+    // replication tax fell 0.02 -> 0.01/byte. All of that changes the
+    // seeded run's trajectory, so the fingerprint moves.
+    const GOLDEN = "d3b5915e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

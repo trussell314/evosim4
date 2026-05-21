@@ -74,6 +74,18 @@ export const OP = {
   // 0x69 SYNTH -- unified biosynthesis op (kind, param).
   SYNTH:         0x69,
 
+  // Gene framing (start/stop codons). The VM only EXECUTES bytes inside
+  // a GENE..END span; bytes outside (between END and the next GENE, or
+  // before the first GENE) are INTRONS -- skipped, never executed, and
+  // therefore neutral space where indels accumulate without breaking
+  // the cell. This gives the genome a reading frame: an indel inside
+  // one gene frame-shifts only that gene (until its END); the next
+  // GENE re-synchronises. The stack is cleared at every GENE boundary
+  // so a garbled gene cannot corrupt its neighbours (per-gene
+  // isolation). A genome with no GENE codon executes nothing.
+  GENE:          0x6A,
+  END:           0x6B,
+
   // Chemistry sensor. Reads the cell's own pool of chem by id (operand
   // mod CHEMICAL_COUNT). With the K-3 activation pass populating
   // activated_* chems for every modality, this is the only external
@@ -203,10 +215,27 @@ OPERANDS[OP.SYNTH] = 2;
 export function walkGenome(
   genome: Uint8Array,
   visit: (op: number, pc: number, operand: number | undefined) => void | "break",
+  // expressedOnly: mirror the VM's gene framing -- skip intron bytes
+  // (outside any GENE..END span) and don't visit the GENE/END codons
+  // themselves, so callers see exactly the ops that actually EXECUTE.
+  // Default false = walk every byte (used by the disassembler, which
+  // must render introns + codons too). Scanning advances byte-by-byte
+  // (introns aren't parsed for operands), matching runTick.
+  expressedOnly = false,
 ): void {
   let i = 0;
+  let executing = !expressedOnly;
   while (i < genome.length) {
     const op = genome[i];
+    if (expressedOnly && !executing) {
+      if (op === OP.GENE) executing = true;
+      i += 1;
+      continue;
+    }
+    if (expressedOnly) {
+      if (op === OP.END) { executing = false; i += 1; continue; }
+      if (op === OP.GENE) { i += 1; continue; }
+    }
     const operandLen = OPERANDS[op];
     const operand = operandLen >= 1 && i + 1 < genome.length ? genome[i + 1] : undefined;
     if (visit(op, i, operand) === "break") return;
@@ -250,10 +279,15 @@ export interface VMState {
   // Scratch register file. Persists across ticks so a genome can build
   // oscillators, timers, integrators, memory of past sensor values.
   regs: Float32Array;
+  // Gene-framing mode. false = SCANNING (skipping introns, looking for
+  // the next GENE codon); true = EXECUTING (inside a gene, running ops
+  // until END). Persists across ticks because pc does -- a gene can
+  // span tick boundaries when the instruction budget runs out mid-gene.
+  executing: boolean;
 }
 
 export function newVMState(): VMState {
-  return { pc: 0, stack: [], regs: new Float32Array(REG_COUNT) };
+  return { pc: 0, stack: [], regs: new Float32Array(REG_COUNT), executing: false };
 }
 
 export interface VMSensors {
@@ -419,10 +453,45 @@ export function runTick(
 
   for (let n = 0; n < budget; n++) {
     state.pc = ((state.pc % L) + L) % L;
+
+    // SCANNING: outside any gene. Skip the intron run to the next GENE
+    // codon in a single budget step (intron length is therefore nearly
+    // free -- it is "spliced out", not executed), so large neutral
+    // regions don't starve genes of the small per-tick instr budget.
+    if (!state.executing) {
+      let scanned = 0;
+      while (scanned < L && genome[state.pc] !== OP.GENE) {
+        state.pc++;
+        if (state.pc >= L) state.pc = 0;
+        scanned++;
+      }
+      out.instructions++;
+      if (scanned >= L) {
+        // No GENE anywhere in the genome: nothing to express. Don't
+        // spin the remaining budget scanning a gene-less genome.
+        break;
+      }
+      // Landed on a GENE codon: enter the gene. Clear the stack so a
+      // previous (possibly garbled) gene can't leak values into this
+      // one -- per-gene isolation.
+      if (execCounts && state.pc < execCounts.length) execCounts[state.pc]++;
+      state.pc++;
+      state.executing = true;
+      stack.length = 0;
+      continue;
+    }
+
     if (execCounts && state.pc < execCounts.length) execCounts[state.pc]++;
     const op = genome[state.pc];
     state.pc++;
     out.instructions++;
+
+    // END codon: leave the gene, resume scanning for the next one.
+    if (op === OP.END) { state.executing = false; continue; }
+    // A GENE codon encountered while already executing starts a fresh
+    // gene (back-to-back genes with a zero-length intron). Re-clear the
+    // stack for isolation, stay in executing mode.
+    if (op === OP.GENE) { stack.length = 0; continue; }
 
     switch (op) {
       case OP.NOP: break;
@@ -1007,7 +1076,7 @@ export function genomeSynthMask(genome: Uint8Array): number {
     if (kind === SYNTH_KIND.BOND) mask |= 1 << SYNTH_BIT_BOND;
     else if (kind === SYNTH_KIND.COMPETENCE) mask |= 1 << SYNTH_BIT_COMPETENCE;
     else if (kind === SYNTH_KIND.PACKAGE) mask |= 1 << SYNTH_BIT_PACKAGE;
-  });
+  }, true);
   return mask;
 }
 
@@ -1073,6 +1142,8 @@ export function viableGenome(genome: Uint8Array): boolean {
   let hasReproduce = false;
   let hasSense = false;
   let hasThrust = false;
+  // Only EXPRESSED ops count -- a REPRODUCE or SENSE buried in an
+  // intron never executes, so it can't make the genome viable.
   walkGenome(genome, (op) => {
     if (op === OP.INGEST) hasIngest = true;
     else if (op === OP.PREDATE) hasPredate = true;
@@ -1080,7 +1151,7 @@ export function viableGenome(genome: Uint8Array): boolean {
     else if (op === OP.REPRODUCE) hasReproduce = true;
     else if (op === OP.THRUST) hasThrust = true;
     if (!hasSense && SENSE_OPS.has(op)) hasSense = true;
-  });
+  }, true);
   if (!hasReproduce || !hasSense) return false;
   const isHeterotroph = hasIngest || hasPredate || hasEngulf;
   if (isHeterotroph && !hasThrust) return false;
@@ -1105,12 +1176,6 @@ const ADHESION_PREVALENCE: number = (() => {
   return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.50;
 })();
 
-function randomGenomeSize(rng: () => number): number {
-  const u = rng();
-  // Triangular falloff on [16, 100]; clamping handles the math.
-  const k = Math.floor((201 - Math.sqrt(Math.max(0, 38025 - 38024 * u))) / 2) + 1;
-  return Math.max(16, Math.min(100, k));
-}
 
 // Catalyst slots a founder might invest in -- the post-Phase-4a
 // equivalent of "what kind of cell is this." Importing the numeric
@@ -1184,16 +1249,33 @@ export function makeRandomViableGenome(
     const j = Math.floor(rng() * (i + 1));
     const t = tokens[i]; tokens[i] = tokens[j]; tokens[j] = t;
   }
-  const core: number[] = [];
-  for (const tk of tokens) for (const byte of tk) core.push(byte);
-  // Pad with junk to a random total size. Junk goes AFTER the core so
-  // the required ops always decode at a fixed alignment from pc 0
-  // regardless of what the random filler bytes happen to be.
-  const target = Math.max(core.length, randomGenomeSize(rng));
-  const out = new Uint8Array(target);
-  for (let i = 0; i < core.length; i++) out[i] = core[i];
-  for (let i = core.length; i < target; i++) out[i] = Math.floor(rng() * 256);
-  return out;
+  // Lay the genome out as intron-gene-intron-gene-...-intron: each
+  // token becomes its own GENE..END span, separated (and book-ended) by
+  // random-length introns. Introns are neutral non-coding filler (the
+  // VM skips them), so they give mutation a safe place to land and a
+  // reservoir of bytes to exonize later. Founder length runs high
+  // (many introns up to 20b each); selection trims it over generations.
+  const out: number[] = [];
+  const emitIntron = (): void => {
+    const len = Math.floor(rng() * 21); // 0..20 bytes
+    for (let i = 0; i < len; i++) {
+      // Any byte EXCEPT a GENE codon, so the founder's gene structure
+      // is exactly as designed (an accidental GENE in an intron would
+      // start an unintended gene). END in an intron is harmless (the
+      // scanner ignores everything but GENE).
+      let b = Math.floor(rng() * 256);
+      if (b === OP.GENE) b = OP.NOP;
+      out.push(b);
+    }
+  };
+  for (const tk of tokens) {
+    emitIntron();
+    out.push(OP.GENE);
+    for (const byte of tk) out.push(byte);
+    out.push(OP.END);
+  }
+  emitIntron();
+  return new Uint8Array(out);
 }
 
 // Mutation random byte generator. We want the ratio of noop bytes

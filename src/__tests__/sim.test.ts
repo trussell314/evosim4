@@ -53,6 +53,14 @@ import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, ty
 // fully random; kept here so behavior tests stay deterministic without
 // the sim shipping a hand-built genome.
 // CHEM_BIOPOLYMER id = 11 (named chem).
+// Gene framing: the VM only executes bytes inside a GENE..END span.
+// Test genomes are raw op sequences, so wrap each in one gene. (Idempotent
+// guard: a genome already starting with GENE is left alone.)
+function frameTestGenome(bytes: Uint8Array): Uint8Array {
+  if (bytes.length > 0 && bytes[0] === OP.GENE) return bytes;
+  return new Uint8Array([OP.GENE, ...bytes, OP.END]);
+}
+
 const TEST_DEFAULT_GENOME = new Uint8Array([
   OP.SENSE_AMP,
   OP.SENSE_OUT, 11,   // Phase 5: SENSE_OUT pushes [gx, gy] for biopolymer
@@ -210,7 +218,7 @@ function makeCreature(overrides: Partial<{
     energy: overrides.energy ?? 100,
     senseRange: overrides.senseRange ?? 200,
     thrustAccel: overrides.thrustAccel ?? 70,
-    genome: overrides.genome ?? TEST_DEFAULT_GENOME,
+    genome: frameTestGenome(overrides.genome ?? TEST_DEFAULT_GENOME),
     vm: overrides.vm ?? newVMState(),
     color: overrides.color ?? "#ffffff",
     ingestCooldown: overrides.ingestCooldown ?? 0,
