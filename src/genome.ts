@@ -1295,6 +1295,60 @@ const FOUNDER_CAT_SLOTS = [
   11, // synth_membrane (fa-only)
 ] as const;
 
+// Chem ids / reaction-slot numbers used by the founder gene pool below.
+// genome.ts must stay free of the chem-ids/reactions import cycle (same
+// reason as FOUNDER_CAT_SLOTS), so these mirror the canonical constants
+// by hand; genome.test.ts asserts the mapping holds.
+export const FOUNDER_GENE_REFS = {
+  // chem-ids.ts
+  CO2: 1, GLU: 2, FA: 4, MIN: 5, WASTE: 7, MRNA: 10, BIOPOLYMER: 11,
+  ACT_THERMO: 35, MARKER0: 41,
+  // reactions.ts named slots
+  PHOTOSYNTH: 3, SYNTH_AA: 4, SYNTH_FA: 5, SYNTH_CHL: 6, SYNTH_ENZ: 7,
+  SYNTH_MEM: 9, DIGEST_BIOP: 10, SYNTH_THERMO: 20, SYNTH_REPAIR: 23,
+} as const;
+
+// Founder gene pool: each entry is one GENE's worth of op-bytes
+// transcribed from a tested archetype module (genome-archetypes.ts). A
+// founder splices 2..5 of these (with replacement -- may repeat or mix
+// archetypes) into its token list, so it starts with a random handful of
+// real behaviors / metabolic identities drawn from across the
+// archetypes, shuffled in and intron-framed like every other gene. Each
+// gene runs with a cleared stack (per-GENE), so stack effects can't
+// corrupt neighbours and any module is safe to splice anywhere.
+const FG = FOUNDER_GENE_REFS;
+const FOUNDER_GENES: ReadonlyArray<ReadonlyArray<number>> = [
+  // photoautotroph (AUTO_KIT): boost photosynthesis + de-novo amino acid
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.PHOTOSYNTH, OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_AA],
+  // heterotroph (HET_KIT): boost enzyme + biopolymer digestion
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_ENZ, OP.SYNTH, SYNTH_KIND.CAT, FG.DIGEST_BIOP],
+  // forager: climb the biopolymer/detritus gradient
+  [OP.SENSE_OUT, FG.BIOPOLYMER, OP.PUSH8, 30, OP.MUL, OP.SWAP, OP.PUSH8, 30, OP.MUL, OP.SWAP, OP.THRUST],
+  // miner: climb the mineral gradient
+  [OP.SENSE_OUT, FG.MIN, OP.PUSH8, 24, OP.MUL, OP.SWAP, OP.PUSH8, 24, OP.MUL, OP.SWAP, OP.THRUST],
+  // thermophile: build thermoreceptor, thrust ~ act_thermo^3 toward the isotherm
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_THERMO, OP.SENSE_CHEMICAL, FG.ACT_THERMO, OP.DUP, OP.DUP, OP.MUL, OP.MUL, OP.DUP, OP.THRUST],
+  // heat-shock tolerance (thermophile/chemolith): synth repair chaperone
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_REPAIR],
+  // lipogenesis + membrane: boost fatty-acid + membrane synthesis
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_FA, OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_MEM],
+  // primary-producer pigment: chlorophyll synthesis
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_CHL],
+  // predator: strike on contact
+  [OP.PREDATE],
+  // engulfer: take up smaller cells / particles
+  [OP.ENGULF],
+  // allelopath: vent waste + CO2 as a toxin (EXCRETE-ing them also
+  // confers self-resistance to that toxin)
+  [OP.SENSE_CHEMICAL, FG.WASTE, OP.EXCRETE, FG.WASTE, OP.SENSE_CHEMICAL, FG.CO2, OP.EXCRETE, FG.CO2],
+  // beacon: shed a marker0 plume others can sense/home on
+  [OP.SENSE_CHEMICAL, FG.MARKER0, OP.EXCRETE, FG.MARKER0],
+  // differentiated colony: skew mRNA toward the mother at fission
+  [OP.PUSH8, 0xFF, OP.PARTITION, FG.MRNA],
+  // metabolic sensing identity: read the glucose pool
+  [OP.SENSE_CHEMICAL, FG.GLU],
+];
+
 // Viable-by-construction founder genome. After Phase 4a a viable cell
 // just needs REPRODUCE + a SENSE op (+ THRUST for heterotrophs). We
 // assemble those, plus a randomized handful of `SYNTH CAT <slot>`
@@ -1345,6 +1399,14 @@ export function makeRandomViableGenome(
   // (shed) so eDNA flow is a present-but-rare baseline strategy.
   if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]);
   if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.PACKAGE, 0]);
+  // Cross-archetype variation: splice 2..5 genes from the archetype pool
+  // (with replacement, so a founder may repeat a gene or mix several
+  // archetypes). They join the viability tokens before the shuffle, so
+  // they land in random order and get intron-framed like everything else.
+  const nGenes = 2 + Math.floor(rng() * 4); // 2..5
+  for (let i = 0; i < nGenes; i++) {
+    tokens.push(FOUNDER_GENES[Math.floor(rng() * FOUNDER_GENES.length)].slice());
+  }
   // Fisher-Yates shuffle so structure differs founder to founder.
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -1357,8 +1419,12 @@ export function makeRandomViableGenome(
   // reservoir of bytes to exonize later. Founder length runs high
   // (many introns up to 20b each); selection trims it over generations.
   const out: number[] = [];
+  // Per-founder intron budget: larger on average and more variable across
+  // founders than the old fixed 0..20 cap, so founder genome SIZE has a
+  // wide spread (some lean, some sprawling). Selection trims it over time.
+  const intronMax = 16 + Math.floor(rng() * 48); // per-founder cap 16..63
   const emitIntron = (): void => {
-    const len = Math.floor(rng() * 21); // 0..20 bytes
+    const len = Math.floor(rng() * (intronMax + 1)); // 0..intronMax bytes
     for (let i = 0; i < len; i++) {
       // Any byte EXCEPT a GENE codon, so the founder's gene structure
       // is exactly as designed (an accidental GENE in an intron would

@@ -597,6 +597,29 @@ describe("genome decoding: known byte sequences", () => {
         expect(viableGenome(g!)).toBe(true);
       }
     });
+    it("FOUNDER_GENE_REFS mirror the canonical chem/slot constants", async () => {
+      const { FOUNDER_GENE_REFS: F } = await import("../genome");
+      const c = await import("../sim/chem-ids");
+      const r = await import("../sim/reactions");
+      expect(F.CO2).toBe(c.CHEM_CO2);
+      expect(F.GLU).toBe(c.CHEM_GLU);
+      expect(F.FA).toBe(c.CHEM_FA);
+      expect(F.MIN).toBe(c.CHEM_MIN);
+      expect(F.WASTE).toBe(c.CHEM_WASTE);
+      expect(F.MRNA).toBe(c.CHEM_MRNA);
+      expect(F.BIOPOLYMER).toBe(c.CHEM_BIOPOLYMER);
+      expect(F.ACT_THERMO).toBe(c.CHEM_ACT_THERMO);
+      expect(F.MARKER0).toBe(c.CHEM_MARKER0);
+      expect(F.PHOTOSYNTH).toBe(r.RX_SLOT_PHOTOSYNTH);
+      expect(F.SYNTH_AA).toBe(r.RX_SLOT_SYNTH_AA);
+      expect(F.SYNTH_FA).toBe(r.RX_SLOT_SYNTH_FA);
+      expect(F.SYNTH_CHL).toBe(r.RX_SLOT_SYNTH_CHL);
+      expect(F.SYNTH_ENZ).toBe(r.RX_SLOT_SYNTH_ENZ);
+      expect(F.SYNTH_MEM).toBe(r.RX_SLOT_SYNTH_MEM_AAFA);
+      expect(F.DIGEST_BIOP).toBe(r.RX_SLOT_DIGEST_BIOP);
+      expect(F.SYNTH_THERMO).toBe(r.RX_SLOT_SYNTH_THERMO);
+      expect(F.SYNTH_REPAIR).toBe(r.RX_SLOT_SYNTH_REPAIR);
+    });
   });
 });
 

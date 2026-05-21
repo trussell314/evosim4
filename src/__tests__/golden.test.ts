@@ -253,7 +253,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // generic fuel + a marker0 beacon near the mouth from t=0 (the
     // chemolithoautotroph niche), adding particles the seeded run didn't
     // have. Intended; determinism + mass-conservation green.
-    const GOLDEN = "6df6ec6f";
+    // Bumped again: founders now splice 2-5 archetype-derived genes and
+    // use a wider per-founder intron budget (larger, more varied founder
+    // genomes), so the seeded run's founder lineages differ. Intended.
+    const GOLDEN = "ad67ef90";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
