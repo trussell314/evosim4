@@ -14,7 +14,7 @@ import {
   spawnSpeciesInstance,
   type World,
 } from "../src/sim";
-import { ARCHETYPES } from "../src/genome-archetypes";
+import { ARCHETYPES, frameProg } from "../src/genome-archetypes";
 import { asm, type Instr } from "../src/genome-asm";
 import { pushParticle } from "../src/sim/core";
 import { genomeSynthMask } from "../src/genome";
@@ -104,7 +104,7 @@ const VENT = (() => {
 // vent fuel as particles (generic chems ride the biopolymer INGEST
 // gate). NOT a shipped archetype -- a scenario probe demonstrating
 // the substrate already expresses chemolithotrophy.
-const ventProbeGenome = asm([
+const ventProbeGenome = asm(frameProg([
   ["SYNTH", "CAT", 7],  // boost synth_enz (formerly SYNTH ENZ)
   ["SYNTH", "CAT", 10], // boost biopolymer digestion (heterotroph kit)
   ["SYNTH", "CAT", 9],  // boost synth_membrane(aa+fa)
@@ -117,7 +117,7 @@ const ventProbeGenome = asm([
   ["JZ", "np"],
   ["REPRODUCE"],
   ["LABEL", "np"],
-] as Instr[]);
+] as Instr[]));
 
 // Bounded, accounted abiotic source: a sea-floor seep refilled to a
 // fixed standing count (a chemostat -> the influx is bounded, never
@@ -174,10 +174,12 @@ function foragerProg(gate: number): Instr[] {
     ["LABEL", "np"],
   ];
 }
-const FORAGER80 = asm(foragerProg(80));
+// Framed to match how the catalogue builds archetype genomes (the VM
+// only executes inside a GENE..END span -- an unframed genome is inert).
+const FORAGER80 = asm(frameProg(foragerProg(80)));
 {
   const real = ARCHETYPES.find((a) => a.id === "forager")!.genome;
-  const mine = asm(foragerProg(30));
+  const mine = asm(frameProg(foragerProg(30)));
   const same =
     real.length === mine.length && real.every((b, i) => b === mine[i]);
   if (!same) {

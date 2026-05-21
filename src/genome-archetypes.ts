@@ -147,7 +147,7 @@ function climbParticleGradient(chemId: number, gain: number): Instr[] {
 // Adding the leading bytes shifts every address equally, so asm's
 // relative jump offsets are unchanged and stay in i8 range.
 const INTRON_MARGIN: Instr[] = [["NOP"], ["NOP"]];
-function frameProg(prog: Instr[]): Instr[] {
+export function frameProg(prog: Instr[]): Instr[] {
   return [...INTRON_MARGIN, ["GENE"], ...prog, ["END"], ...INTRON_MARGIN];
 }
 
