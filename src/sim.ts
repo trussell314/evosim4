@@ -2133,6 +2133,9 @@ export function createWorld(
     world.t = Math.max(FOUNDER_SPAWN_DELAY_SEC, WATER_FILL_DELAY_SEC) + 1;
     // 60-100% of FOUNDER_TARGET seeded immediately; the top-up loop
     // fills the rest in step().
+    // Build the particle grid so the founder scoop (forParticlesNear)
+    // has a populated index for these initial spawns.
+    buildParticleGrid(world);
     const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + simRng() * 0.4));
     for (let i = 0; i < initialFounders; i++) {
       const f = spawnFounder(world);
@@ -2747,17 +2750,20 @@ function makeCreature(
   // that probably won't survive long; that's the luck of biogenesis.
   const scoopR = FOUNDER_SCOOP_R_MIN + simRng() * (FOUNDER_SCOOP_R_MAX - FOUNDER_SCOOP_R_MIN);
   const rSq = scoopR * scoopR;
-  const ps = world.particles;
   const cstore = c.store; const cidx = c.idx;
-  for (let i = ps.length - 1; i >= 0; i--) {
-    const p = ps[i];
+  // Scan only particles near the spawn point (grid built by the caller
+  // before founder spawning) rather than all of world.particles. The
+  // visitor removes each scooped particle; forParticlesNear's bucket
+  // arrays aren't mutated by removal, and each candidate is liveness-
+  // checked, so multi-remove during the walk is safe.
+  forParticlesNear(world, x, y, scoopR, (p) => {
     const dx = p.x - x;
     const dy = p.y - y;
     const dz = p.z - z;
-    if (dx * dx + dy * dy + dz * dz >= rSq) continue;
+    if (dx * dx + dy * dy + dz * dz >= rSq) return;
     // Skip dense particles so the founder doesn't spawn heavier than
     // water (left in the world for later INGEST/TRANSPORT).
-    if (CHEM_BASE_DENSITY[p.chemId] > FOUNDER_SCOOP_MAX_DENSITY) continue;
+    if (CHEM_BASE_DENSITY[p.chemId] > FOUNDER_SCOOP_MAX_DENSITY) return;
     cstore.chemCols[p.chemId][cidx] += mass(p) / CHEM_MM[p.chemId];
     if (p.molecules) {
       for (const k of MOLECULE_IDS) c.molecules[k] += p.molecules[k];
@@ -2768,8 +2774,8 @@ function makeCreature(
         gcCols[k][cidx] += p.genericChem[k];
       }
     }
-    removeParticleAt(world, i);
-  }
+    removeParticleAt(world, p.idx);
+  });
   updateCreatureRadius(c);
   return c;
 }
@@ -5049,6 +5055,10 @@ export function step(world: World, dt: number): void {
     // 20% of the remaining cap each time (at least one). A freshly
     // empty world seeds a single founder that re-anchors the palette.
     const nSpawn = wasEmpty ? 1 : Math.max(1, Math.ceil(deficit * FOUNDER_TRICKLE_FRACTION));
+    // Refresh the particle grid: this runs after updateCreatures (whose
+    // grid reflects pre-physics positions and has had INGEST removals),
+    // so rebuild it for an accurate founder scoop.
+    buildParticleGrid(world);
     let first: Creature | null = null;
     for (let i = 0; i < nSpawn; i++) {
       const f = spawnFounder(world);
@@ -5628,6 +5638,9 @@ function updateCreatures(world: World, dt: number): void {
   // over every particle. Skip the rebuild when no cells are alive
   // to keep the empty-world steady state cheap.
   if (n > 0) rebuildSensorBins(world);
+  // Particle bucket grid for the per-cell INGEST scan below (replaces a
+  // full world.particles walk per ingesting cell).
+  if (n > 0) buildParticleGrid(world);
   // Snapshot each cell's surface fingerprint up front so ADHERE /
   // ENGULF in the per-cell loop below see consistent values for
   // both self and neighbor (rather than mid-update mixes).
@@ -6123,8 +6136,10 @@ function updateCreatures(world: World, dt: number): void {
       // into per-material flags so a genome can opt in to several types
       // at once. Engulf/predate above remain genome-triggered too.
       if (!ingested) {
-        for (let i = world.particles.length - 1; i >= 0; i--) {
-          const p = world.particles[i];
+        // Only scan particles whose bucket overlaps the cell's body
+        // (forParticlesNear) instead of walking all of world.particles.
+        const cr2 = c.r * c.r;
+        forParticlesNear(world, c.x, c.y, c.r, (p) => {
           const chemId = p.chemId;
           // Bond-energy-threshold engulf: the cell eats any contacted
           // particle whose chemical bond potential clears the
@@ -6135,11 +6150,11 @@ function updateCreatures(world: World, dt: number): void {
           // curated lists -- selectivity is an evolvable scalar and
           // species-specificity is handled post-ingestion by
           // chem-id-addressed metabolism.
-          if (CHEM_BOND_POTENTIAL[chemId] < vmOut.ingestThreshold) continue;
+          if (CHEM_BOND_POTENTIAL[chemId] < vmOut.ingestThreshold) return;
           const dx = p.x - c.x;
           const dy = p.y - c.y;
           const dz = p.z - c.z;
-          if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
+          if (dx * dx + dy * dy + dz * dz < cr2) {
             if (p.molecules) {
               // Molecule-tagged particle: contents go straight into the
               // cell's molecule pool, bypassing digestion. This is corpse
@@ -6165,10 +6180,10 @@ function updateCreatures(world: World, dt: number): void {
             spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
             // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
-            removeParticleAt(world, i);
-            break;
+            removeParticleAt(world, p.idx);
+            return true; // ate one; stop
           }
-        }
+        });
       }
     }
 
@@ -7034,6 +7049,77 @@ function buildCreatureGrid(world: World): void {
     const bucket = CREATURE_BUCKETS[idx];
     if (bucket.length === 0) CREATURE_NONEMPTY[CREATURE_NONEMPTY_N++] = idx;
     bucket.push(c);
+  }
+}
+
+// Per-tick spatial grid of particle refs, mirroring CREATURE_BUCKETS.
+// Lets per-entity scans (INGEST, the founder scoop) query only the
+// particles near a point instead of walking all of world.particles --
+// the old O(cells * particles) pattern. Stores Particle refs; liveness
+// is validated at query time via world.particles[p.idx] === p, so a
+// swap-pop removal between build and query never surfaces a stale ref
+// (the eaten particle's idx no longer maps back to it).
+const PARTICLE_GRID_CELL = 32;
+const PARTICLE_BUCKETS: Particle[][] = [];
+let PARTICLE_NONEMPTY = new Int32Array(0);
+let PARTICLE_NONEMPTY_N = 0;
+let PARTICLE_GRID_COLS = 0;
+let PARTICLE_GRID_ROWS = 0;
+
+function buildParticleGrid(world: World): void {
+  const pcs = PARTICLE_GRID_CELL;
+  PARTICLE_GRID_COLS = Math.max(1, Math.ceil(world.width / pcs));
+  PARTICLE_GRID_ROWS = Math.max(1, Math.ceil(world.height / pcs));
+  const cellCount = PARTICLE_GRID_COLS * PARTICLE_GRID_ROWS;
+  while (PARTICLE_BUCKETS.length < cellCount) PARTICLE_BUCKETS.push([]);
+  if (PARTICLE_NONEMPTY.length < cellCount) PARTICLE_NONEMPTY = new Int32Array(cellCount * 2);
+  for (let i = 0; i < PARTICLE_NONEMPTY_N; i++) PARTICLE_BUCKETS[PARTICLE_NONEMPTY[i]].length = 0;
+  PARTICLE_NONEMPTY_N = 0;
+  const ps = world.particles;
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[i];
+    let bx = Math.floor(p.x / pcs);
+    let by = Math.floor(p.y / pcs);
+    if (!Number.isFinite(bx)) bx = 0;
+    if (!Number.isFinite(by)) by = 0;
+    if (bx < 0) bx = 0; else if (bx >= PARTICLE_GRID_COLS) bx = PARTICLE_GRID_COLS - 1;
+    if (by < 0) by = 0; else if (by >= PARTICLE_GRID_ROWS) by = PARTICLE_GRID_ROWS - 1;
+    const idx = by * PARTICLE_GRID_COLS + bx;
+    const bucket = PARTICLE_BUCKETS[idx];
+    if (bucket.length === 0) PARTICLE_NONEMPTY[PARTICLE_NONEMPTY_N++] = idx;
+    bucket.push(p);
+  }
+}
+
+// Visit live particles whose bin overlaps the (x, y, range) query.
+// Visitor returns true to stop early. Each candidate is liveness-checked
+// against world.particles so removals since the grid build are skipped;
+// the visitor may itself remove particles (removeParticleAt) safely
+// because the bucket arrays are not mutated by removal.
+function forParticlesNear(
+  world: World, x: number, y: number, range: number,
+  visitor: (p: Particle) => boolean | void,
+): void {
+  if (PARTICLE_GRID_COLS === 0) return;
+  const pcs = PARTICLE_GRID_CELL;
+  const span = Math.max(1, Math.ceil(range / pcs));
+  const cx = Math.max(0, Math.min(PARTICLE_GRID_COLS - 1, Math.floor(x / pcs)));
+  const cy = Math.max(0, Math.min(PARTICLE_GRID_ROWS - 1, Math.floor(y / pcs)));
+  const x0 = Math.max(0, cx - span);
+  const x1 = Math.min(PARTICLE_GRID_COLS - 1, cx + span);
+  const y0 = Math.max(0, cy - span);
+  const y1 = Math.min(PARTICLE_GRID_ROWS - 1, cy + span);
+  const live = world.particles;
+  for (let gy = y0; gy <= y1; gy++) {
+    const row = gy * PARTICLE_GRID_COLS;
+    for (let gx = x0; gx <= x1; gx++) {
+      const bucket = PARTICLE_BUCKETS[row + gx];
+      for (let k = 0; k < bucket.length; k++) {
+        const p = bucket[k];
+        if (live[p.idx] !== p) continue; // removed/eaten since the grid build
+        if (visitor(p) === true) return;
+      }
+    }
   }
 }
 

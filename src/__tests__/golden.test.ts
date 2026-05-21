@@ -240,7 +240,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: founders no longer scoop / draw-reserve chems denser
     // than FOUNDER_SCOOP_MAX_DENSITY (buoyancy), changing seed composition.
     // Bumped again: founder seed glucose 100 -> 50 (buoyancy).
-    const GOLDEN = "70d97869";
+    // Bumped again: INGEST + founder scoop now use the particle bucket
+    // grid (forParticlesNear); the bin/order scan eats a different
+    // particle when several are in range, shifting the trajectory.
+    const GOLDEN = "7977e25f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
