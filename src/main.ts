@@ -1759,7 +1759,7 @@ parWrap.append(parTitle, parMinus, parValue, parPlus);
 gWorld.append(foundersBtn, seedingBtn, capWrap, parWrap);
 
 // ---- view: overlay / density sources / material / grid ----
-type HeatmapMode = "off" | "temp" | "density";
+type HeatmapMode = "off" | "temp" | "density" | "health" | "reproduce";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
@@ -1769,7 +1769,7 @@ const SELECT_CSS =
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay";
 overlaySelectEl.style.cssText = SELECT_CSS;
-for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"]] as [HeatmapMode, string][]) {
+for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"], ["health", "overlay: cell health"], ["reproduce", "overlay: reproduce readiness"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
   o.value = val; o.textContent = txt; overlaySelectEl.appendChild(o);
 }
@@ -2653,6 +2653,41 @@ function drawHeatmap(): void {
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     ctx.font = UI_CANVAS_FONT;
     ctx.fillText("heatmap: temperature (cold blue → warm red)", 8, surfaceY + 14);
+    return;
+  }
+  if (heatmapMode === "health" || heatmapMode === "reproduce") {
+    // Per-cell metric (cellHealth / reproduceReadiness, the same calcs the
+    // inspector meters use) averaged over the cells in each heatmap bin.
+    const isHealth = heatmapMode === "health";
+    const sum = new Float32Array(cols * rows);
+    const cnt = new Float32Array(cols * rows);
+    for (const c of snapshot.creatures) {
+      const v = isHealth ? cellHealth(c) : reproduceReadiness(c.genome, c);
+      if (v === null) continue; // no reproduce gate -> excluded from the avg
+      const cx = Math.floor(c.x / cell);
+      const cy = Math.floor((c.y - surfaceY) / cell);
+      if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+      const i = cy * cols + cx;
+      sum[i] += Math.max(0, Math.min(1, v));
+      cnt[i] += 1;
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const i = r * cols + c;
+        if (cnt[i] <= 0) continue;
+        const avg = sum[i] / cnt[i];
+        ctx.fillStyle = isHealth ? healthColor(avg) : reproduceColor(avg);
+        ctx.fillRect(c * cell, surfaceY + r * cell, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = UI_CANVAS_FONT;
+    ctx.fillText(
+      isHealth ? "overlay: avg cell health (red → green)"
+               : "overlay: avg reproduce readiness (violet → green)",
+      8, surfaceY + 14,
+    );
     return;
   }
   if (heatmapMode === "density") {
@@ -4409,6 +4444,17 @@ function meterHtml(label: string, frac: number, color: string): string {
 // Health bar color shifts red->amber->green with the value.
 function healthColor(frac: number): string {
   return frac < 0.25 ? "#d0524c" : frac < 0.6 ? "#d0a24c" : "#4caf50";
+}
+
+// Reproduce-readiness ramp: dim violet (far from the division gate) ->
+// bright green (ready to divide). Distinct from the red->green health
+// ramp so the two overlays read differently at a glance.
+function reproduceColor(frac: number): string {
+  const f = frac < 0 ? 0 : frac > 1 ? 1 : frac;
+  const r = Math.round(120 - 60 * f);
+  const g = Math.round(60 + 180 * f);
+  const b = Math.round(160 - 80 * f);
+  return `rgb(${r},${g},${b})`;
 }
 
 function reproduceReadiness(genome: Uint8Array, c: CellVals): number | null {
