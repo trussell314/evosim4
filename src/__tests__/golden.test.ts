@@ -289,7 +289,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // (photophosphorylation rate 6->16, matching respiration throughput)
     // and fermentation re-tuned toward realism (+4@4 -> +2@1.5, aerobic
     // advantage 2.5:1 -> 5:1). Intended; determinism + mass re-verified.
-    const GOLDEN = "99bd7d28";
+    // Bumped again: FOUNDER_TARGET 50->10 (cap distinct founder lineages
+    // at 10) and ongoingSeeding now defaults true (resources keep
+    // replenishing). Intended.
+    const GOLDEN = "73dbedba";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

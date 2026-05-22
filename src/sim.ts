@@ -2193,7 +2193,7 @@ export function createWorld(
     stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
     rxnStats: newRxnStats(),
     foundersEnabled: true,
-    ongoingSeeding: false,
+    ongoingSeeding: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
     liveCodingKeys: new Set(),
@@ -2315,7 +2315,9 @@ export function createWorld(
 // founder spawn is now deferred to the same top-up path (gated by
 // FOUNDER_SPAWN_DELAY_SEC below), so there's no separate "initial
 // batch" constants any more.
-const FOUNDER_TARGET = 50;
+// Cap of 10 distinct founder-derived coding lineages: once 10+ such
+// species are alive, the top-up stops spawning new founders.
+const FOUNDER_TARGET = 10;
 // Active immigration model. Each trickle interval, if the live lineage
 // pool is below FOUNDER_TARGET, spawn the ENTIRE remaining deficit
 // (founderTarget - live) so the pool is topped straight back to the cap.

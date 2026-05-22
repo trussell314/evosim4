@@ -1687,12 +1687,12 @@ function syncFoundersBtn(on: boolean): void {
 // Ongoing resource seeding. Off by default: the one-shot startup seed
 // (the "initial period") always runs regardless; turning this on
 // resumes periodic resource replenishment toward the cap afterward.
-let seedingOn = false;
+let seedingOn = true;
 const seedingBtn = mkBtn(
-  "seeding off",
-  "Keep dumping resources periodically after the initial seed period (the initial period always happens; default off = closed system after startup)",
+  "seeding on",
+  "Keep dumping resources periodically after the initial seed period (the initial period always happens; default on = resources keep replenishing so the world runs indefinitely)",
 );
-setBtn(seedingBtn, false, T_GREEN);
+setBtn(seedingBtn, true, T_GREEN);
 seedingBtn.addEventListener("click", () => {
   seedingOn = !seedingOn;
   seedingBtn.textContent = seedingOn ? "seeding on" : "seeding off";

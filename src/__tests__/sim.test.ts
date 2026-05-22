@@ -275,8 +275,8 @@ describe("createWorld", () => {
     // the live count lands below the cap but well populated.
     expect(w.particles.length).toBeGreaterThan(w.particleTarget * 0.4);
     expect(w.particles.length).toBeLessThanOrEqual(w.particleTarget);
-    expect(w.creatures.length).toBeGreaterThanOrEqual(30);
-    expect(w.creatures.length).toBeLessThanOrEqual(50);
+    expect(w.creatures.length).toBeGreaterThanOrEqual(5);
+    expect(w.creatures.length).toBeLessThanOrEqual(10);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
@@ -400,10 +400,10 @@ describe("createWorld", () => {
 
   it("registers each initial founder as its own species (no parents)", () => {
     const w = createWorld(800, 600);
-    // 5-10 founders means 5-10 species (each random genome is its
-    // own root). Founders are at firstSeen=0 with no parent.
-    expect(w.species.size).toBeGreaterThanOrEqual(30);
-    expect(w.species.size).toBeLessThanOrEqual(50);
+    // FOUNDER_TARGET=10 -> a 6-10 founder cohort, each random genome its
+    // own root. Founders are at firstSeen=0 with no parent.
+    expect(w.species.size).toBeGreaterThanOrEqual(5);
+    expect(w.species.size).toBeLessThanOrEqual(10);
     for (const sp of w.species.values()) {
       // Founders enter at world creation time. createWorld in the
       // test path bumps w.t past the warmup delays before spawning,
