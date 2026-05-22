@@ -4499,7 +4499,14 @@ function readinessInGene(
   const covering = guards.filter((g) => reproPc >= g.start && reproPc < g.end);
   if (covering.length === 0) return 1; // reflexive: always ready
   let r = 1;
-  for (const g of covering) if (g.prog) r = Math.min(r, g.prog());
+  for (const g of covering) {
+    // A guard whose condition we couldn't evaluate (prog undefined)
+    // means the gate stack underflowed or chained ops this symbolic
+    // pass can't model -- i.e. a mutation-broken gate. The real VM
+    // computes 0 there and the JZ skips REPRODUCE, so it is NOT ready:
+    // count it as blocking instead of leaving readiness at 100%.
+    r = Math.min(r, g.prog ? g.prog() : 0);
+  }
   return r;
 }
 
