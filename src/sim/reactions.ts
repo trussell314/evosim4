@@ -428,14 +428,12 @@ function installNamedReactions(out: Reaction[]): void {
   // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11 biop=12 memb=13.
   // Energy reactions: no mrnaScale (these aren't protein synthesis).
   out[0] = mk([CHEM_GLU, CHEM_O2], [1, 1], [CHEM_CO2], [2], +10, 16);                          // aerobic: glu+o2 -> 2 co2 + 10 atp
-  // Anaerobic glycolysis: the ONLY O2-free ATP route, so it's what a
-  // cell in dark, anoxic water (where neither betaOx nor
-  // photophosphorylation can fire) must live on. Buffed +2->+4 ATP and
-  // rate 1.5->4 so it's a viable fallback strategy (still far below
-  // aerobic glu+o2's 10@16, so cells prefer respiration when O2 is
-  // present, but anaerobes / deep detritivores can now actually subsist
-  // on fermented glucose from digested necromass).
-  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +4, 4);                     // ferment: glu -> 0.5 co2 + 0.5 waste + 4 atp
+  // Anaerobic glycolysis: the only O2-free ATP route. Kept deliberately
+  // poor (+2 ATP vs aerobic's +10 = 5:1, toward nature's ~15:1 aerobic
+  // advantage) so anaerobic coasting can't rival autotrophy/respiration
+  // -- there must be real energetic pressure to be aerobic. It's still a
+  // last-resort lifeline in anoxic pockets, not a comfortable strategy.
+  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
   out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
   // Photosynth: requires chlorophyll molecule (mandatory multiplier).
   // vmax 1.2 -> 5.0, DERIVED (not guessed) from the glu mass balance:
@@ -541,9 +539,16 @@ function installNamedReactions(out: Reaction[]): void {
   // chl pool (chlScale) for an autocatalytic takeoff. Gated only on
   // carrying chlorophyll (gateMask 0), exactly like out[3], so
   // autotrophy stays emergent from the genome's SYNTH_CHL.
-  // rate 4 -> 6: thicken the light-driven ATP supply so an ignited but
-  // seedless cell runs a real surplus (covers upkeep + growth + fission),
-  // not just break-even. With the rest of the energy pass this is what
-  // lets a lineage sustain itself once the founder seed is spent.
-  out[25] = mk([], [], [], [], +6, 6, { lightIn: 1, chlScale: true, surfaceScale: true });
+  // rate -> 16 (matching aerobic respiration's throughput). In nature
+  // photosynthesis is the dominant, SURPLUS-generating primary input --
+  // a photoautotroph in light fixes far more energy than it needs. The
+  // model had it inverted: photophosphorylation topped out near ~1.3
+  // ATP/s (barely upkeep) while fuel-burning ran ~100x faster. At 16 a
+  // typical photic cell (chl~0.68 -> ~0.34 of CHL_REF=2, light~0.7) nets
+  // ~3.4 ATP/s -- a real surplus over the ~1.5/s upkeep -- and a cell
+  // that invests in chlorophyll (-> chl/CHL_REF=1) gets the full ~10
+  // ATP/s, so autotrophy stays emergent (chl still pays) but viable.
+  // Self-limiting: output is capped by available ADP, so it can't run
+  // away once the ATP pool fills.
+  out[25] = mk([], [], [], [], +6, 16, { lightIn: 1, chlScale: true, surfaceScale: true });
 }

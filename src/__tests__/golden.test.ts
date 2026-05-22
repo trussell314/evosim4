@@ -285,7 +285,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: energy-economy tuning pass -- photophosphorylation
     // rate 4->6, photosynthesis rate 5->6.5, reproduce threshold range
     // 8..47 -> 4..16, membrane decay 0.005->0.003. Intended.
-    const GOLDEN = "9ca01db3";
+    // Bumped again: photosynthesis made genuinely surplus-generating
+    // (photophosphorylation rate 6->16, matching respiration throughput)
+    // and fermentation re-tuned toward realism (+4@4 -> +2@1.5, aerobic
+    // advantage 2.5:1 -> 5:1). Intended; determinism + mass re-verified.
+    const GOLDEN = "99bd7d28";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
