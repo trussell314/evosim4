@@ -1304,6 +1304,11 @@ export interface World {
   // Empty for worlds without terrain.
   windExposureFromLeft?: Float32Array;
   windExposureFromRight?: Float32Array;
+  // Per-column wave-train spatial origin (reset at surface-breaching
+  // rock edges) so the lee re-forms waves instead of phase-locking to
+  // the windward train. Direction-paired like the exposure maps.
+  waveOriginFromLeft?: Float32Array;
+  waveOriginFromRight?: Float32Array;
   // Per-region effective temperature (state-bearing field, stepped by
   // sampleRegionTemps each tick: diffuses neighbour heat, relaxes
   // toward the analytical baseline temperatureAt, integrates vent

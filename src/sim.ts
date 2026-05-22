@@ -998,6 +998,13 @@ export interface WorldEnv {
   wind: number;
   windExposureFromLeft?: Float32Array;
   windExposureFromRight?: Float32Array;
+  // Per-column wave-train spatial origin: the x a surface wave "starts"
+  // from for that column, reset to the downwind edge of each
+  // surface-breaching rock so the lee re-forms its own waves instead of
+  // staying phase-locked to (and appearing to pass straight through) the
+  // windward train. Direction-paired like the exposure maps.
+  waveOriginFromLeft?: Float32Array;
+  waveOriginFromRight?: Float32Array;
   // Optional vent state. WorldEnv is the narrow slice that helpers
   // like temperatureAt see; vents contribute heat through this so the
   // helper doesn't need a full World.
@@ -1030,6 +1037,13 @@ export function windExposureAt(world: WorldEnv, x: number): number {
   return map[ix];
 }
 
+export function waveOriginAt(world: WorldEnv, x: number): number {
+  const map = world.wind >= 0 ? world.waveOriginFromLeft : world.waveOriginFromRight;
+  if (!map || map.length === 0) return 0;
+  const ix = Math.max(0, Math.min(map.length - 1, Math.floor(x)));
+  return map[ix];
+}
+
 export function surfaceYAt(world: WorldEnv, x: number): number {
   const t = world.t;
   // Amplitude derives from wind magnitude and per-column shelter.
@@ -1041,6 +1055,10 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   // Wave propagation direction follows wind sign: positive wind blows
   // right, so waves travel +x; negative wind flips the time term.
   const dir = world.wind >= 0 ? 1 : -1;
+  // Spatial phase is measured from the wave origin for this column (reset
+  // at each surface-breaching rock), so the lee re-forms its own train
+  // instead of a single global sine sweeping straight through the rock.
+  const xr = x - waveOriginAt(world, x);
   const kS = (2 * Math.PI) / world.surfaceLength;
   const wS = (2 * Math.PI) / world.surfacePeriod;
   const kL = (2 * Math.PI) / world.swellLength;
@@ -1049,16 +1067,16 @@ export function surfaceYAt(world: WorldEnv, x: number): number {
   const wU = (2 * Math.PI) / world.updraftPeriod;
 
   // Main gravity wave.
-  let dy = A * Math.sin(kS * x - dir * wS * t);
+  let dy = A * Math.sin(kS * xr - dir * wS * t);
   // Off-rate harmonics; irrational frequency ratios + phase offsets
   // keep the surface from visibly repeating.
-  dy += 0.45 * A * Math.sin(1.7 * kS * x - dir * 1.3 * wS * t + 0.6);
-  dy += 0.25 * A * Math.sin(3.1 * kS * x + dir * 2.1 * wS * t + 1.4);
+  dy += 0.45 * A * Math.sin(1.7 * kS * xr - dir * 1.3 * wS * t + 0.6);
+  dy += 0.25 * A * Math.sin(3.1 * kS * xr + dir * 2.1 * wS * t + 1.4);
   // Longer swell contribution.
-  dy += 0.7 * A * Math.sin(kL * x + dir * 0.4 * wL * t);
+  dy += 0.7 * A * Math.sin(kL * xr + dir * 0.4 * wL * t);
   // Updraft coupling -- where updraft is pushing water up, the
   // surface bulges up.
-  dy -= 0.8 * A * Math.sin(kU * x + wU * t);
+  dy -= 0.8 * A * Math.sin(kU * xr + wU * t);
   return world.surfaceY + dy;
 }
 
@@ -1329,6 +1347,32 @@ export function generateObstacles(world: World): void {
   };
   world.windExposureFromLeft = buildExposureMap(true);
   world.windExposureFromRight = buildExposureMap(false);
+
+  // Wave-origin maps: the spatial phase reference for each column. As the
+  // wave train sweeps in from the upwind edge, every surface-breaching
+  // rock resets the origin to its own (downwind) edge, so leeward water
+  // re-forms its own waves from the rock rather than continuing the
+  // windward phase. Without this the surface is one global sine and a
+  // crest appears to translate straight through a rock.
+  const buildWaveOrigin = (fromLeft: boolean): Float32Array => {
+    const m = new Float32Array(cliffHeight.length);
+    if (fromLeft) {
+      let origin = 0;
+      for (let x = 0; x < cliffHeight.length; x++) {
+        if (cliffHeight[x] > 0) origin = x; // tracks to the rock's far edge
+        m[x] = origin;
+      }
+    } else {
+      let origin = cliffHeight.length - 1;
+      for (let x = cliffHeight.length - 1; x >= 0; x--) {
+        if (cliffHeight[x] > 0) origin = x;
+        m[x] = origin;
+      }
+    }
+    return m;
+  };
+  world.waveOriginFromLeft = buildWaveOrigin(true);
+  world.waveOriginFromRight = buildWaveOrigin(false);
 
   // Vent: anchor it at the normalized VENT_ORIGIN inside the seafloor
   // notch. Per-world vent state (next eruption time, current phase)
@@ -8677,6 +8721,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     wind: world.wind,
     windExposureFromLeft: world.windExposureFromLeft,
     windExposureFromRight: world.windExposureFromRight,
+    waveOriginFromLeft: world.waveOriginFromLeft,
+    waveOriginFromRight: world.waveOriginFromRight,
     vent: world.vent ? { ...world.vent } : undefined,
     particleTarget: world.particleTarget,
     parallelMin: world.parallelMin,
