@@ -263,7 +263,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // particle in reach now eats a bite of its region's reserve pool, so
     // cells access cap-overflow mass that used to sit inaccessible.
     // Intended; determinism + mass-conservation re-verified green.
-    const GOLDEN = "41cadf7c";
+    // Bumped again: particle cap default 2500 -> 1000 (collision perf;
+    // overflow lives in now-edible reserve), and reservePass promotion
+    // spreads visible particles proportional to each region's reserve
+    // share instead of draining in region order. Intended.
+    const GOLDEN = "1cd667a2";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

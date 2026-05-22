@@ -285,14 +285,14 @@ describe("createWorld", () => {
   it("initial particle target is a fixed cap, independent of world area", () => {
     const small = createWorld(800, 600);
     const big = createWorld(1600, 1200);
-    expect(small.particleTarget).toBe(2500);
-    expect(big.particleTarget).toBe(2500);
+    expect(small.particleTarget).toBe(1000);
+    expect(big.particleTarget).toBe(1000);
   });
 
   it("resizeWorld does not rescale the particle target", () => {
     const w = createWorld(800, 600);
     resizeWorld(w, 1600, 1200);
-    expect(w.particleTarget).toBe(2500);
+    expect(w.particleTarget).toBe(1000);
   });
 
   it("setParticleTarget changes the cap, clamps, and resyncs spawn rate", () => {

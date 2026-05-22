@@ -134,8 +134,12 @@ const DEFAULT_VM_INSTR_BUDGET = 8;
 // Initial particle cap for a fresh world. Fixed (not area-scaled) so the
 // steady-state particle budget is predictable and user-adjustable at
 // runtime via setParticleTarget(). Resizing the window no longer
-// recomputes it.
-const INITIAL_PARTICLE_TARGET = 2500;
+// recomputes it. Lowered 2500 -> 1000 now that reserve mass is edible
+// (cells eat their region's reserve directly), so the cap-overflow food
+// stays in play without rendering as collidable particles -- the
+// per-particle collision passes are ~60% of step time and scale with
+// this count, so halving+ it is the bulk of the perf win.
+const INITIAL_PARTICLE_TARGET = 1000;
 // Bounds + step for runtime cap adjustment. Max stays well under
 // PARTICLE_STORE_PREALLOC_CAP so the over-cap headroom never overflows
 // the preallocated store.
@@ -3896,8 +3900,15 @@ function reservePass(world: World): void {
     }
   }
 
-  // --- Promote per-chem deficit (want[k] > visN[k]) from that
-  // chem's reserve, drawing mass region-locally.
+  // --- Promote per-chem deficit (want[k] > visN[k]) from that chem's
+  // reserve, spread across regions PROPORTIONAL to each region's reserve
+  // share so the visible particles are a spatially-honest sample of where
+  // the food actually is. (A plain drain-in-order fill clustered the few
+  // visible particles into the low-index regions at a low cap, leaving
+  // SENSE_OUT gradients blind to reserve-rich regions elsewhere.) Each
+  // region is capped at ~ceil(deficit * its reserve share), so a region
+  // with any reserve still places at least one particle until the budget
+  // runs out, and food-dense regions get proportionally more.
   for (let k = 0; k < AMBIENT_STRIDE; k++) {
     let need = want[k] - visN[k];
     if (need <= 0) continue;
@@ -3905,13 +3916,18 @@ function reservePass(world: World): void {
     // reserve is AMOUNT; one PRECIP particle drains amountPer moles.
     const amountPer = (density * volPer) / CHEM_MM[k];
     if (amountPer <= 0) continue;
+    let rmassK = 0;
+    for (let ri = 0; ri < nReg; ri++) rmassK += res[ri * AMBIENT_STRIDE + k];
+    if (rmassK < amountPer) continue;
+    const deficit = need;
     for (let ri = 0; ri < nReg && need > 0; ri++) {
       const ak = ri * AMBIENT_STRIDE + k;
       let avail = res[ak];
       if (avail < amountPer) continue;
+      let regionCap = Math.ceil(deficit * (avail / rmassK));
       const rx = ri % cols, ry = (ri / cols) | 0;
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
-      while (avail >= amountPer && need > 0) {
+      while (avail >= amountPer && need > 0 && regionCap > 0) {
         const px = Math.min(world.width - 1, x0 + simRng() * REGION_PX);
         let py = y0 + simRng() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
@@ -3922,6 +3938,7 @@ function reservePass(world: World): void {
         });
         avail -= amountPer;
         need--;
+        regionCap--;
       }
       res[ak] = avail;
     }
