@@ -271,7 +271,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // (as particle-equivalents) into the sensor bins, so cells sense
     // total rendered+reserve food -- foraging trajectories shift.
     // Intended; determinism re-verified green.
-    const GOLDEN = "e2b8b2a5";
+    // Bumped again: founder top-up now fills the ENTIRE remaining deficit
+    // to FOUNDER_TARGET each trickle (was 20% of the deficit), so more
+    // founders spawn per interval -> different RNG draw sequence. Intended.
+    const GOLDEN = "e38e65cf";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

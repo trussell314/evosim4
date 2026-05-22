@@ -2312,15 +2312,11 @@ export function createWorld(
 // batch" constants any more.
 const FOUNDER_TARGET = 50;
 // Active immigration model. Each trickle interval, if the live lineage
-// pool is below FOUNDER_TARGET, spawn a fraction of the REMAINING
-// deficit (founderTarget - live) -- a geometric approach to the target
-// rather than the old "rare rescue only below a floor" trickle. No
-// resource/particle cap gates it. Total extinction (zero lineages)
+// pool is below FOUNDER_TARGET, spawn the ENTIRE remaining deficit
+// (founderTarget - live) so the pool is topped straight back to the cap.
+// No resource/particle cap gates it. Total extinction (zero lineages)
 // still gets an immediate reseed so a dead world restarts promptly.
-const FOUNDER_TRICKLE_FRACTION = 0.2;
 const FOUNDER_TRICKLE_INTERVAL_SEC = 7.5;
-// (legacy note) Founder top-up previously refilled the full deficit
-// (founderTarget minus current live lineages) every step it was short.
 // Hold off all founder spawning (initial + top-up) for the first
 // FOUNDER_SPAWN_DELAY_SEC sim-seconds of a fresh world. Gives the
 // water column time to populate before any creatures enter the
@@ -5318,9 +5314,9 @@ export function step(world: World, dt: number): void {
   }
 
   // Top up immigration. Each trickle interval, if the number of DISTINCT
-  // CODING genomes alive is below world.founderTarget, spawn a fraction
-  // of the remaining deficit -- so founders inject when FUNCTIONAL
-  // diversity collapses (e.g. after a selective sweep), not merely when
+  // CODING genomes alive is below world.founderTarget, spawn the entire
+  // remaining deficit -- so founders inject when FUNCTIONAL diversity
+  // collapses (e.g. after a selective sweep), not merely when
   // founder-ancestry count is low. No resource/particle cap gates this.
   const deficit = Math.max(0, world.founderTarget - currentCoding.size);
   // Suppress founder spawning until the world is ready. Ramp worlds
@@ -5338,9 +5334,9 @@ export function step(world: World, dt: number): void {
     delayDone && world.foundersEnabled !== false && world.founderTarget > 0
     && deficit > 0 && trickleDue
   ) {
-    // 20% of the remaining cap each time (at least one). A freshly
-    // empty world seeds a single founder that re-anchors the palette.
-    const nSpawn = wasEmpty ? 1 : Math.max(1, Math.ceil(deficit * FOUNDER_TRICKLE_FRACTION));
+    // Fill the entire remaining deficit each time. A freshly empty world
+    // seeds a single founder that re-anchors the palette.
+    const nSpawn = wasEmpty ? 1 : deficit;
     // Refresh the particle grid: this runs after updateCreatures (whose
     // grid reflects pre-physics positions and has had INGEST removals),
     // so rebuild it for an accurate founder scoop.
