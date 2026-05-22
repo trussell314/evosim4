@@ -188,7 +188,18 @@ export const CHEM_MARKER0 = 41;
 // CHEMICAL_COUNT stays 96 so the genome ABI is unchanged.
 export const CHEM_ATP = 45;
 export const MRNA_REF = 5;
-export const CHL_REF = 5;
+// Lowered 5 -> 2: photosynthesis + photophosphorylation scale by
+// min(1, chl/CHL_REF), and a fresh founder seeds only chl=1, so at
+// CHL_REF=5 it ran light-harvesting at 20% -- too little ATP to afford
+// building more chlorophyll (synth_chl costs -8 ATP), a bootstrap
+// deadlock that left <0.1% of cells able to ignite autotrophy. At 2 the
+// seed chl=1 drives 50% light-harvesting (~8x more cells ignite), while
+// reaching full rate still requires investing in chl (SYNTH_CHL), so
+// autotrophy stays an evolved trait -- just a reachable one. (Note: this
+// broadens ignition but does NOT by itself make the world self-
+// sustaining; seedless descendants still rarely reach the reproduce
+// threshold -- see the founder-subsidy finding.)
+export const CHL_REF = 2;
 export const ENZ_REF = 5;
 export const GENERIC_CHEMICAL_COUNT = CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT;
 

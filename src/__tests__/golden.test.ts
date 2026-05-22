@@ -279,7 +279,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // founders spawn in the photic zone (top 10-45% not 10-90%), and the
     // anaerobic fermentation route buffed (+2->+4 ATP, rate 1.5->4).
     // Intended; determinism + mass-conservation re-verified green.
-    const GOLDEN = "7c4b5c78";
+    // Bumped again: CHL_REF 5->2 so a fresh founder's seed chlorophyll
+    // drives 50% (not 20%) light-harvesting, broadening autotroph
+    // ignition ~8x. Intended; determinism + mass re-verified green.
+    const GOLDEN = "2a86785f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
