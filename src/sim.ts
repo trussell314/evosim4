@@ -846,12 +846,18 @@ const MIN_VIABLE_MEMBRANE = 0.5;
 // enzymes. Ribosome decays slowly (~0.1%/sec) so a 0.01 threshold
 // gives healthy cells thousands of sim-sec of headroom before falling
 // below it without active SYNTH_MRNA.
-const MIN_VIABLE_RIBOSOME = 0.01;
+// Lowered 0.01 -> 0.001: fission halves the mRNA pool into the daughter,
+// and a freshly-split daughter born thin on ribosomes was tripping this
+// floor and dying before it could rebuild. A lower floor gives the
+// daughter grace to bootstrap (it still needs some mRNA to run
+// synth_ribo at all -- that autocatalysis is a separate concern).
+const MIN_VIABLE_RIBOSOME = 0.001;
 // Amino acid is much more fluid -- biosynth + reactions consume it
-// in bursts and maintenance decay refills it. A 0.001 threshold
-// catches cells with *essentially zero* aa (no synth, no prey)
-// without nuking cells in transient low-aa states mid-tick.
-const MIN_VIABLE_AMINOACID = 0.001;
+// in bursts and maintenance decay refills it.
+// Lowered 0.001 -> 0.0001 for the same fission-dilution reason: a
+// daughter born aa-thin can remake aa from glucose+min (synth_aa needs
+// no aa input), so it just needs to survive a few ticks first.
+const MIN_VIABLE_AMINOACID = 0.0001;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
 // is effectively stable; an old cell accumulates DNA damage gradually.

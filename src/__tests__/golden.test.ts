@@ -292,7 +292,14 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: FOUNDER_TARGET 50->10 (cap distinct founder lineages
     // at 10) and ongoingSeeding now defaults true (resources keep
     // replenishing). Intended.
-    const GOLDEN = "73dbedba";
+    // Bumped again: default reproduce gate is now a SELF_MEMBRANE size
+    // checkpoint (threshold 8..23, no energy variant) so offspring are
+    // born with viable membrane, and the aa/mRNA viability floors were
+    // lowered (0.001->0.0001, 0.01->0.001) so freshly-split daughters
+    // survive long enough to bootstrap. This is the change that makes
+    // the world self-sustaining without immigration. Intended;
+    // determinism + mass-conservation re-verified green.
+    const GOLDEN = "dba34cfc";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
