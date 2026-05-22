@@ -3365,25 +3365,38 @@ function updateSpray(width: number, surfaceY: number, snap: typeof snapshot): vo
   }
   const windMag = Math.min(1, Math.abs(snap.wind) / WIND_MAX);
   if (windMag <= 0.05) return;
-  const dir = snap.wind >= 0 ? 1 : -1; // launch downwind, over the wall
-  let budget = 14; // new drops/frame cap
-  for (let x = 0; x <= width && budget > 0; x += 6) {
+  const hm = snap.terrainHeightmap;
+  if (!hm || hm.length === 0) return;
+  const dir = snap.wind >= 0 ? 1 : -1; // downwind = toward the wall / over it
+  let budget = 16; // new drops/frame cap
+  for (let x = 0; x <= width && budget > 0; x += 5) {
     const boost = shoalAt(snap, x) - 1;
-    if (boost <= 0.4) continue; // only the inner apron / wall face
-    const sy = surfaceYAt(snap, x);
-    const up = surfaceY - sy; // crest height above still surface
+    if (boost <= 0.4) continue; // only the inner apron right at the face
+    const up = surfaceY - surfaceYAt(snap, x); // crest height above still surface
     if (up <= 0) continue;
     const intensity = boost * Math.min(1, up / Math.max(1, snap.surfaceWaveAmp));
     if (intensity < 0.18 || Math.random() > intensity) continue;
-    const d = SPRAY[sprayCursor];
+    // Find the wall edge downwind of this apron column + its crest height,
+    // so the spray launches FROM the top of the wall and spills over it.
+    let edge = -1, crestY = surfaceY;
+    const xi = Math.floor(x);
+    for (let d = 1; d <= 72; d++) {
+      const cx = xi + dir * d;
+      if (cx < 0 || cx >= hm.length) break;
+      if (hm[cx] < surfaceY) { edge = cx; crestY = hm[cx]; break; } // breaching rock
+    }
+    if (edge < 0) continue;
+    const drop = SPRAY[sprayCursor];
     sprayCursor = (sprayCursor + 1) % SPRAY_POOL;
-    d.x = x + (Math.random() - 0.5) * 4;
-    d.y = sy;
-    d.vx = dir * (45 + Math.random() * 80) * (0.6 + boost * 0.6);
-    d.vy = -(130 + Math.random() * 130) * (0.5 + intensity); // up, to clear the wall
-    d.r = 0.7 + Math.random() * 1.7;
-    d.lifeMax = 0.7 + Math.random() * 0.9;
-    d.life = d.lifeMax;
+    // Launch just above the crest, heading over the wall (downwind) with a
+    // pop up; gravity then carries it down the lee side.
+    drop.x = edge + dir * 2;
+    drop.y = crestY - 2;
+    drop.vx = dir * (38 + Math.random() * 70) * (0.6 + intensity);
+    drop.vy = -(40 + Math.random() * 80) * (0.6 + intensity);
+    drop.r = 0.7 + Math.random() * 1.6;
+    drop.lifeMax = 0.7 + Math.random() * 0.9;
+    drop.life = drop.lifeMax;
     budget--;
   }
 }

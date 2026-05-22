@@ -8502,6 +8502,9 @@ export interface RenderSnapshot extends WorldEnv {
   // Static across the run, but we ship it once so the renderer can
   // bake the terrain bitmap on the first snapshot it sees.
   obstacles: Obstacle[];
+  // Per-column topmost rock-surface y (Inf where no rock). Lets the
+  // renderer find a wall's crest to launch overtopping spray from.
+  terrainHeightmap?: Float32Array;
   particles: ParticleSnapshot[];
   creatures: CreatureSnapshot[];
   species: SpeciesSnapshot[];
@@ -8791,6 +8794,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
       return roots;
     })(),
     obstacles: world.obstacles,
+    terrainHeightmap: world.terrainHeightmap,
     particles,
     creatures,
     species,
