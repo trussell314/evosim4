@@ -3455,8 +3455,44 @@ function ambientBaseAt(world: { width: number; height: number }, x: number, y: n
 // water stayed anoxic and the aphotic zone was an energy desert (no
 // O2 for betaOx/respiration, no light for photophosphorylation), which
 // killed the majority of cells that spawn below the photic layer.
-const REGION_DIFFUSION_HALFLIFE_S = 120;
+// Lowered 120 -> 60: rock now occludes light (caves/overhangs can't
+// photosynthesize), so shaded + deep water depends entirely on O2 mixed
+// in from the lit surface for respiration. Faster vertical/lateral
+// mixing keeps those zones habitable.
+const REGION_DIFFUSION_HALFLIFE_S = 60;
 let REGION_DIFF_SCRATCH = new Float32Array(0);
+
+// Per-region solid mask: 1 if the region center sits inside rock.
+// Dissolved fields (ambient gases + reserve) can't diffuse through rock,
+// so solid regions are no-flux barriers -- caves/overhangs become
+// chemically isolated micro-environments. Cached per world (terrain is
+// static after generation); rebuilt on region-grid resize. Mass-safe:
+// skipping a barrier exchange moves no mass, and solid regions hold ~0
+// (cells/particles are evacuated from rock) but any trapped mass still
+// counts toward conservation.
+const REGION_SOLID_CACHE = new WeakMap<World, Uint8Array>();
+function regionSolidMask(world: World): Uint8Array {
+  const cols = regionCols(world), rows = regionRows(world);
+  const n = cols * rows;
+  const cached = REGION_SOLID_CACHE.get(world);
+  if (cached && cached.length === n) return cached;
+  const mask = new Uint8Array(n);
+  const obs = world.obstacles;
+  for (let ry = 0; ry < rows; ry++) {
+    for (let rx = 0; rx < cols; rx++) {
+      const cx = rx * REGION_PX + REGION_PX / 2;
+      const cy = ry * REGION_PX + REGION_PX / 2;
+      for (let k = 0; k < obs.length; k++) {
+        const ob = obs[k];
+        if (cx < ob.minX || cx > ob.maxX || cy < ob.minY || cy > ob.maxY) continue;
+        const poly = ob.polygon;
+        if (poly && pointInPolygon(cx, cy, poly)) { mask[ry * cols + rx] = 1; break; }
+      }
+    }
+  }
+  REGION_SOLID_CACHE.set(world, mask);
+  return mask;
+}
 function diffuseRegions(world: World, dt: number): void {
   // The DISSOLVED field is a true aqueous solute -> isotropic Jacobi
   // diffusion. The reserve pool diffuses too now, but anisotropically:
@@ -3503,9 +3539,11 @@ export function diffuseReserve(world: World, dt: number): void {
     if (tf < 0.3) tf = 0.3; else if (tf > 2) tf = 2;
     return tf;
   };
+  const solid = regionSolidMask(world);
   for (let ry = 0; ry < rows; ry++) {
     for (let rx = 0; rx < cols; rx++) {
       const ri = ry * cols + rx;
+      if (solid[ri]) continue; // rock: no reserve exchange
       const base = ri * AMBIENT_STRIDE;
       const left = rx > 0 ? ri - 1 : -1;
       const right = rx < cols - 1 ? ri + 1 : -1;
@@ -3514,7 +3552,7 @@ export function diffuseReserve(world: World, dt: number): void {
       // (1) Horizontal: symmetric Jacobi, every chem, both edges.
       for (let h = 0; h < 2; h++) {
         const nj = h === 0 ? left : right;
-        if (nj < 0) continue;
+        if (nj < 0 || solid[nj]) continue;
         const a = alpha * tempFactor(ri, nj);
         const jb = nj * AMBIENT_STRIDE;
         for (let k = 0; k < AMBIENT_STRIDE; k++) {
@@ -3524,7 +3562,7 @@ export function diffuseReserve(world: World, dt: number): void {
         }
       }
       // (2) Dense chems settle one region DOWN.
-      if (down >= 0) {
+      if (down >= 0 && !solid[down]) {
         const a = alpha * tempFactor(ri, down);
         const db = down * AMBIENT_STRIDE;
         for (let k = 0; k < AMBIENT_STRIDE; k++) {
@@ -3535,7 +3573,7 @@ export function diffuseReserve(world: World, dt: number): void {
         }
       }
       // (3) Buoyant chems rise one region UP.
-      if (up >= 0) {
+      if (up >= 0 && !solid[up]) {
         const a = alpha * tempFactor(ri, up);
         const ub = up * AMBIENT_STRIDE;
         for (let k = 0; k < AMBIENT_STRIDE; k++) {
@@ -3562,9 +3600,11 @@ function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
   // lambda = ln2/ticks ; alpha solves lambda = alpha*(pi/N)^2 (small-mode).
   let alpha = Math.LN2 / (ticks * wmode * wmode);
   if (alpha > 0.1) alpha = 0.1; // hard stability clamp
+  const solid = regionSolidMask(world);
   for (let ry = 0; ry < rows; ry++) {
     for (let rx = 0; rx < cols; rx++) {
       const ri = ry * cols + rx;
+      if (solid[ri]) continue; // rock: no dissolved-field exchange
       const base = ri * AMBIENT_STRIDE;
       // Edge-symmetric, temperature-scaled coefficient per neighbour
       // (avg T of the two regions) so the Jacobi pass stays exactly
@@ -3577,7 +3617,7 @@ function jacobiDiffuseField(world: World, amb: Float32Array, dt: number): void {
       const nb3 = ry < rows - 1 ? ri + cols : -1;
       for (let pass = 0; pass < 4; pass++) {
         const nj = pass === 0 ? nb0 : pass === 1 ? nb1 : pass === 2 ? nb2 : nb3;
-        if (nj < 0) continue;
+        if (nj < 0 || solid[nj]) continue;
         const tJ = world.regionTemp.length > nj ? world.regionTemp[nj] : TEMP_BASELINE;
         // warmer water mixes a bit faster; mild, clamped, symmetric.
         let tf = 1 + 0.5 * (((tI + tJ) * 0.5 - TEMP_BASELINE) / TEMP_BASELINE);

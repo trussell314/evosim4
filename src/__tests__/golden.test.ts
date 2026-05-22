@@ -306,7 +306,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // column has terrain above it (terrainHeightmap[x] < y) gets zero
     // light, so photosynthesis + photoreceptors go dark under overhangs
     // and surface outcrops (caves become dark refugia). Intended.
-    const GOLDEN = "d9c0d25b";
+    // Bumped again: ambient diffusion halflife 120->60, and dissolved
+    // fields (ambient gases + reserve) no longer diffuse through rock
+    // (solid regions are no-flux barriers), so caves are chemically
+    // isolated. Intended; mass-conservation re-verified green.
+    const GOLDEN = "ff86effa";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
