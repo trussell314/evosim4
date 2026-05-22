@@ -93,6 +93,9 @@ import {
   type CreatureSnapshot,
   type InnerCreatureSnapshot,
   type SpeciesSnapshot,
+  MIN_VIABLE_MEMBRANE,
+  MIN_VIABLE_RIBOSOME,
+  MIN_VIABLE_AMINOACID,
 } from "./sim";
 import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
@@ -4535,9 +4538,11 @@ function cellHealth(c: CellVals): number {
   if (m.chlorophyll > 0.5 && m.co2 > 0.5) fuel += 20;
   return Math.min(
     sat(c.energy + fuel, 0, 20),   // ATP + convertible fuel buffer
-    sat(m.membrane, 0.5, 8),       // structural membrane
-    sat(m.mrna, 0.01, 2),          // ribosome/translation
-    sat(m.aminoAcid, 0.001, 1),    // amino-acid pool
+    // Floors reference the engine's MIN_VIABLE_* directly so the meter
+    // can't drift from the actual death thresholds.
+    sat(m.membrane, MIN_VIABLE_MEMBRANE, 8),    // structural membrane
+    sat(m.mrna, MIN_VIABLE_RIBOSOME, 2),        // ribosome/translation
+    sat(m.aminoAcid, MIN_VIABLE_AMINOACID, 1),  // amino-acid pool
   );
 }
 

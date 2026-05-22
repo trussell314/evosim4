@@ -841,7 +841,7 @@ const MRNA_DECAY_PER_SEC = 0.001;
 // Membrane is the structural reserve that gates viability now that
 // the biomass chemical is retired. Same threshold the old MIN_VIABLE_MEMBRANE
 // gate used; cells below this autolyze.
-const MIN_VIABLE_MEMBRANE = 0.5;
+export const MIN_VIABLE_MEMBRANE = 0.5;
 // A cell with no mrna can't turn over biomass or rebuild lost
 // enzymes. Ribosome decays slowly (~0.1%/sec) so a 0.01 threshold
 // gives healthy cells thousands of sim-sec of headroom before falling
@@ -851,13 +851,13 @@ const MIN_VIABLE_MEMBRANE = 0.5;
 // floor and dying before it could rebuild. A lower floor gives the
 // daughter grace to bootstrap (it still needs some mRNA to run
 // synth_ribo at all -- that autocatalysis is a separate concern).
-const MIN_VIABLE_RIBOSOME = 0.001;
+export const MIN_VIABLE_RIBOSOME = 0.001;
 // Amino acid is much more fluid -- biosynth + reactions consume it
 // in bursts and maintenance decay refills it.
 // Lowered 0.001 -> 0.0001 for the same fission-dilution reason: a
 // daughter born aa-thin can remake aa from glucose+min (synth_aa needs
 // no aa input), so it just needs to survive a few ticks first.
-const MIN_VIABLE_AMINOACID = 0.0001;
+export const MIN_VIABLE_AMINOACID = 0.0001;
 
 // Somatic mutation rate scales quadratically with age (seconds). A newborn
 // is effectively stable; an old cell accumulates DNA damage gradually.
@@ -2516,16 +2516,18 @@ function spawnFounder(world: World): Creature | null {
   const nc = creatures.length;
   for (let attempt = 0; attempt < 32; attempt++) {
     x = world.width * (0.1 + 0.8 * simRng());
-    // Y range biased to the PHOTIC zone (top ~10%..45% of height).
-    // Light e-folds every LIGHT_DECAY(=250)px below the surface, and
-    // the two cellular ATP sources both need either light
-    // (photophosphorylation) or O2 (respiration/betaOx, and O2 is made
-    // by surface photosynthesis), so a founder dropped into the dark,
-    // anoxic deep water cannot bootstrap energy and just peters out.
-    // Spawning founders where they can actually power up lets a lineage
-    // establish; descendants then drift down into the (now better
-    // oxygenated, see REGION_DIFFUSION_HALFLIFE_S) deeper water.
-    y = world.height * (0.1 + 0.35 * simRng());
+    // Y: triangular distribution over the water column (10%..90% of
+    // height), peaked at the top and tapering linearly downward. Light
+    // e-folds every LIGHT_DECAY(=250)px below the surface and the two
+    // ATP sources both need light (photophosphorylation) or O2
+    // (respiration/betaOx; O2 is made by surface photosynthesis), so
+    // founders bootstrap energy far more easily near the top -- but not
+    // EXCLUSIVELY there: the long tail still seeds the deeper, now
+    // better-oxygenated water (see REGION_DIFFUSION_HALFLIFE_S) so the
+    // whole column gets colonised. PDF f(d) = 2(1-d) via inverse-CDF
+    // d = 1 - sqrt(1 - u); mean depth ~1/3 of the band.
+    const yTri = 1 - Math.sqrt(1 - simRng());
+    y = world.height * (0.1 + 0.8 * yTri);
     let okay = true;
     // Terrain avoidance: refuse to place a founder at-or-below the
     // topmost rock surface in this column. topTerrainYAtColumn handles

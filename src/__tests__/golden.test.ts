@@ -299,7 +299,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // survive long enough to bootstrap. This is the change that makes
     // the world self-sustaining without immigration. Intended;
     // determinism + mass-conservation re-verified green.
-    const GOLDEN = "dba34cfc";
+    // Bumped again: founder spawn Y is now a triangular distribution
+    // (peaked near the surface, tapering over 10%..90% of height)
+    // instead of uniform over 10%..45%. Intended.
+    const GOLDEN = "b055310a";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
