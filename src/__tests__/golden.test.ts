@@ -310,7 +310,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // fields (ambient gases + reserve) no longer diffuse through rock
     // (solid regions are no-flux barriers), so caves are chemically
     // isolated. Intended; mass-conservation re-verified green.
-    const GOLDEN = "ff86effa";
+    // Bumped again: chem deposits are redirected out of solid regions
+    // (depositRegionBase) at every particle/evacuation deposit site, and
+    // aeration skips solid surface regions, so the diffusion barrier no
+    // longer traps mass in inert rock. Intended; mass re-verified green.
+    const GOLDEN = "c0b5a649";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

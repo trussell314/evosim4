@@ -1803,8 +1803,9 @@ function evacuateRocks(world: World): void {
       if (pointInPolygon(px, py, poly)) { inside = true; break; }
     }
     if (!inside) continue;
-    // In rock -- dissolve. Mass to local ambient.
-    const base = ambientBaseAt(world, px, py);
+    // In rock -- dissolve. Mass to the nearest WATER region (not the
+    // rock region, where the no-flux barrier would trap it forever).
+    const base = depositRegionBase(world, px, py);
     const mol = store.molecules[i];
     if (mol) {
       for (let k = 0; k < NAMED_CHEMICALS.length; k++) {
@@ -3493,6 +3494,34 @@ function regionSolidMask(world: World): Uint8Array {
   REGION_SOLID_CACHE.set(world, mask);
   return mask;
 }
+
+// Region base (AMBIENT_STRIDE index) for depositing dissolved mass at
+// (x,y), redirected OUT of rock: the no-flux barrier would otherwise
+// trap any mass deposited in a solid region forever, slowly draining the
+// living water into inert rock. If the target region is solid, return
+// the nearest non-solid region instead. Non-rock positions take the fast
+// path and are byte-identical to regionIndexAt()*AMBIENT_STRIDE.
+function depositRegionBase(world: World, x: number, y: number): number {
+  const ri = regionIndexAt(world, x, y);
+  const solid = regionSolidMask(world);
+  if (!solid[ri]) return ri * AMBIENT_STRIDE;
+  const cols = regionCols(world), rows = regionRows(world);
+  const rx = ri % cols, ry = (ri / cols) | 0;
+  const maxR = Math.max(cols, rows);
+  for (let radius = 1; radius < maxR; radius++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      const ny = ry + dy; if (ny < 0 || ny >= rows) continue;
+      const edgeY = Math.abs(dy) === radius;
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (!edgeY && Math.abs(dx) !== radius) continue; // ring perimeter only
+        const nx = rx + dx; if (nx < 0 || nx >= cols) continue;
+        const ni = ny * cols + nx;
+        if (!solid[ni]) return ni * AMBIENT_STRIDE;
+      }
+    }
+  }
+  return ri * AMBIENT_STRIDE; // fully solid world -> nowhere to redirect
+}
 function diffuseRegions(world: World, dt: number): void {
   // The DISSOLVED field is a true aqueous solute -> isotropic Jacobi
   // diffusion. The reserve pool diffuses too now, but anisotropically:
@@ -3969,7 +3998,7 @@ function reservePass(world: World): void {
       if (surplus[k] <= 0) continue;
       const r = store.r[i];
       const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
-      res[regionIndexAt(world, px[i], py[i]) * AMBIENT_STRIDE + k]
+      res[depositRegionBase(world, px[i], py[i]) + k]
         += (density * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[k];
       const vx = pvx[i], vy = pvy[i], vz = pvz[i];
       const settled = vx * vx + vy * vy + vz * vz < SLEEP_SPEED_SQ;
@@ -4039,7 +4068,7 @@ function reservePass(world: World): void {
         const k = store.chemId[i];
         const r = store.r[i];
         const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[k];
-        res[regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE + k]
+        res[depositRegionBase(world, store.x[i], store.y[i]) + k]
           += (density * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[k];
         removeParticleAt(world, i);
       }
@@ -4264,7 +4293,7 @@ export function denatureWaste(world: World, dt: number): void {
     const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[CHEM_WASTE];
     const mass = density * FOUR_THIRDS_PI * r * r * r;
     const dm = mass * frac;
-    const base = regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE;
+    const base = depositRegionBase(world, store.x[i], store.y[i]);
     amb[base + CHEM_CO2] += dm;
     recordRxn(RX_DENATURE_WASTE, RX_LOC_FIELD, 0);
     const newMass = mass - dm;
@@ -4295,7 +4324,7 @@ function weatherMinerals(world: World, dt: number): void {
     const density = store.density[i] !== 0 ? store.density[i] : CHEM_BASE_DENSITY[CHEM_MIN];
     const mass = density * FOUR_THIRDS_PI * r * r * r;
     const dm = mass * frac;
-    const base = regionIndexAt(world, store.x[i], store.y[i]) * AMBIENT_STRIDE;
+    const base = depositRegionBase(world, store.x[i], store.y[i]);
     amb[base + CHEM_MIN] += dm; // CHEM_MIN molarMass == 1: physMass == amount
     const newMass = mass - dm;
     const newR = Math.cbrt((3 * newMass) / (4 * Math.PI * density));
@@ -4347,6 +4376,9 @@ function aerateAmbient(world: World, dt: number): void {
     regionRows(world) - 1,
     Math.max(0, (world.surfaceY / REGION_PX) | 0),
   );
+  // Don't aerate into a surface-breaching rock outcrop's region (the
+  // barrier would trap that O2/CO2 in the rock).
+  const solid = regionSolidMask(world);
   // Per-gas surface-exchange multiplier. O2 is pushed hard (10x) so
   // the surface stays well oxygenated and feeds the bulk via
   // diffusion. CO2 stays at the base rate ON PURPOSE: we want
@@ -4361,7 +4393,7 @@ function aerateAmbient(world: World, dt: number): void {
     if (target <= 0) continue;
     const rate = baseRate * mult;
     for (let r = 0; r < nRegions; r++) {
-      if (((r / cols) | 0) !== surfaceRow) continue;
+      if (((r / cols) | 0) !== surfaceRow || solid[r]) continue;
       const ak = r * AMBIENT_STRIDE + k;
       const gap = target - ambient[ak];
       let flow = gap * rate;
