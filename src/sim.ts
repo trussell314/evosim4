@@ -192,6 +192,14 @@ const INGEST_COOLDOWN_SEC = 0.15;
 // (cooldown / (r / INGEST_REF_R)). Below INGEST_REF_R the cooldown stays at
 // the baseline so tiny cells aren't accidentally penalized.
 const INGEST_REF_R = 4;
+// Edible reserve (Option 1): when a cell runs INGEST but no particle is in
+// reach, it eats a bite of the most-abundant ingestible chem from its
+// region's reserve pool -- the cap-overflow mass that would otherwise sit
+// inaccessible. Bite is amount-units, scaled by surface like the cooldown,
+// so it's comparable to swallowing one small particle. This makes reserve
+// mass count in cell chemistry and lets the particle cap drop (fewer
+// collidable particles) without starving cells.
+const RESERVE_INGEST_BITE = 10;
 const EXCRETE_MIN_AMOUNT = 0.5;
 
 // Predation/engulfment is gated by the cells' PHYSICAL nature, not an
@@ -5031,6 +5039,29 @@ function thermalStress(c: Creature, dt: number, world: World): void {
   recordRxn(RX_THERMAL_DENATURE, RX_LOC_CELL, 0);
 }
 
+// Edible-reserve uptake: eat a bite of the most-abundant ingestible chem
+// (bond potential >= the INGEST threshold) from the cell's region reserve
+// and deposit it into the cell, mass-conserved. Mirrors a particle ingest
+// (one chem per event, ATP cost + cooldown). Returns true if it ate.
+function ingestFromReserve(world: World, c: Creature, threshold: number): boolean {
+  const res = world.reserve;
+  const ri = regionIndexAt(world, c.x, c.y) * AMBIENT_STRIDE;
+  if (ri < 0 || ri + AMBIENT_STRIDE > res.length) return false;
+  let bestChem = -1, bestAmt = 0;
+  for (let k = 0; k < CHEMICAL_COUNT; k++) {
+    if (CHEM_BOND_POTENTIAL[k] < threshold) continue;
+    const a = res[ri + k];
+    if (a > bestAmt) { bestAmt = a; bestChem = k; }
+  }
+  if (bestChem < 0 || bestAmt <= 0) return false;
+  const bite = Math.min(bestAmt, RESERVE_INGEST_BITE * (c.r / INGEST_REF_R));
+  res[ri + bestChem] -= bite;
+  c.store.chemCols[bestChem][c.idx] += bite; // chemCols[NAMED+k] aliases generics
+  spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
+  c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
+  return true;
+}
+
 function spawnExcretedParticle(
   c: Creature,
   world: World,
@@ -6391,6 +6422,7 @@ function updateCreatures(world: World, dt: number): void {
         // Only scan particles whose bucket overlaps the cell's body
         // (forParticlesNear) instead of walking all of world.particles.
         const cr2 = c.r * c.r;
+        let ateParticle = false;
         forParticlesNear(world, c.x, c.y, c.r, (p) => {
           const chemId = p.chemId;
           // Bond-energy-threshold engulf: the cell eats any contacted
@@ -6433,9 +6465,16 @@ function updateCreatures(world: World, dt: number): void {
             // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
             c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
             removeParticleAt(world, p.idx);
+            ateParticle = true;
             return true; // ate one; stop
           }
         });
+        // No particle in reach but the cell ran INGEST -> eat from the
+        // region's reserve pool (cap-overflow mass), so reserve food
+        // counts in cell chemistry instead of sitting inaccessible.
+        if (!ateParticle && vmOut.ingestThreshold < Infinity) {
+          ingestFromReserve(world, c, vmOut.ingestThreshold);
+        }
       }
     }
 

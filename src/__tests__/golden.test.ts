@@ -259,7 +259,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: founders spawn at a per-founder scaled PHYSICAL size
     // (whole seed * a right-skewed ~1.5..8 factor), so founder body
     // sizes + the rng draw order differ from tick 0. Intended.
-    const GOLDEN = "f4b18148";
+    // Bumped again: edible reserve -- a cell running INGEST with no
+    // particle in reach now eats a bite of its region's reserve pool, so
+    // cells access cap-overflow mass that used to sit inaccessible.
+    // Intended; determinism + mass-conservation re-verified green.
+    const GOLDEN = "41cadf7c";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
