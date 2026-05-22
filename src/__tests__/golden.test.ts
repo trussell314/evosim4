@@ -256,7 +256,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: founders now splice 2-5 archetype-derived genes and
     // use a wider per-founder intron budget (larger, more varied founder
     // genomes), so the seeded run's founder lineages differ. Intended.
-    const GOLDEN = "ad67ef90";
+    // Bumped again: founders spawn at a per-founder scaled PHYSICAL size
+    // (whole seed * a right-skewed ~1.5..8 factor), so founder body
+    // sizes + the rng draw order differ from tick 0. Intended.
+    const GOLDEN = "f4b18148";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

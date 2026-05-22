@@ -2377,11 +2377,16 @@ function pullReserveAny(world: World, x: number, y: number, want: number): numbe
 // Pay for the founder's fixed seed (materials + ATP) out of reserve so
 // ATP/materials are conserved matter; record the founder spawn (and
 // the uncovered remainder = explicit external input) as RX_BIOGENESIS.
-function reconcileFounderSeed(world: World, x: number, y: number): void {
-  for (const [chem, amt] of FOUNDER_SEED_MAT) pullReserve(world, x, y, chem, amt);
-  const atpFromReserve = pullReserveAny(world, x, y, FOUNDER_SEED_ATP);
+function reconcileFounderSeed(world: World, x: number, y: number, sizeMult: number = 1): void {
+  // Scale the reserve pull + ATP by the founder's size factor so a bigger
+  // founder recycles proportionally more reserve mass (accounting stays
+  // as honest as the unscaled path: reserve first, external remainder
+  // recorded).
+  for (const [chem, amt] of FOUNDER_SEED_MAT) pullReserve(world, x, y, chem, amt * sizeMult);
+  const seedAtp = FOUNDER_SEED_ATP * sizeMult;
+  const atpFromReserve = pullReserveAny(world, x, y, seedAtp);
   recordRxn(RX_BIOGENESIS, RX_LOC_CELL, 0);
-  const atpExternal = FOUNDER_SEED_ATP - atpFromReserve;
+  const atpExternal = seedAtp - atpFromReserve;
   if (atpExternal > 0) recordAtp(ATP_OTHER, 0, atpExternal);
 }
 
@@ -2423,13 +2428,17 @@ function spawnFounder(world: World): Creature | null {
     }
     if (okay) break;
   }
-  const c = makeCreature(world, x, y, z);
+  // Per-founder physical size: ~[1.5, 8], right-skewed (rng*rng) so most
+  // founders are modestly larger than the old minimal body and a few are
+  // much bigger -- larger on average, wide spread.
+  const sizeMult = 1.5 + simRng() * simRng() * 6.5;
+  const c = makeCreature(world, x, y, z, undefined, sizeMult);
   if (c === null) return null; // genome roll failed -- skip this founder
   // Recirculate cap-sequestered reserve mass into the new founder.
   drawFounderReserve(world, c, x, y);
   // ATP is real matter now: pay for the fixed seed out of reserve
   // (conserving) and record the spawn / external remainder.
-  reconcileFounderSeed(world, x, y);
+  reconcileFounderSeed(world, x, y, sizeMult);
   updateCreatureRadius(c); // reflect the drawn mass in r / density
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
@@ -2710,6 +2719,7 @@ const FOUNDER_SCOOP_R_MAX = 50;
 const FOUNDER_SCOOP_MAX_DENSITY = 1.1;
 function makeCreature(
   world: World, x: number, y: number, z: number, genomeOverride?: Uint8Array,
+  sizeMult: number = 1,
 ): Creature | null {
   // genomeOverride: used by spawnSpeciesInstance to materialize a
   // specific pinned/notable genome instead of rolling a random one.
@@ -2798,6 +2808,19 @@ function makeCreature(
       magnetoreceptor: 0.5,
     },
   });
+  // Founder size variation: scale the whole molecular seed (incl. the
+  // aliased ATP column) by a per-founder factor so founders spawn across
+  // a range of physical sizes -- larger on average, wide spread --
+  // instead of all at the minimal body. Proportional, so composition
+  // (hence density/buoyancy) and the maintenance/synthesis balance are
+  // preserved -- the cell is just bigger. Applied BEFORE the particle
+  // scoop so only the seed scales, not scooped environmental matter.
+  // sizeMult is 1 for archetype spawns (genomeOverride), so seeds keep
+  // their authored size.
+  if (sizeMult !== 1) {
+    const sc = c.store.chemCols; const si = c.idx;
+    for (let k = 0; k < sc.length; k++) sc[k][si] *= sizeMult;
+  }
   // Scoop every loose particle within FOUNDER_SCOOP_RADIUS into the
   // cell. The particle's chemId deposits straight into the matching
   // chemCols slot; an accompanying multi-chem corpse payload (genericChem)
