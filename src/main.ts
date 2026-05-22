@@ -2473,6 +2473,7 @@ function render(): void {
   // and real wall-clock time).
   updateWindStreaks(width, surfaceY, snapshot.wind);
   drawWindStreaks(ctx, snapshot);
+  updateSpray(width, surfaceY, snapshot);
 
   // Region grid overlay (toggled by the lower-left button). Matches
   // REGION_PX so the dissolved/reserve region boundaries are visible.
@@ -2580,6 +2581,9 @@ function render(): void {
   // over the chimney.
   if (snapshot.vent) drawVent(ctx, snapshot.vent, snapshot.t);
   if (terrainBitmap) ctx.drawImage(terrainBitmap, 0, 0);
+  // Overtopping spray draws AFTER the rock so droplets are visible
+  // arcing over and splashing down the wall's lee side.
+  drawSpray(ctx);
 
   const selId = selectedCellId;
   // When a cell is selected (its follow-tooltip is up), ring every
@@ -3334,6 +3338,65 @@ interface WindStreak { x: number; y: number; len: number; life: number; lifeMax:
 const WIND_STREAKS: WindStreak[] = [];
 const WIND_STREAK_POOL = 80;
 let windLastUpdateMs = performance.now();
+
+// Wave-crash overtopping spray. Ballistic droplets launched from a
+// shoaling wall face up and DOWNWIND, so they arc over a surface wall
+// and splash down its lee side instead of stopping at the windward face.
+// Drawn after the terrain bitmap so they're visible clearing the rock.
+// Render-only: Math.random + wall-clock dt, no determinism impact.
+interface SprayDrop { x: number; y: number; vx: number; vy: number; life: number; lifeMax: number; r: number }
+const SPRAY_POOL = 200;
+const SPRAY: SprayDrop[] = [];
+let sprayCursor = 0;
+let sprayLastMs = 0;
+const SPRAY_GRAV = 240; // px/s^2
+function updateSpray(width: number, surfaceY: number, snap: typeof snapshot): void {
+  const now = performance.now();
+  const dt = Math.min(0.05, Math.max(0.001, (now - sprayLastMs) / 1000));
+  sprayLastMs = now;
+  while (SPRAY.length < SPRAY_POOL) SPRAY.push({ x: 0, y: 0, vx: 0, vy: 0, life: 0, lifeMax: 1, r: 1 });
+  // Integrate live drops (gravity arc).
+  for (const d of SPRAY) {
+    if (d.life <= 0) continue;
+    d.life -= dt;
+    d.vy += SPRAY_GRAV * dt;
+    d.x += d.vx * dt;
+    d.y += d.vy * dt;
+  }
+  const windMag = Math.min(1, Math.abs(snap.wind) / WIND_MAX);
+  if (windMag <= 0.05) return;
+  const dir = snap.wind >= 0 ? 1 : -1; // launch downwind, over the wall
+  let budget = 14; // new drops/frame cap
+  for (let x = 0; x <= width && budget > 0; x += 6) {
+    const boost = shoalAt(snap, x) - 1;
+    if (boost <= 0.4) continue; // only the inner apron / wall face
+    const sy = surfaceYAt(snap, x);
+    const up = surfaceY - sy; // crest height above still surface
+    if (up <= 0) continue;
+    const intensity = boost * Math.min(1, up / Math.max(1, snap.surfaceWaveAmp));
+    if (intensity < 0.18 || Math.random() > intensity) continue;
+    const d = SPRAY[sprayCursor];
+    sprayCursor = (sprayCursor + 1) % SPRAY_POOL;
+    d.x = x + (Math.random() - 0.5) * 4;
+    d.y = sy;
+    d.vx = dir * (45 + Math.random() * 80) * (0.6 + boost * 0.6);
+    d.vy = -(130 + Math.random() * 130) * (0.5 + intensity); // up, to clear the wall
+    d.r = 0.7 + Math.random() * 1.7;
+    d.lifeMax = 0.7 + Math.random() * 0.9;
+    d.life = d.lifeMax;
+    budget--;
+  }
+}
+function drawSpray(c: CanvasRenderingContext2D): void {
+  for (const d of SPRAY) {
+    if (d.life <= 0) continue;
+    const a = Math.min(0.8, (d.life / d.lifeMax) * 0.8);
+    c.fillStyle = `rgba(235, 248, 255, ${a.toFixed(3)})`;
+    c.beginPath();
+    c.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+    c.fill();
+  }
+}
 
 function updateWindStreaks(width: number, surfaceY: number, wind: number): void {
   const now = performance.now();
