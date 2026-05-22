@@ -74,6 +74,7 @@ import {
   VENT_BASE_INTENSITY,
   shoalAt,
   solarLight,
+  ambientLightAt,
   takeSnapshot,
   chemName,
   reactionName,
@@ -1763,7 +1764,7 @@ parWrap.append(parTitle, parMinus, parValue, parPlus);
 gWorld.append(foundersBtn, seedingBtn, capWrap, parWrap);
 
 // ---- view: overlay / density sources / material / grid ----
-type HeatmapMode = "off" | "temp" | "density" | "health" | "reproduce";
+type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
@@ -1773,7 +1774,7 @@ const SELECT_CSS =
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay";
 overlaySelectEl.style.cssText = SELECT_CSS;
-for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"], ["health", "overlay: cell health"], ["reproduce", "overlay: reproduce readiness"]] as [HeatmapMode, string][]) {
+for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"], ["light", "overlay: light"], ["health", "overlay: cell health"], ["reproduce", "overlay: reproduce readiness"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
   o.value = val; o.textContent = txt; overlaySelectEl.appendChild(o);
 }
@@ -2687,6 +2688,24 @@ function drawHeatmap(): void {
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     ctx.font = UI_CANVAS_FONT;
     ctx.fillText("heatmap: temperature (cold blue → warm red)", 8, surfaceY + 14);
+    return;
+  }
+  if (heatmapMode === "light") {
+    // Field overlay of usable sunlight = day-cycle x depth attenuation x
+    // rock occlusion (the same ambientLightAt photosynthesis reads), so
+    // rock shadows and the day/night cycle show up directly.
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * cell, y = surfaceY + r * cell;
+        const v = ambientLightAt(snapshot, x + cell / 2, y + cell / 2);
+        ctx.fillStyle = `rgb(${Math.round(255 * v)},${Math.round(238 * v)},${Math.round(120 * v)})`;
+        ctx.fillRect(x, y, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = UI_CANVAS_FONT;
+    ctx.fillText("overlay: light (dark → bright; rock casts a shadow)", 8, surfaceY + 14);
     return;
   }
   if (heatmapMode === "health" || heatmapMode === "reproduce") {

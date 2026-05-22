@@ -265,7 +265,7 @@ const BIRTH_OFFSET_MULT = 3.0;
 
 // Photosynthesis depth attenuation: ambient light = exp(-y / LIGHT_DECAY).
 // Surface = 1.0, e-folds every LIGHT_DECAY pixels of depth.
-const LIGHT_DECAY = 250;
+export const LIGHT_DECAY = 250;
 const DRAG_REF_R = 4;
 const MIN_CREATURE_R = 4;
 // Cell density: how strongly reserve composition shifts the effective
@@ -1186,6 +1186,27 @@ export function regionTempAt(world: World, x: number, y: number): number {
 // attenuation at every light-using site (photosynthesis, sensor).
 export function solarLight(world: { dayPhase: number }): number {
   return Math.max(0, Math.sin(2 * Math.PI * world.dayPhase));
+}
+
+// Rock occlusion of sunlight: light comes from above and cannot pass
+// through rock. A point is fully shadowed if the topmost terrain in its
+// column (terrainHeightmap[x]) sits above it (smaller y). This makes
+// caves and overhangs dark refugia where photosynthesis can't run.
+export function lightOcclusion(
+  env: { terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
+): number {
+  const hm = env.terrainHeightmap;
+  if (!hm || hm.length === 0) return 1;
+  let ix = Math.floor(x); if (ix < 0) ix = 0; else if (ix >= hm.length) ix = hm.length - 1;
+  return hm[ix] < y ? 0 : 1;
+}
+// Visible ambient light at a point: solar day-cycle x depth attenuation
+// x rock occlusion. Single source of truth shared by photosynthesis and
+// the light overlay.
+export function ambientLightAt(
+  env: { dayPhase: number; terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
+): number {
+  return solarLight(env) * Math.exp(-y / LIGHT_DECAY) * lightOcclusion(env, x, y);
 }
 
 function advanceDayCycle(world: World, dt: number): void {
@@ -4027,11 +4048,14 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   const s = c.store; const i = c.idx;
   const cols = s.chemCols;
   const k = Math.max(0, 1 - ACT_DECAY * dt);
-  const sunlight = solarLight(world);
+  // Rock blocks light, so all three photo bands gate on column occlusion.
+  const occ = lightOcclusion(world, c.x, c.y);
+  const sunlight = solarLight(world) * occ;
   const depthRatio = Math.max(0, c.y / LIGHT_DECAY);
   // PHOTO: 3 bands. Visible attenuates at LIGHT_DECAY (the canonical
   // depth e-fold). Long-penetrating attenuates 3x slower. Surface
-  // is depth-invariant -- cells anywhere read it equally.
+  // is depth-invariant -- cells anywhere read it equally (but still dark
+  // under rock).
   const lightVis = Math.exp(-depthRatio) * sunlight;
   const lightLong = Math.exp(-depthRatio / 3) * sunlight;
   const lightSurf = sunlight;
@@ -6001,7 +6025,7 @@ function updateCreatures(world: World, dt: number): void {
     // slots get expressed (catSynthMask/inhSynthMask, below) -- the old
     // SYNTH_AA/FA/BIO/CHL/ENZ/RIBO synthMask bits no longer exist (the
     // VM only sets BOND/COMPETENCE/PACKAGE on synthMask now).
-    const ambientLight = Math.exp(-c.y / LIGHT_DECAY) * solarLight(world);
+    const ambientLight = ambientLightAt(world, c.x, c.y);
     runGenericReactions(c, dtT, ambientLight);
     // Standing transporters across the outer membrane (cell<->world).
     // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a

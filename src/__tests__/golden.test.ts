@@ -302,7 +302,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: founder spawn Y is now a triangular distribution
     // (peaked near the surface, tapering over 10%..90% of height)
     // instead of uniform over 10%..45%. Intended.
-    const GOLDEN = "b055310a";
+    // Bumped again: sunlight is now occluded by rock -- a cell whose
+    // column has terrain above it (terrainHeightmap[x] < y) gets zero
+    // light, so photosynthesis + photoreceptors go dark under overhangs
+    // and surface outcrops (caves become dark refugia). Intended.
+    const GOLDEN = "d9c0d25b";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
