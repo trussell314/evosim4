@@ -7283,6 +7283,40 @@ function rebuildSensorBins(world: World): void {
     SENSOR_BIN_SUMX[chem][bin] += xi;
     SENSOR_BIN_SUMY[chem][bin] += yi;
   }
+  // Blend each region's reserve into the bins as particle-equivalents,
+  // placed at the region center, so SENSE_OUT gradients sense total
+  // (rendered + reserve) food. With the particle cap low most food lives
+  // in reserve; without this a cell would be blind to it and chase only
+  // the sparse rendered sample. Deterministic; ~nReg*CHEMICAL_COUNT/tick.
+  const res = world.reserve;
+  if (res.length > 0) {
+    const rcols = regionCols(world);
+    const nReg = rcols * regionRows(world);
+    const volPer = (4 / 3) * Math.PI * PRECIP_R * PRECIP_R * PRECIP_R;
+    const half = REGION_PX / 2;
+    for (let ri = 0; ri < nReg; ri++) {
+      const rgx = (ri % rcols) * REGION_PX + half;
+      const rgy = ((ri / rcols) | 0) * REGION_PX + half;
+      let bx = Math.floor(rgx / SENSOR_BIN);
+      let by = Math.floor(rgy / SENSOR_BIN);
+      if (bx < 0) bx = 0; else if (bx >= SENSOR_BIN_COLS) bx = SENSOR_BIN_COLS - 1;
+      if (by < 0) by = 0; else if (by >= SENSOR_BIN_ROWS) by = SENSOR_BIN_ROWS - 1;
+      const bin = by * SENSOR_BIN_COLS + bx;
+      const base = ri * AMBIENT_STRIDE;
+      for (let k = 0; k < CHEMICAL_COUNT; k++) {
+        const rmass = res[base + k];
+        if (rmass <= 0) continue;
+        const density = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
+        const amountPer = (density * volPer) / CHEM_MM[k];
+        if (amountPer <= 0) continue;
+        const eq = Math.round(rmass / amountPer);
+        if (eq <= 0) continue;
+        SENSOR_BIN_COUNT[k][bin] += eq;
+        SENSOR_BIN_SUMX[k][bin] += eq * rgx;
+        SENSOR_BIN_SUMY[k][bin] += eq * rgy;
+      }
+    }
+  }
 }
 
 // Gradient pull vector toward particles of a given chem within

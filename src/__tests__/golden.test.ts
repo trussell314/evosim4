@@ -267,7 +267,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // overflow lives in now-edible reserve), and reservePass promotion
     // spreads visible particles proportional to each region's reserve
     // share instead of draining in region order. Intended.
-    const GOLDEN = "1cd667a2";
+    // Bumped again: SENSE_OUT gradients now blend each region's reserve
+    // (as particle-equivalents) into the sensor bins, so cells sense
+    // total rendered+reserve food -- foraging trajectories shift.
+    // Intended; determinism re-verified green.
+    const GOLDEN = "e2b8b2a5";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
