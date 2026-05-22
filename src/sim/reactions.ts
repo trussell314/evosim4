@@ -428,7 +428,14 @@ function installNamedReactions(out: Reaction[]): void {
   // biomass=6 adp=7 waste=8 chl=9 enz=10 rib=11 biop=12 memb=13.
   // Energy reactions: no mrnaScale (these aren't protein synthesis).
   out[0] = mk([CHEM_GLU, CHEM_O2], [1, 1], [CHEM_CO2], [2], +10, 16);                          // aerobic: glu+o2 -> 2 co2 + 10 atp
-  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +2, 1.5);                   // ferment: glu -> 0.5 co2 + 0.5 waste + 2 atp
+  // Anaerobic glycolysis: the ONLY O2-free ATP route, so it's what a
+  // cell in dark, anoxic water (where neither betaOx nor
+  // photophosphorylation can fire) must live on. Buffed +2->+4 ATP and
+  // rate 1.5->4 so it's a viable fallback strategy (still far below
+  // aerobic glu+o2's 10@16, so cells prefer respiration when O2 is
+  // present, but anaerobes / deep detritivores can now actually subsist
+  // on fermented glucose from digested necromass).
+  out[1] = mk([CHEM_GLU], [1], [CHEM_CO2, CHEM_WASTE], [0.5, 0.5], +4, 4);                     // ferment: glu -> 0.5 co2 + 0.5 waste + 4 atp
   out[2] = mk([CHEM_FA, CHEM_O2], [1, 1], [CHEM_CO2], [2], +14, 1.5);                          // betaOx: fa+o2 -> 2 co2 + 14 atp
   // Photosynth: requires chlorophyll molecule (mandatory multiplier).
   // vmax 1.2 -> 5.0, DERIVED (not guessed) from the glu mass balance:

@@ -2503,9 +2503,16 @@ function spawnFounder(world: World): Creature | null {
   const nc = creatures.length;
   for (let attempt = 0; attempt < 32; attempt++) {
     x = world.width * (0.1 + 0.8 * simRng());
-    // Y range covers most of the water column (10%..90% of height),
-    // skipping just the surface band and the rocky terrain at the floor.
-    y = world.height * (0.1 + 0.8 * simRng());
+    // Y range biased to the PHOTIC zone (top ~10%..45% of height).
+    // Light e-folds every LIGHT_DECAY(=250)px below the surface, and
+    // the two cellular ATP sources both need either light
+    // (photophosphorylation) or O2 (respiration/betaOx, and O2 is made
+    // by surface photosynthesis), so a founder dropped into the dark,
+    // anoxic deep water cannot bootstrap energy and just peters out.
+    // Spawning founders where they can actually power up lets a lineage
+    // establish; descendants then drift down into the (now better
+    // oxygenated, see REGION_DIFFUSION_HALFLIFE_S) deeper water.
+    y = world.height * (0.1 + 0.35 * simRng());
     let okay = true;
     // Terrain avoidance: refuse to place a founder at-or-below the
     // topmost rock surface in this column. topTerrainYAtColumn handles
@@ -3402,12 +3409,17 @@ const AMBIENT_STRIDE = CHEMICAL_COUNT;
 function ambientBaseAt(world: { width: number; height: number }, x: number, y: number): number {
   return regionIndexAt(world, x, y) * AMBIENT_STRIDE;
 }
-// Per-neighbour Jacobi exchange fraction giving a ~10-minute
+// Per-neighbour Jacobi exchange fraction giving a ~2-minute
 // half-life for the longest-wavelength (domain-spanning) gradient,
 // derived from the region-grid extent. Recomputed per call (cheap)
 // so it adapts to world size; clamped well under the 2-D explicit
 // stability limit (sum of 4 edge coeffs < 0.5).
-const REGION_DIFFUSION_HALFLIFE_S = 600;
+// Lowered 600 -> 120: at 600s the surface->floor O2 gradient took ~10
+// min to half-equilibrate -- longer than a cell lives -- so the deep
+// water stayed anoxic and the aphotic zone was an energy desert (no
+// O2 for betaOx/respiration, no light for photophosphorylation), which
+// killed the majority of cells that spawn below the photic layer.
+const REGION_DIFFUSION_HALFLIFE_S = 120;
 let REGION_DIFF_SCRATCH = new Float32Array(0);
 function diffuseRegions(world: World, dt: number): void {
   // The DISSOLVED field is a true aqueous solute -> isotropic Jacobi

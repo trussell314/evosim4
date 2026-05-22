@@ -274,7 +274,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: founder top-up now fills the ENTIRE remaining deficit
     // to FOUNDER_TARGET each trickle (was 20% of the deficit), so more
     // founders spawn per interval -> different RNG draw sequence. Intended.
-    const GOLDEN = "e38e65cf";
+    // Bumped again: energy-economy pass to relieve the anoxic-deep-zone
+    // die-off -- ambient diffusion halflife 600s->120s (O2 reaches depth),
+    // founders spawn in the photic zone (top 10-45% not 10-90%), and the
+    // anaerobic fermentation route buffed (+2->+4 ATP, rate 1.5->4).
+    // Intended; determinism + mass-conservation re-verified green.
+    const GOLDEN = "7c4b5c78";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
