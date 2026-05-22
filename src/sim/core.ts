@@ -1309,6 +1309,10 @@ export interface World {
   // the windward train. Direction-paired like the exposure maps.
   waveOriginFromLeft?: Float32Array;
   waveOriginFromRight?: Float32Array;
+  // Per-column windward-apron wave-amplitude multiplier (shoaling toward
+  // surface-breaching rock). Direction-paired like the maps above.
+  shoalFromLeft?: Float32Array;
+  shoalFromRight?: Float32Array;
   // Per-region effective temperature (state-bearing field, stepped by
   // sampleRegionTemps each tick: diffuses neighbour heat, relaxes
   // toward the analytical baseline temperatureAt, integrates vent

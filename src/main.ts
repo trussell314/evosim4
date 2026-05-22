@@ -72,6 +72,7 @@ import {
   WIND_MAX,
   temperatureAt,
   VENT_BASE_INTENSITY,
+  shoalAt,
   solarLight,
   takeSnapshot,
   chemName,
@@ -2433,6 +2434,32 @@ function render(): void {
   ctx.moveTo(0, surfaceYAt(snapshot, 0));
   for (let x = SURFACE_VIS_STEP; x <= width; x += SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.stroke();
+
+  // Wave-crash foam: where the surface shoals into a rock (shoalAt > 1),
+  // spray bursts as crests arrive. Intensity peaks at the rock face (max
+  // shoal) and pulses with the live crest height. Render-only -- uses
+  // Math.random + wall time, no determinism impact.
+  if (Math.abs(snapshot.wind) > WIND_MAX * 0.05) {
+    for (let x = 0; x <= width; x += 4) {
+      const boost = shoalAt(snapshot, x) - 1; // 0 in open water, peaks at the face
+      if (boost <= 0.02) continue;
+      const sy = surfaceYAt(snapshot, x);
+      const up = surfaceY - sy; // >0 when a crest is up at this column
+      if (up <= 0) continue;
+      const intensity = boost * Math.min(1, up / Math.max(1, snapshot.surfaceWaveAmp));
+      if (intensity < 0.05) continue;
+      const n = Math.min(10, Math.round(intensity * 9));
+      ctx.fillStyle = `rgba(230, 247, 255, ${Math.min(0.75, intensity).toFixed(3)})`;
+      for (let i = 0; i < n; i++) {
+        const sx = x + (Math.random() - 0.5) * 7;
+        const rise = Math.random() * Math.random() * 18 * (0.6 + boost);
+        const rr = 0.6 + Math.random() * 1.5;
+        ctx.beginPath();
+        ctx.arc(sx, sy - rise, rr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
 
   // Pre-bake terrain bitmap if needed; the blit happens later so rock
   // paints over particles that would otherwise visibly overlap the

@@ -1005,6 +1005,13 @@ export interface WorldEnv {
   // windward train. Direction-paired like the exposure maps.
   waveOriginFromLeft?: Float32Array;
   waveOriginFromRight?: Float32Array;
+  // Per-column wave-amplitude multiplier (>=1) that ramps up over the
+  // windward apron of a surface-breaching rock -- shoaling, so the wave
+  // visibly steepens as it nears the rock and then breaks (the rock face
+  // is glassy via exposure 0). Direction-paired; also drives the foam
+  // accent in the renderer (where the boost is largest = the rock face).
+  shoalFromLeft?: Float32Array;
+  shoalFromRight?: Float32Array;
   // Optional vent state. WorldEnv is the narrow slice that helpers
   // like temperatureAt see; vents contribute heat through this so the
   // helper doesn't need a full World.
@@ -1044,13 +1051,23 @@ export function waveOriginAt(world: WorldEnv, x: number): number {
   return map[ix];
 }
 
+// Windward-apron amplitude multiplier (>=1): the wave shoals (piles up)
+// as it approaches a surface-breaching rock. Drives both the steepening
+// surface and the renderer's foam accent.
+export function shoalAt(world: WorldEnv, x: number): number {
+  const map = world.wind >= 0 ? world.shoalFromLeft : world.shoalFromRight;
+  if (!map || map.length === 0) return 1;
+  const ix = Math.max(0, Math.min(map.length - 1, Math.floor(x)));
+  return map[ix];
+}
+
 export function surfaceYAt(world: WorldEnv, x: number): number {
   const t = world.t;
   // Amplitude derives from wind magnitude and per-column shelter.
   // Floor at 0 -- a sheltered column with calm wind is glassy.
   const windFactor = Math.min(1, Math.abs(world.wind) / WIND_MAX);
   const expo = windExposureAt(world, x);
-  const A = world.surfaceWaveAmp * windFactor * expo;
+  const A = world.surfaceWaveAmp * windFactor * expo * shoalAt(world, x);
   if (A <= 0) return world.surfaceY;
   // Wave propagation direction follows wind sign: positive wind blows
   // right, so waves travel +x; negative wind flips the time term.
@@ -1373,6 +1390,34 @@ export function generateObstacles(world: World): void {
   };
   world.waveOriginFromLeft = buildWaveOrigin(true);
   world.waveOriginFromRight = buildWaveOrigin(false);
+
+  // Shoaling maps: a wave bound for a surface-breaching rock piles up as
+  // it reaches the shallows in front of it. For each open-water column,
+  // find the nearest breaching rock DOWNWIND within SHOAL_APRON_PX and
+  // boost amplitude, strongest right at the rock face -- so the wave
+  // steepens into the rock and then breaks (the rock columns are glassy
+  // via exposure 0). Direction-paired: downwind is +x for rightward wind.
+  const SHOAL_APRON_PX = 55;
+  const SHOAL_GAIN = 1.1; // up to ~2.1x amplitude at the face
+  const buildShoal = (fromLeft: boolean): Float32Array => {
+    const m = new Float32Array(cliffHeight.length);
+    m.fill(1);
+    const step = fromLeft ? 1 : -1; // scan downwind for the rock
+    for (let x = 0; x < cliffHeight.length; x++) {
+      if (cliffHeight[x] > 0) continue; // on the rock: no shoaling (glassy)
+      for (let d = 1; d <= SHOAL_APRON_PX; d++) {
+        const ux = x + step * d;
+        if (ux < 0 || ux >= cliffHeight.length) break;
+        if (cliffHeight[ux] > 0) { // rock d px downwind -> shoal, peak at the face
+          m[x] = 1 + SHOAL_GAIN * (1 - (d - 1) / SHOAL_APRON_PX);
+          break;
+        }
+      }
+    }
+    return m;
+  };
+  world.shoalFromLeft = buildShoal(true);
+  world.shoalFromRight = buildShoal(false);
 
   // Vent: anchor it at the normalized VENT_ORIGIN inside the seafloor
   // notch. Per-world vent state (next eruption time, current phase)
@@ -8723,6 +8768,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     windExposureFromRight: world.windExposureFromRight,
     waveOriginFromLeft: world.waveOriginFromLeft,
     waveOriginFromRight: world.waveOriginFromRight,
+    shoalFromLeft: world.shoalFromLeft,
+    shoalFromRight: world.shoalFromRight,
     vent: world.vent ? { ...world.vent } : undefined,
     particleTarget: world.particleTarget,
     parallelMin: world.parallelMin,
