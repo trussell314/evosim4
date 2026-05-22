@@ -825,7 +825,12 @@ export function runTransportReactions(c: Creature, world: World, dt: number): vo
 // biosynthesizing (because it has no ATP) bleeds structure and
 // eventually drops below MIN_VIABLE_MEMBRANE, at which point it
 // autolyzes.
-const MEMBRANE_DECAY_PER_SEC = 0.005;
+// Lowered 0.005 -> 0.003: membrane attrition is the dominant death, and
+// at 0.005 the standing upkeep tax outran the thin synthesis a seedless
+// cell could afford, so cells bled membrane to the autolysis floor
+// before they could grow + reproduce. A gentler tax lets the modest
+// autotrophic surplus net positive long enough to establish a lineage.
+const MEMBRANE_DECAY_PER_SEC = 0.003;
 // The three mandatory-machinery molecules (chl/enz/ribo) gate hard at
 // zero now, so their decay is what eventually kills a starving cell.
 // Lowered to ~0.001 so cells survive temporary substrate shortages

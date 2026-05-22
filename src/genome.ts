@@ -1368,7 +1368,13 @@ export function makeRandomViableGenome(
   // stays aligned through the shuffle; threshold + which reserve are
   // randomized per founder, and mutation/selection tune it from there.
   const repSensor = rng() < 0.5 ? OP.SELF_ENERGY : OP.SELF_MEMBRANE;
-  const repThresh = 8 + Math.floor(rng() * 40); // 8..47, positive i8
+  // Lowered 8..47 -> 4..16: at the old range a seedless descendant (born
+  // small, no founder seed) almost never grew its energy/membrane high
+  // enough to clear the gate, so only seed-subsidized founders ever
+  // reproduced and every lineage died with its founder. A lower gate is
+  // reachable by an ignited-but-modest cell; mutation/selection still
+  // tune it per lineage from here.
+  const repThresh = 4 + Math.floor(rng() * 13); // 4..16, positive i8
   const tokens: number[][] = [
     [repSensor, OP.PUSH8, repThresh, OP.GT, OP.JZ, 1, OP.REPRODUCE],
     [OP.PUSH8, 4, OP.INGEST], // low bond-energy threshold -> eats detritus

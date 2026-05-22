@@ -449,7 +449,11 @@ function installNamedReactions(out: Reaction[]): void {
   // weak growth even aa-replete). Validated empirically by the
   // unfed photoautotroph/phototaxis controlled runs. Global,
   // intended behavior change; golden re-baselined.
-  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 5.0, { lightIn: 1, surfaceScale: true, chlScale: true });
+  // vmax 5.0 -> 6.5: part of thickening the autotrophic surplus so a
+  // SEEDLESS cell (not just a seed-subsidized founder) can fix enough
+  // carbon to fund growth-to-reproduction. Pairs with the photophos-
+  // phorylation (out[25]) boost and the reduced membrane-decay tax.
+  out[3] = mk([CHEM_CO2], [1], [CHEM_GLU, CHEM_O2], [0.5, 0.5], -1, 6.5, { lightIn: 1, surfaceScale: true, chlScale: true });
   // Biosynth (gated by VM_OUT.synthMask bits 1/2/4/3/5/0). All scale
   // with mrna / mRNA count (mandatory) -- this is the cell's
   // protein synthesis machinery, and zero mRNA means zero growth.
@@ -537,5 +541,9 @@ function installNamedReactions(out: Reaction[]): void {
   // chl pool (chlScale) for an autocatalytic takeoff. Gated only on
   // carrying chlorophyll (gateMask 0), exactly like out[3], so
   // autotrophy stays emergent from the genome's SYNTH_CHL.
-  out[25] = mk([], [], [], [], +6, 4, { lightIn: 1, chlScale: true, surfaceScale: true });
+  // rate 4 -> 6: thicken the light-driven ATP supply so an ignited but
+  // seedless cell runs a real surplus (covers upkeep + growth + fission),
+  // not just break-even. With the rest of the energy pass this is what
+  // lets a lineage sustain itself once the founder seed is spent.
+  out[25] = mk([], [], [], [], +6, 6, { lightIn: 1, chlScale: true, surfaceScale: true });
 }

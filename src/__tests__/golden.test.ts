@@ -282,7 +282,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: CHL_REF 5->2 so a fresh founder's seed chlorophyll
     // drives 50% (not 20%) light-harvesting, broadening autotroph
     // ignition ~8x. Intended; determinism + mass re-verified green.
-    const GOLDEN = "2a86785f";
+    // Bumped again: energy-economy tuning pass -- photophosphorylation
+    // rate 4->6, photosynthesis rate 5->6.5, reproduce threshold range
+    // 8..47 -> 4..16, membrane decay 0.005->0.003. Intended.
+    const GOLDEN = "9ca01db3";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
