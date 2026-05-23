@@ -180,6 +180,10 @@ export const ELEMENT_KIND = { CHROMOSOME: 0, PLASMID: 1 } as const;
 export interface GenomeElement {
   kind: number; // ELEMENT_KIND.*
   bytes: Uint8Array;
+  // Per-element VM execution state (pc/stack/regs persist independently
+  // so each element runs its own program). Element 0's state is the
+  // cell's `vm`; extra elements get their own, created lazily.
+  vm?: VMState;
 }
 
 // Max bytes any single genome-editing event may copy in one tick:

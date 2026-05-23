@@ -9,6 +9,7 @@ import {
   type VMSelf,
   type VMOutputs,
   newVMState,
+  newOutputs,
   runTick,
   makeRandomViableGenome,
   genomeSynthMask,
@@ -26,6 +27,7 @@ import {
   SYNTH_BIT_PACKAGE,
   appendGenomeBytes,
   GENE_FRAGMENT_CAP,
+  PARTITION_CAP,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
@@ -4800,6 +4802,72 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
   updateCreatureRadius(child);
 }
 
+// Express a cell's full genome into c.vmOut. With one element (every cell
+// today) this is exactly the single runTick -- byte-identical. With >1
+// element (diploidy / plasmids), continuous outputs (catalyst/inhibitor
+// synth, excrete, transport, force) combine ADDITIVELY/union across
+// elements -- a working allele on either homolog expresses the catalyst,
+// so recessive knockouts are masked -- and discrete actions
+// (reproduce/predate/engulf) OR together. Per-element instruction cost
+// sums, so ploidy/plasmid load is priced in ATP.
+const EXPRESS_SCRATCH = newOutputs();
+function expressCell(
+  c: Creature, sensors: typeof VM_SENSORS, self: typeof VM_SELF,
+  budget: number, ec?: Uint32Array,
+): void {
+  const g = c.genomes;
+  // Element 0 uses the cell's vm and writes c.vmOut directly -- this
+  // single call is identical to the pre-multi-element code path.
+  runTick(g[0].bytes, c.vm, sensors, self, budget, c.vmOut, ec);
+  for (let i = 1; i < g.length; i++) {
+    const el = g[i];
+    if (!el.vm) el.vm = newVMState();
+    runTick(el.bytes, el.vm, sensors, self, budget, EXPRESS_SCRATCH);
+    mergeVmOutputs(c.vmOut, EXPRESS_SCRATCH);
+  }
+}
+// Combine one element's outputs (`from`) into the accumulator (`into`).
+export function mergeVmOutputs(into: VMOutputs, from: VMOutputs): void {
+  // Catalyst / inhibitor synthesis: union (any element expressing a slot
+  // expresses it -> a working allele masks a knocked-out homolog).
+  for (let i = 0; i < from.catSynthCount; i++) {
+    const s = from.catSynthList[i];
+    if (!into.catSynthMask[s]) { into.catSynthMask[s] = 1; into.catSynthList[into.catSynthCount++] = s; }
+  }
+  for (let i = 0; i < from.inhSynthCount; i++) {
+    const s = from.inhSynthList[i];
+    if (!into.inhSynthMask[s]) { into.inhSynthMask[s] = 1; into.inhSynthList[into.inhSynthCount++] = s; }
+  }
+  // Excrete / transport / force: additive (co-dominant).
+  const ex = into.excrete, fx = from.excrete, tr = into.transport, ft = from.transport;
+  for (let k = 0; k < ex.length; k++) { ex[k] += fx[k]; tr[k] += ft[k]; }
+  into.thrustX += from.thrustX; into.thrustY += from.thrustY; into.turn += from.turn;
+  // Discrete actions: OR. A working copy rescues a broken one.
+  if (from.reproduce) { into.reproduce = true; into.reproduceFraction = from.reproduceFraction; }
+  if (from.predate) into.predate = true;
+  if (from.engulf) into.engulf = true;
+  if (from.ingestThreshold < into.ingestThreshold) into.ingestThreshold = from.ingestThreshold;
+  into.synthMask |= from.synthMask;
+  if ((from.synthMask & (1 << SYNTH_BIT_BOND)) !== 0) into.bondMarker = from.bondMarker;
+  // Partition bias: last writer for a chem wins; new chems append up to cap.
+  for (let i = 0; i < from.partitionCount; i++) {
+    const chem = from.partitionChem[i];
+    let slot = -1;
+    for (let q = 0; q < into.partitionCount; q++) {
+      if (into.partitionChem[q] === chem) { slot = q; break; }
+    }
+    if (slot < 0 && into.partitionCount < PARTITION_CAP) {
+      slot = into.partitionCount++;
+      into.partitionChem[slot] = chem;
+    }
+    if (slot >= 0) into.partitionBias[slot] = from.partitionBias[i];
+  }
+  // Instruction cost sums -> ploidy/plasmid load is priced in ATP.
+  into.instructions += from.instructions;
+  // spliceMode intentionally NOT merged: only element 0 self-modifies for
+  // now (per-element self-splice is a later phase).
+}
+
 // An engulfed cell is FULLY ALIVE and its relationship to the host is
 // the exact analog of a free cell's relationship to the outer
 // environment -- the host cytoplasm IS its environment:
@@ -4849,7 +4917,7 @@ function runInnerCell(
     VM_SELF.mass = selfMass;
   }
   VM_SELF.membrane = inner.molecules.membrane;
-  runTick(inner.genome, inner.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, inner.vmOut);
+  expressCell(inner, VM_SENSORS, VM_SELF, world.vmInstrBudget);
   spendATP(inner, inner.vmOut.instructions * ENERGY_PER_INSTRUCTION, ATP_VM);
   if (inner.vmOut.spliceMode !== 0 && inner.vmOut.spliceLength > 0) {
     applyGenomeSplice(inner, inner.vmOut.spliceMode, inner.vmOut.spliceOffset, inner.vmOut.spliceLength);
@@ -6251,7 +6319,7 @@ function updateCreatures(world: World, dt: number): void {
     // rates.
     const sp = world.species.get(c.speciesKey);
     const ec = sp ? sp.execCounts : undefined;
-    runTick(c.genome, c.vm, VM_SENSORS, VM_SELF, world.vmInstrBudget, vmOut, ec);
+    expressCell(c, VM_SENSORS, VM_SELF, world.vmInstrBudget, ec);
     if (sp) sp.vmTicks++;
     spendATP(c, vmOut.instructions * ENERGY_PER_INSTRUCTION, ATP_VM);
     // K-5: somatic-mutation suppression is now driven by CHEM_REPAIR

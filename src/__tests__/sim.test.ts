@@ -44,9 +44,10 @@ import {
   TRANSPORT_CHEM_IDS,
   TRANSPORT_ATP_SLOT,
   spawnCompositeInstance,
+  mergeVmOutputs,
 } from "../sim";
 import { ARCHETYPES } from "../genome-archetypes";
-import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, newVMState, GENE_FRAGMENT_CAP, type VMState } from "../genome";
+import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, SYNTH_BIT_BOND, newVMState, newOutputs, GENE_FRAGMENT_CAP, type VMState } from "../genome";
 
 // Local viable-heterotroph genome for test creatures. Mirrors the
 // production curated default that used to exist before founders went
@@ -3020,5 +3021,62 @@ describe("standing transporters (Substrate B, sub-commit 2: host<->organelle)", 
 
   it("isolates the ATP-translocase effect vs no-catalyst control", () => {
     expect(runAtp(10)).toBeGreaterThan(runAtp(0) + 2);
+  });
+});
+
+// Multi-element expression combine rule (genetics phase 1). expressCell runs
+// each genome element and folds the extra elements' outputs into the cell's
+// via mergeVmOutputs. The rule: catalyst/inhibitor synthesis unions (a working
+// allele masks a knocked-out homolog), excrete/transport/force add, discrete
+// actions OR, ingest threshold takes the min (most permissive), synth bits OR,
+// instruction cost sums (ploidy is priced in ATP).
+describe("mergeVmOutputs combine rule", () => {
+  it("unions catalyst/inhibitor synthesis across elements", () => {
+    const a = newOutputs();
+    const b = newOutputs();
+    a.catSynthMask[3] = 1; a.catSynthList[a.catSynthCount++] = 3;
+    b.catSynthMask[3] = 1; b.catSynthList[b.catSynthCount++] = 3; // overlap
+    b.catSynthMask[7] = 1; b.catSynthList[b.catSynthCount++] = 7; // unique
+    b.inhSynthMask[2] = 1; b.inhSynthList[b.inhSynthCount++] = 2;
+    mergeVmOutputs(a, b);
+    expect(a.catSynthCount).toBe(2); // 3 deduped, 7 added
+    expect(a.catSynthMask[3]).toBe(1);
+    expect(a.catSynthMask[7]).toBe(1);
+    expect(a.inhSynthCount).toBe(1);
+    expect(a.inhSynthMask[2]).toBe(1);
+  });
+
+  it("adds excrete/transport/force and ORs discrete actions", () => {
+    const a = newOutputs();
+    const b = newOutputs();
+    a.excrete[1] = 2; b.excrete[1] = 3;
+    a.transport[0] = -1; b.transport[0] = 4;
+    a.thrustX = 1; b.thrustX = 2; a.turn = 0.1; b.turn = 0.2;
+    b.reproduce = true; b.reproduceFraction = 0.7;
+    b.predate = true; b.engulf = true;
+    mergeVmOutputs(a, b);
+    expect(a.excrete[1]).toBe(5);
+    expect(a.transport[0]).toBe(3);
+    expect(a.thrustX).toBe(3);
+    expect(a.turn).toBeCloseTo(0.3);
+    expect(a.reproduce).toBe(true);
+    expect(a.reproduceFraction).toBe(0.7);
+    expect(a.predate).toBe(true);
+    expect(a.engulf).toBe(true);
+  });
+
+  it("takes the most permissive ingest threshold and ORs synth bits", () => {
+    const a = newOutputs();
+    const b = newOutputs();
+    a.ingestThreshold = 5; b.ingestThreshold = 2;
+    a.synthMask = 1 << SYNTH_BIT_COMPETENCE;
+    b.synthMask = 1 << SYNTH_BIT_BOND; b.bondMarker = 42;
+    a.instructions = 8; b.instructions = 6;
+    mergeVmOutputs(a, b);
+    expect(a.ingestThreshold).toBe(2);
+    expect(a.synthMask & (1 << SYNTH_BIT_COMPETENCE)).toBeTruthy();
+    expect(a.synthMask & (1 << SYNTH_BIT_BOND)).toBeTruthy();
+    expect(a.bondMarker).toBe(42); // bond expressed by b carries its marker
+    expect(a.instructions).toBe(14); // cost sums
   });
 });
