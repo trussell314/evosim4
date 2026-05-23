@@ -168,6 +168,20 @@ export const N_REACTIONS = CATALYST_COUNT;
 // SENSE_CHEMICAL's operand by it -- part of the genome ABI.
 export const CHEMICAL_COUNT = 96;
 
+// --- Multi-element genome (chromosomes + plasmids) ---------------------
+// A cell's heritable material is a SET of genetic elements, not one flat
+// array. CHROMOSOME elements are the essential, vertically-inherited
+// genome (>=2 homologous copies => diploidy); PLASMID elements are small,
+// non-essential, horizontally-transferable. Today every cell carries
+// exactly one CHROMOSOME (genomes[0]) and Creature.genome is an accessor
+// for its bytes, so behavior is unchanged -- this just lays the storage
+// the later phases (diploidy, conjugation) build on. See GENETICS_PLAN.md.
+export const ELEMENT_KIND = { CHROMOSOME: 0, PLASMID: 1 } as const;
+export interface GenomeElement {
+  kind: number; // ELEMENT_KIND.*
+  bytes: Uint8Array;
+}
+
 // Max bytes any single genome-editing event may copy in one tick:
 // the SPLICE_DUP/SPLICE_DEL payload cap, and (reused) the per-event
 // cap for horizontal injection and death-triggered EGT fragment

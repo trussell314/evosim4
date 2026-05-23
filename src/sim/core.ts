@@ -6,7 +6,7 @@
 // profile, genome VM types) and never imports sim.ts, so the
 // dependency edge is one-directional and cycle-free.
 
-import { CATALYST_COUNT, newOutputs, type VMState, type VMOutputs } from "../genome";
+import { CATALYST_COUNT, newOutputs, ELEMENT_KIND, type VMState, type VMOutputs, type GenomeElement } from "../genome";
 import {
   type Molecules, MOLECULE_IDS,
   CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
@@ -886,7 +886,16 @@ export class Creature {
   // when the worker rebuilds creature snapshots each frame.
   id: number = 0;
   // Non-typed-array fields kept on the handle (variable-shape, not hot)
-  genome!: Uint8Array;
+  // Heritable elements: genomes[0] is the (only, today) chromosome.
+  // `genome` is an accessor for its bytes so the existing single-genome
+  // call sites are unchanged while the multi-element storage exists
+  // underneath (diploidy = extra CHROMOSOMEs; HGT = PLASMID elements).
+  genomes: GenomeElement[] = [];
+  get genome(): Uint8Array { return this.genomes[0].bytes; }
+  set genome(v: Uint8Array) {
+    if (this.genomes.length === 0) this.genomes.push({ kind: ELEMENT_KIND.CHROMOSOME, bytes: v });
+    else this.genomes[0].bytes = v;
+  }
   vm!: VMState;
   // Per-cell VM output struct. Previously a single module-global
   // (VM_OUT), shared across all cells. Made per-cell so each creature
