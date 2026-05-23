@@ -1198,17 +1198,44 @@ export function solarLight(world: { dayPhase: number }): number {
   return Math.max(0, Math.sin(2 * Math.PI * world.dayPhase));
 }
 
-// Rock occlusion of sunlight: light comes from above and cannot pass
-// through rock. A point is fully shadowed if the topmost terrain in its
-// column (terrainHeightmap[x]) sits above it (smaller y). This makes
-// caves and overhangs dark refugia where photosynthesis can't run.
+// Rock occlusion of sunlight. Light comes from above and rock blocks the
+// direct beam, but water scatters light into shadows, so the edge is a
+// soft penumbra rather than a hard step (the old binary 0/1 looked like
+// cut-out cardboard). Three terms make it diffuse realistically:
+//   - vertical penumbra: light fades over LIGHT_PENUMBRA_PX around the
+//     rock rim instead of switching instantly (a smoothstep on depth
+//     below the rim).
+//   - horizontal softening: the rim is sampled across a small window
+//     whose half-width grows with depth (a deeper point sees a wider,
+//     softer edge -- its occluding rim is farther up), so adjacent
+//     columns stop producing hard vertical stripes.
+//   - LIGHT_SHADOW_FLOOR: a little scattered skylight reaches shadows,
+//     so they're dim rather than pure black. Combined with the depth
+//     decay in ambientLightAt, deep caves still go effectively dark.
+const LIGHT_SHADOW_FLOOR = 0.06;
+const LIGHT_PENUMBRA_PX = 10;
 export function lightOcclusion(
   env: { terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
 ): number {
   const hm = env.terrainHeightmap;
   if (!hm || hm.length === 0) return 1;
-  let ix = Math.floor(x); if (ix < 0) ix = 0; else if (ix >= hm.length) ix = hm.length - 1;
-  return hm[ix] < y ? 0 : 1;
+  const n = hm.length;
+  // Penumbra half-width widens with depth below the surface.
+  let spread = y * 0.05; if (spread < 3) spread = 3; else if (spread > 36) spread = 36;
+  let lit = 0;
+  for (let t = -2; t <= 2; t++) {
+    let ix = Math.round(x + (t * 0.5) * spread);
+    if (ix < 0) ix = 0; else if (ix >= n) ix = n - 1;
+    const rim = hm[ix]; // +Infinity where no rock -> fully lit tap
+    // smoothstep over [rim - P, rim + P]: 0 (lit) above the rim, 1
+    // (shadow) below it, soft in between. Infinity rim -> stays lit.
+    let s = (y - (rim - LIGHT_PENUMBRA_PX)) / (2 * LIGHT_PENUMBRA_PX);
+    if (s < 0) s = 0; else if (s > 1) s = 1;
+    s = s * s * (3 - 2 * s);
+    lit += 1 - s;
+  }
+  lit *= 0.2; // average of the 5 taps
+  return LIGHT_SHADOW_FLOOR + (1 - LIGHT_SHADOW_FLOOR) * lit;
 }
 // Visible ambient light at a point: solar day-cycle x depth attenuation
 // x rock occlusion. Single source of truth shared by photosynthesis and
@@ -4129,7 +4156,8 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   const s = c.store; const i = c.idx;
   const cols = s.chemCols;
   const k = Math.max(0, 1 - ACT_DECAY * dt);
-  // Rock blocks light, so all three photo bands gate on column occlusion.
+  // Rock blocks light, so all three photo bands scale by the soft rock
+  // occlusion (penumbra + scattered-light floor) at the cell.
   const occ = lightOcclusion(world, c.x, c.y);
   const sunlight = solarLight(world) * occ;
   const depthRatio = Math.max(0, c.y / LIGHT_DECAY);

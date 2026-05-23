@@ -2785,6 +2785,12 @@ function dumpProfile(): void {
     console.log(`  ${r.phase.padEnd(22)} ${r.ms.toFixed(3)}ms  ${pct}%`);
   }
 }
+// Offscreen buffer for the light overlay: the soft light field is
+// sampled into a small bitmap, then upscaled with smoothing so the
+// penumbra reads as a continuous gradient instead of 32px blocks.
+const lightBuf = document.createElement("canvas");
+const lightBufCtx = lightBuf.getContext("2d");
+
 function drawHeatmap(): void {
   if (heatmapMode === "off") return;
   const { width, height, surfaceY } = snapshot;
@@ -2822,27 +2828,43 @@ function drawHeatmap(): void {
     ctx.fillText("heatmap: temperature (cold blue → warm red)", 8, surfaceY + 14);
     return;
   }
-  if (heatmapMode === "light") {
+  if (heatmapMode === "light" && lightBufCtx) {
     // Field overlay of usable sunlight = day-cycle x depth attenuation x
-    // rock occlusion (the same ambientLightAt photosynthesis reads), so
-    // rock shadows and the day/night cycle show up directly. solarLight
-    // is constant per frame and the depth term varies only by row, so
-    // hoist both out of the per-bin loop -- only occlusion is per-bin.
+    // soft rock occlusion (the same ambientLightAt photosynthesis reads).
+    // Sample into a small bitmap, then upscale with smoothing so the
+    // penumbra is a continuous gradient, not flat blocks. solarLight is
+    // constant per frame and the depth term varies only by row, so both
+    // are hoisted -- only occlusion is per-sample.
     const sun = solarLight(snapshot);
-    for (let r = 0; r < rows; r++) {
-      const y = surfaceY + r * cell;
-      const rowLight = sun * Math.exp(-(y + cell / 2) / LIGHT_DECAY);
-      for (let c = 0; c < cols; c++) {
-        const x = c * cell;
-        const v = rowLight * lightOcclusion(snapshot, x + cell / 2, y + cell / 2);
-        ctx.fillStyle = `rgb(${Math.round(255 * v)},${Math.round(238 * v)},${Math.round(120 * v)})`;
-        ctx.fillRect(x, y, cell, cell);
+    const SAMP = 6; // world px per sample (buffer resolution)
+    const bw = Math.max(1, Math.ceil(width / SAMP));
+    const bh = Math.max(1, Math.ceil((height - surfaceY) / SAMP));
+    if (lightBuf.width !== bw) lightBuf.width = bw;
+    if (lightBuf.height !== bh) lightBuf.height = bh;
+    const img = lightBufCtx.createImageData(bw, bh);
+    const data = img.data;
+    for (let by = 0; by < bh; by++) {
+      const y = surfaceY + (by + 0.5) * SAMP;
+      const rowLight = sun * Math.exp(-y / LIGHT_DECAY);
+      for (let bx = 0; bx < bw; bx++) {
+        const x = (bx + 0.5) * SAMP;
+        const v = rowLight * lightOcclusion(snapshot, x, y);
+        const o = (by * bw + bx) * 4;
+        data[o] = Math.round(255 * v);
+        data[o + 1] = Math.round(238 * v);
+        data[o + 2] = Math.round(120 * v);
+        data[o + 3] = 255;
       }
     }
+    lightBufCtx.putImageData(img, 0, 0);
+    const prevSmooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(lightBuf, 0, surfaceY, width, height - surfaceY);
+    ctx.imageSmoothingEnabled = prevSmooth;
     ctx.globalAlpha = 1;
     ctx.fillStyle = "rgba(255,255,255,0.65)";
     ctx.font = UI_CANVAS_FONT;
-    ctx.fillText("overlay: light (dark → bright; rock casts a shadow)", 8, surfaceY + 14);
+    ctx.fillText("overlay: light (dark → bright; rock casts a soft shadow)", 8, surfaceY + 14);
     return;
   }
   if (heatmapMode === "health" || heatmapMode === "reproduce") {

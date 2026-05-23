@@ -318,7 +318,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // cell must earn its mass -- heavy hoarders that sink to the dark
     // floor go net-negative and starve instead of coasting indefinitely.
     // Intended; mass-conservation re-verified green.
-    const GOLDEN = "7e581493";
+    // Bumped again: rock light occlusion is now a soft penumbra (vertical
+    // smoothstep + depth-widening horizontal samples + a faint scattered-
+    // light floor) instead of a hard per-column 0/1, so shadow EDGES feed
+    // photosynthesis/photoreceptors gradually. Intended.
+    const GOLDEN = "78a93412";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
