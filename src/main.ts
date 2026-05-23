@@ -539,6 +539,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
       renderParLabel();
     }
     syncFoundersBtn(snapshot.foundersEnabled !== false);
+    syncFounderMode(snapshot.founderCapEnabled !== false, snapshot.founderTarget ?? founderCapValue);
     syncSeedingBtn(snapshot.ongoingSeeding === true);
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
@@ -1682,13 +1683,91 @@ foundersBtn.addEventListener("click", () => {
   foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
   setBtn(foundersBtn, foundersOn, T_GREEN);
   simWorker.postMessage({ type: "setFoundersEnabled", on: foundersOn });
+  updateFounderModeEnabled();
 });
 function syncFoundersBtn(on: boolean): void {
-  if (on === foundersOn) return;
-  foundersOn = on;
-  foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
-  setBtn(foundersBtn, foundersOn, T_GREEN);
+  if (on !== foundersOn) {
+    foundersOn = on;
+    foundersBtn.textContent = foundersOn ? "founders on" : "founders off";
+    setBtn(foundersBtn, foundersOn, T_GREEN);
+  }
+  updateFounderModeEnabled();
 }
+
+// Founder cap mode (mutex, only meaningful while founders are on).
+// "cap N" tops the world up to N distinct founder coding lineages and
+// stops; "no cap" trickles fresh founders indefinitely with no ceiling.
+const FOUNDER_CAP_STEP = 5;
+const FOUNDER_CAP_MIN = 1;
+let founderCapOn = true;
+let founderCapValue = 10;
+const founderModeWrap = document.createElement("div");
+founderModeWrap.style.cssText =
+  "display:flex;align-items:center;gap:6px;padding:2px 8px;flex:0 1 auto;" +
+  "white-space:nowrap;max-width:100%;border:1px solid #1a3340;" +
+  "border-radius:4px;color:#9ee;background:rgba(0,0,0,.4);";
+founderModeWrap.title =
+  "Founder spawning mode. cap N: maintain up to N distinct founder " +
+  "lineages, then stop. no cap: keep trickling new founders with no ceiling.";
+function mkFounderRadio(text: string): [HTMLLabelElement, HTMLInputElement] {
+  const l = document.createElement("label");
+  l.style.cssText = "display:flex;align-items:center;gap:3px;cursor:pointer;";
+  const r = document.createElement("input");
+  r.type = "radio"; r.name = "founderMode"; r.style.cssText = "cursor:pointer;";
+  l.append(r, document.createTextNode(text));
+  return [l, r];
+}
+const [fmCapLabel, fmCapRadio] = mkFounderRadio("cap");
+const [fmNoCapLabel, fmNoCapRadio] = mkFounderRadio("no cap");
+fmCapRadio.checked = true;
+const fcMinus = mkBtn("−", `Lower the founder cap by ${FOUNDER_CAP_STEP}`);
+const fcPlus = mkBtn("+", `Raise the founder cap by ${FOUNDER_CAP_STEP}`);
+fcMinus.style.cssText = CBTN + "padding:1px 9px;";
+fcPlus.style.cssText = CBTN + "padding:1px 9px;";
+const fcValue = document.createElement("span");
+fcValue.style.cssText = "font-weight:bold;min-width:3ch;text-align:right;color:#cfe;";
+function renderFounderCapLabel(): void { fcValue.textContent = String(founderCapValue); }
+function updateFounderModeEnabled(): void {
+  founderModeWrap.style.opacity = foundersOn ? "1" : "0.4";
+  fmCapRadio.disabled = !foundersOn;
+  fmNoCapRadio.disabled = !foundersOn;
+  const capCtl = foundersOn && founderCapOn;
+  fcMinus.disabled = !capCtl;
+  fcPlus.disabled = !capCtl;
+  fcMinus.style.cursor = capCtl ? "pointer" : "default";
+  fcPlus.style.cursor = capCtl ? "pointer" : "default";
+  fcValue.style.opacity = capCtl ? "1" : "0.45";
+}
+function setFounderCapMode(capOn: boolean): void {
+  founderCapOn = capOn;
+  fmCapRadio.checked = capOn;
+  fmNoCapRadio.checked = !capOn;
+  updateFounderModeEnabled();
+  simWorker.postMessage({ type: "setFounderCapEnabled", on: capOn });
+  if (capOn) simWorker.postMessage({ type: "setFounderTarget", target: founderCapValue });
+}
+function nudgeFounderCap(delta: number): void {
+  founderCapValue = Math.max(FOUNDER_CAP_MIN, founderCapValue + delta);
+  renderFounderCapLabel();
+  simWorker.postMessage({ type: "setFounderTarget", target: founderCapValue });
+}
+fmCapRadio.addEventListener("change", () => { if (fmCapRadio.checked) setFounderCapMode(true); });
+fmNoCapRadio.addEventListener("change", () => { if (fmNoCapRadio.checked) setFounderCapMode(false); });
+fcMinus.addEventListener("click", () => nudgeFounderCap(-FOUNDER_CAP_STEP));
+fcPlus.addEventListener("click", () => nudgeFounderCap(FOUNDER_CAP_STEP));
+renderFounderCapLabel();
+updateFounderModeEnabled();
+founderModeWrap.append(fmCapLabel, fcMinus, fcValue, fcPlus, fmNoCapLabel);
+function syncFounderMode(capOn: boolean, target: number): void {
+  if (target !== founderCapValue) { founderCapValue = target; renderFounderCapLabel(); }
+  if (capOn !== founderCapOn) {
+    founderCapOn = capOn;
+    fmCapRadio.checked = capOn;
+    fmNoCapRadio.checked = !capOn;
+  }
+  updateFounderModeEnabled();
+}
+
 // Ongoing resource seeding. Off by default: the one-shot startup seed
 // (the "initial period") always runs regardless; turning this on
 // resumes periodic resource replenishment toward the cap afterward.
@@ -1762,7 +1841,7 @@ parPlus.addEventListener("click", () => nudgePar(PARALLEL_MIN_RANGE.step));
 renderParLabel();
 parWrap.append(parTitle, parMinus, parValue, parPlus);
 
-gWorld.append(foundersBtn, seedingBtn, capWrap, parWrap);
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce";

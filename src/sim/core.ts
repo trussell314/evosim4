@@ -1112,6 +1112,11 @@ export interface World {
   // Whether the founder top-up spawns new lineages. Optional: absent
   // (older saves / test literals) means enabled. Persisted.
   foundersEnabled?: boolean;
+  // Founder spawning mode. Absent/true = CAPPED: top the world up to
+  // founderTarget distinct coding lineages and stop. false = NO CAP:
+  // ignore the ceiling and trickle a fresh founder every interval
+  // indefinitely (continuous immigration). Persisted.
+  founderCapEnabled?: boolean;
   // Whether the world keeps replenishing resource particles toward the
   // cap *after* the one-shot startup seed. The startup seed (the
   // "initial period") always happens regardless; this only controls

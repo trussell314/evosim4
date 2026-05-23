@@ -2231,6 +2231,7 @@ export function createWorld(
     stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
     rxnStats: newRxnStats(),
     foundersEnabled: true,
+    founderCapEnabled: true,
     ongoingSeeding: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
@@ -5512,11 +5513,17 @@ export function step(world: World, dt: number): void {
     if (!currentCoding.has(key)) world.extinctionCount++;
   }
 
-  // Top up immigration. Each trickle interval, if the number of DISTINCT
-  // CODING genomes alive is below world.founderTarget, spawn the entire
-  // remaining deficit -- so founders inject when FUNCTIONAL diversity
-  // collapses (e.g. after a selective sweep), not merely when
-  // founder-ancestry count is low. No resource/particle cap gates this.
+  // Top up immigration. Two modes, set from the UI:
+  //   CAPPED (default): each trickle interval, if the number of DISTINCT
+  //     CODING genomes alive is below world.founderTarget, spawn the
+  //     entire remaining deficit -- founders inject when FUNCTIONAL
+  //     diversity collapses (e.g. after a selective sweep), not merely
+  //     when founder-ancestry count is low, and stop once the cap is met.
+  //   NO CAP (founderCapEnabled === false): ignore the target ceiling and
+  //     trickle one fresh founder per interval indefinitely (continuous
+  //     immigration with no diversity limit).
+  // No resource/particle cap gates either mode.
+  const capEnabled = world.founderCapEnabled !== false;
   const deficit = Math.max(0, world.founderTarget - currentCoding.size);
   // Suppress founder spawning until the world is ready. Ramp worlds
   // (production) hold founders back until the one-shot seed ramp has
@@ -5529,13 +5536,16 @@ export function step(world: World, dt: number): void {
   // restarts promptly; otherwise spawn at most once per interval.
   const trickleDue = wasEmpty
     || world.t - world.lastFounderTrickleT >= FOUNDER_TRICKLE_INTERVAL_SEC;
-  if (
-    delayDone && world.foundersEnabled !== false && world.founderTarget > 0
-    && deficit > 0 && trickleDue
-  ) {
-    // Fill the entire remaining deficit each time. A freshly empty world
-    // seeds a single founder that re-anchors the palette.
-    const nSpawn = wasEmpty ? 1 : deficit;
+  // Capped mode wants founders only while below the ceiling; no-cap mode
+  // always wants them.
+  const wantFounders = capEnabled
+    ? (world.founderTarget > 0 && deficit > 0)
+    : true;
+  if (delayDone && world.foundersEnabled !== false && wantFounders && trickleDue) {
+    // Capped: fill the entire remaining deficit each time. No cap: a
+    // steady single-founder drip. A freshly empty world seeds exactly
+    // one founder (re-anchoring the palette) in either mode.
+    const nSpawn = wasEmpty ? 1 : (capEnabled ? deficit : 1);
     // Refresh the particle grid: this runs after updateCreatures (whose
     // grid reflects pre-physics positions and has had INGEST removals),
     // so rebuild it for an accurate founder scoop.
@@ -8322,6 +8332,8 @@ interface SavedWorld {
   parallelMin?: number;
   // Founder generation toggle. Absent (old saves) = enabled.
   foundersEnabled?: boolean;
+  // Founder cap mode. Absent (old saves) = capped (prior behavior).
+  founderCapEnabled?: boolean;
   // Ongoing resource-replenishment toggle. Absent (old saves) = off.
   ongoingSeeding?: boolean;
   // Reaction / ATP accounting history. Optional: older saves restore
@@ -8435,6 +8447,7 @@ export function serializeWorld(w: World): string {
     particleTarget: w.particleTarget,
     parallelMin: w.parallelMin,
     foundersEnabled: w.foundersEnabled,
+    founderCapEnabled: w.founderCapEnabled,
     ongoingSeeding: w.ongoingSeeding,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
@@ -8563,11 +8576,11 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.t = saved.t;
   world.nextLineageRoot = saved.nextLineageRoot;
   world.extinctionCount = saved.extinctionCount;
-  // Intentionally NOT restoring saved.founderTarget -- we want the
-  // current FOUNDER_TARGET constant to win so bumps in code take
-  // effect even when restoring from a snapshot taken under an older
-  // target. Tests / scripts that set founderTarget at runtime keep
-  // doing so via direct mutation after createWorld returns.
+  // Founder cap + target are UI-controlled now, so (like particleTarget)
+  // the user's chosen budget survives a reload. Older saves predate
+  // founderCapEnabled -> default to capped (prior behavior).
+  world.founderTarget = saved.founderTarget;
+  world.founderCapEnabled = saved.founderCapEnabled !== false;
   // The visible particle cap IS restored (UI-controlled, must survive
   // a refresh). setParticleTarget keeps particleSpawnRate consistent
   // and clamps to the valid range. Older saves omit it -> keep default.
@@ -8821,6 +8834,10 @@ export interface RenderSnapshot extends WorldEnv {
   reactionTotals?: Int32Array;
   // Mirrors world.foundersEnabled so the UI toggle reflects loaded state.
   foundersEnabled?: boolean;
+  // Mirrors world.founderCapEnabled (cap vs no-cap) and the cap value so
+  // the UI mutex + stepper reflect loaded/runtime state.
+  founderCapEnabled?: boolean;
+  founderTarget?: number;
   // Mirrors world.ongoingSeeding so the UI toggle reflects loaded state.
   ongoingSeeding?: boolean;
   // Windowed reaction history (sparse) for the detail time-graph.
@@ -9095,6 +9112,8 @@ export function takeSnapshot(world: World): RenderSnapshot {
     reactionTotals: world.rxnStats ? reactionTotals(world) : undefined,
     rxnStatsHistory: world.rxnStats ? serializeRxnStats(world.rxnStats) : undefined,
     foundersEnabled: world.foundersEnabled !== false,
+    founderCapEnabled: world.founderCapEnabled !== false,
+    founderTarget: world.founderTarget,
     ongoingSeeding: world.ongoingSeeding === true,
     profile: world.profile,
   };

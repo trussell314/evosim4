@@ -83,6 +83,8 @@ type WorkerInbound =
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
   | { type: "setSeeding"; on: boolean }
+  | { type: "setFounderTarget"; target: number }
+  | { type: "setFounderCapEnabled"; on: boolean }
   | { type: "setDensityChem"; chem: number }
   | {
       type: "spawnSpecies";
@@ -172,6 +174,12 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setSeeding":
       if (world) world.ongoingSeeding = m.on;
+      break;
+    case "setFounderTarget":
+      if (world) world.founderTarget = Math.max(0, Math.round(m.target));
+      break;
+    case "setFounderCapEnabled":
+      if (world) world.founderCapEnabled = m.on;
       break;
     case "setDensityChem":
       if (world) world.densityChem = m.chem;
