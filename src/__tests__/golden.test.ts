@@ -322,7 +322,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // smoothstep + depth-widening horizontal samples + a faint scattered-
     // light floor) instead of a hard per-column 0/1, so shadow EDGES feed
     // photosynthesis/photoreceptors gradually. Intended.
-    const GOLDEN = "78a93412";
+    // Bumped again: more light diffusion -- wider penumbra (20px), wider
+    // depth-scaled horizontal scatter (9 taps, up to 60px), and a higher
+    // scattered-light floor (0.10), so shadows are softer and bleed more
+    // light. Intended.
+    const GOLDEN = "165126bd";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

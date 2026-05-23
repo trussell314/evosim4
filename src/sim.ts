@@ -1212,19 +1212,24 @@ export function solarLight(world: { dayPhase: number }): number {
 //   - LIGHT_SHADOW_FLOOR: a little scattered skylight reaches shadows,
 //     so they're dim rather than pure black. Combined with the depth
 //     decay in ambientLightAt, deep caves still go effectively dark.
-const LIGHT_SHADOW_FLOOR = 0.06;
-const LIGHT_PENUMBRA_PX = 10;
+const LIGHT_SHADOW_FLOOR = 0.1;
+const LIGHT_PENUMBRA_PX = 20;
+// Tap count for the horizontal scatter window (odd; centered on x).
+const LIGHT_TAPS = 9;
+const LIGHT_TAP_HALF = (LIGHT_TAPS - 1) / 2;
 export function lightOcclusion(
   env: { terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
 ): number {
   const hm = env.terrainHeightmap;
   if (!hm || hm.length === 0) return 1;
   const n = hm.length;
-  // Penumbra half-width widens with depth below the surface.
-  let spread = y * 0.05; if (spread < 3) spread = 3; else if (spread > 36) spread = 36;
+  // Scatter half-width widens with depth below the surface: deeper water
+  // has scattered more light sideways, so shadows soften and bleed wider.
+  let spread = y * 0.09; if (spread < 5) spread = 5; else if (spread > 60) spread = 60;
+  const stepPx = spread / LIGHT_TAP_HALF;
   let lit = 0;
-  for (let t = -2; t <= 2; t++) {
-    let ix = Math.round(x + (t * 0.5) * spread);
+  for (let t = -LIGHT_TAP_HALF; t <= LIGHT_TAP_HALF; t++) {
+    let ix = Math.round(x + t * stepPx);
     if (ix < 0) ix = 0; else if (ix >= n) ix = n - 1;
     const rim = hm[ix]; // +Infinity where no rock -> fully lit tap
     // smoothstep over [rim - P, rim + P]: 0 (lit) above the rim, 1
@@ -1234,7 +1239,7 @@ export function lightOcclusion(
     s = s * s * (3 - 2 * s);
     lit += 1 - s;
   }
-  lit *= 0.2; // average of the 5 taps
+  lit /= LIGHT_TAPS; // average of the scatter taps
   return LIGHT_SHADOW_FLOOR + (1 - LIGHT_SHADOW_FLOOR) * lit;
 }
 // Visible ambient light at a point: solar day-cycle x depth attenuation
