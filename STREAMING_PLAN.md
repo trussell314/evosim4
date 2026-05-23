@@ -143,6 +143,17 @@ control commands go out on the token-gated channel).
 tunnel** + domain; add a Cloudflare rate-limit rule; verify public read-only
 access from the phone and private control from your authenticated client.
 
+**UI + docs (every phase, in the same change-set):** keep the viewer's UI
+correct for the mode it's in — the **view-only** client shows the world + HUD
+but **no control surface**; the **control** client gains a connection/token
+indicator and routes commands over the gated channel; both show a clear
+**connection/streaming status** (connected / reconnecting / read-only). Update
+`README.md` and `CLAUDE.md` to document the headless-server + streaming-viewer
+architecture, the read-only-public / token-gated-control split, the
+render-snapshot protocol, and to point at the §6 deployment runbook. New
+server/client entry points (`scripts/server.ts`, the WS protocol) get a short
+doc section so the next reader can run it cold.
+
 Suggested order keeps each step shippable and low-risk; Phase 1 can run on the
 LAN before anything is exposed.
 

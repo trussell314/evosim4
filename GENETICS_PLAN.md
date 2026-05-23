@@ -163,6 +163,13 @@ genuine strategies rather than one dominating trivially.
 Golden re-baselines at the end of each *behavior-changing* phase (1–4); Phase 0
 must not move it.
 
+**Every phase ships its affected UI surfaces and documentation in the same
+change-set** (see §8). A phase isn't done until the inspector/HUD/overlays
+reflect the new genome shape and the docs naming "the genome" are updated —
+these are acceptance criteria, not later cleanup. Even Phase 0 (no behavior
+change) must update the inspector/disassembly to render the element set and the
+docs that describe the genome as a single array.
+
 ---
 
 ## 8. Consumer / semantic-drift checklist (per CLAUDE.md)
@@ -185,12 +192,54 @@ change-set:
 - **Save/load:** `serializeWorld` / `applySavedWorld` (`SavedCreature.genome` →
   `genomes[]`); **bump `SAVE_SCHEMA`** + document migration (old saves load as
   ploidy-1).
-- **Inspector/overlays:** `main.ts` disassembly, `reproduceReadiness`,
-  `describeGenomeProse`, founder/species coloring — show/evaluate the element set.
 - **Tests:** `determinism`, `golden`, `sim`, `genome-asm` — update fixtures;
   Phase 0 must keep golden byte-identical.
-- **Docs:** `GENOME_ARCHETYPES.md`, `CHEM_IO_REFERENCE.md`, `OP_REDESIGN_PLAN.md`,
-  `README.md`, `CLAUDE.md` — anything naming "the genome" as a single array.
+
+**UI surfaces (`src/main.ts`) — every genome-shape-dependent element.** These
+are acceptance criteria for the phase that changes the underlying behavior, not
+follow-ups:
+
+- **HUD stats line** (`hudStats`, currently
+  `pop/engulfed … species/engulfed … lineages/extinct … parts`): add genetics
+  readouts as features land — **ploidy distribution** (haploid/diploid/poly),
+  **plasmid prevalence**, **sexual-vs-asexual birth counts**, **conjugation
+  events/min**.
+- **Inspector** (`inspector` pre + `inspectorProse` + `inspectorMeters` + the
+  disasm bar in the Inspector tab): render the selected cell as its **element
+  set** — per-element disassembly (each chromosome + plasmid labeled), ploidy +
+  plasmid count, and (Phase 1+) which alleles are **expressed vs masked** under
+  the combine rule. `describeGenomeProse` summarizes the multi-element genome;
+  `cellHealth` / `reproduceReadiness` evaluate over the set (a diploid's
+  reproduce gate may be satisfied on either homolog).
+- **Field overlays** (`HeatmapMode` + `drawHeatmap` + the overlay `<select>`):
+  add optional modes — **ploidy**, **heterozygosity**, **plasmid presence** —
+  each with a render branch + legend, mirroring the existing temp/light/health
+  overlays.
+- **Cell rendering / coloring:** `genomeColor` computed over the element set;
+  consider a visual marker (ring/badge) distinguishing **diploid** and
+  **plasmid-carrying** cells so the new genetics is visible at a glance.
+- **Spawn / archetype UI** (`ARCHETYPES`, inject/clump spawn): if cells are
+  user-spawnable, expose **ploidy / plasmid** options (or default sensibly so the
+  control still works).
+- **Other `main.ts` genome consumers:** `disassemble`, `walkGenome`,
+  `genomeCodingKey` usages — operate per element.
+
+**Docs — update every doc that names "the genome" or describes the genetics
+model, in the same change-set (CLAUDE.md no-drift rule):**
+
+- `README.md` (design philosophy + how the genome is described), `CLAUDE.md`
+  (engineering-standards/determinism text that references the genome),
+  `GENOME_ARCHETYPES.md`, `CHEM_IO_REFERENCE.md`, `OP_REDESIGN_PLAN.md`,
+  `MUTATION_FIDELITY_PLAN.md`, `REGION_SYSTEM_PLAN.md` — anything still
+  describing a single flat `Uint8Array` genome.
+- This `GENETICS_PLAN.md` — tick off phases as they land.
+- **Add a genetics reference** (new `GENETICS_REFERENCE.md`, or a section in an
+  existing doc) covering: the element model (chromosomes + plasmids), the
+  expression/combine + dominance rule, meiosis/syngamy, conjugation, the new ops
+  (e.g. `CONJUGATE`), and the **`SAVE_SCHEMA` migration** (old saves load as
+  ploidy-1, no plasmids).
+- Any **new op/sensor** is documented in `CHEM_IO_REFERENCE.md` and named in the
+  disassembler + `describeGenomeProse`.
 
 Delete dead surface (no inert single-genome shims kept "for compatibility");
 bump the schema and migrate instead.
