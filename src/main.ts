@@ -181,6 +181,45 @@ pinSpeciesBtn.addEventListener("click", () => {
   togglePin(sel.speciesKey, sel.genome, sel.color, peakBiomassByKey.get(sel.speciesKey) ?? 0);
 });
 
+// Kill the SELECTED cell. Two-tap arm/fire confirm (like reset): first
+// click arms a red "confirm kill" for 3s, second click within the window
+// kills it. Hidden when nothing is selected; visibility + reset on
+// selection change are driven by updateInspector().
+const killCellBtn = document.createElement("div");
+killCellBtn.style.cssText =
+  "display:none;align-items:center;gap:6px;padding:2px 9px 6px;" +
+  "cursor:pointer;user-select:none;" + HUD_FONT;
+let killArmedUntil = 0;
+let killArmedId: number | null = null;
+let killTimer: ReturnType<typeof setTimeout> | null = null;
+function renderKillBtn(armed: boolean): void {
+  killCellBtn.innerHTML = armed
+    ? `<span style="color:#ff6b7a;font-weight:bold;">✕ confirm kill</span>`
+    : `<span style="color:#e08a93;">✕ kill cell</span>`;
+}
+function disarmKill(): void {
+  killArmedUntil = 0;
+  killArmedId = null;
+  renderKillBtn(false);
+  if (killTimer) { clearTimeout(killTimer); killTimer = null; }
+}
+killCellBtn.addEventListener("click", () => {
+  const sel = selectedCell();
+  if (!sel) return;
+  const now = performance.now();
+  if (now < killArmedUntil && killArmedId === sel.id) {
+    simWorker.postMessage({ type: "killCell", id: sel.id });
+    disarmKill();
+    return;
+  }
+  killArmedUntil = now + 3000;
+  killArmedId = sel.id;
+  renderKillBtn(true);
+  if (killTimer) clearTimeout(killTimer);
+  killTimer = setTimeout(disarmKill, 3000);
+});
+renderKillBtn(false);
+
 // Human-readable genome summary -- the same prose shown on the
 // species cards. Filled by updateInspector when a cell is selected.
 const inspectorProse = document.createElement("div");
@@ -761,6 +800,7 @@ inspectorPane.style.cssText =
 // gene-aware genome description, then the resource/stats block, then
 // the collapsible genome disassembly.
 inspectorPane.appendChild(pinSpeciesBtn);
+inspectorPane.appendChild(killCellBtn);
 inspectorPane.appendChild(inspectorMeters);
 inspectorPane.appendChild(inspectorProse);
 inspectorPane.appendChild(inspector);
@@ -2072,13 +2112,7 @@ tooltip.style.cssText =
   "position:fixed;pointer-events:none;display:none;z-index:9;" +
   "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #1a3340;" +
   `padding:4px 6px;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};` +
-  "border-radius:3px;";
-// The age/ATP/bars text is rebuilt every frame via innerHTML, so it
-// lives in a child; the kill button is a persistent sibling whose
-// two-tap state the rebuild can't wipe.
-const tooltipBody = document.createElement("div");
-tooltipBody.style.cssText = "white-space:pre;";
-tooltip.appendChild(tooltipBody);
+  "border-radius:3px;white-space:pre;";
 document.body.appendChild(tooltip);
 // Mousemove sets the lock; the per-frame flusher just re-renders.
 let pendingMouseInside = false;
@@ -2090,49 +2124,6 @@ let tooltipScheduled = false;
 // empty water leaves the existing lock alone. Click an empty patch
 // to clear it manually.
 let lockedCellId: number | null = null;
-
-// Kill button on the tooltip. pointer-events:auto so it's clickable even
-// though the card itself is click-through; clicks elsewhere still reach
-// the canvas. Two-tap arm/fire confirm (like reset): first tap arms a
-// red "confirm kill" for 3s, second tap inside that window kills the
-// cell the tooltip is locked on.
-const TIP_KILL_CSS =
-  "margin-top:6px;width:100%;padding:2px 0;border:1px solid #5a2330;" +
-  "border-radius:3px;background:rgba(60,0,12,.6);color:#f3b3bc;" +
-  "cursor:pointer;pointer-events:auto;" + HUD_FONT;
-const tooltipKillBtn = document.createElement("button");
-tooltipKillBtn.textContent = "kill";
-tooltipKillBtn.style.cssText = TIP_KILL_CSS;
-tooltip.appendChild(tooltipKillBtn);
-let tipKillArmedUntil = 0;
-let tipKillArmedId: number | null = null;
-let tipKillTimer: ReturnType<typeof setTimeout> | null = null;
-function disarmTipKill(): void {
-  tipKillArmedUntil = 0;
-  tipKillArmedId = null;
-  tooltipKillBtn.textContent = "kill";
-  tooltipKillBtn.style.cssText = TIP_KILL_CSS;
-  if (tipKillTimer) { clearTimeout(tipKillTimer); tipKillTimer = null; }
-}
-tooltipKillBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const id = lockedCellId;
-  if (id == null) return;
-  const now = performance.now();
-  if (now < tipKillArmedUntil && tipKillArmedId === id) {
-    simWorker.postMessage({ type: "killCell", id });
-    disarmTipKill();
-    return;
-  }
-  tipKillArmedUntil = now + 3000;
-  tipKillArmedId = id;
-  tooltipKillBtn.textContent = "confirm kill";
-  tooltipKillBtn.style.cssText =
-    TIP_KILL_CSS + "background:rgba(120,0,22,.9);color:#fff;border-color:#a33;";
-  if (tipKillTimer) clearTimeout(tipKillTimer);
-  tipKillTimer = setTimeout(disarmTipKill, 3000);
-});
-
 function worldToClientX(wx: number): number {
   const rect = canvas.getBoundingClientRect();
   return wx * viewScale * viewZoom + viewOffsetX * viewZoom + viewPanX + rect.left;
@@ -2150,9 +2141,6 @@ function flushTooltip(): void {
   // drifted under the parked cursor.)
   if (lockedCellId != null && !snapshotCreatureById.has(lockedCellId)) lockedCellId = null;
   const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
-  // Reset a pending kill-confirm if the tooltip closed or moved to a
-  // different cell, so a stale "confirm kill" never fires on the wrong one.
-  if (tipKillArmedId !== null && lockedCellId !== tipKillArmedId) disarmTipKill();
   if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
@@ -2197,7 +2185,7 @@ function flushTooltip(): void {
   let barHtml = `<div style="margin-top:5px;">` + meterHtml("health", health, healthColor(health));
   if (readiness !== null) barHtml += meterHtml("reproduce", readiness, readiness >= 1 ? "#4caf50" : "#6fae6f");
   barHtml += `</div>`;
-  tooltipBody.innerHTML =
+  tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
@@ -3953,6 +3941,8 @@ function updateInspector(): void {
     refreshActiveDisasm(); // clears the cached disasm when nothing is selected
     lastInspectedGenomeVer = "";
     pinSpeciesBtn.style.display = "none";
+    killCellBtn.style.display = "none";
+    if (killArmedId !== null) disarmKill();
     inspectorMeters.style.display = "none";
     inspectorProse.style.display = "none";
     disasmBar.style.display = "none";
@@ -3976,6 +3966,10 @@ function updateInspector(): void {
   {
     const isPinned = pinnedSpecies.has(c.speciesKey);
     pinSpeciesBtn.style.display = "flex";
+    // Selection changed out from under an armed confirm -> reset it so
+    // the second tap can't kill a different cell.
+    if (killArmedId !== null && killArmedId !== c.id) disarmKill();
+    killCellBtn.style.display = "flex";
     const col = isPinned ? "#ffd24c" : "#9ee";
     pinSpeciesBtn.innerHTML =
       `<span style="font-weight:bold;line-height:1;color:${col};">` +
