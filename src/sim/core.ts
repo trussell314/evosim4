@@ -1132,6 +1132,10 @@ export interface World {
   // UI focus chem for the density overlay (-1 / absent = all chems).
   // Transient; not persisted.
   densityChem?: number;
+  // Creature ids the UI has asked to kill. Drained by the death pass
+  // each step (matched cells die like any other death). Transient; not
+  // persisted.
+  killRequests?: Set<number>;
   width: number;
   height: number;
   depth: number;

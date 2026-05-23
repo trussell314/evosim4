@@ -2232,6 +2232,7 @@ export function createWorld(
     rxnStats: newRxnStats(),
     foundersEnabled: true,
     founderCapEnabled: true,
+    killRequests: new Set(),
     ongoingSeeding: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
@@ -6729,7 +6730,11 @@ function updateCreatures(world: World, dt: number): void {
     const lowMemb = m.membrane < MIN_VIABLE_MEMBRANE;
     const lowMrna = m.mrna < MIN_VIABLE_RIBOSOME;
     const lowAa = m.aminoAcid < MIN_VIABLE_AMINOACID;
-    if (starve || lowMemb || lowMrna || lowAa || founderTooOld) {
+    // User-requested kill from the inspector tooltip. Routed through the
+    // normal death path so it spills mass + releases contents/slot like
+    // any other death.
+    const killed = world.killRequests !== undefined && world.killRequests.has(c.id);
+    if (starve || lowMemb || lowMrna || lowAa || founderTooOld || killed) {
       const st = world.stats;
       if (st) {
         if (starve) st.dStarve++;
@@ -6811,6 +6816,9 @@ function updateCreatures(world: World, dt: number): void {
     for (const s of survivors) world.creatures.push(s);
     for (const r of released) world.creatures.push(r);
   }
+  // Drain kill requests: any handled this step are gone; any whose cell
+  // had already died are moot. Either way, don't carry them forward.
+  if (world.killRequests && world.killRequests.size > 0) world.killRequests.clear();
 }
 
 // On death, return the cell's chem pool to the world as free-floating

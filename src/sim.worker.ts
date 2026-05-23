@@ -85,6 +85,7 @@ type WorkerInbound =
   | { type: "setSeeding"; on: boolean }
   | { type: "setFounderTarget"; target: number }
   | { type: "setFounderCapEnabled"; on: boolean }
+  | { type: "killCell"; id: number }
   | { type: "setDensityChem"; chem: number }
   | {
       type: "spawnSpecies";
@@ -180,6 +181,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setFounderCapEnabled":
       if (world) world.founderCapEnabled = m.on;
+      break;
+    case "killCell":
+      if (world) (world.killRequests ??= new Set()).add(m.id);
       break;
     case "setDensityChem":
       if (world) world.densityChem = m.chem;

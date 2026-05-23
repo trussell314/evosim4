@@ -2072,7 +2072,13 @@ tooltip.style.cssText =
   "position:fixed;pointer-events:none;display:none;z-index:9;" +
   "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #1a3340;" +
   `padding:4px 6px;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};` +
-  "border-radius:3px;white-space:pre;";
+  "border-radius:3px;";
+// The age/ATP/bars text is rebuilt every frame via innerHTML, so it
+// lives in a child; the kill button is a persistent sibling whose
+// two-tap state the rebuild can't wipe.
+const tooltipBody = document.createElement("div");
+tooltipBody.style.cssText = "white-space:pre;";
+tooltip.appendChild(tooltipBody);
 document.body.appendChild(tooltip);
 // Mousemove sets the lock; the per-frame flusher just re-renders.
 let pendingMouseInside = false;
@@ -2084,6 +2090,49 @@ let tooltipScheduled = false;
 // empty water leaves the existing lock alone. Click an empty patch
 // to clear it manually.
 let lockedCellId: number | null = null;
+
+// Kill button on the tooltip. pointer-events:auto so it's clickable even
+// though the card itself is click-through; clicks elsewhere still reach
+// the canvas. Two-tap arm/fire confirm (like reset): first tap arms a
+// red "confirm kill" for 3s, second tap inside that window kills the
+// cell the tooltip is locked on.
+const TIP_KILL_CSS =
+  "margin-top:6px;width:100%;padding:2px 0;border:1px solid #5a2330;" +
+  "border-radius:3px;background:rgba(60,0,12,.6);color:#f3b3bc;" +
+  "cursor:pointer;pointer-events:auto;" + HUD_FONT;
+const tooltipKillBtn = document.createElement("button");
+tooltipKillBtn.textContent = "kill";
+tooltipKillBtn.style.cssText = TIP_KILL_CSS;
+tooltip.appendChild(tooltipKillBtn);
+let tipKillArmedUntil = 0;
+let tipKillArmedId: number | null = null;
+let tipKillTimer: ReturnType<typeof setTimeout> | null = null;
+function disarmTipKill(): void {
+  tipKillArmedUntil = 0;
+  tipKillArmedId = null;
+  tooltipKillBtn.textContent = "kill";
+  tooltipKillBtn.style.cssText = TIP_KILL_CSS;
+  if (tipKillTimer) { clearTimeout(tipKillTimer); tipKillTimer = null; }
+}
+tooltipKillBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const id = lockedCellId;
+  if (id == null) return;
+  const now = performance.now();
+  if (now < tipKillArmedUntil && tipKillArmedId === id) {
+    simWorker.postMessage({ type: "killCell", id });
+    disarmTipKill();
+    return;
+  }
+  tipKillArmedUntil = now + 3000;
+  tipKillArmedId = id;
+  tooltipKillBtn.textContent = "confirm kill";
+  tooltipKillBtn.style.cssText =
+    TIP_KILL_CSS + "background:rgba(120,0,22,.9);color:#fff;border-color:#a33;";
+  if (tipKillTimer) clearTimeout(tipKillTimer);
+  tipKillTimer = setTimeout(disarmTipKill, 3000);
+});
+
 function worldToClientX(wx: number): number {
   const rect = canvas.getBoundingClientRect();
   return wx * viewScale * viewZoom + viewOffsetX * viewZoom + viewPanX + rect.left;
@@ -2101,6 +2150,9 @@ function flushTooltip(): void {
   // drifted under the parked cursor.)
   if (lockedCellId != null && !snapshotCreatureById.has(lockedCellId)) lockedCellId = null;
   const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
+  // Reset a pending kill-confirm if the tooltip closed or moved to a
+  // different cell, so a stale "confirm kill" never fires on the wrong one.
+  if (tipKillArmedId !== null && lockedCellId !== tipKillArmedId) disarmTipKill();
   if (!c) { tooltip.style.display = "none"; return; }
   let mass = c.energy;
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
@@ -2145,7 +2197,7 @@ function flushTooltip(): void {
   let barHtml = `<div style="margin-top:5px;">` + meterHtml("health", health, healthColor(health));
   if (readiness !== null) barHtml += meterHtml("reproduce", readiness, readiness >= 1 ? "#4caf50" : "#6fae6f");
   barHtml += `</div>`;
-  tooltip.innerHTML =
+  tooltipBody.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
     `age=${age}\n` +
