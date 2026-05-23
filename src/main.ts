@@ -3383,17 +3383,24 @@ function updateSpray(width: number, surfaceY: number, snap: typeof snapshot): vo
   const dt = Math.min(0.05, Math.max(0.001, (now - sprayLastMs) / 1000));
   sprayLastMs = now;
   while (SPRAY.length < SPRAY_POOL) SPRAY.push({ x: 0, y: 0, vx: 0, vy: 0, life: 0, lifeMax: 1, r: 1 });
-  // Integrate live drops (gravity arc).
+  const hm = snap.terrainHeightmap;
+  // Integrate live drops (gravity arc) and retire any that have landed:
+  // a drop dies the instant it touches the wavy water surface or rock, so
+  // spray splashes down instead of sinking through the sea or the wall.
   for (const d of SPRAY) {
     if (d.life <= 0) continue;
     d.life -= dt;
     d.vy += SPRAY_GRAV * dt;
     d.x += d.vx * dt;
     d.y += d.vy * dt;
+    if (d.y >= surfaceYAt(snap, d.x)) { d.life = 0; continue; }
+    if (hm && hm.length > 0) {
+      const ix = Math.floor(d.x);
+      if (ix >= 0 && ix < hm.length && d.y >= hm[ix]) d.life = 0;
+    }
   }
   const windMag = Math.min(1, Math.abs(snap.wind) / WIND_MAX);
   if (windMag <= 0.05) return;
-  const hm = snap.terrainHeightmap;
   if (!hm || hm.length === 0) return;
   const dir = snap.wind >= 0 ? 1 : -1; // downwind = toward the wall / over it
   let budget = 16; // new drops/frame cap
