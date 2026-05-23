@@ -74,7 +74,8 @@ import {
   VENT_BASE_INTENSITY,
   shoalAt,
   solarLight,
-  ambientLightAt,
+  lightOcclusion,
+  LIGHT_DECAY,
   takeSnapshot,
   chemName,
   reactionName,
@@ -2693,11 +2694,16 @@ function drawHeatmap(): void {
   if (heatmapMode === "light") {
     // Field overlay of usable sunlight = day-cycle x depth attenuation x
     // rock occlusion (the same ambientLightAt photosynthesis reads), so
-    // rock shadows and the day/night cycle show up directly.
+    // rock shadows and the day/night cycle show up directly. solarLight
+    // is constant per frame and the depth term varies only by row, so
+    // hoist both out of the per-bin loop -- only occlusion is per-bin.
+    const sun = solarLight(snapshot);
     for (let r = 0; r < rows; r++) {
+      const y = surfaceY + r * cell;
+      const rowLight = sun * Math.exp(-(y + cell / 2) / LIGHT_DECAY);
       for (let c = 0; c < cols; c++) {
-        const x = c * cell, y = surfaceY + r * cell;
-        const v = ambientLightAt(snapshot, x + cell / 2, y + cell / 2);
+        const x = c * cell;
+        const v = rowLight * lightOcclusion(snapshot, x + cell / 2, y + cell / 2);
         ctx.fillStyle = `rgb(${Math.round(255 * v)},${Math.round(238 * v)},${Math.round(120 * v)})`;
         ctx.fillRect(x, y, cell, cell);
       }
