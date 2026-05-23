@@ -233,9 +233,17 @@ const PREDATION_ENERGY_PER_COHESION = 3;
 
 // Baseline metabolism: a small flat "cost of being alive" plus a per-mass
 // component. Big cells must keep more chemistry running and starve faster
-// when idle. A r=4 cell pays ~0.5 e/s; a r=20 (~mass 1250) cell pays ~7 e/s.
+// when idle, so a cell must EARN its mass: a r=4 cell pays ~0.5 e/s; a
+// ~mass-1250 cell pays ~3 e/s. Per-mass raised 0.0003 -> 0.002: at 0.0003
+// the per-mass cost had drifted ~15x below intent, so heavy hoarders that
+// sank to the dark floor (little photosynthetic income) could coast there
+// indefinitely as inert "bum cells" -- a perf + clarity drain. At 0.002 a
+// big idle cell at the floor goes net-negative and dies, while productive
+// surface autotrophs (high light income) and small fresh daughters (low
+// mass) are unaffected; it also nudges cells to reproduce (shed mass)
+// rather than hoard.
 const BASE_METABOLIC_DRAIN = 0.5;
-const BASE_METABOLIC_PER_MASS = 0.0003;
+const BASE_METABOLIC_PER_MASS = 0.002;
 const DEATH_RELEASE_R_MIN = 1.2;
 
 // Thrust energy scaling. Starter cell mass is ~224 (reserves + molecules +

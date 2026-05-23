@@ -314,7 +314,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // (depositRegionBase) at every particle/evacuation deposit site, and
     // aeration skips solid surface regions, so the diffusion barrier no
     // longer traps mass in inert rock. Intended; mass re-verified green.
-    const GOLDEN = "c0b5a649";
+    // Bumped again: per-mass idle metabolic drain 0.0003 -> 0.002 so a
+    // cell must earn its mass -- heavy hoarders that sink to the dark
+    // floor go net-negative and starve instead of coasting indefinitely.
+    // Intended; mass-conservation re-verified green.
+    const GOLDEN = "7e581493";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
