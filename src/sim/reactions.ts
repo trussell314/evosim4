@@ -15,7 +15,7 @@ import {
   CHEM_ADP,
   CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHOTORECEPTOR_LONG,
   CHEM_PHOTORECEPTOR_SURFACE, CHEM_ELECTRORECEPTOR,
-  CHEM_CHEMORECEPTOR_MINERALS, CHEM_PHRECEPTOR,
+  CHEM_VIBRORECEPTOR, CHEM_PHRECEPTOR,
   CHEM_CHEMORECEPTOR_MARKER0, CHEM_MECHANORECEPTOR,
   CHEM_THERMORECEPTOR, CHEM_MAGNETORECEPTOR, CHEM_BOND, CHEM_REPAIR,
   CHEM_ATP,
@@ -364,6 +364,7 @@ export const RX_SLOT_SYNTH_PHOTO_V  = 12; // visible photoreceptor
 export const RX_SLOT_SYNTH_PHOTO_L  = 13; // long photoreceptor
 export const RX_SLOT_SYNTH_PHOTO_S  = 14; // surface photoreceptor
 export const RX_SLOT_SYNTH_ELECTRO  = 15; // electroreceptor (ex-chemoBiopolymer slot)
+export const RX_SLOT_SYNTH_VIBRO    = 16; // vibroreceptor (ex-chemoMinerals slot)
 export const RX_SLOT_SYNTH_PHRECEPTOR = 17; // pH/acidity receptor (ex-chemoFa slot)
 export const RX_SLOT_SYNTH_MECH     = 19;
 export const RX_SLOT_SYNTH_THERMO   = 20;
@@ -508,12 +509,12 @@ function installNamedReactions(out: Reaction[]): void {
   out[13] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_LONG], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[14] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHOTORECEPTOR_SURFACE], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   // Retired chemo-branch receptor synth slots, being REPURPOSED into the
-  // new sensory modalities (SENSES_PLAN.md). Slot 15 -> electroreceptor
-  // (electric sense), slot 17 -> phreceptor (pH) -- both live at the
-  // standard receptor rate, so a cell builds them via SYNTH CAT 15/17.
-  // Slots 16/18 stay inert until vibration/light land.
+  // new sensory modalities (SENSES_PLAN.md). Slot 15 -> electroreceptor,
+  // 16 -> vibroreceptor, 17 -> phreceptor -- all live at the standard
+  // receptor rate, so a cell builds them via SYNTH CAT 15/16/17. Slot 18
+  // stays inert (light reuses the visible photoreceptor, no new receptor).
   out[15] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_ELECTRORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
-  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MINERALS], [1], -3, 0, { atpFloor: true, mrnaScale: true });
+  out[16] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_VIBRORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[17] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_PHRECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });
   out[18] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_CHEMORECEPTOR_MARKER0], [1], -3, 0, { atpFloor: true, mrnaScale: true });
   out[19] = mk([CHEM_AA, CHEM_MIN], [0.5, 0.5], [CHEM_MECHANORECEPTOR], [1], -3, 0.15, { atpFloor: true, mrnaScale: true });

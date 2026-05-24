@@ -66,6 +66,7 @@ import {
   CHEM_PHRECEPTOR, CHEM_ACT_PH,
   CHEM_ELECTRORECEPTOR, CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y,
   CHEM_ACT_LIGHT_X, CHEM_ACT_LIGHT_Y,
+  CHEM_VIBRORECEPTOR, CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y,
   CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
@@ -4170,6 +4171,10 @@ const EMIT_ATP_PER_UNIT = 0.02;
 // light carries before 1/r^2 + water make it undetectable. Tunable.
 const LIGHT_ALBEDO = 0.5;
 const LIGHT_RANGE = 110;
+// Vibration (hydroacoustic) sense. VIB_GAIN: wake strength per unit speed.
+// VIB_RANGE: long (sound carries far); 1/r falloff in the detector. Tunable.
+const VIB_GAIN = 0.5;
+const VIB_RANGE = 180;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
@@ -4295,6 +4300,35 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   } else {
     cols[CHEM_ACT_LIGHT_X][i] *= k;
     cols[CHEM_ACT_LIGHT_Y][i] *= k;
+  }
+  // VIBRATION (lateral-line / hydroacoustic): with a vibroreceptor, sum the
+  // wake OTHER moving cells radiate over the grid into an act_vib bearing
+  // toward them. Long range, 1/r falloff (sound carries farther than the
+  // 1/r^2 electric/light fields). Lets a still cell hear an approaching
+  // swimmer (and the swimmer be heard) -> a speed-vs-stealth arms race.
+  // Distinct from mechanoreception (contact force); this is sensing-at-
+  // range. Transparent to obstacles for now. Host -> decay.
+  const vibR = cols[CHEM_VIBRORECEPTOR][i];
+  if (vibR > 0 && host === undefined) {
+    let vx2 = 0, vy2 = 0;
+    const cx = c.x, cy = c.y, R2 = VIB_RANGE * VIB_RANGE;
+    forCreaturesNear(cx, cy, VIB_RANGE, (o) => {
+      if (o === c) return;
+      const em = o.store.vibrationEmission[o.idx];
+      if (em <= 0) return;
+      const dx = o.x - cx, dy = o.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 1e-6 || d2 > R2) return;
+      const d = Math.sqrt(d2);
+      const w = em / d;           // 1/r falloff (sound travels far)
+      vx2 += (w * dx) / d;
+      vy2 += (w * dy) / d;
+    });
+    cols[CHEM_ACT_VIB_X][i] = cols[CHEM_ACT_VIB_X][i] * k + vibR * vx2 * dt;
+    cols[CHEM_ACT_VIB_Y][i] = cols[CHEM_ACT_VIB_Y][i] * k + vibR * vy2 * dt;
+  } else {
+    cols[CHEM_ACT_VIB_X][i] *= k;
+    cols[CHEM_ACT_VIB_Y][i] *= k;
   }
   // The remaining retired-chemo ids (minerals/marker0 + their activated
   // x/y) stay inert until repurposed for vibration/light in later commits;
@@ -4751,7 +4785,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
   const RECEPTOR_DECAY_PER_SEC = 0.005;
   const recCols = [
     s.m_photoreceptorVisible, s.m_photoreceptorLong, s.m_photoreceptorSurface,
-    s.m_electroreceptor, s.m_chemoreceptorMinerals, s.m_phreceptor, s.m_chemoreceptorMarker0,
+    s.m_electroreceptor, s.m_vibroreceptor, s.m_phreceptor, s.m_chemoreceptorMarker0,
     s.m_mechanoreceptor, s.m_thermoreceptor, s.m_magnetoreceptor,
   ];
   for (let r = 0; r < recCols.length; r++) {
@@ -6277,6 +6311,11 @@ function updateCreatures(world: World, dt: number): void {
       // blocking); see SENSES_PLAN occlusion follow-up. Bioluminescence
       // (active EMIT light) will add onto this later.
       st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y);
+      // Vibration output: a moving cell makes a wake/pressure wave. Speed-
+      // proportional (fresh from current velocity). Active EMIT vibration
+      // would add on top later. Fresh (not lagged) like reflection.
+      const vx = st.vx[ix], vy = st.vy[ix];
+      st.vibrationEmission[ix] = VIB_GAIN * Math.sqrt(vx * vx + vy * vy);
     }
   }
   // SENSOR_BIN_* is only read by chemGradient() inside runActivation

@@ -434,9 +434,9 @@ const CREATURE_F32_COLS = [
   "m_biopolymer", "m_membrane",
   "m_photoreceptorVisible", "m_photoreceptorLong", "m_photoreceptorSurface",
   "m_activatedPhotoVisible", "m_activatedPhotoLong", "m_activatedPhotoSurface",
-  "m_electroreceptor", "m_chemoreceptorMinerals", "m_phreceptor", "m_chemoreceptorMarker0",
+  "m_electroreceptor", "m_vibroreceptor", "m_phreceptor", "m_chemoreceptorMarker0",
   "m_activatedElectroX", "m_activatedElectroY",
-  "m_activatedChemoMineralsX", "m_activatedChemoMineralsY",
+  "m_activatedVibX", "m_activatedVibY",
   "m_activatedPh", "m_activatedChemoFaY",
   "m_activatedLightX", "m_activatedLightY",
   "m_mechanoreceptor", "m_activatedMechX", "m_activatedMechY",
@@ -452,7 +452,7 @@ const CREATURE_F32_COLS = [
   // last-tick atpSpentTick), summed over neighbours in runActivation.
   // lightEmission: the cell's visible-light output (reflection of ambient
   // sky-light; bioluminescence added later) others' photoreceptors detect.
-  "atpSpentTick", "electricEmission", "lightEmission",
+  "atpSpentTick", "electricEmission", "lightEmission", "vibrationEmission",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
@@ -528,13 +528,13 @@ export class CreatureStore {
   m_activatedPhotoLong!: Float32Array;
   m_activatedPhotoSurface!: Float32Array;
   m_electroreceptor!: Float32Array;
-  m_chemoreceptorMinerals!: Float32Array;
+  m_vibroreceptor!: Float32Array;
   m_phreceptor!: Float32Array;
   m_chemoreceptorMarker0!: Float32Array;
   m_activatedElectroX!: Float32Array;
   m_activatedElectroY!: Float32Array;
-  m_activatedChemoMineralsX!: Float32Array;
-  m_activatedChemoMineralsY!: Float32Array;
+  m_activatedVibX!: Float32Array;
+  m_activatedVibY!: Float32Array;
   m_activatedPh!: Float32Array;
   m_activatedChemoFaY!: Float32Array;
   m_activatedLightX!: Float32Array;
@@ -557,6 +557,7 @@ export class CreatureStore {
   atpSpentTick!: Float32Array;
   electricEmission!: Float32Array;
   lightEmission!: Float32Array;
+  vibrationEmission!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -646,13 +647,13 @@ export class CreatureStore {
     this.m_activatedPhotoLong = new Float32Array(b, o.base.m_activatedPhotoLong, cap);
     this.m_activatedPhotoSurface = new Float32Array(b, o.base.m_activatedPhotoSurface, cap);
     this.m_electroreceptor = new Float32Array(b, o.base.m_electroreceptor, cap);
-    this.m_chemoreceptorMinerals = new Float32Array(b, o.base.m_chemoreceptorMinerals, cap);
+    this.m_vibroreceptor = new Float32Array(b, o.base.m_vibroreceptor, cap);
     this.m_phreceptor = new Float32Array(b, o.base.m_phreceptor, cap);
     this.m_chemoreceptorMarker0 = new Float32Array(b, o.base.m_chemoreceptorMarker0, cap);
     this.m_activatedElectroX = new Float32Array(b, o.base.m_activatedElectroX, cap);
     this.m_activatedElectroY = new Float32Array(b, o.base.m_activatedElectroY, cap);
-    this.m_activatedChemoMineralsX = new Float32Array(b, o.base.m_activatedChemoMineralsX, cap);
-    this.m_activatedChemoMineralsY = new Float32Array(b, o.base.m_activatedChemoMineralsY, cap);
+    this.m_activatedVibX = new Float32Array(b, o.base.m_activatedVibX, cap);
+    this.m_activatedVibY = new Float32Array(b, o.base.m_activatedVibY, cap);
     this.m_activatedPh = new Float32Array(b, o.base.m_activatedPh, cap);
     this.m_activatedChemoFaY = new Float32Array(b, o.base.m_activatedChemoFaY, cap);
     this.m_activatedLightX = new Float32Array(b, o.base.m_activatedLightX, cap);
@@ -675,6 +676,7 @@ export class CreatureStore {
     this.atpSpentTick = new Float32Array(b, o.base.atpSpentTick, cap);
     this.electricEmission = new Float32Array(b, o.base.electricEmission, cap);
     this.lightEmission = new Float32Array(b, o.base.lightEmission, cap);
+    this.vibrationEmission = new Float32Array(b, o.base.vibrationEmission, cap);
     // Path 1: ATP is a first-class chemical. `energy` is the same
     // backing array as the m_atp molecule column (== molCols[atp] ==
     // chemCols[CHEM_ATP]); every store.energy / c.energy / c.molecules
@@ -705,10 +707,10 @@ export class CreatureStore {
       this.m_biopolymer, this.m_membrane,
       this.m_photoreceptorVisible, this.m_photoreceptorLong, this.m_photoreceptorSurface,
       this.m_activatedPhotoVisible, this.m_activatedPhotoLong, this.m_activatedPhotoSurface,
-      this.m_electroreceptor, this.m_chemoreceptorMinerals,
+      this.m_electroreceptor, this.m_vibroreceptor,
       this.m_phreceptor, this.m_chemoreceptorMarker0,
       this.m_activatedElectroX, this.m_activatedElectroY,
-      this.m_activatedChemoMineralsX, this.m_activatedChemoMineralsY,
+      this.m_activatedVibX, this.m_activatedVibY,
       this.m_activatedPh, this.m_activatedChemoFaY,
       this.m_activatedLightX, this.m_activatedLightY,
       this.m_mechanoreceptor, this.m_activatedMechX, this.m_activatedMechY,
@@ -822,8 +824,8 @@ export class MoleculesView {
   set activatedPhotoSurface(v: number) { this.c.store.m_activatedPhotoSurface[this.c.idx] = v; }
   get electroreceptor(): number { return this.c.store.m_electroreceptor[this.c.idx]; }
   set electroreceptor(v: number) { this.c.store.m_electroreceptor[this.c.idx] = v; }
-  get chemoreceptorMinerals(): number { return this.c.store.m_chemoreceptorMinerals[this.c.idx]; }
-  set chemoreceptorMinerals(v: number) { this.c.store.m_chemoreceptorMinerals[this.c.idx] = v; }
+  get vibroreceptor(): number { return this.c.store.m_vibroreceptor[this.c.idx]; }
+  set vibroreceptor(v: number) { this.c.store.m_vibroreceptor[this.c.idx] = v; }
   get phreceptor(): number { return this.c.store.m_phreceptor[this.c.idx]; }
   set phreceptor(v: number) { this.c.store.m_phreceptor[this.c.idx] = v; }
   get chemoreceptorMarker0(): number { return this.c.store.m_chemoreceptorMarker0[this.c.idx]; }
@@ -832,10 +834,10 @@ export class MoleculesView {
   set activatedElectroX(v: number) { this.c.store.m_activatedElectroX[this.c.idx] = v; }
   get activatedElectroY(): number { return this.c.store.m_activatedElectroY[this.c.idx]; }
   set activatedElectroY(v: number) { this.c.store.m_activatedElectroY[this.c.idx] = v; }
-  get activatedChemoMineralsX(): number { return this.c.store.m_activatedChemoMineralsX[this.c.idx]; }
-  set activatedChemoMineralsX(v: number) { this.c.store.m_activatedChemoMineralsX[this.c.idx] = v; }
-  get activatedChemoMineralsY(): number { return this.c.store.m_activatedChemoMineralsY[this.c.idx]; }
-  set activatedChemoMineralsY(v: number) { this.c.store.m_activatedChemoMineralsY[this.c.idx] = v; }
+  get activatedVibX(): number { return this.c.store.m_activatedVibX[this.c.idx]; }
+  set activatedVibX(v: number) { this.c.store.m_activatedVibX[this.c.idx] = v; }
+  get activatedVibY(): number { return this.c.store.m_activatedVibY[this.c.idx]; }
+  set activatedVibY(v: number) { this.c.store.m_activatedVibY[this.c.idx] = v; }
   get activatedPh(): number { return this.c.store.m_activatedPh[this.c.idx]; }
   set activatedPh(v: number) { this.c.store.m_activatedPh[this.c.idx] = v; }
   get activatedChemoFaY(): number { return this.c.store.m_activatedChemoFaY[this.c.idx]; }

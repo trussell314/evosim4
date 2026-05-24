@@ -1354,11 +1354,13 @@ export const FOUNDER_GENE_REFS = {
   // chem-ids.ts -- activated sensor chems read via SENSE_CHEMICAL
   ACT_PHOTO_V: 16, ACT_MECH_X: 32, ACT_MECH_Y: 33, ACT_MAG_X: 37, ACT_MAG_Y: 38,
   ACT_PH: 27, ACT_ELECTRO_X: 23, ACT_ELECTRO_Y: 24, ACT_LIGHT_X: 29, ACT_LIGHT_Y: 30,
+  ACT_VIB_X: 25, ACT_VIB_Y: 26,
   // reactions.ts named slots
   PHOTOSYNTH: 3, SYNTH_AA: 4, SYNTH_FA: 5, SYNTH_CHL: 6, SYNTH_ENZ: 7,
   SYNTH_MEM: 9, DIGEST_BIOP: 10, SYNTH_THERMO: 20, SYNTH_REPAIR: 23,
   // reactions.ts -- receptor-synth slots driven by SYNTH CAT
-  SYNTH_PHOTO_V: 12, SYNTH_ELECTRO: 15, SYNTH_PHRECEPTOR: 17, SYNTH_MECH: 19, SYNTH_MAGNETO: 21,
+  SYNTH_PHOTO_V: 12, SYNTH_ELECTRO: 15, SYNTH_VIBRO: 16, SYNTH_PHRECEPTOR: 17,
+  SYNTH_MECH: 19, SYNTH_MAGNETO: 21,
 } as const;
 
 // Founder gene pool: each entry is one GENE's worth of op-bytes
@@ -1462,6 +1464,12 @@ const SENSE_BEHAVIOR_GENES: ReadonlyArray<ReadonlyArray<number>> = [
   [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_PHOTO_V,
    OP.SENSE_CHEMICAL, FG.ACT_LIGHT_X, OP.PUSH8, 30, OP.MUL,
    OP.SENSE_CHEMICAL, FG.ACT_LIGHT_Y, OP.PUSH8, 30, OP.MUL, OP.THRUST],
+  // vibration startle -- build a vibroreceptor, flee AWAY from the bearing
+  // of a nearby mover/wake (act_vib x/y, negated): predator-avoidance /
+  // escape response. Pairs against fast swimmers.
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_VIBRO,
+   OP.SENSE_CHEMICAL, FG.ACT_VIB_X, OP.PUSH8, 30, OP.MUL, OP.NEG,
+   OP.SENSE_CHEMICAL, FG.ACT_VIB_Y, OP.PUSH8, 30, OP.MUL, OP.NEG, OP.THRUST],
 ];
 
 // Viable-by-construction founder genome. After Phase 4a a viable cell

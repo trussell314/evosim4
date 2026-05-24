@@ -28,6 +28,8 @@ import {
   CHEM_ACT_ELECTRO_Y,
   CHEM_ACT_LIGHT_X,
   CHEM_ACT_LIGHT_Y,
+  CHEM_ACT_VIB_X,
+  CHEM_ACT_VIB_Y,
   CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
@@ -47,6 +49,7 @@ import {
   RX_SLOT_SYNTH_MEM_FA,
   RX_SLOT_SYNTH_PHOTO_V,
   RX_SLOT_SYNTH_ELECTRO,
+  RX_SLOT_SYNTH_VIBRO,
   RX_SLOT_SYNTH_PHRECEPTOR,
   RX_SLOT_SYNTH_MECH,
   RX_SLOT_SYNTH_THERMO,
@@ -603,6 +606,22 @@ function build(): Archetype[] {
         ["JZ", "settled"],
         ...climbParticleGradient(CHEM_CO2, 30), // swim up the CO2/acid plume
         ["LABEL", "settled"],
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
+      id: "skitterer",
+      label: "vib skitterer",
+      cls: "direct",
+      desc: "Hydroacoustic prey: builds a vibroreceptor (lateral-line-style hearing) and bolts AWAY from the bearing of any nearby moving cell -- it hears an approaching swimmer's wake and flees before contact. Forages detritus otherwise. Sets up a speed-vs-stealth arms race: fast predators are loud and easy to flee, so gliding/ambush pays. Distinct from mechanoreception (contact); this is sensing motion at range.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_VIBRO], // build the lateral-line sense
+        // flee the wake bearing (negate act_vib): ax=-vx*30, ay=-vy*30
+        ["SENSE_CHEMICAL", CHEM_ACT_VIB_X], ["PUSH8", 30], ["MUL"], ["NEG"],
+        ["SENSE_CHEMICAL", CHEM_ACT_VIB_Y], ["PUSH8", 30], ["MUL"], ["NEG"],
+        ["THRUST"],
         ...reproduceWhenGrown(32, "np"),
       ],
     },

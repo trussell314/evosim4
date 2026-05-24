@@ -2376,6 +2376,42 @@ describe("mass conservation", () => {
     expect(loneAct).toBe(0);
   });
 
+  it("vibration sense: a vibroreceptor hears a moving neighbour, not a still one", () => {
+    const CHEM_VIBRORECEPTOR_ID = 20;
+    const CHEM_ACT_VIB_X_ID = 25;
+    const w = quietWorld();
+    // Sensor with a vibroreceptor; a neighbour 40px to +x that we keep
+    // moving each tick (so its wake persists).
+    const sensor = makeCreature({ x: 150, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    sensor.store.chemCols[CHEM_VIBRORECEPTOR_ID][sensor.idx] = 2;
+    w.creatures.push(sensor);
+    const mover = makeCreature({ x: 190, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    w.creatures.push(mover);
+    // Second sensor far away with a STILL neighbour (control).
+    const sensor2 = makeCreature({ x: 500, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    sensor2.store.chemCols[CHEM_VIBRORECEPTOR_ID][sensor2.idx] = 2;
+    w.creatures.push(sensor2);
+    w.creatures.push(makeCreature({ x: 540, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 2, enzyme: 1 } }));
+    for (let i = 0; i < 20; i++) {
+      mover.store.vx[mover.idx] = 80; // keep it swimming so it has a wake
+      step(w, 1 / 60);
+    }
+    const heardX = sensor.store.chemCols[CHEM_ACT_VIB_X_ID][sensor.idx];
+    const quietX = sensor2.store.chemCols[CHEM_ACT_VIB_X_ID][sensor2.idx];
+    // Hears the moving neighbour, bearing toward it (+x).
+    expect(heardX).toBeGreaterThan(0);
+    // A still neighbour radiates no wake -> nothing heard.
+    expect(Math.abs(quietX)).toBeLessThan(heardX * 0.05);
+  });
+
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
     // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
     // each tick, which somaticMutate already consults. A cell whose

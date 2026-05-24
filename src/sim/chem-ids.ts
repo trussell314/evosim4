@@ -40,13 +40,13 @@ export interface Molecules {
   // The remaining biopolymer/minerals/marker0 slots are repurposed in
   // later modality commits (electric/vibration/light).
   electroreceptor: number;
-  chemoreceptorMinerals: number;
+  vibroreceptor: number;
   phreceptor: number; // ex-chemoreceptorFa (id 21): acidity receptor
   chemoreceptorMarker0: number;
   activatedElectroX: number;
   activatedElectroY: number;
-  activatedChemoMineralsX: number;
-  activatedChemoMineralsY: number;
+  activatedVibX: number;
+  activatedVibY: number;
   activatedPh: number; // ex-activatedChemoFaX (id 27): acidity signal (scalar)
   activatedChemoFaY: number; // dead spare (id 28), future repurpose
 
@@ -86,9 +86,9 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "biopolymer", "membrane",
   "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
   "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "electroreceptor", "chemoreceptorMinerals", "phreceptor", "chemoreceptorMarker0",
+  "electroreceptor", "vibroreceptor", "phreceptor", "chemoreceptorMarker0",
   "activatedElectroX", "activatedElectroY",
-  "activatedChemoMineralsX", "activatedChemoMineralsY",
+  "activatedVibX", "activatedVibY",
   "activatedPh", "activatedChemoFaY",
   "activatedLightX", "activatedLightY",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
@@ -125,9 +125,9 @@ export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "biopolymer", "membrane",
   "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
   "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "electroreceptor", "chemoreceptorMinerals", "phreceptor", "chemoreceptorMarker0",
+  "electroreceptor", "vibroreceptor", "phreceptor", "chemoreceptorMarker0",
   "activatedElectroX", "activatedElectroY",
-  "activatedChemoMineralsX", "activatedChemoMineralsY",
+  "activatedVibX", "activatedVibY",
   "activatedPh", "activatedChemoFaY",
   "activatedLightX", "activatedLightY",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
@@ -165,13 +165,13 @@ export const CHEM_ACT_PHOTO_VISIBLE = 16;
 export const CHEM_ACT_PHOTO_LONG = 17;
 export const CHEM_ACT_PHOTO_SURFACE = 18;
 export const CHEM_ELECTRORECEPTOR = 19;
-export const CHEM_CHEMORECEPTOR_MINERALS = 20;
+export const CHEM_VIBRORECEPTOR = 20;
 export const CHEM_PHRECEPTOR = 21; // ex-CHEM_CHEMORECEPTOR_FA: acidity receptor
 export const CHEM_CHEMORECEPTOR_MARKER0 = 22;
 export const CHEM_ACT_ELECTRO_X = 23;
 export const CHEM_ACT_ELECTRO_Y = 24;
-export const CHEM_ACT_CHEMO_MINERALS_X = 25;
-export const CHEM_ACT_CHEMO_MINERALS_Y = 26;
+export const CHEM_ACT_VIB_X = 25;
+export const CHEM_ACT_VIB_Y = 26;
 export const CHEM_ACT_PH = 27; // ex-CHEM_ACT_CHEMO_FA_X: acidity signal (scalar)
 export const CHEM_ACT_CHEMO_FA_Y = 28;
 export const CHEM_ACT_LIGHT_X = 29;

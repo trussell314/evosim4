@@ -345,7 +345,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // (albedo*ambientLightAt) and photoreceptor-bearing cells read it as a
     // bearing toward lit neighbours. New light-vision founder gene shifts
     // the seeded run. (Cells optically transparent -- no occlusion yet.)
-    const GOLDEN = "3ef04fb5";
+    // Bumped again: vibration / hydroacoustic sense added (repurposed the
+    // retired minerals chemoreceptor chems -> vibroreceptor + activatedVib
+    // x/y; synth slot 16 live). Moving cells radiate a speed-proportional
+    // wake; vibroreceptors read it (1/r, long range) as a bearing. New
+    // vibration-startle founder gene shifts the seeded run. Intended.
+    const GOLDEN = "90b505bc";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

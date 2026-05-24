@@ -48,9 +48,17 @@ Progress:
   optically TRANSPARENT (no occlusion -- see pending item). Light-vision
   founder gene + `light-shoaler` archetype. Golden rebaselined; activation
   test added.
-- NEXT — bioluminescence (add a LIGHT channel to `EMIT`, fold active light
-  into `lightEmission`) → vibration (repurpose minerals chemo chems) →
-  magnetism (positional map + emit).
+- DONE — **vibration / hydroacoustic sense (lateral line).** Repurposed the
+  minerals chemoreceptor chems (20, 25/26) → `vibroreceptor` + `activatedVibX/Y`;
+  synth slot 16 live. `vibrationEmission` SoA column = `VIB_GAIN · speed`
+  (moving cells radiate a wake), materialized fresh in the pre-loop pass.
+  `runActivation` sums neighbours' wake over the grid (1/r, long `VIB_RANGE`
+  -- sound carries farther than the 1/r² electric/light fields) into an
+  `act_vib` bearing. Distinct from mechanoreception (contact force) -- this
+  is motion-at-range. Vibration-startle founder gene (flee a wake) +
+  `skitterer` archetype. Golden rebaselined; activation test added.
+- NEXT — magnetism (positional map field + emit channel). Then optional:
+  bioluminescence (LIGHT channel on `EMIT`), active vibration EMIT.
 - PENDING (revisit before wrapping up, per request) — **light occlusion /
   shade**: cells currently don't shadow each other or block each other's
   emitted/reflected light (transparent). Cheapest add: attenuate
