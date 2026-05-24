@@ -339,7 +339,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // electro x/y; synth slot 15 live). Cells emit a bioelectric field from
     // metabolic ATP spend; electroreceptors read neighbours' field as a
     // bearing. New electrotaxis founder gene shifts the seeded run. Intended.
-    const GOLDEN = "7ecfd54e";
+    // Bumped again: reflected-light vision added (repurposed the retired
+    // marker0 chemoreceptor activated chems -> activatedLight x/y; reuses
+    // the visible photoreceptor). Cells reflect ambient sky-light
+    // (albedo*ambientLightAt) and photoreceptor-bearing cells read it as a
+    // bearing toward lit neighbours. New light-vision founder gene shifts
+    // the seeded run. (Cells optically transparent -- no occlusion yet.)
+    const GOLDEN = "3ef04fb5";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

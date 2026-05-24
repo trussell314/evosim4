@@ -2341,6 +2341,41 @@ describe("mass conservation", () => {
     expect(ex).toBeGreaterThan(0);
   });
 
+  it("light vision: a photoreceptor sees a sunlit neighbour by reflected light", () => {
+    // In daylight near the surface, every cell reflects ambient sky-light
+    // (lightEmission = albedo * ambientLightAt). A cell with a visible
+    // photoreceptor should accrue an act_light bearing toward a nearby lit
+    // cell; deep in the dark there's nothing to reflect, so it stays ~0.
+    const CHEM_PHOTO_V_ID = 13;
+    const CHEM_ACT_LIGHT_X_ID = 29;
+    const w = quietWorld();
+    w.surfaceY = 8;
+    w.dayPhase = 0.25; // peak sun, shallow -> bright
+    // Eye (visible photoreceptor) with a lit neighbour 40px to +x.
+    const eye = makeCreature({ x: 150, y: 20, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    eye.store.chemCols[CHEM_PHOTO_V_ID][eye.idx] = 2;
+    w.creatures.push(eye);
+    w.creatures.push(makeCreature({ x: 190, y: 20, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 2, enzyme: 1 } }));
+    // Lone control: same eye, far away with NO neighbour to reflect light.
+    const lone = makeCreature({ x: 500, y: 20, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    lone.store.chemCols[CHEM_PHOTO_V_ID][lone.idx] = 2;
+    w.creatures.push(lone);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const eyeAct = eye.store.chemCols[CHEM_ACT_LIGHT_X_ID][eye.idx];
+    const loneAct = lone.store.chemCols[CHEM_ACT_LIGHT_X_ID][lone.idx];
+    // Eye sees the +x neighbour by reflected light (bearing ex > 0).
+    expect(eyeAct).toBeGreaterThan(0);
+    // A lit eye with nobody nearby reflects light itself but sees no one
+    // (can't see itself) -> zero bearing.
+    expect(loneAct).toBe(0);
+  });
+
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
     // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
     // each tick, which somaticMutate already consults. A cell whose

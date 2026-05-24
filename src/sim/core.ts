@@ -438,7 +438,7 @@ const CREATURE_F32_COLS = [
   "m_activatedElectroX", "m_activatedElectroY",
   "m_activatedChemoMineralsX", "m_activatedChemoMineralsY",
   "m_activatedPh", "m_activatedChemoFaY",
-  "m_activatedChemoMarker0X", "m_activatedChemoMarker0Y",
+  "m_activatedLightX", "m_activatedLightY",
   "m_mechanoreceptor", "m_activatedMechX", "m_activatedMechY",
   "m_thermoreceptor", "m_activatedThermo",
   "m_magnetoreceptor", "m_activatedMagX", "m_activatedMagY",
@@ -450,7 +450,9 @@ const CREATURE_F32_COLS = [
   // reset per turn) -- the metabolic-activity proxy. electricEmission: the
   // cell's bioelectric output others detect (materialized pre-loop from
   // last-tick atpSpentTick), summed over neighbours in runActivation.
-  "atpSpentTick", "electricEmission",
+  // lightEmission: the cell's visible-light output (reflection of ambient
+  // sky-light; bioluminescence added later) others' photoreceptors detect.
+  "atpSpentTick", "electricEmission", "lightEmission",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
@@ -535,8 +537,8 @@ export class CreatureStore {
   m_activatedChemoMineralsY!: Float32Array;
   m_activatedPh!: Float32Array;
   m_activatedChemoFaY!: Float32Array;
-  m_activatedChemoMarker0X!: Float32Array;
-  m_activatedChemoMarker0Y!: Float32Array;
+  m_activatedLightX!: Float32Array;
+  m_activatedLightY!: Float32Array;
   m_mechanoreceptor!: Float32Array;
   m_activatedMechX!: Float32Array;
   m_activatedMechY!: Float32Array;
@@ -554,6 +556,7 @@ export class CreatureStore {
   m_atp!: Float32Array; // Path 1: ATP column; `energy` aliases it.
   atpSpentTick!: Float32Array;
   electricEmission!: Float32Array;
+  lightEmission!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -652,8 +655,8 @@ export class CreatureStore {
     this.m_activatedChemoMineralsY = new Float32Array(b, o.base.m_activatedChemoMineralsY, cap);
     this.m_activatedPh = new Float32Array(b, o.base.m_activatedPh, cap);
     this.m_activatedChemoFaY = new Float32Array(b, o.base.m_activatedChemoFaY, cap);
-    this.m_activatedChemoMarker0X = new Float32Array(b, o.base.m_activatedChemoMarker0X, cap);
-    this.m_activatedChemoMarker0Y = new Float32Array(b, o.base.m_activatedChemoMarker0Y, cap);
+    this.m_activatedLightX = new Float32Array(b, o.base.m_activatedLightX, cap);
+    this.m_activatedLightY = new Float32Array(b, o.base.m_activatedLightY, cap);
     this.m_mechanoreceptor = new Float32Array(b, o.base.m_mechanoreceptor, cap);
     this.m_activatedMechX = new Float32Array(b, o.base.m_activatedMechX, cap);
     this.m_activatedMechY = new Float32Array(b, o.base.m_activatedMechY, cap);
@@ -671,6 +674,7 @@ export class CreatureStore {
     this.m_atp = new Float32Array(b, o.base.m_atp, cap);
     this.atpSpentTick = new Float32Array(b, o.base.atpSpentTick, cap);
     this.electricEmission = new Float32Array(b, o.base.electricEmission, cap);
+    this.lightEmission = new Float32Array(b, o.base.lightEmission, cap);
     // Path 1: ATP is a first-class chemical. `energy` is the same
     // backing array as the m_atp molecule column (== molCols[atp] ==
     // chemCols[CHEM_ATP]); every store.energy / c.energy / c.molecules
@@ -706,7 +710,7 @@ export class CreatureStore {
       this.m_activatedElectroX, this.m_activatedElectroY,
       this.m_activatedChemoMineralsX, this.m_activatedChemoMineralsY,
       this.m_activatedPh, this.m_activatedChemoFaY,
-      this.m_activatedChemoMarker0X, this.m_activatedChemoMarker0Y,
+      this.m_activatedLightX, this.m_activatedLightY,
       this.m_mechanoreceptor, this.m_activatedMechX, this.m_activatedMechY,
       this.m_thermoreceptor, this.m_activatedThermo,
       this.m_magnetoreceptor, this.m_activatedMagX, this.m_activatedMagY,
@@ -836,10 +840,10 @@ export class MoleculesView {
   set activatedPh(v: number) { this.c.store.m_activatedPh[this.c.idx] = v; }
   get activatedChemoFaY(): number { return this.c.store.m_activatedChemoFaY[this.c.idx]; }
   set activatedChemoFaY(v: number) { this.c.store.m_activatedChemoFaY[this.c.idx] = v; }
-  get activatedChemoMarker0X(): number { return this.c.store.m_activatedChemoMarker0X[this.c.idx]; }
-  set activatedChemoMarker0X(v: number) { this.c.store.m_activatedChemoMarker0X[this.c.idx] = v; }
-  get activatedChemoMarker0Y(): number { return this.c.store.m_activatedChemoMarker0Y[this.c.idx]; }
-  set activatedChemoMarker0Y(v: number) { this.c.store.m_activatedChemoMarker0Y[this.c.idx] = v; }
+  get activatedLightX(): number { return this.c.store.m_activatedLightX[this.c.idx]; }
+  set activatedLightX(v: number) { this.c.store.m_activatedLightX[this.c.idx] = v; }
+  get activatedLightY(): number { return this.c.store.m_activatedLightY[this.c.idx]; }
+  set activatedLightY(v: number) { this.c.store.m_activatedLightY[this.c.idx] = v; }
   get mechanoreceptor(): number { return this.c.store.m_mechanoreceptor[this.c.idx]; }
   set mechanoreceptor(v: number) { this.c.store.m_mechanoreceptor[this.c.idx] = v; }
   get activatedMechX(): number { return this.c.store.m_activatedMechX[this.c.idx]; }

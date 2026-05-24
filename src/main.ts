@@ -4093,6 +4093,7 @@ function updateInspector(): void {
     `chemo: M=${fmt(m.chemoreceptorMinerals)} 0=${fmt(m.chemoreceptorMarker0)}\n` +
     `sense: mech=${fmt(m.mechanoreceptor)} thermo=${fmt(m.thermoreceptor)} mag=${fmt(m.magnetoreceptor)}\n` +
     `      pH=${fmt(m.phreceptor)}/${fmt(m.activatedPh)} electro=${fmt(m.electroreceptor)}/${fmt(m.activatedElectroX)},${fmt(m.activatedElectroY)}\n` +
+    `      light=${fmt(m.activatedLightX)},${fmt(m.activatedLightY)}\n` +
     `bond=${fmt(m.bondChem)} repair=${fmt(m.repairChem)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b`;

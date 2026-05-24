@@ -65,6 +65,7 @@ import {
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
   CHEM_PHRECEPTOR, CHEM_ACT_PH,
   CHEM_ELECTRORECEPTOR, CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y,
+  CHEM_ACT_LIGHT_X, CHEM_ACT_LIGHT_Y,
   CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
@@ -4164,6 +4165,11 @@ const ELEC_PASSIVE_GAIN = 4;
 // is "spend ATP to glow brighter": the cost lands in atpSpentTick, which
 // the next-tick emission pass turns into a louder electricEmission.
 const EMIT_ATP_PER_UNIT = 0.02;
+// Visible-light sense. LIGHT_ALBEDO: fraction of local sky-light a cell
+// reflects (its visibility to others). LIGHT_RANGE: how far reflected
+// light carries before 1/r^2 + water make it undetectable. Tunable.
+const LIGHT_ALBEDO = 0.5;
+const LIGHT_RANGE = 110;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
@@ -4261,6 +4267,34 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   } else {
     cols[CHEM_ACT_ELECTRO_X][i] *= k;
     cols[CHEM_ACT_ELECTRO_Y][i] *= k;
+  }
+  // LIGHT (reflected-light vision): with a visible photoreceptor, sum the
+  // light OTHER cells emit (reflected sky-light now; bioluminescence later)
+  // over the grid, 1/r^2 attenuated, into an act_light bearing toward the
+  // brightest nearby cells. Gated by the same visible photoreceptor that
+  // reads ambient sky-light (one eye, two readouts: scalar brightness +
+  // this cell-light vector). Transparent (no occlusion). Host -> decay.
+  const litR = cols[CHEM_PHOTORECEPTOR_VISIBLE][i];
+  if (litR > 0 && host === undefined) {
+    let lx = 0, ly = 0;
+    const cx = c.x, cy = c.y, R2 = LIGHT_RANGE * LIGHT_RANGE;
+    forCreaturesNear(cx, cy, LIGHT_RANGE, (o) => {
+      if (o === c) return;
+      const em = o.store.lightEmission[o.idx];
+      if (em <= 0) return;
+      const dx = o.x - cx, dy = o.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 1e-6 || d2 > R2) return;
+      const d = Math.sqrt(d2);
+      const w = em / d2;
+      lx += (w * dx) / d;
+      ly += (w * dy) / d;
+    });
+    cols[CHEM_ACT_LIGHT_X][i] = cols[CHEM_ACT_LIGHT_X][i] * k + litR * lx * dt;
+    cols[CHEM_ACT_LIGHT_Y][i] = cols[CHEM_ACT_LIGHT_Y][i] * k + litR * ly * dt;
+  } else {
+    cols[CHEM_ACT_LIGHT_X][i] *= k;
+    cols[CHEM_ACT_LIGHT_Y][i] *= k;
   }
   // The remaining retired-chemo ids (minerals/marker0 + their activated
   // x/y) stay inert until repurposed for vibration/light in later commits;
@@ -6235,8 +6269,14 @@ function updateCreatures(world: World, dt: number): void {
   {
     const cs = world.creatures;
     for (let i = 0; i < cs.length; i++) {
-      const st = cs[i].store; const ix = cs[i].idx;
+      const c = cs[i]; const st = c.store; const ix = c.idx;
       st.electricEmission[ix] = ELEC_PASSIVE_GAIN * st.atpSpentTick[ix];
+      // Visible-light output: reflection of the local sky-light (albedo *
+      // ambient). No cell-occlusion term yet -> cells are optically
+      // transparent to each other (no inter-cell shadows / no path
+      // blocking); see SENSES_PLAN occlusion follow-up. Bioluminescence
+      // (active EMIT light) will add onto this later.
+      st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y);
     }
   }
   // SENSOR_BIN_* is only read by chemGradient() inside runActivation

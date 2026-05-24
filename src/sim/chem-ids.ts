@@ -50,8 +50,8 @@ export interface Molecules {
   activatedPh: number; // ex-activatedChemoFaX (id 27): acidity signal (scalar)
   activatedChemoFaY: number; // dead spare (id 28), future repurpose
 
-  activatedChemoMarker0X: number;
-  activatedChemoMarker0Y: number;
+  activatedLightX: number;
+  activatedLightY: number;
   // Mechano / thermo / magneto.
   mechanoreceptor: number;
   activatedMechX: number;
@@ -90,7 +90,7 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "activatedElectroX", "activatedElectroY",
   "activatedChemoMineralsX", "activatedChemoMineralsY",
   "activatedPh", "activatedChemoFaY",
-  "activatedChemoMarker0X", "activatedChemoMarker0Y",
+  "activatedLightX", "activatedLightY",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
   "thermoreceptor", "activatedThermo",
   "magnetoreceptor", "activatedMagX", "activatedMagY",
@@ -129,7 +129,7 @@ export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "activatedElectroX", "activatedElectroY",
   "activatedChemoMineralsX", "activatedChemoMineralsY",
   "activatedPh", "activatedChemoFaY",
-  "activatedChemoMarker0X", "activatedChemoMarker0Y",
+  "activatedLightX", "activatedLightY",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
   "thermoreceptor", "activatedThermo",
   "magnetoreceptor", "activatedMagX", "activatedMagY",
@@ -174,8 +174,8 @@ export const CHEM_ACT_CHEMO_MINERALS_X = 25;
 export const CHEM_ACT_CHEMO_MINERALS_Y = 26;
 export const CHEM_ACT_PH = 27; // ex-CHEM_ACT_CHEMO_FA_X: acidity signal (scalar)
 export const CHEM_ACT_CHEMO_FA_Y = 28;
-export const CHEM_ACT_CHEMO_MARKER0_X = 29;
-export const CHEM_ACT_CHEMO_MARKER0_Y = 30;
+export const CHEM_ACT_LIGHT_X = 29;
+export const CHEM_ACT_LIGHT_Y = 30;
 export const CHEM_MECHANORECEPTOR = 31;
 export const CHEM_ACT_MECH_X = 32;
 export const CHEM_ACT_MECH_Y = 33;

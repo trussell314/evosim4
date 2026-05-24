@@ -37,8 +37,25 @@ Progress:
   path). `EMIT_CHANNELS` grows as modalities land (today: electric only).
   Added an `electric-beacon` archetype. Golden unchanged (nothing in the
   seeded run emits yet); VM-level EMIT test added.
-- NEXT — vibration → light → magnetism. Repurpose the remaining dead chems
-  (minerals/marker0 → vibro/light) and add their channels to `EMIT`.
+- DONE — **light / reflected-light vision.** Repurposed the marker0
+  chemoreceptor activated chems (29/30) → `activatedLightX/Y`; reuses the
+  existing visible photoreceptor (no new receptor). Added a `lightEmission`
+  SoA column = `LIGHT_ALBEDO · ambientLightAt(cell)` (reflection of local
+  sky-light), materialized in the pre-loop pass; `runActivation` sums
+  neighbours' lightEmission over the grid (1/r², `LIGHT_RANGE`) into an
+  `act_light` bearing toward lit cells, gated by the visible photoreceptor
+  (one eye: scalar sky-brightness + this cell-light vector). Cells are
+  optically TRANSPARENT (no occlusion -- see pending item). Light-vision
+  founder gene + `light-shoaler` archetype. Golden rebaselined; activation
+  test added.
+- NEXT — bioluminescence (add a LIGHT channel to `EMIT`, fold active light
+  into `lightEmission`) → vibration (repurpose minerals chemo chems) →
+  magnetism (positional map + emit).
+- PENDING (revisit before wrapping up, per request) — **light occlusion /
+  shade**: cells currently don't shadow each other or block each other's
+  emitted/reflected light (transparent). Cheapest add: attenuate
+  `ambientLightAt` by the biomass in the column above a cell (turbidity/
+  shade) -> enables shade-avoidance, hiding-in-shadow, swarm self-shading.
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy

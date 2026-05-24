@@ -1353,7 +1353,7 @@ export const FOUNDER_GENE_REFS = {
   ACT_THERMO: 35, MARKER0: 41,
   // chem-ids.ts -- activated sensor chems read via SENSE_CHEMICAL
   ACT_PHOTO_V: 16, ACT_MECH_X: 32, ACT_MECH_Y: 33, ACT_MAG_X: 37, ACT_MAG_Y: 38,
-  ACT_PH: 27, ACT_ELECTRO_X: 23, ACT_ELECTRO_Y: 24,
+  ACT_PH: 27, ACT_ELECTRO_X: 23, ACT_ELECTRO_Y: 24, ACT_LIGHT_X: 29, ACT_LIGHT_Y: 30,
   // reactions.ts named slots
   PHOTOSYNTH: 3, SYNTH_AA: 4, SYNTH_FA: 5, SYNTH_CHL: 6, SYNTH_ENZ: 7,
   SYNTH_MEM: 9, DIGEST_BIOP: 10, SYNTH_THERMO: 20, SYNTH_REPAIR: 23,
@@ -1456,6 +1456,12 @@ const SENSE_BEHAVIOR_GENES: ReadonlyArray<ReadonlyArray<number>> = [
   [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_ELECTRO,
    OP.SENSE_CHEMICAL, FG.ACT_ELECTRO_X, OP.PUSH8, 30, OP.MUL,
    OP.SENSE_CHEMICAL, FG.ACT_ELECTRO_Y, OP.PUSH8, 30, OP.MUL, OP.THRUST],
+  // light vision -- boost the visible photoreceptor, swim toward the
+  // reflected-light bearing of nearby cells (act_light x/y). Visual
+  // shoaling/aggregation toward sunlit clusters (dark = nothing to see).
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_PHOTO_V,
+   OP.SENSE_CHEMICAL, FG.ACT_LIGHT_X, OP.PUSH8, 30, OP.MUL,
+   OP.SENSE_CHEMICAL, FG.ACT_LIGHT_Y, OP.PUSH8, 30, OP.MUL, OP.THRUST],
 ];
 
 // Viable-by-construction founder genome. After Phase 4a a viable cell

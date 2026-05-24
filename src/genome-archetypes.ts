@@ -26,6 +26,8 @@ import {
   CHEM_ACT_PH,
   CHEM_ACT_ELECTRO_X,
   CHEM_ACT_ELECTRO_Y,
+  CHEM_ACT_LIGHT_X,
+  CHEM_ACT_LIGHT_Y,
   CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
@@ -601,6 +603,19 @@ function build(): Archetype[] {
         ["JZ", "settled"],
         ...climbParticleGradient(CHEM_CO2, 30), // swim up the CO2/acid plume
         ["LABEL", "settled"],
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
+      id: "light-shoaler",
+      label: "light shoaler",
+      cls: "direct",
+      desc: "Sees by reflected light: boosts its visible photoreceptor and swims up the act_light bearing -- toward nearby cells lit by the sun -- so it aggregates into visible shoals in sunlit water. Pure reflected-light vision (cells are transparent for now: no shadows / no occlusion), so it only works where there IS ambient light (dark/deep = blind until bioluminescence lands). Emergent visual schooling from one shared light field.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_PHOTO_V], // boost the visible eye
+        ...climbGradient(CHEM_ACT_LIGHT_X, CHEM_ACT_LIGHT_Y, 30), // toward lit cells
         ...reproduceWhenGrown(32, "np"),
       ],
     },
