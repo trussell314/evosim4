@@ -366,7 +366,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: minerals are magnetic (magnetite) -- a magnetoreceptor's
     // act_mag now also tracks the mineral gradient, so magnetotaxis cells in
     // the seeded run drift toward deposits. Intended.
-    const GOLDEN = "d26a706f";
+    // Bumped again: a dividing cell's daughter now marches out from the
+    // parent and stops before rock (instead of being flung a radius-scaled
+    // offset that could tunnel a big cell's daughter through a wall), so
+    // near-rock division placement changed. Intended.
+    const GOLDEN = "834878b2";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

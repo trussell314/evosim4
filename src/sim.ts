@@ -7550,8 +7550,23 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   // parent drifted during the second-long animation. Matches the
   // initial offset in tryReproduce().
   const offset = (c.r + child.r) * BIRTH_OFFSET_MULT;
-  child.x = c.x + Math.cos(ang) * offset;
-  child.y = c.y + Math.sin(ang) * offset;
+  // March out from the parent toward the split axis and STOP before any
+  // rock, so a daughter from a large cell next to rock can't be flung
+  // across or into it (the offset scales with the parent's radius, so big
+  // cells used to tunnel a daughter through a wall). It lands at the last
+  // rock-free point on the parent's side -- their shared pocket of open
+  // water. founderTerrainBlocked is the same lobe-accurate rock test
+  // founder placement uses, so cliffs/overhangs/caves count too.
+  const ux = Math.cos(ang), uy = Math.sin(ang);
+  const step = Math.max(2, child.r * 0.5);
+  let px = c.x, py = c.y;
+  for (let d = step; d <= offset; d += step) {
+    const nx = c.x + ux * d, ny = c.y + uy * d;
+    if (founderTerrainBlocked(world, nx, ny, child.r)) break;
+    px = nx; py = ny;
+  }
+  child.x = px;
+  child.y = py;
   child.vx = c.vx;
   child.vy = c.vy;
   world.creatures.push(child);
