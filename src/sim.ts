@@ -4176,8 +4176,27 @@ const LIGHT_RANGE = 110;
 const VIB_GAIN = 0.5;
 const VIB_RANGE = 180;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
-const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
-const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
+// Geomagnetic MAP. Baseline points "up" (-Y = north). Two positional
+// gradients make it a map rather than a bare compass:
+//  - declination: the heading tilts in +X as you move across the world
+//    (MAG_DECLINATION * (x/width - 0.5)), so direction encodes x-position.
+//  - intensity: the field strengthens with depth (1 + MAG_DEPTH_GAIN *
+//    y/height), so |act_mag| encodes depth.
+// A cell with a magnetoreceptor can thus hold a heading, read its depth,
+// and (with the tilt) get a coarse x fix -- the substrate for homing /
+// vertical migration / long-range navigation.
+const MAG_BASE_X = 0;
+const MAG_BASE_Y = -1;
+const MAG_DECLINATION = 0.6;
+const MAG_DEPTH_GAIN = 1.0;
+const _MAG = new Float32Array(2);
+function magFieldAt(world: World, x: number, y: number, out: Float32Array): void {
+  const w = world.width > 0 ? world.width : 1;
+  const h = world.height > 0 ? world.height : 1;
+  const intensity = 1 + MAG_DEPTH_GAIN * (y / h);
+  out[0] = (MAG_BASE_X + MAG_DECLINATION * (x / w - 0.5)) * intensity;
+  out[1] = MAG_BASE_Y * intensity;
+}
 // Phase 5 retired the CHEMO branch of runActivation; the per-target
 // receptor/signal-chem arrays it iterated were deleted along with it.
 // CHEM_CHEMORECEPTOR_* and CHEM_ACT_CHEMO_*_X/Y ids remain in the
@@ -4228,10 +4247,16 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
     cols[CHEM_ACT_MECH_X][i] *= k;
     cols[CHEM_ACT_MECH_Y][i] *= k;
   }
-  // MAGNETO: receptor * fixed compass field.
+  // MAGNETO: receptor * the local geomagnetic field. No longer a single
+  // global constant -- it's a positional MAP (like Earth's): the field
+  // tilts (declination drifts across x) and strengthens with depth, so a
+  // cell reading act_mag x/y gets both a heading AND a position fix
+  // (|act_mag| ~ depth, the x/y ratio ~ where you are). Enables homing /
+  // depth-keeping / migration, not just a fixed compass.
   const magR = cols[CHEM_MAGNETORECEPTOR][i];
-  cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * MAG_FIELD_X * dt;
-  cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * MAG_FIELD_Y * dt;
+  magFieldAt(world, c.x, c.y, _MAG);
+  cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * _MAG[0] * dt;
+  cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * _MAG[1] * dt;
   // pH / ACIDITY: receptor * local acidity above baseline. Acidity is
   // proxied by dissolved CO2 (carbonic acid): the cell's own CO2 pool +
   // the ambient CO2 of its region, so a cell senses both its metabolic

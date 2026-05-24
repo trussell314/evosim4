@@ -57,8 +57,18 @@ Progress:
   `act_vib` bearing. Distinct from mechanoreception (contact force) -- this
   is motion-at-range. Vibration-startle founder gene (flee a wake) +
   `skitterer` archetype. Golden rebaselined; activation test added.
-- NEXT — magnetism (positional map field + emit channel). Then optional:
-  bioluminescence (LIGHT channel on `EMIT`), active vibration EMIT.
+- DONE — **magnetism: positional MAP.** Replaced the fixed global compass
+  with `magFieldAt(x,y)`: heading tilts across x (declination) and the field
+  strengthens with depth (intensity), so a magnetoreceptor reads a heading
+  AND a depth/position fix (|act_mag| ~ depth). Substrate for homing /
+  vertical migration. Added a `magneto-navigator` archetype. Golden
+  rebaselined; depth-gauge test added.
+- ALL FIVE CHANNELS now have detection (light · vibration · electric · pH ·
+  magnetism) + the shared emission infra (emission columns, order-independent
+  pre-loop pass, grid neighbour scan, `OP.EMIT`).
+- OPTIONAL / remaining: bioluminescence (LIGHT channel on `EMIT` + active
+  light fold-in), active vibration EMIT, the invented magnetic-emit channel,
+  and the PENDING light-occlusion/shade term (see below).
 - PENDING (revisit before wrapping up, per request) — **light occlusion /
   shade**: cells currently don't shadow each other or block each other's
   emitted/reflected light (transparent). Cheapest add: attenuate

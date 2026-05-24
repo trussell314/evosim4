@@ -2412,6 +2412,28 @@ describe("mass conservation", () => {
     expect(Math.abs(quietX)).toBeLessThan(heardX * 0.05);
   });
 
+  it("magnetic map: field intensity grows with depth (a depth gauge)", () => {
+    // The geomagnetic field is now positional: |act_mag| strengthens with
+    // depth, so a deeper magnetoreceptor cell reads a stronger vertical
+    // field than a shallow one -> the substrate for depth-keeping.
+    const CHEM_MAGNETO_ID = 36;
+    const CHEM_ACT_MAG_Y_ID = 38;
+    const read = (y: number) => {
+      const w = quietWorld();
+      const c = makeCreature({ x: 400, y, energy: 50,
+        genome: new Uint8Array([HALT_MARK]),
+        molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+      c.store.chemCols[CHEM_MAGNETO_ID][c.idx] = 2;
+      w.creatures.push(c);
+      for (let i = 0; i < 20; i++) step(w, 1 / 60);
+      return Math.abs(c.store.chemCols[CHEM_ACT_MAG_Y_ID][c.idx]);
+    };
+    const shallow = read(20);
+    const deep = read(400);
+    expect(shallow).toBeGreaterThan(0);
+    expect(deep).toBeGreaterThan(shallow);
+  });
+
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
     // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
     // each tick, which somaticMutate already consults. A cell whose

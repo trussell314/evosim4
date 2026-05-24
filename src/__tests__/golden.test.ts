@@ -350,7 +350,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // x/y; synth slot 16 live). Moving cells radiate a speed-proportional
     // wake; vibroreceptors read it (1/r, long range) as a bearing. New
     // vibration-startle founder gene shifts the seeded run. Intended.
-    const GOLDEN = "90b505bc";
+    // Bumped again: magnetism upgraded from a fixed global compass to a
+    // positional MAP (field tilts across x = declination, strengthens with
+    // depth = intensity), so magnetotaxis cells in the seeded run follow a
+    // position-varying field. Intended.
+    const GOLDEN = "8ea6c16e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

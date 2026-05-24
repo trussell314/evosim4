@@ -610,6 +610,19 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "magneto-navigator",
+      label: "magneto navigator",
+      cls: "direct",
+      desc: "Navigates by the geomagnetic MAP: builds a magnetoreceptor and swims along the local field vector (act_mag x/y). Because the field is now positional -- it tilts across x (declination) and strengthens with depth (intensity) rather than being one fixed compass -- following it produces directed migration / depth-keeping that varies with where the cell is, the substrate for homing and long-range vertical migration. Unlike the phototaxis seed it migrates always (not only when dark).",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MAGNETO], // build the compass/map sense
+        ...climbGradient(CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, 30), // swim along the field
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
       id: "skitterer",
       label: "vib skitterer",
       cls: "direct",
