@@ -99,7 +99,7 @@ import {
   MIN_VIABLE_RIBOSOME,
   MIN_VIABLE_AMINOACID,
 } from "./sim";
-import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT } from "./genome";
+import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT, emitChannelName } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -4597,6 +4597,7 @@ function analyzeGene(genome: Uint8Array, start: number, end: number): {
       case OP.TURN: actions.push({ text: "Turns", pc: i }); break;
       case OP.EXCRETE: actions.push({ text: `Excretes ${chemName(a1 % 96)}`, pc: i }); break;
       case OP.TRANSPORT: actions.push({ text: `Transports ${chemName(a1 % 96)}`, pc: i }); break;
+      case OP.EMIT: actions.push({ text: `Emits a ${emitChannelName(a1)} signal`, pc: i }); break;
       case OP.POKE_BYTE: case OP.SPLICE_DUP: case OP.SPLICE_DEL:
         actions.push({ text: "Self-modifies its genome", pc: i }); break;
       case OP.SYNTH: {
@@ -4867,6 +4868,7 @@ function describeGenomeProse(genome: Uint8Array): string {
   // EXCRETE is operand mod CHEMICAL_COUNT (any chem in the table).
   const ingest = new Set<number>();
   const excrete = new Set<number>();
+  const emits = new Set<number>();
   // Chem ids the genome reads via SENSE_CHEMICAL.
   const sensedChems = new Set<number>();
   walkGenome(genome, (op, pc, operand) => {
@@ -4889,6 +4891,7 @@ function describeGenomeProse(genome: Uint8Array): string {
       }
       case OP.INGEST: ingest.add((operand ?? 0) % 6); break;
       case OP.EXCRETE: excrete.add((operand ?? 0) % 96); break;
+      case OP.EMIT: emits.add(operand ?? 0); break;
       case OP.SENSE_CHEMICAL: sensedChems.add((operand ?? 0) % 96); break;
       case OP.JZ: case OP.JNZ: hasJump = true; break;
       case OP.LT: case OP.GT: case OP.EQ: case OP.NOT: case OP.AND: case OP.OR: hasCmp = true; break;
@@ -4941,6 +4944,12 @@ function describeGenomeProse(genome: Uint8Array): string {
     lines.push(`Excretes: ${names.join(", ")}.`);
   } else {
     lines.push(`Excretes: nothing (plus passive CO2/waste auto-vent).`);
+  }
+
+  // Emits: OP.EMIT broadcasts an active signal (costs ATP) on a channel.
+  if (emits.size > 0) {
+    const names = Array.from(emits).map(emitChannelName);
+    lines.push(`Emits: ${[...new Set(names)].join(", ")} signal(s) (active, ATP-costed).`);
   }
 
   // Senses: SENSE_CHEMICAL <id> reads. Lists every chem id the genome

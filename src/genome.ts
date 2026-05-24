@@ -249,6 +249,10 @@ export const EMIT_CHANNEL_ELECTRIC = 0;
 export const EMIT_CHANNEL_LIGHT = 1;
 export const EMIT_CHANNEL_VIBRATION = 2;
 export const EMIT_CHANNEL_MAGNETIC = 3;
+const EMIT_CHANNEL_NAMES = ["electric", "light", "vibration", "magnetic"] as const;
+export function emitChannelName(ch: number): string {
+  return EMIT_CHANNEL_NAMES[((ch % EMIT_CHANNELS) + EMIT_CHANNELS) % EMIT_CHANNELS] ?? "signal";
+}
 // Per-tick magnitude clamp so a runaway stack value can't request an
 // absurd ATP burn in one op.
 const EMIT_MAG_CAP = 1000;
@@ -809,6 +813,7 @@ export function summarizeGenome(
   let thrust = false, turn = false, reproduce = false;
   let predate = false, engulf = false;
   let selfModifies = false;
+  const emitChannels = new Set<number>();
   let hasJump = false, hasCmp = false;
   let executableOps = 0, unknownBytes = 0;
   const catalystSlots: number[] = [];
@@ -836,6 +841,9 @@ export function summarizeGenome(
       case OP.SPLICE_DEL: selfModifies = true; break;
       case OP.INGEST:
         ingests = true;
+        break;
+      case OP.EMIT:
+        emitChannels.add(operand % EMIT_CHANNELS);
         break;
       case OP.EXCRETE: {
         const mat = m6(operand);
@@ -890,6 +898,9 @@ export function summarizeGenome(
   if (excreteMaterials.length > 0) {
     capabilities.push("excretes " + excreteMaterials.map(matName).join("/"));
   }
+  if (emitChannels.size > 0) {
+    capabilities.push("emits " + [...emitChannels].sort((a, b) => a - b).map(emitChannelName).join("/") + " signals");
+  }
   if (capabilities.length === 0) capabilities.push("inert (no actions)");
 
   const instrBudget = opts?.instrBudget ?? 32;
@@ -922,7 +933,8 @@ export function summarizeGenome(
   if (engulf) otherActs.push("engulfs prey");
   if (predate) otherActs.push("predates");
   if (selfModifies) otherActs.push("rewrites its own genome (POKE / SPLICE)");
-  bullets.push("- Excrete / engulf / predate? " + (otherActs.length > 0
+  if (emitChannels.size > 0) otherActs.push("emits " + [...emitChannels].sort((a, b) => a - b).map(emitChannelName).join("/") + " signals (costs ATP)");
+  bullets.push("- Excrete / engulf / predate / emit? " + (otherActs.length > 0
     ? otherActs.join("; ") + "."
     : "None of the corresponding ops are present."));
 
@@ -952,7 +964,9 @@ export function summarizeGenome(
     3: "photosynth", 4: "synth_aa", 5: "synth_fa",
     6: "synth_chl", 7: "synth_enz", 8: "synth_ribo",
     9: "synth_membrane(aa+fa)", 10: "digest_biopolymer",
-    11: "synth_membrane(fa)", 12: "synth_photo_v",
+    11: "synth_membrane(fa)", 12: "synth_photoreceptor",
+    15: "synth_electroreceptor", 16: "synth_vibroreceptor",
+    17: "synth_phreceptor",
     19: "synth_mech", 20: "synth_thermo", 21: "synth_magneto",
   };
   const boostsPhotosynth = catalystSlots.includes(SLOT_PHOTOSYNTH);
