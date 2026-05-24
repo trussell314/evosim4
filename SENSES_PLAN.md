@@ -12,8 +12,16 @@ Progress:
   chemoreceptor chems (ids 19–30) + their dead synth slots (15–18) rather
   than append new named chems: no schema bump, no SoA column surgery, no
   reaction-slot additions, and old saves survive. See §3.0.
-- NEXT — implement modalities in order pH → electric → vibration → light →
-  magnetism (each repurposes its chems, each its own golden rebaseline).
+- DONE — **pH/acidity sense.** Repurposed `chemoreceptorFa`(21)→`phreceptor`
+  + `activatedChemoFaX`(27)→`activatedPh`; synth slot 17 live. `runActivation`
+  writes `act_ph = phreceptor·(cellCO2 + ambientCO2 − baseline)`. Added a pH
+  founder life-history gene + an `acidophile` archetype (bistable vent-
+  seeker). No schema bump; old saves load; golden rebaselined; pH activation
+  test added.
+- NEXT — electric → vibration → light → magnetism. These need the genuinely
+  new infra (`OP.EMIT` + emission columns + the perceptual-field pass over
+  the creature grid); repurpose the remaining dead chems
+  (biopolymer/minerals/marker0 → electro/vibro/light).
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy

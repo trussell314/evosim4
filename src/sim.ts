@@ -62,6 +62,7 @@ import {
   CHEM_MECHANORECEPTOR, CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y,
   CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
+  CHEM_PHRECEPTOR, CHEM_ACT_PH,
   CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
@@ -4142,6 +4143,11 @@ const AMBIENT_FLOW_RATE = 0.6;
 // conservation explicitly excludes signal chems.
 const ACT_DECAY = 2.0;            // per second; ~0.35s half-life
 const VEL_TO_FORCE_GAIN = 0.5;    // velocity contribution to perceived mech
+// pH baseline: the (cell CO2 + ambient CO2) level the acidity sense reads
+// as "neutral". Above -> act_ph positive (acidic), below -> negative. 0 for
+// now (sense reports total dissolved-CO2/acid load); tune against realized
+// CO2 pools once cells express phreceptor at scale.
+const PH_BASELINE = 0;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
@@ -4199,6 +4205,20 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   const magR = cols[CHEM_MAGNETORECEPTOR][i];
   cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * MAG_FIELD_X * dt;
   cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * MAG_FIELD_Y * dt;
+  // pH / ACIDITY: receptor * local acidity above baseline. Acidity is
+  // proxied by dissolved CO2 (carbonic acid): the cell's own CO2 pool +
+  // the ambient CO2 of its region, so a cell senses both its metabolic
+  // micro-environment and the broader field (e.g. a vent's CO2 plume).
+  // Positive act_ph = acidic. Bounded signal chem like the others (the
+  // decay term caps it); not mass-conserved by design (pure signal).
+  const phR = cols[CHEM_PHRECEPTOR][i];
+  if (phR > 0) {
+    const ambCO2 = world.ambient[regionIndexAt(world, c.x, c.y) * AMBIENT_STRIDE + CHEM_CO2];
+    const acidity = cols[CHEM_CO2][i] + ambCO2 - PH_BASELINE;
+    cols[CHEM_ACT_PH][i] = cols[CHEM_ACT_PH][i] * k + phR * acidity * dt;
+  } else {
+    cols[CHEM_ACT_PH][i] *= k;
+  }
   // Phase 5: the CHEMO branch (4 receptor-gated particle-gradient
   // signals into CHEM_ACT_CHEMO_*_X/Y) is retired -- SENSE_OUT
   // <chemId> reads the same chemGradient universally for any chem,
@@ -4661,7 +4681,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
   const RECEPTOR_DECAY_PER_SEC = 0.005;
   const recCols = [
     s.m_photoreceptorVisible, s.m_photoreceptorLong, s.m_photoreceptorSurface,
-    s.m_chemoreceptorBiopolymer, s.m_chemoreceptorMinerals, s.m_chemoreceptorFa, s.m_chemoreceptorMarker0,
+    s.m_chemoreceptorBiopolymer, s.m_chemoreceptorMinerals, s.m_phreceptor, s.m_chemoreceptorMarker0,
     s.m_mechanoreceptor, s.m_thermoreceptor, s.m_magnetoreceptor,
   ];
   for (let r = 0; r < recCols.length; r++) {

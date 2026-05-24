@@ -33,18 +33,23 @@ export interface Molecules {
   activatedPhotoVisible: number;
   activatedPhotoLong: number;
   activatedPhotoSurface: number;
-  // Per-target chemoreceptor variants. Each target chem the cell
-  // invests in gets its own receptor + activated x/y pair.
+  // Retired CHEMO-branch receptor chems (the chemo gradient sense was
+  // superseded by universal SENSE_OUT). Their ids/columns are being
+  // REPURPOSED into the new sensory modalities (SENSES_PLAN.md) rather
+  // than left inert: chemoreceptorFa(21)->phreceptor (pH/acidity sense).
+  // The remaining biopolymer/minerals/marker0 slots are repurposed in
+  // later modality commits (electric/vibration/light).
   chemoreceptorBiopolymer: number;
   chemoreceptorMinerals: number;
-  chemoreceptorFa: number;
+  phreceptor: number; // ex-chemoreceptorFa (id 21): acidity receptor
   chemoreceptorMarker0: number;
   activatedChemoBiopolymerX: number;
   activatedChemoBiopolymerY: number;
   activatedChemoMineralsX: number;
   activatedChemoMineralsY: number;
-  activatedChemoFaX: number;
-  activatedChemoFaY: number;
+  activatedPh: number; // ex-activatedChemoFaX (id 27): acidity signal (scalar)
+  activatedChemoFaY: number; // dead spare (id 28), future repurpose
+
   activatedChemoMarker0X: number;
   activatedChemoMarker0Y: number;
   // Mechano / thermo / magneto.
@@ -81,10 +86,10 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "biopolymer", "membrane",
   "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
   "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
+  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "phreceptor", "chemoreceptorMarker0",
   "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
   "activatedChemoMineralsX", "activatedChemoMineralsY",
-  "activatedChemoFaX", "activatedChemoFaY",
+  "activatedPh", "activatedChemoFaY",
   "activatedChemoMarker0X", "activatedChemoMarker0Y",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
   "thermoreceptor", "activatedThermo",
@@ -120,10 +125,10 @@ export const NAMED_CHEMICALS: ReadonlyArray<keyof Molecules> = [
   "biopolymer", "membrane",
   "photoreceptorVisible", "photoreceptorLong", "photoreceptorSurface",
   "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
-  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "chemoreceptorFa", "chemoreceptorMarker0",
+  "chemoreceptorBiopolymer", "chemoreceptorMinerals", "phreceptor", "chemoreceptorMarker0",
   "activatedChemoBiopolymerX", "activatedChemoBiopolymerY",
   "activatedChemoMineralsX", "activatedChemoMineralsY",
-  "activatedChemoFaX", "activatedChemoFaY",
+  "activatedPh", "activatedChemoFaY",
   "activatedChemoMarker0X", "activatedChemoMarker0Y",
   "mechanoreceptor", "activatedMechX", "activatedMechY",
   "thermoreceptor", "activatedThermo",
@@ -161,13 +166,13 @@ export const CHEM_ACT_PHOTO_LONG = 17;
 export const CHEM_ACT_PHOTO_SURFACE = 18;
 export const CHEM_CHEMORECEPTOR_BIOPOLYMER = 19;
 export const CHEM_CHEMORECEPTOR_MINERALS = 20;
-export const CHEM_CHEMORECEPTOR_FA = 21;
+export const CHEM_PHRECEPTOR = 21; // ex-CHEM_CHEMORECEPTOR_FA: acidity receptor
 export const CHEM_CHEMORECEPTOR_MARKER0 = 22;
 export const CHEM_ACT_CHEMO_BIOPOLYMER_X = 23;
 export const CHEM_ACT_CHEMO_BIOPOLYMER_Y = 24;
 export const CHEM_ACT_CHEMO_MINERALS_X = 25;
 export const CHEM_ACT_CHEMO_MINERALS_Y = 26;
-export const CHEM_ACT_CHEMO_FA_X = 27;
+export const CHEM_ACT_PH = 27; // ex-CHEM_ACT_CHEMO_FA_X: acidity signal (scalar)
 export const CHEM_ACT_CHEMO_FA_Y = 28;
 export const CHEM_ACT_CHEMO_MARKER0_X = 29;
 export const CHEM_ACT_CHEMO_MARKER0_Y = 30;

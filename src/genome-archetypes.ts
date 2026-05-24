@@ -23,6 +23,7 @@ import {
   CHEM_ACT_MAG_Y,
   CHEM_ACT_MECH_X,
   CHEM_ACT_MECH_Y,
+  CHEM_ACT_PH,
   CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
@@ -41,6 +42,7 @@ import {
   RX_SLOT_DIGEST_BIOP,
   RX_SLOT_SYNTH_MEM_FA,
   RX_SLOT_SYNTH_PHOTO_V,
+  RX_SLOT_SYNTH_PHRECEPTOR,
   RX_SLOT_SYNTH_MECH,
   RX_SLOT_SYNTH_THERMO,
   RX_SLOT_SYNTH_MAGNETO,
@@ -577,6 +579,25 @@ function build(): Archetype[] {
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
         ...fleeParticleGradient(CHEM_WASTE, 30),
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
+      id: "acidophile",
+      label: "acidophile",
+      cls: "direct",
+      desc: "pH-sensing vent specialist: builds a phreceptor (acidity sense) + the heat-shock/repair chaperone (acid/heat tolerance), then uses the acidity reading bistably -- when the water isn't acidic enough (act_ph < 20) it climbs the CO2 plume toward the vent; once it's in acidic water it settles and grows. Reproduction is effectively niche-locked to the acidic vent zone. Demonstrates the new pH sense driving habitat selection rather than just gating. Spawn it near a vent.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_PHRECEPTOR], // build the acidity sense
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_REPAIR],     // chaperone -> acid/heat tolerance
+        ["SENSE_CHEMICAL", CHEM_ACT_PH],
+        ["PUSH8", 20],
+        ["LT"], // act_ph < 20 -> not acidic enough -> migrate toward the vent
+        ["JZ", "settled"],
+        ...climbParticleGradient(CHEM_CO2, 30), // swim up the CO2/acid plume
+        ["LABEL", "settled"],
         ...reproduceWhenGrown(32, "np"),
       ],
     },

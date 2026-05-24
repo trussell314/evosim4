@@ -330,7 +330,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // sense+behavior genes (chemo/thermo/magneto/mechano/photo taxis or
     // life-history) wired sensor->action, so founder genomes (and thus the
     // seeded run) changed. Intended.
-    const GOLDEN = "cbb70823";
+    // Bumped again: pH/acidity sense added (repurposed the retired Fa
+    // chemoreceptor chems -> phreceptor + activatedPh; synth slot 17 live).
+    // Founders can now build the phreceptor (new pH life-history gene) and
+    // runActivation writes activatedPh, shifting the seeded run. Intended.
+    const GOLDEN = "30182c29";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

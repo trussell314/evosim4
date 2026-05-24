@@ -2289,6 +2289,30 @@ describe("mass conservation", () => {
   // Phase 3 SENSE_OUT tests above (gradient-vector primitive); the
   // legacy K-3 chemo activation tests are removed with the machinery.
 
+  it("pH activation: phreceptor + local CO2 -> activated_ph; no receptor -> ~0", () => {
+    // pH/acidity sense (repurposed Fa-chemoreceptor chems). act_ph =
+    // phreceptor * (cell CO2 + ambient CO2 - baseline), decayed. A cell
+    // holding CO2 + a phreceptor should accrue a positive act_ph; one
+    // without the receptor should stay ~0.
+    const w = quietWorld();
+    const CHEM_PHRECEPTOR_ID = 21;
+    const CHEM_ACT_PH_ID = 27;
+    const acid = makeCreature({ x: 100, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1, co2: 5 } });
+    acid.store.chemCols[CHEM_PHRECEPTOR_ID][acid.idx] = 2;
+    w.creatures.push(acid);
+    const blind = makeCreature({ x: 200, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1, co2: 5 } });
+    w.creatures.push(blind);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const acidAct = acid.store.chemCols[CHEM_ACT_PH_ID][acid.idx];
+    const blindAct = blind.store.chemCols[CHEM_ACT_PH_ID][blind.idx];
+    expect(acidAct).toBeGreaterThan(0);
+    expect(blindAct).toBeLessThan(acidAct * 0.01);
+  });
+
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {
     // CHEM_REPAIR (id 40) above 0.1 refreshes the repairTicks window
     // each tick, which somaticMutate already consults. A cell whose
