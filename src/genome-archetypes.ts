@@ -762,7 +762,14 @@ function build(): Archetype[] {
         ["SYNTH", "CAT", CHEMOLITH_ENERGY_SLOT], // abiotic fuel -> ATP
         ["SYNTH", "CAT", CHEMOLITH_CARBON_SLOT], // CO2 (+fuel) -> glucose
         ["SYNTH", "CAT", RX_SLOT_SYNTH_REPAIR],  // heat-shock chaperone -> survive the hot vent
-        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA], // boost membrane synth (growth)
+        // Boost the amino-acid PRECURSOR (mirrors the photoautotroph's
+        // AUTO_KIT), not membrane. The old membrane boost made it grow
+        // fast but starved the aa/fa/mRNA supply chain it feeds from (only
+        // baseline-rate), so growth outran sustainment and -- with vent
+        // denaturation eating membrane -- health/readiness stayed low and
+        // it died. Boosting aa feeds the whole downstream chain (aa->mRNA,
+        // aa+fa->membrane) so growth is balanced and sustainable.
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_AA],
         ["PUSH8", ING_DETRITUS], ["INGEST"],     // eat the reduced-fuel particles
         // Sessile: it parks on the fuel seep and lets fuel come to it.
         // Homing UP the marker0 gradient drove cells into the scalding
