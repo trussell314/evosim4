@@ -4174,6 +4174,17 @@ const LIGHT_ALBEDO = 0.5;
 const LIGHT_RANGE = 110;
 // Bioluminescence: emitted light per unit ATP spent on EMIT(light).
 const LIGHT_EMIT_GAIN = 20;
+// Light occlusion (shade cast by cells above). A cell sums the radius of
+// cells overhead within a narrow column (SHADE_RADIUS wide, SHADE_DEPTH
+// tall) and dims its sky-light by exp(-SHADE_K * sum), floored at
+// SHADE_FLOOR so heavy cover never fully blacks it out. Kept mild so it
+// opens shade-avoidance / hiding without starving autotroph clusters
+// (tune SHADE_K / SHADE_FLOOR against headless population health).
+const SHADE_RADIUS = 24;
+const SHADE_DEPTH = 60;
+const SHADE_RANGE = 60;   // forCreaturesNear square half-size (>= both above)
+const SHADE_K = 0.05;
+const SHADE_FLOOR = 0.5;
 // Vibration (hydroacoustic) sense. VIB_GAIN: wake strength per unit speed.
 // VIB_RANGE: long (sound carries far); 1/r falloff in the detector. Tunable.
 const VIB_GAIN = 0.5;
@@ -4219,7 +4230,11 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   // Rock blocks light, so all three photo bands scale by the soft rock
   // occlusion (penumbra + scattered-light floor) at the cell.
   const occ = lightOcclusion(world, c.x, c.y);
-  const sunlight = solarLight(world) * occ;
+  // shadeFactor: dimming from cells overhead (materialized in the pre-loop
+  // emission pass). Folds into the photoreceptor reading so a cell can
+  // SENSE that it's shaded (shade-avoidance). engulfed organelles get 1.
+  const shade = host === undefined ? s.shadeFactor[i] : 1;
+  const sunlight = solarLight(world) * occ * shade;
   const depthRatio = Math.max(0, c.y / LIGHT_DECAY);
   // PHOTO: 3 bands. Visible attenuates at LIGHT_DECAY (the canonical
   // depth e-fold). Long-penetrating attenuates 3x slower. Surface
@@ -6333,16 +6348,29 @@ function updateCreatures(world: World, dt: number): void {
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i]; const st = c.store; const ix = c.idx;
       st.electricEmission[ix] = ELEC_PASSIVE_GAIN * st.atpSpentTick[ix];
+      // Cell light-occlusion (shade): sum the radius of cells ABOVE this one
+      // (toward the surface, smaller y) within a narrow column; more cover
+      // overhead -> less sky-light reaches it. Floored so it's never fully
+      // black. Feeds photosynthesis + photoreception + reflection below, so
+      // a cell can be shaded by neighbours (shade-avoidance, hiding, swarm
+      // self-shading) -- cells are no longer optically transparent.
+      let shadow = 0;
+      const sx = c.x, sy = c.y;
+      forCreaturesNear(sx, sy, SHADE_RANGE, (o) => {
+        if (o === c) return;
+        const up = sy - o.y;            // >0 if o is above (toward surface)
+        if (up <= 0 || up > SHADE_DEPTH) return;
+        if (Math.abs(o.x - sx) > SHADE_RADIUS) return;
+        shadow += o.r;
+      });
+      const shade = SHADE_FLOOR + (1 - SHADE_FLOOR) * Math.exp(-SHADE_K * shadow);
+      st.shadeFactor[ix] = shade;
       // Visible-light output: reflection of the local sky-light (albedo *
-      // ambient). No cell-occlusion term yet -> cells are optically
-      // transparent to each other (no inter-cell shadows / no path
-      // blocking); see SENSES_PLAN occlusion follow-up. Bioluminescence
-      // (active EMIT light) will add onto this later.
-      st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y);
-      // Light = passive reflection of sky-light + active bioluminescence
-      // (last tick's EMIT light). Biolum is the only term that works in the
-      // dark, where reflection -> 0.
-      st.lightEmission[ix] += st.activeLightEmit[ix];
+      // ambient * shade) + active bioluminescence (last tick's EMIT light;
+      // self-generated, so NOT shaded). Biolum is the only term that works
+      // in the dark, where reflection -> 0.
+      st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y) * shade
+        + st.activeLightEmit[ix];
       // Vibration output: a moving cell makes a wake/pressure wave. Speed-
       // proportional (fresh from current velocity). Active EMIT vibration
       // would add on top later. Fresh (not lagged) like reflection.
@@ -6401,7 +6429,10 @@ function updateCreatures(world: World, dt: number): void {
     // slots get expressed (catSynthMask/inhSynthMask, below) -- the old
     // SYNTH_AA/FA/BIO/CHL/ENZ/RIBO synthMask bits no longer exist (the
     // VM only sets BOND/COMPETENCE/PACKAGE on synthMask now).
-    const ambientLight = ambientLightAt(world, c.x, c.y);
+    // Shade from cells overhead dims photosynthesis too (not just sensing),
+    // so dense canopies actually compete for light -> shade-avoidance is a
+    // real selective pressure, not just a readout.
+    const ambientLight = ambientLightAt(world, c.x, c.y) * c.store.shadeFactor[c.idx];
     runGenericReactions(c, dtT, ambientLight);
     // Standing transporters across the outer membrane (cell<->world).
     // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a

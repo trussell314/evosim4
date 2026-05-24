@@ -354,7 +354,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // positional MAP (field tilts across x = declination, strengthens with
     // depth = intensity), so magnetotaxis cells in the seeded run follow a
     // position-varying field. Intended.
-    const GOLDEN = "8ea6c16e";
+    // Bumped again: light occlusion (shade). Cells above a cell now dim its
+    // sky-light (photosynthesis + photoreception + reflection) -- cells are
+    // no longer optically transparent -- so the seeded run's autotroph
+    // light economy shifts. Mild + floored. Intended.
+    const GOLDEN = "b393095f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

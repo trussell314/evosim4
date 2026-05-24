@@ -457,6 +457,11 @@ const CREATURE_F32_COLS = [
   // accumulated this tick, read next tick by the emission pass and added to
   // lightEmission on top of passive reflection. Reset per turn.
   "activeLightEmit",
+  // shadeFactor (0..1): how much sky-light reaches this cell after cells
+  // ABOVE it (toward the surface) cast shadow. Materialized in the pre-loop
+  // pass; multiplies the cell's sky-light reads (photosynthesis,
+  // photoreception, reflection) so a shaded cell makes/senses/reflects less.
+  "shadeFactor",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
@@ -563,6 +568,7 @@ export class CreatureStore {
   lightEmission!: Float32Array;
   vibrationEmission!: Float32Array;
   activeLightEmit!: Float32Array;
+  shadeFactor!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -683,6 +689,7 @@ export class CreatureStore {
     this.lightEmission = new Float32Array(b, o.base.lightEmission, cap);
     this.vibrationEmission = new Float32Array(b, o.base.vibrationEmission, cap);
     this.activeLightEmit = new Float32Array(b, o.base.activeLightEmit, cap);
+    this.shadeFactor = new Float32Array(b, o.base.shadeFactor, cap);
     // Path 1: ATP is a first-class chemical. `energy` is the same
     // backing array as the m_atp molecule column (== molCols[atp] ==
     // chemCols[CHEM_ATP]); every store.energy / c.energy / c.molecules

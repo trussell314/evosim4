@@ -2376,6 +2376,36 @@ describe("mass conservation", () => {
     expect(loneAct).toBe(0);
   });
 
+  it("light occlusion: a cell shaded by one above gets less light (floored)", () => {
+    // A cell with a big neighbour directly overhead should read less
+    // sky-light (act_photo_visible) than one in the open -- but not zero
+    // (shade is floored). Cells are no longer optically transparent.
+    const CHEM_PHOTO_V_ID = 13;
+    const CHEM_ACT_PHOTO_V_ID = 16;
+    const w = quietWorld();
+    w.surfaceY = 8;
+    w.dayPhase = 0.25;
+    const eyeMol = { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 };
+    // Shaded eye with a large cell directly above it (within the column).
+    const shaded = makeCreature({ x: 200, y: 70, energy: 50,
+      genome: new Uint8Array([HALT_MARK]), molecules: eyeMol });
+    shaded.store.chemCols[CHEM_PHOTO_V_ID][shaded.idx] = 2;
+    w.creatures.push(shaded);
+    w.creatures.push(makeCreature({ x: 200, y: 28, energy: 200,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 1000, mrna: 5, aminoAcid: 5, minerals: 200 } }));
+    // Open eye, nothing overhead.
+    const open = makeCreature({ x: 500, y: 70, energy: 50,
+      genome: new Uint8Array([HALT_MARK]), molecules: eyeMol });
+    open.store.chemCols[CHEM_PHOTO_V_ID][open.idx] = 2;
+    w.creatures.push(open);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const shadedAct = shaded.store.chemCols[CHEM_ACT_PHOTO_V_ID][shaded.idx];
+    const openAct = open.store.chemCols[CHEM_ACT_PHOTO_V_ID][open.idx];
+    expect(shadedAct).toBeLessThan(openAct);  // shaded by the cell above
+    expect(shadedAct).toBeGreaterThan(0);      // but floored, not black
+  });
+
   it("bioluminescence: an EMIT(light) cell reads brighter than a plain one", () => {
     // EMIT light spends ATP to glow on top of reflection. An eye next to a
     // bioluminescing neighbour should read a stronger act_light than an eye

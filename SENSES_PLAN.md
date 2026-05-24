@@ -73,13 +73,22 @@ Progress:
   reflection is zero. Added an `anglerfish` lure archetype (glow → ambush
   light-seeing prey). Golden unchanged (no seeded cell emits light);
   bioluminescence test added.
-- OPTIONAL / remaining: active vibration EMIT, the invented magnetic-emit
-  channel, and the PENDING light-occlusion/shade term (see below).
-- PENDING (revisit before wrapping up, per request) — **light occlusion /
-  shade**: cells currently don't shadow each other or block each other's
-  emitted/reflected light (transparent). Cheapest add: attenuate
-  `ambientLightAt` by the biomass in the column above a cell (turbidity/
-  shade) -> enables shade-avoidance, hiding-in-shadow, swarm self-shading.
+- DONE — **light occlusion / shade.** Cells are no longer optically
+  transparent: each cell sums the radius of cells in the column ABOVE it
+  (`SHADE_RADIUS` wide, `SHADE_DEPTH` tall) and dims its sky-light by
+  `exp(-SHADE_K·sum)`, floored at `SHADE_FLOOR` (never fully black). The
+  `shadeFactor` (materialized in the pre-loop pass) multiplies the cell's
+  photosynthesis AND photoreception AND reflection -- so shade is both a
+  real selective pressure (canopies compete for photosynthetic light) and
+  sensible (a cell reads that it's shaded -> shade-avoidance; prey can hide
+  in a shadow; swarms self-shade). Kept mild + floored; a 6-min headless
+  run stayed healthy (73 cells / 104 species), so it didn't starve
+  autotrophs. Golden rebaselined; occlusion test added. (Path-occlusion of
+  emitted light between two cells -- true line-of-sight blocking -- remains
+  deferred; this is column-shade from the sun.)
+- OPTIONAL / remaining: active vibration EMIT + the invented magnetic-emit
+  channel (the `EMIT` multi-channel infra supports both; each is a small
+  add). Path/line-of-sight occlusion of cell-emitted light.
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy
