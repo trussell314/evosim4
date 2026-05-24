@@ -2825,13 +2825,16 @@ function render(): void {
   // (covers mutated descendants that speciated away) with a 1px
   // selection border so the family is visible at a glance.
   const sel = selectedCell();
+  // When a cell is selected, ring every other cell of the SAME SPECIES
+  // (same speciesKey) so the species is visible at a glance. (We do NOT
+  // ring the whole founding lineage -- lineageRoot is inherited through
+  // all mutation, so a single dominant founder's descendants are usually
+  // most of the world, which lit up ~every cell.)
   const kinSpecies = sel ? sel.speciesKey : null;
-  const kinLineage = sel ? sel.lineageRoot : -1;
   for (let i = 0; i < snapshot.creatures.length; i++) {
     const c = snapshot.creatures[i];
     const isSel = c.id === selId;
-    const isKin = !isSel && sel != null
-      && (c.speciesKey === kinSpecies || c.lineageRoot === kinLineage);
+    const isKin = !isSel && sel != null && c.speciesKey === kinSpecies;
     drawCreature(c, isSel, isKin);
   }
 
