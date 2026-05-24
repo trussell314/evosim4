@@ -251,6 +251,23 @@ Living list of deferred work. Newest/explicit asks at top.
   initial archetypes feature. Touch points: the `archPanel` block in
   `main.ts`, `spawnSpeciesInstance` (already supports repeated calls).
 
+- **DSLs for creatures + scenarios, and creation dialogs (UI).** A
+  creature DSL already exists at the assembly level (`src/genome-asm.ts`:
+  `asm(Instr[])` with named ops/labels, used by `genome-archetypes.ts`),
+  and a scenario *harness* exists (`scripts/scenario.ts`, founders-off
+  per-archetype probe) -- but neither is user-facing or high-level.
+  Consider: (a) a higher-level creature DSL (named behaviors/traits ->
+  genome bytes, above raw asm) so cells can be authored without hand-
+  writing op tuples; (b) a declarative scenario DSL (world size, seeded
+  populations, environment knobs, success metrics) that the smoke/scenario
+  harness consumes. Add-on: **in-app dialogs for creating new cells and
+  worlds** -- a cell-builder (pick senses/behaviors/metabolism -> compiled
+  genome, spawn it) layered on the creature DSL, and a world-builder
+  (dimensions, vents, light/wind, founder mix) layered on the scenario
+  DSL. Pairs with the existing archetypes panel + the new sensory
+  substrate (SENSES_PLAN.md). Touch points: `genome-asm.ts`,
+  `genome-archetypes.ts`, `scripts/scenario.ts`, `main.ts` (panels/dialogs).
+
 - **In-app "import save from file"** button so headless-run results
   (`scripts/headless.ts` writes the save JSON) load in one click
   instead of hand-setting the `evosim4:save` localStorage key.
