@@ -701,6 +701,11 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     }
   } else if (msg.type === "teardown-particle-pool") {
     teardownParticleWorkers();
+  } else if (msg.type === "diag") {
+    // Response to a stall-triggered requestDiag: surface worker liveness +
+    // pool state in the diag bar so an intermittent SIM STALLED can be
+    // pinpointed (vs. just "stalled").
+    stallDiag = `worker: running=${msg.running} world=${msg.hasWorld} t=${msg.t.toFixed(0)} | ${msg.pool}`;
   }
 });
 
@@ -4199,17 +4204,27 @@ requestAnimationFrame(frame);
 // instead of in the dev console.
 let stallWatchT = 0;
 let stallWatchWall = performance.now();
+let stallDiag = "";          // last worker diag response (set on "diag" msg)
+let stallDiagReqWall = 0;    // last time we asked the worker for a diag
 const STALL_WALL_MS = 1500;
 function updateDiagBar(): void {
   const nowWall = performance.now();
   if (snapshot.t !== stallWatchT) {
     stallWatchT = snapshot.t;
     stallWatchWall = nowWall;
+    stallDiag = "";
   }
   const stalledMs = nowWall - stallWatchWall;
   const parts: string[] = [];
   if (stalledMs > STALL_WALL_MS) {
     parts.push(`SIM STALLED ${(stalledMs / 1000).toFixed(1)}s  pop=${snapshot.creatures.length}  parts=${snapshot.particles.length}`);
+    // Ask the worker what it's doing (throttled). If it answers, the
+    // response shows below; if it never does, the worker thread is hung.
+    if (nowWall - stallDiagReqWall > 1000) {
+      stallDiagReqWall = nowWall;
+      simWorker.postMessage({ type: "requestDiag" });
+    }
+    parts.push(stallDiag || "(querying worker… no diag response = worker thread hung)");
   }
   if (workerLastSimError) {
     parts.push(`step err @ t=${workerLastSimErrorAt.toFixed(0)}s: ${workerLastSimError.slice(0, 120)}`);

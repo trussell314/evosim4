@@ -101,7 +101,8 @@ type WorkerInbound =
       placement?: "scatter" | "clump";
     }
   | { type: "particle-pool-message"; index: number; data: unknown }
-  | { type: "particle-pool-error"; index: number; message: string };
+  | { type: "particle-pool-error"; index: number; message: string }
+  | { type: "requestDiag" };
 
 type WorkerOutbound =
   | {
@@ -113,7 +114,8 @@ type WorkerOutbound =
     }
   | { type: "save"; json: string }
   | { type: "spawn-particle-pool"; initPayloads: unknown[] }
-  | { type: "teardown-particle-pool" };
+  | { type: "teardown-particle-pool" }
+  | { type: "diag"; running: boolean; hasWorld: boolean; t: number; pool: string };
 
 function send(msg: WorkerOutbound): void {
   (self as unknown as Worker).postMessage(msg);
@@ -158,6 +160,13 @@ self.addEventListener("message", (e: MessageEvent) => {
       schedule();
       break;
     }
+    case "requestDiag":
+      // Main asks for liveness/pool state when it sees the snapshot clock
+      // frozen (SIM STALLED). Cheap, read-only -- helps pinpoint a stall
+      // (stepping not running? world null? a pool worker unresponsive?).
+      send({ type: "diag", running, hasWorld: world !== null,
+        t: world ? world.t : -1, pool: poolDiagSnapshot() });
+      break;
     case "setTurbo":
       turbo = !!m.turbo;
       break;
