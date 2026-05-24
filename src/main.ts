@@ -2889,9 +2889,6 @@ function drawHeatmap(): void {
       }
     }
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = UI_CANVAS_FONT;
-    ctx.fillText("heatmap: temperature (cold blue → warm red)", 8, surfaceY + 14);
     return;
   }
   if (heatmapMode === "light" && lightBufCtx) {
@@ -2928,9 +2925,6 @@ function drawHeatmap(): void {
     ctx.drawImage(lightBuf, 0, surfaceY, width, height - surfaceY);
     ctx.imageSmoothingEnabled = prevSmooth;
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = UI_CANVAS_FONT;
-    ctx.fillText("overlay: light (dark → bright; rock casts a soft shadow)", 8, surfaceY + 14);
     return;
   }
   if (heatmapMode === "health" || heatmapMode === "reproduce") {
@@ -2959,13 +2953,6 @@ function drawHeatmap(): void {
       }
     }
     ctx.globalAlpha = 1;
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = UI_CANVAS_FONT;
-    ctx.fillText(
-      isHealth ? "overlay: avg cell health (red → green)"
-               : "overlay: avg reproduce readiness (violet → green)",
-      8, surfaceY + 14,
-    );
     return;
   }
   if (heatmapMode === "density") {
