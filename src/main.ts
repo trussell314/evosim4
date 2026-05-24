@@ -313,11 +313,12 @@ const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const SAVE_KEY = "evosim4:save";
 
-// Read whatever's in localStorage (if anything) so we can pass it to
-// the worker as part of init. The worker schema-checks before applying
-// and silently keeps the fresh world on mismatch; we wipe the bad
-// localStorage entry here too so the next reload starts clean.
-const savedJson = (() => {
+// Read whatever's in localStorage (if anything); it's either a gzip-
+// compressed blob (current format) or legacy raw JSON. Decompression is
+// async, so the actual decode + worker init happens in a bootstrap below.
+// The worker schema-checks before applying and silently keeps the fresh
+// world on mismatch.
+const storedSave = (() => {
   try { return localStorage.getItem(SAVE_KEY); }
   catch { return null; }
 })();
@@ -448,11 +449,18 @@ function clearSelectionIfDead(): void {
 }
 rebuildSnapshotIndexes();
 
-// Latest serialized save string the worker has posted to us. Autosave
-// + forceSave + export all read from this cache rather than asking
-// the worker synchronously (which we can't do across the worker
-// boundary anyway). Updated on every "save" message from the worker.
-let latestSaveJson: string | null = savedJson;
+// Latest serialized save string the worker has posted to us. The export
+// button reads this RAW JSON; localStorage instead gets a gzip-compressed
+// copy (latestSaveCompressed) so big worlds fit under the ~5MB quota.
+// Updated on every "save" message from the worker. Starts null and is
+// populated by the load bootstrap below (after decompressing whatever is
+// in localStorage) or by the first "save" message, whichever lands first.
+let latestSaveJson: string | null = null;
+// gzip(latestSaveJson) as a "gz1:"-tagged base64 string, ready to drop
+// into localStorage. maybeAutosave() recomputes it (off the render path,
+// async) after each save; forceSave() writes this cached blob
+// synchronously on pagehide -- it can't await compression during unload.
+let latestSaveCompressed: string | null = null;
 
 // Latest per-frame stats reported by the worker. Used by the perf
 // stats line so the main thread can still display sim/wall ratio
@@ -468,11 +476,68 @@ let workerLastSimErrorAt = 0;
 let workerLastSimErrorWallTs = 0;
 const SIM_ERROR_LINGER_MS = 5000;
 
-function maybeAutosave(): void {
-  if (resetting) return;
-  if (!latestSaveJson) return;
+// Saved worlds are stored gzip-compressed (raw JSON outgrows the ~5MB
+// localStorage quota on long runs -- gzip buys ~4x). The stored string is
+// tagged so the loader can tell compressed blobs from legacy raw-JSON
+// saves and from the (rare) uncompressed fallback.
+const SAVE_GZIP_PREFIX = "gz1:";
+const canCompress = typeof CompressionStream !== "undefined";
+
+function bytesToB64(b: Uint8Array): string {
+  // Build the binary string in chunks; spreading the whole array into
+  // fromCharCode overflows the call stack past a few hundred KB.
+  let s = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < b.length; i += CHUNK) {
+    s += String.fromCharCode(...b.subarray(i, i + CHUNK));
+  }
+  return btoa(s);
+}
+function b64ToBytes(b64: string) {
+  const s = atob(b64);
+  // Construct from an explicit ArrayBuffer (not SharedArrayBuffer) so the
+  // result is a Blob-compatible ArrayBufferView.
+  const b = new Uint8Array(new ArrayBuffer(s.length));
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+  return b;
+}
+async function gzipToStored(json: string): Promise<string> {
+  const cs = new CompressionStream("gzip");
+  const buf = await new Response(
+    new Blob([json]).stream().pipeThrough(cs),
+  ).arrayBuffer();
+  return SAVE_GZIP_PREFIX + bytesToB64(new Uint8Array(buf));
+}
+async function decodeStoredSave(stored: string | null): Promise<string | null> {
+  if (!stored) return null;
+  if (!stored.startsWith(SAVE_GZIP_PREFIX)) return stored; // legacy raw JSON
   try {
-    localStorage.setItem(SAVE_KEY, latestSaveJson);
+    const ds = new DecompressionStream("gzip");
+    const buf = await new Response(
+      new Blob([b64ToBytes(stored.slice(SAVE_GZIP_PREFIX.length))]).stream().pipeThrough(ds),
+    ).arrayBuffer();
+    return new TextDecoder().decode(buf);
+  } catch {
+    return null; // corrupt blob -> treat as no save
+  }
+}
+
+async function maybeAutosave(): Promise<void> {
+  if (resetting) return;
+  const json = latestSaveJson;
+  if (!json) return;
+  let payload = json;
+  if (canCompress) {
+    try {
+      payload = await gzipToStored(json);
+      if (resetting) return; // a reset may have fired during compression
+      latestSaveCompressed = payload;
+    } catch {
+      payload = json; // compression failed -> fall back to raw
+    }
+  }
+  try {
+    localStorage.setItem(SAVE_KEY, payload);
   } catch (err) {
     // Quota exceeded, private mode, etc. Don't crash the page.
     console.warn("evosim4: autosave failed", err);
@@ -483,9 +548,12 @@ function forceSave(): void {
   // without this guard we'd write the soon-to-be-discarded world
   // right back to localStorage, defeating the reset.
   if (resetting) return;
-  if (!latestSaveJson) return;
+  // Prefer the cached compressed blob (can't await compression mid-
+  // unload); fall back to raw if we haven't compressed one yet.
+  const payload = latestSaveCompressed ?? latestSaveJson;
+  if (!payload) return;
   try {
-    localStorage.setItem(SAVE_KEY, latestSaveJson);
+    localStorage.setItem(SAVE_KEY, payload);
   } catch { /* quota / private mode -- ignore */ }
 }
 // Set in hardReset(), checked by every save path. Survives until
@@ -533,17 +601,27 @@ window.addEventListener("orientationchange", () => scheduleResize());
 const simWorker = new Worker(new URL("./sim.worker.ts", import.meta.url), {
   type: "module",
 });
-simWorker.postMessage({
-  type: "init",
-  width: WORLD_SIZE.w,
-  height: WORLD_SIZE.h,
-  savedJson,
-});
-// Re-establish cull protection for pinned species. FIFO message
-// order guarantees the worker has built (or restored) its world
-// from the init above before this applies. speciesKey is a
-// deterministic genome hash, so restored species re-match by key.
-syncPinnedToWorker();
+// Decompress the stored save (if any), then init the worker. Done in an
+// async bootstrap because gzip decode can't be synchronous. No other
+// main->worker messages are posted before this runs, so FIFO ordering
+// (init, then syncPinnedToWorker) is preserved.
+void (async () => {
+  const savedJson = await decodeStoredSave(storedSave);
+  // Seed the export cache so "export" works right after load, unless a
+  // fresh "save" message already populated it during the brief decode.
+  if (savedJson && latestSaveJson === null) latestSaveJson = savedJson;
+  simWorker.postMessage({
+    type: "init",
+    width: WORLD_SIZE.w,
+    height: WORLD_SIZE.h,
+    savedJson,
+  });
+  // Re-establish cull protection for pinned species. FIFO message
+  // order guarantees the worker has built (or restored) its world
+  // from the init above before this applies. speciesKey is a
+  // deterministic genome hash, so restored species re-match by key.
+  syncPinnedToWorker();
+})();
 // If we passed a saved JSON in and the worker silently fell back to
 // fresh (schema mismatch / malformed), the worker's "save" stream
 // will overwrite localStorage with the fresh world a minute later --
@@ -601,7 +679,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     mpIntakeMs += performance.now() - tIntake;
   } else if (msg.type === "save") {
     latestSaveJson = msg.json;
-    maybeAutosave();
+    void maybeAutosave();
   } else if (msg.type === "spawn-particle-pool") {
     teardownParticleWorkers();
     const payloads = msg.initPayloads as { workerIndex: number }[];
