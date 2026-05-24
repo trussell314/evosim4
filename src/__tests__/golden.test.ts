@@ -326,7 +326,11 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // depth-scaled horizontal scatter (9 taps, up to 60px), and a higher
     // scattered-light floor (0.10), so shadows are softer and bleed more
     // light. Intended.
-    const GOLDEN = "165126bd";
+    // Bumped again: every procedural founder now gets 1..3 distinct
+    // sense+behavior genes (chemo/thermo/magneto/mechano/photo taxis or
+    // life-history) wired sensor->action, so founder genomes (and thus the
+    // seeded run) changed. Intended.
+    const GOLDEN = "cbb70823";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

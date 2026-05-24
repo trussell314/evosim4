@@ -1321,9 +1321,13 @@ export const FOUNDER_GENE_REFS = {
   // chem-ids.ts
   CO2: 1, GLU: 2, FA: 4, MIN: 5, WASTE: 7, MRNA: 10, BIOPOLYMER: 11,
   ACT_THERMO: 35, MARKER0: 41,
+  // chem-ids.ts -- activated sensor chems read via SENSE_CHEMICAL
+  ACT_PHOTO_V: 16, ACT_MECH_X: 32, ACT_MECH_Y: 33, ACT_MAG_X: 37, ACT_MAG_Y: 38,
   // reactions.ts named slots
   PHOTOSYNTH: 3, SYNTH_AA: 4, SYNTH_FA: 5, SYNTH_CHL: 6, SYNTH_ENZ: 7,
   SYNTH_MEM: 9, DIGEST_BIOP: 10, SYNTH_THERMO: 20, SYNTH_REPAIR: 23,
+  // reactions.ts -- receptor-synth slots driven by SYNTH CAT
+  SYNTH_PHOTO_V: 12, SYNTH_MECH: 19, SYNTH_MAGNETO: 21,
 } as const;
 
 // Founder gene pool: each entry is one GENE's worth of op-bytes
@@ -1365,6 +1369,51 @@ const FOUNDER_GENES: ReadonlyArray<ReadonlyArray<number>> = [
   [OP.PUSH8, 0xFF, OP.PARTITION, FG.MRNA],
   // metabolic sensing identity: read the glucose pool
   [OP.SENSE_CHEMICAL, FG.GLU],
+];
+
+// Sense+behavior gene pool: each entry is ONE complete gene that both
+// SENSES and ACTS on what it senses (the per-gene cleared stack wires the
+// sensor's output straight into THRUST/REPRODUCE). makeRandomViableGenome
+// guarantees every founder gets 1..3 DISTINCT entries, so a fresh founder
+// genuinely perceives and responds rather than drifting with a dangling
+// sensor. Spans modalities: chemotaxis (SENSE_OUT particle gradient -- no
+// receptor needed), thermo/magneto/mechano/photo (SYNTH the receptor in
+// the same gene, then read its activated chem). Vector taxis pushes
+// ax then ay so THRUST (pops ay,ax) drives along the gradient; the scale
+// constants size raw gradient/activation into a usable thrust.
+const SB_SCALE = 30;
+// climb a particle-field gradient (SENSE_OUT pushes gx,gy; *s both; THRUST up-grad)
+const chemoSeek = (chem: number): number[] =>
+  [OP.SENSE_OUT, chem, OP.PUSH8, SB_SCALE, OP.MUL, OP.SWAP, OP.PUSH8, SB_SCALE, OP.MUL, OP.SWAP, OP.THRUST];
+// flee down the gradient: negate both components before THRUST
+const chemoFlee = (chem: number): number[] =>
+  [OP.SENSE_OUT, chem, OP.PUSH8, SB_SCALE, OP.MUL, OP.NEG, OP.SWAP, OP.PUSH8, SB_SCALE, OP.MUL, OP.NEG, OP.SWAP, OP.THRUST];
+const SENSE_BEHAVIOR_GENES: ReadonlyArray<ReadonlyArray<number>> = [
+  // chemotaxis -- swim up a food / mineral / lipid / kin-marker gradient
+  chemoSeek(FG.BIOPOLYMER),
+  chemoSeek(FG.MIN),
+  chemoSeek(FG.FA),
+  chemoSeek(FG.MARKER0),
+  // chemo-AVOIDANCE -- flee a waste/toxin plume (also a predator-exhaust cue)
+  chemoFlee(FG.WASTE),
+  // thermotaxis -- build thermoreceptor, drive hard far from the isotherm
+  // (act_thermo^3), barely when close (saves ATP).
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_THERMO, OP.SENSE_CHEMICAL, FG.ACT_THERMO,
+   OP.DUP, OP.DUP, OP.MUL, OP.MUL, OP.DUP, OP.THRUST],
+  // magnetotaxis -- build the compass, swim along the magnetic axis
+  // (vertical migration / depth-keeping). ax = mag_x*40, ay = mag_y*40.
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_MAGNETO,
+   OP.SENSE_CHEMICAL, FG.ACT_MAG_X, OP.PUSH8, 40, OP.MUL,
+   OP.SENSE_CHEMICAL, FG.ACT_MAG_Y, OP.PUSH8, 40, OP.MUL, OP.THRUST],
+  // mechanotaxis -- build the mechanoreceptor, drift along the net force
+  // (rheotaxis: ride currents / disturbance).
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_MECH,
+   OP.SENSE_CHEMICAL, FG.ACT_MECH_X, OP.PUSH8, 20, OP.MUL,
+   OP.SENSE_CHEMICAL, FG.ACT_MECH_Y, OP.PUSH8, 20, OP.MUL, OP.THRUST],
+  // photo life-history -- build a photoreceptor, only fission when it's
+  // bright enough (act_photo_visible > 2). Couples reproduction to light.
+  [OP.SYNTH, SYNTH_KIND.CAT, FG.SYNTH_PHOTO_V,
+   OP.SENSE_CHEMICAL, FG.ACT_PHOTO_V, OP.PUSH8, 2, OP.GT, OP.JZ, 1, OP.REPRODUCE],
 ];
 
 // Viable-by-construction founder genome. After Phase 4a a viable cell
@@ -1434,6 +1483,19 @@ export function makeRandomViableGenome(
   const nGenes = 2 + Math.floor(rng() * 4); // 2..5
   for (let i = 0; i < nGenes; i++) {
     tokens.push(FOUNDER_GENES[Math.floor(rng() * FOUNDER_GENES.length)].slice());
+  }
+  // Guarantee every founder is multi-sensory: 1..3 DISTINCT sense+behavior
+  // genes (each wires a sensor straight into THRUST/REPRODUCE). Distinct
+  // picks (sample without replacement) => up to three different modalities,
+  // so a fresh founder perceives and acts rather than drifting.
+  {
+    const pool = SENSE_BEHAVIOR_GENES.map((g) => g);
+    const nSenses = 1 + Math.floor(rng() * 3); // 1..3
+    for (let s = 0; s < nSenses && pool.length > 0; s++) {
+      const pick = Math.floor(rng() * pool.length);
+      tokens.push(pool[pick].slice());
+      pool.splice(pick, 1);
+    }
   }
   // Fisher-Yates shuffle so structure differs founder to founder.
   for (let i = tokens.length - 1; i > 0; i--) {

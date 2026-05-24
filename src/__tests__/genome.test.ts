@@ -610,6 +610,14 @@ describe("genome decoding: known byte sequences", () => {
       expect(F.BIOPOLYMER).toBe(c.CHEM_BIOPOLYMER);
       expect(F.ACT_THERMO).toBe(c.CHEM_ACT_THERMO);
       expect(F.MARKER0).toBe(c.CHEM_MARKER0);
+      expect(F.ACT_PHOTO_V).toBe(c.CHEM_ACT_PHOTO_VISIBLE);
+      expect(F.ACT_MECH_X).toBe(c.CHEM_ACT_MECH_X);
+      expect(F.ACT_MECH_Y).toBe(c.CHEM_ACT_MECH_Y);
+      expect(F.ACT_MAG_X).toBe(c.CHEM_ACT_MAG_X);
+      expect(F.ACT_MAG_Y).toBe(c.CHEM_ACT_MAG_Y);
+      expect(F.SYNTH_PHOTO_V).toBe(r.RX_SLOT_SYNTH_PHOTO_V);
+      expect(F.SYNTH_MECH).toBe(r.RX_SLOT_SYNTH_MECH);
+      expect(F.SYNTH_MAGNETO).toBe(r.RX_SLOT_SYNTH_MAGNETO);
       expect(F.PHOTOSYNTH).toBe(r.RX_SLOT_PHOTOSYNTH);
       expect(F.SYNTH_AA).toBe(r.RX_SLOT_SYNTH_AA);
       expect(F.SYNTH_FA).toBe(r.RX_SLOT_SYNTH_FA);
