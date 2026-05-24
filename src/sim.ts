@@ -122,7 +122,7 @@ import {
   ParticleStore, Particle, CreatureStore, Creature,
   pushParticle, removeParticleAt, newCreature,
   resetCreatureIdCounter, setParticleSlotReusedHook,
-  PARTICLE_STORE_PREALLOC_CAP, CREATURE_STORE_PREALLOC_CAP,
+  PARTICLE_STORE_PREALLOC_CAP,
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
@@ -195,9 +195,8 @@ export function setParticleTarget(world: World, cap: number): void {
 }
 // No soft population ceiling: the hard limit IS the CreatureStore
 // allocation size. Reproduction/spawn is refused only when the store
-// is physically full (see CreatureStore.canAlloc), not at some lower
-// tuned number.
-const MAX_CREATURES = CREATURE_STORE_PREALLOC_CAP;
+// is physically full (CreatureStore.canAlloc, which counts EVERY cell --
+// free, engulfed and nested), not at some lower tuned number.
 
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.15;
@@ -2934,6 +2933,9 @@ function makeCreature(
   world: World, x: number, y: number, z: number, genomeOverride?: Uint8Array,
   sizeMult: number = 1,
 ): Creature | null {
+  // Store full (counting engulfed/nested cells)? Bail before consuming any
+  // RNG so determinism is unaffected when there's room.
+  if (!world.creatureStore.canAlloc()) return null;
   // genomeOverride: used by spawnSpeciesInstance to materialize a
   // specific pinned/notable genome instead of rolling a random one.
   // The minimal molecule seed below is the "force it" floor (the cell
@@ -3111,7 +3113,7 @@ export function spawnSpeciesInstance(
   genome: Uint8Array,
   placement?: SpawnPlacement,
 ): Creature | null {
-  if (world.creatures.length >= MAX_CREATURES) return null;
+  if (!world.creatureStore.canAlloc()) return null;
   const z = world.depth * 0.5;
   let x = world.width * 0.5, y = world.height * 0.5;
   if (placement?.mode === "clump") {
@@ -7351,7 +7353,12 @@ function tryReproduce(parent: Creature, world: World): void {
   // cell instead of being free.
   spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent), ATP_REPRODUCE);
 
-  if (world.creatures.length >= MAX_CREATURES) return;
+  // The store is the only population ceiling, and it counts EVERY cell --
+  // free, engulfed, and nested -- so check canAlloc (which respects the
+  // un-growable subworker-view cap), NOT world.creatures.length (free cells
+  // only). With many engulfed cells the store can be full while the free
+  // count looks low; alloc() would then throw and freeze the sim.
+  if (!world.creatureStore.canAlloc()) return;
   // Sexual reproduction (bonded crossover): if the parent currently has
   // any bonds, the child's pre-mutation genome is a single-crossover
   // recombinant of parent + random bond partner. Lets useful subprograms
