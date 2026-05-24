@@ -2589,7 +2589,8 @@ function render(): void {
   // Day/night tint applied to both surface and depth water colors so
   // the whole scene gets dimmer at night. 1 = full day, ~0.4 = deep
   // night (we don't go fully black so creatures stay visible).
-  const dayMult = 0.4 + 0.6 * solarLight(snapshot);
+  const sl = solarLight(snapshot);
+  const dayMult = 0.4 + 0.6 * sl;
   const tWarm = darkenColor(tempToColor(snapshot.tempSurface), dayMult);
   const tCool = darkenColor(tempToColor(snapshot.tempBottom), dayMult);
 
@@ -2611,9 +2612,13 @@ function render(): void {
     dpr * (viewOffsetY * viewZoom + viewPanY),
   );
 
-  // Atmosphere band -- fill above the wavy surface line. Darkened with
-  // the same day/night multiplier as the water so the whole scene dims.
-  ctx.fillStyle = darkenColor("rgb(10,22,32)", dayMult);
+  // Atmosphere band -- fill above the wavy surface line. Interpolates from a
+  // bright daytime sky-blue at midday to a dark night-blue, by the solar
+  // intensity (so it tracks the same day/night cycle as the water).
+  const skyR = Math.round(8 + sl * 84);
+  const skyG = Math.round(14 + sl * 136);
+  const skyB = Math.round(30 + sl * 184);
+  ctx.fillStyle = `rgb(${skyR},${skyG},${skyB})`;
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(width, 0);
