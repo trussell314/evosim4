@@ -4090,8 +4090,9 @@ function updateInspector(): void {
     // the scalar mech/thermo/magneto pools. Bond + repair chems
     // show alongside since they're chemistry-mediated actions now.
     `photo: V=${fmt(m.photoreceptorVisible)} L=${fmt(m.photoreceptorLong)} S=${fmt(m.photoreceptorSurface)}\n` +
-    `chemo: B=${fmt(m.chemoreceptorBiopolymer)} M=${fmt(m.chemoreceptorMinerals)} 0=${fmt(m.chemoreceptorMarker0)}\n` +
-    `sense: mech=${fmt(m.mechanoreceptor)} thermo=${fmt(m.thermoreceptor)} mag=${fmt(m.magnetoreceptor)} pH=${fmt(m.phreceptor)}/${fmt(m.activatedPh)}\n` +
+    `chemo: M=${fmt(m.chemoreceptorMinerals)} 0=${fmt(m.chemoreceptorMarker0)}\n` +
+    `sense: mech=${fmt(m.mechanoreceptor)} thermo=${fmt(m.thermoreceptor)} mag=${fmt(m.magnetoreceptor)}\n` +
+    `      pH=${fmt(m.phreceptor)}/${fmt(m.activatedPh)} electro=${fmt(m.electroreceptor)}/${fmt(m.activatedElectroX)},${fmt(m.activatedElectroY)}\n` +
     `bond=${fmt(m.bondChem)} repair=${fmt(m.repairChem)}\n` +
     (c.contents.length > 0 ? `vacuole: ${c.contents.length} engulfed cell(s)\n` : "") +
     `pc=${c.vmPc}  genome=${c.genome.length}b`;

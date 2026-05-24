@@ -616,7 +616,10 @@ describe("genome decoding: known byte sequences", () => {
       expect(F.ACT_MAG_X).toBe(c.CHEM_ACT_MAG_X);
       expect(F.ACT_MAG_Y).toBe(c.CHEM_ACT_MAG_Y);
       expect(F.ACT_PH).toBe(c.CHEM_ACT_PH);
+      expect(F.ACT_ELECTRO_X).toBe(c.CHEM_ACT_ELECTRO_X);
+      expect(F.ACT_ELECTRO_Y).toBe(c.CHEM_ACT_ELECTRO_Y);
       expect(F.SYNTH_PHOTO_V).toBe(r.RX_SLOT_SYNTH_PHOTO_V);
+      expect(F.SYNTH_ELECTRO).toBe(r.RX_SLOT_SYNTH_ELECTRO);
       expect(F.SYNTH_PHRECEPTOR).toBe(r.RX_SLOT_SYNTH_PHRECEPTOR);
       expect(F.SYNTH_MECH).toBe(r.RX_SLOT_SYNTH_MECH);
       expect(F.SYNTH_MAGNETO).toBe(r.RX_SLOT_SYNTH_MAGNETO);

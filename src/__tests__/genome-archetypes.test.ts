@@ -12,9 +12,9 @@ import { createWorld, spawnSpeciesInstance, step } from "../sim";
 
 describe("genome archetypes", () => {
   it("the catalogue has unique ids/labels and both classes", () => {
-    expect(ARCHETYPES.length).toBe(25);
-    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(25);
-    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(25);
+    expect(ARCHETYPES.length).toBe(26);
+    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(26);
+    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(26);
     expect(ARCHETYPES.some((a) => a.cls === "direct")).toBe(true);
     expect(ARCHETYPES.some((a) => a.cls === "seed")).toBe(true);
   });

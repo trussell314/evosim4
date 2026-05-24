@@ -205,7 +205,7 @@ function makeCreature(overrides: Partial<{
     // pre-fill the legacy single-receptor equivalents (visible band
     // for photo, biopolymer target for chemo) so existing sensing
     // tests still pass. Tests probing receptor-gating override these.
-    photoreceptorVisible: 1, chemoreceptorBiopolymer: 1,
+    photoreceptorVisible: 1, electroreceptor: 1,
     mechanoreceptor: 1, thermoreceptor: 1,
     ...(overrides.molecules ?? {}),
   };
@@ -2311,6 +2311,34 @@ describe("mass conservation", () => {
     const blindAct = blind.store.chemCols[CHEM_ACT_PH_ID][blind.idx];
     expect(acidAct).toBeGreaterThan(0);
     expect(blindAct).toBeLessThan(acidAct * 0.01);
+  });
+
+  it("electric sense: electroreceptor detects a nearby metabolizing cell", () => {
+    // A cell with an electroreceptor, sitting next to a metabolically
+    // active emitter, should accrue a non-zero act_electro bearing; with
+    // no emitter nearby it stays ~0. The emitter is made "active" by
+    // seeding its atpSpentTick (the metabolic-glow proxy the emission pass
+    // reads) -- but it also spends ATP naturally, so this is belt+braces.
+    const w = quietWorld();
+    const CHEM_ELECTRORECEPTOR_ID = 19;
+    const CHEM_ACT_ELECTRO_X_ID = 23;
+    const CHEM_ACT_ELECTRO_Y_ID = 24;
+    const sensor = makeCreature({ x: 200, y: 200, energy: 50,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 } });
+    sensor.store.chemCols[CHEM_ELECTRORECEPTOR_ID][sensor.idx] = 2;
+    w.creatures.push(sensor);
+    // Loud metabolic emitter 40px to the +x side.
+    const emitter = makeCreature({ x: 240, y: 200, energy: 80,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 5, enzyme: 2, glucose: 10 } });
+    w.creatures.push(emitter);
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const ex = sensor.store.chemCols[CHEM_ACT_ELECTRO_X_ID][sensor.idx];
+    const ey = sensor.store.chemCols[CHEM_ACT_ELECTRO_Y_ID][sensor.idx];
+    // Non-zero bearing, and pointing toward the +x emitter (ex dominant, >0).
+    expect(Math.abs(ex) + Math.abs(ey)).toBeGreaterThan(0);
+    expect(ex).toBeGreaterThan(0);
   });
 
   it("K-5 repair_chem pool keeps somatic mutation suppressed", () => {

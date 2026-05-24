@@ -334,7 +334,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // chemoreceptor chems -> phreceptor + activatedPh; synth slot 17 live).
     // Founders can now build the phreceptor (new pH life-history gene) and
     // runActivation writes activatedPh, shifting the seeded run. Intended.
-    const GOLDEN = "30182c29";
+    // Bumped again: electric (electroreception) sense added (repurposed the
+    // retired biopolymer chemoreceptor chems -> electroreceptor + activated
+    // electro x/y; synth slot 15 live). Cells emit a bioelectric field from
+    // metabolic ATP spend; electroreceptors read neighbours' field as a
+    // bearing. New electrotaxis founder gene shifts the seeded run. Intended.
+    const GOLDEN = "7ecfd54e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

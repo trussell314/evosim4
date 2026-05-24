@@ -24,6 +24,8 @@ import {
   CHEM_ACT_MECH_X,
   CHEM_ACT_MECH_Y,
   CHEM_ACT_PH,
+  CHEM_ACT_ELECTRO_X,
+  CHEM_ACT_ELECTRO_Y,
   CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
@@ -42,6 +44,7 @@ import {
   RX_SLOT_DIGEST_BIOP,
   RX_SLOT_SYNTH_MEM_FA,
   RX_SLOT_SYNTH_PHOTO_V,
+  RX_SLOT_SYNTH_ELECTRO,
   RX_SLOT_SYNTH_PHRECEPTOR,
   RX_SLOT_SYNTH_MECH,
   RX_SLOT_SYNTH_THERMO,
@@ -598,6 +601,21 @@ function build(): Archetype[] {
         ["JZ", "settled"],
         ...climbParticleGradient(CHEM_CO2, 30), // swim up the CO2/acid plume
         ["LABEL", "settled"],
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
+      id: "electro-hunter",
+      label: "electro-hunter",
+      cls: "direct",
+      desc: "Electrosensory predator: builds an electroreceptor and homes on the bioelectric glow of nearby metabolically-active cells (act_electro x/y -> thrust), then strikes on contact (PREDATE) and engulfs. Hunts by electroreception -- it finds busy prey even with no chemical trail or light, in murky/dark water. Demonstrates the new electric sense: a cell is detectable simply by being metabolically alive. Predator/prey balance still emerges from size (PREDATE needs the attacker wider than the target).",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_ELECTRO], // build the electrosense
+        ...climbGradient(CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, 30), // swim toward active cells
+        ["PREDATE"],
+        ["ENGULF"],
         ...reproduceWhenGrown(32, "np"),
       ],
     },

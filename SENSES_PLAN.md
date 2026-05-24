@@ -18,10 +18,20 @@ Progress:
   founder life-history gene + an `acidophile` archetype (bistable vent-
   seeker). No schema bump; old saves load; golden rebaselined; pH activation
   test added.
-- NEXT — electric → vibration → light → magnetism. These need the genuinely
-  new infra (`OP.EMIT` + emission columns + the perceptual-field pass over
-  the creature grid); repurpose the remaining dead chems
-  (biopolymer/minerals/marker0 → electro/vibro/light).
+- DONE — **electric / electroreception (passive).** Repurposed
+  `chemoreceptorBiopolymer`(19)→`electroreceptor` + `activatedChemoBiopolymerX/Y`
+  (23/24)→`activatedElectroX/Y`; synth slot 15 live. Added the shared
+  emission infra (first piece): `atpSpentTick` + `electricEmission` SoA
+  columns, a pre-loop pass materializing each cell's bioelectric output
+  from last-tick metabolic ATP spend (order-independent), and a grid
+  neighbour scan in `runActivation` summing it into an `act_electro` bearing
+  (1/r² falloff). Cells are detectable simply by metabolizing. Added an
+  electrotaxis founder gene + an `electro-hunter` archetype. No schema bump;
+  determinism byte-identical; mass conserved; golden rebaselined; activation
+  test added.
+- NEXT — `OP.EMIT` opcode (active emission, shared by all channels) routing
+  to `electricEmission` first; then vibration → light → magnetism (repurpose
+  the remaining dead chems: minerals/marker0 → vibro/light).
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy

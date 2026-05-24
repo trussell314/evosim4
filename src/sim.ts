@@ -63,6 +63,7 @@ import {
   CHEM_THERMORECEPTOR, CHEM_ACT_THERMO,
   CHEM_MAGNETORECEPTOR, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y,
   CHEM_PHRECEPTOR, CHEM_ACT_PH,
+  CHEM_ELECTRORECEPTOR, CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y,
   CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
   MRNA_REF, CHL_REF, ENZ_REF,
 } from "./sim/chem-ids";
@@ -3257,6 +3258,10 @@ function spendATP(c: Creature, want: number, src: number = ATP_OTHER): number {
   const got = e < want ? e : want;
   s.energy[i] = e - got;
   s.m_adp[i] += got;
+  // Metabolic-activity proxy for the bioelectric field: accumulate every
+  // ATP spend this tick (reset per turn). A busier cell glows brighter to
+  // electroreceptors. Active EMIT (later) adds on top of this passive term.
+  s.atpSpentTick[i] += got;
   recordAtp(src, got, 0);
   return got;
 }
@@ -4148,6 +4153,12 @@ const VEL_TO_FORCE_GAIN = 0.5;    // velocity contribution to perceived mech
 // now (sense reports total dissolved-CO2/acid load); tune against realized
 // CO2 pools once cells express phreceptor at scale.
 const PH_BASELINE = 0;
+// Electric (bioelectric) sense. ELECTRO_RANGE: detection radius (short --
+// electroreception is a proximity sense in conductive water). ELEC_PASSIVE_GAIN:
+// scales metabolic ATP-spend into emitted field strength. Tunable; sized so
+// a metabolizing neighbour at mid-range yields a usable act_electro bearing.
+const ELECTRO_RANGE = 90;
+const ELEC_PASSIVE_GAIN = 4;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
@@ -4219,16 +4230,36 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   } else {
     cols[CHEM_ACT_PH][i] *= k;
   }
-  // Phase 5: the CHEMO branch (4 receptor-gated particle-gradient
-  // signals into CHEM_ACT_CHEMO_*_X/Y) is retired -- SENSE_OUT
-  // <chemId> reads the same chemGradient universally for any chem,
-  // with no SYNTH'd receptor required. The receptor + signal chem
-  // ids (CHEM_CHEMORECEPTOR_*, CHEM_ACT_CHEMO_*_X/Y) remain in the
-  // chem table at their existing ids to avoid renumbering ripple;
-  // their pools are simply no longer written, so they stay 0 unless
-  // a legacy lineage's bootstrap reaction (slots 15-18) still
-  // produces a trickle.
-  void host;
+  // ELECTRIC: electroreception. Sum nearby cells' bioelectric emission
+  // (passive metabolic glow, materialized last tick) over the creature
+  // grid, 1/r^2 attenuated, into a bearing toward the strongest sources ->
+  // act_electro x/y (a vector the genome climbs like a chemo gradient).
+  // Engulfed organelles read no world field (host set -> decay only).
+  const elecR = cols[CHEM_ELECTRORECEPTOR][i];
+  if (elecR > 0 && host === undefined) {
+    let ex = 0, ey = 0;
+    const cx = c.x, cy = c.y, R2 = ELECTRO_RANGE * ELECTRO_RANGE;
+    forCreaturesNear(cx, cy, ELECTRO_RANGE, (o) => {
+      if (o === c) return;
+      const em = o.store.electricEmission[o.idx];
+      if (em <= 0) return;
+      const dx = o.x - cx, dy = o.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 1e-6 || d2 > R2) return;
+      const d = Math.sqrt(d2);
+      const w = em / d2;          // 1/r^2 falloff in conductive water
+      ex += (w * dx) / d;         // unit vector toward the source
+      ey += (w * dy) / d;
+    });
+    cols[CHEM_ACT_ELECTRO_X][i] = cols[CHEM_ACT_ELECTRO_X][i] * k + elecR * ex * dt;
+    cols[CHEM_ACT_ELECTRO_Y][i] = cols[CHEM_ACT_ELECTRO_Y][i] * k + elecR * ey * dt;
+  } else {
+    cols[CHEM_ACT_ELECTRO_X][i] *= k;
+    cols[CHEM_ACT_ELECTRO_Y][i] *= k;
+  }
+  // The remaining retired-chemo ids (minerals/marker0 + their activated
+  // x/y) stay inert until repurposed for vibration/light in later commits;
+  // their synth slots (16/18) are rate 0, so they stay 0.
 }
 
 function diffuseAmbient(c: Creature, world: World, dt: number): void {
@@ -4681,7 +4712,7 @@ function maintenanceDecay(c: Creature, dt: number): void {
   const RECEPTOR_DECAY_PER_SEC = 0.005;
   const recCols = [
     s.m_photoreceptorVisible, s.m_photoreceptorLong, s.m_photoreceptorSurface,
-    s.m_chemoreceptorBiopolymer, s.m_chemoreceptorMinerals, s.m_phreceptor, s.m_chemoreceptorMarker0,
+    s.m_electroreceptor, s.m_chemoreceptorMinerals, s.m_phreceptor, s.m_chemoreceptorMarker0,
     s.m_mechanoreceptor, s.m_thermoreceptor, s.m_magnetoreceptor,
   ];
   for (let r = 0; r < recCols.length; r++) {
@@ -6190,6 +6221,18 @@ function updateCreatures(world: World, dt: number): void {
   // and creature-sediment collisions. Replaces O(N) scans over world
   // particles/creatures inside per-cell loops with O(neighborhood) scans.
   buildCreatureGrid(world);
+  // Materialize each cell's bioelectric emission from LAST tick's metabolic
+  // ATP spend, BEFORE the per-cell loop -- so the neighbour reads in
+  // runActivation are order-independent (every cell sees last-tick values,
+  // not a mix of this/last tick depending on loop position). The per-cell
+  // loop then resets atpSpentTick and re-accumulates this tick's spend.
+  {
+    const cs = world.creatures;
+    for (let i = 0; i < cs.length; i++) {
+      const st = cs[i].store; const ix = cs[i].idx;
+      st.electricEmission[ix] = ELEC_PASSIVE_GAIN * st.atpSpentTick[ix];
+    }
+  }
   // SENSOR_BIN_* is only read by chemGradient() inside runActivation
   // (per-cell). With zero living cells, all that bookkeeping is
   // wasted -- CHEMICAL_COUNT * 3 typed-array fills + a binning pass
@@ -6207,6 +6250,9 @@ function updateCreatures(world: World, dt: number): void {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
     const vmOut = c.vmOut;
+    // Reset the per-tick ATP-spend accumulator (read last tick by the
+    // bioelectric-emission pass above) before this tick's spends land.
+    c.store.atpSpentTick[c.idx] = 0;
 
     updateCreatureRadius(c);
 
