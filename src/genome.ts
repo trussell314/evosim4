@@ -35,7 +35,7 @@ export const OP = {
 
   // K-5 retired: 0x40 SENSE_GRAD_X, 0x41 SENSE_GRAD_Y, 0x42 SENSE_DENSITY,
   // 0x45 SENSE_VX, 0x46 SENSE_VY, 0x47..0x4A SENSE_CRE_*, 0x4C SENSE_LIGHT,
-  // 0x5A..0x5D SENSE_WALL_*/HEAD_*, 0x5F SENSE_TEMP, 0x60 EMIT,
+  // 0x5A..0x5D SENSE_WALL_*/HEAD_*, 0x5F SENSE_TEMP,
   // 0x61 SENSE_PHEROMONE, 0x62 ADHERE, 0x63 REPAIR, 0x70 SENSE_EM,
   // 0x71/0x72 SENSE_PRESSURE_X/Y, 0x74 SENSE_KIN, 0x75 SENSE_NEIGHBOR_HASH.
   // All of those readings are now reachable via SENSE_CHEMICAL <id> on
@@ -62,6 +62,13 @@ export const OP = {
   TRANSPORT:     0x56,
 
   INGEST:        0x5E,
+  // EMIT <channel>: pop a magnitude, deliberately spend ATP to broadcast
+  // into a perceptual field (active emission). The ATP cost raises the
+  // cell's metabolic-glow term, so emitting makes it louder on that
+  // channel than baseline metabolism alone. Channel = operand %
+  // EMIT_CHANNELS (currently only electric; grows as modalities land).
+  // Reclaims the byte of the retired pre-overhaul EMIT op.
+  EMIT:          0x60,
   SENSE_AMP:     0x64,
   POKE_BYTE:     0x65,
   SPLICE_DUP:    0x66,
@@ -229,6 +236,16 @@ OPERANDS[OP.SENSE_CHEMICAL] = 1;
 OPERANDS[OP.SENSE_OUT] = 1;
 OPERANDS[OP.PARTITION] = 1;
 OPERANDS[OP.SYNTH] = 2;
+OPERANDS[OP.EMIT] = 1;
+
+// Active-emission channels addressable by OP.EMIT (operand % EMIT_CHANNELS).
+// Channel ids are stable; new channels append as modalities land. Today:
+// 0 = electric (the only emission channel wired in the sim).
+export const EMIT_CHANNELS = 1;
+export const EMIT_CHANNEL_ELECTRIC = 0;
+// Per-tick magnitude clamp so a runaway stack value can't request an
+// absurd ATP burn in one op.
+const EMIT_MAG_CAP = 1000;
 
 // Walk the genome and call `visit(op, pc, operand)` for each
 // executable op position. `operand` is the FIRST operand byte for any
@@ -417,6 +434,10 @@ export interface VMOutputs {
   partitionBias: Float32Array;
   partitionCount: number;
   instructions: number;
+  // Per-channel active-emission magnitude requested this tick by OP.EMIT
+  // (sized EMIT_CHANNELS). The sim spends ATP proportional to it, which
+  // feeds the channel's emission field. Cleared each tick.
+  emit: Float32Array;
 }
 
 export function newOutputs(): VMOutputs {
@@ -442,6 +463,7 @@ export function newOutputs(): VMOutputs {
     partitionBias: new Float32Array(PARTITION_CAP),
     partitionCount: 0,
     instructions: 0,
+    emit: new Float32Array(EMIT_CHANNELS),
   };
 }
 
@@ -465,6 +487,7 @@ export function runTick(
   out.excrete.fill(0);
   out.transport.fill(0);
   out.reproduce = false;
+  out.emit.fill(0);
   // Parent keeps 40%, child gets 60%. Skewed in favor of the newborn
   // because the parent has had time to build reserves and can rebuild
   // from a lower base, while the newborn faces an immediate
@@ -677,6 +700,13 @@ export function runTick(
         const ax = vmPop(stack);
         out.thrustX += ax;
         out.thrustY += ay;
+        break;
+      }
+      case OP.EMIT: {
+        const ch = genome[state.pc % L] % EMIT_CHANNELS; state.pc++;
+        let mag = vmPop(stack);
+        if (mag < 0) mag = 0; else if (mag > EMIT_MAG_CAP) mag = EMIT_MAG_CAP;
+        out.emit[ch] += mag;
         break;
       }
       case OP.EXCRETE: {

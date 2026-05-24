@@ -605,6 +605,19 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "electric-beacon",
+      label: "electric beacon",
+      cls: "direct",
+      desc: "Deliberately broadcasts a bioelectric pulse every tick (OP.EMIT spends ATP to glow brighter than baseline metabolism on the electric channel). Substrate for emergent electrocommunication, kin signalling, prey luring, or jamming -- other lineages with an electroreceptor can home on it. The ATP cost makes loud signalling a real tradeoff (a beacon is easier for electro-hunters to find), so when/whether it pays off is left to selection.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
+        ["PUSH8", 40], ["EMIT", 0], // broadcast electric magnitude 40 (channel 0)
+        ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
       id: "electro-hunter",
       label: "electro-hunter",
       cls: "direct",

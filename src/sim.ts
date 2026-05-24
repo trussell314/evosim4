@@ -28,6 +28,7 @@ import {
   appendGenomeBytes,
   GENE_FRAGMENT_CAP,
   PARTITION_CAP,
+  EMIT_CHANNEL_ELECTRIC,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
@@ -4159,6 +4160,10 @@ const PH_BASELINE = 0;
 // a metabolizing neighbour at mid-range yields a usable act_electro bearing.
 const ELECTRO_RANGE = 90;
 const ELEC_PASSIVE_GAIN = 4;
+// ATP burned per unit of active EMIT magnitude per second. Active emission
+// is "spend ATP to glow brighter": the cost lands in atpSpentTick, which
+// the next-tick emission pass turns into a louder electricEmission.
+const EMIT_ATP_PER_UNIT = 0.02;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 const MAG_FIELD_X = 0;            // compass field: pointing toward +Y (south)
 const MAG_FIELD_Y = -1;           // -Y is "north" in screen coords
@@ -4924,9 +4929,10 @@ export function mergeVmOutputs(into: VMOutputs, from: VMOutputs): void {
     const s = from.inhSynthList[i];
     if (!into.inhSynthMask[s]) { into.inhSynthMask[s] = 1; into.inhSynthList[into.inhSynthCount++] = s; }
   }
-  // Excrete / transport / force: additive (co-dominant).
+  // Excrete / transport / force / emit: additive (co-dominant).
   const ex = into.excrete, fx = from.excrete, tr = into.transport, ft = from.transport;
   for (let k = 0; k < ex.length; k++) { ex[k] += fx[k]; tr[k] += ft[k]; }
+  for (let k = 0; k < into.emit.length; k++) into.emit[k] += from.emit[k];
   into.thrustX += from.thrustX; into.thrustY += from.thrustY; into.turn += from.turn;
   // Discrete actions: OR. A working copy rescues a broken one.
   if (from.reproduce) { into.reproduce = true; into.reproduceFraction = from.reproduceFraction; }
@@ -6534,6 +6540,13 @@ function updateCreatures(world: World, dt: number): void {
     // Advance any in-flight fission. When progress hits 1, the stashed
     // daughter is committed into world.creatures.
     advanceDivision(c, world, dt);
+
+    // Active emission (OP.EMIT). Burning ATP raises the cell's metabolic
+    // glow (atpSpentTick), so a deliberate emit makes it louder on the
+    // channel than baseline metabolism -- the substrate for electric
+    // signalling / lures. Electric is the only wired channel today.
+    const emitElec = vmOut.emit[EMIT_CHANNEL_ELECTRIC];
+    if (emitElec > 0) spendATP(c, EMIT_ATP_PER_UNIT * emitElec * dtT, ATP_OTHER);
 
     let ax = vmOut.thrustX;
     let ay = vmOut.thrustY;

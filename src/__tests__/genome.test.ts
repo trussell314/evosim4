@@ -296,6 +296,13 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, HALT_MARK]).out.predate).toBe(true);
   });
+  it("EMIT accumulates a clamped magnitude into the electric channel", () => {
+    expect(exec([OP.PUSH8, 50, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(50);
+    // two emits accumulate
+    expect(exec([OP.PUSH8, 20, OP.EMIT, 0, OP.PUSH8, 10, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(30);
+    // negative magnitude (high byte -> i8 negative) clamps to 0
+    expect(exec([OP.PUSH8, 200, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(0);
+  });
   it("INGEST pops a bond-energy threshold off the stack", () => {
     const out = exec([OP.PUSH8, 50, OP.INGEST, HALT_MARK]).out;
     expect(out.ingestThreshold).toBeCloseTo(50 * 0.02, 6); // INGEST_TH_SCALE

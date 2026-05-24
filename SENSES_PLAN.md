@@ -29,9 +29,16 @@ Progress:
   electrotaxis founder gene + an `electro-hunter` archetype. No schema bump;
   determinism byte-identical; mass conserved; golden rebaselined; activation
   test added.
-- NEXT — `OP.EMIT` opcode (active emission, shared by all channels) routing
-  to `electricEmission` first; then vibration → light → magnetism (repurpose
-  the remaining dead chems: minerals/marker0 → vibro/light).
+- DONE — **`OP.EMIT` opcode (active emission).** Reclaimed byte `0x60`
+  (the retired pre-overhaul EMIT). `EMIT <channel>` pops a magnitude; the
+  sim spends ATP ∝ magnitude, which raises the cell's metabolic glow —
+  so active emission is "deliberately burn ATP to broadcast louder than
+  baseline" (no new column needed; it rides the passive `atpSpentTick`
+  path). `EMIT_CHANNELS` grows as modalities land (today: electric only).
+  Added an `electric-beacon` archetype. Golden unchanged (nothing in the
+  seeded run emits yet); VM-level EMIT test added.
+- NEXT — vibration → light → magnetism. Repurpose the remaining dead chems
+  (minerals/marker0 → vibro/light) and add their channels to `EMIT`.
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy
