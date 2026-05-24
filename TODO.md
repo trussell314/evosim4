@@ -240,6 +240,27 @@ Living list of deferred work. Newest/explicit asks at top.
   (`scripts/headless.ts` writes the save JSON) load in one click
   instead of hand-setting the `evosim4:save` localStorage key.
 
+- **Move save persistence to IndexedDB (future-proofing).** Saves are
+  gzip-compressed into `localStorage` (`c600127`), which bought ~3x
+  (a 5MB-raw world → ~1.65MB stored), so this is NOT urgent — do it
+  the day a real world hits the compressed cap. What's involved: a
+  small dependency-free async IDB wrapper (`open` + `onupgradeneeded`
+  to create a one-key store + promise-wrapped `get`/`put`) replacing
+  the two `localStorage` calls; store the gzip **bytes** (`Blob`/
+  `Uint8Array`) directly via structured clone, dropping the base64
+  step (~33% overhead) and its encode/decode; the load bootstrap is
+  already async so it slots in; one-time migration reading the
+  existing `localStorage` save on first load so worlds aren't lost.
+  Tradeoffs: **no synchronous `pagehide` flush** (IDB writes are
+  async and may not commit on unload) — but the 60s autosave cadence
+  already bounds loss to ≤60s, so it's a non-regression; eviction
+  risk (mitigate with a one-time `navigator.storage.persist()`);
+  more Safari/private-mode quirk surface; more boilerplate, harder to
+  unit-test. Win: removes the storage ceiling (IDB quota is disk-
+  fraction, hundreds of MB–GB). Touch points: the save/load block in
+  `src/main.ts` (`SAVE_KEY`, `storedSave`, `decodeStoredSave`,
+  `maybeAutosave`, `forceSave`).
+
 ## Engine decomposition (sim.ts split) — paused
 
 Behavior-preserving split of the `sim.ts` monolith. **Paused at a
