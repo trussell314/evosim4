@@ -1,6 +1,19 @@
 # Sensory-substrate plan: light · vibration · electric · pH · magnetism
 
-Status: **design only — not started** (under review). No code committed.
+Status: **design + reachability landed; modality substrate not yet built.**
+
+Progress:
+- DONE — every procedural founder now gets 1–3 distinct wired senses
+  (chemo/thermo/magneto/mechano/photo taxis + life-history), via a new
+  sense+behavior gene pool in `genome.ts` (`7f0388f`).
+- DONE — sensory-behavior archetypes: kin-swarmer, current-rider (mechano),
+  toxin-scout (chemo seek+flee) (`887d77e`).
+- KEY DE-RISK — the new sense chems should REPURPOSE the 12 retired
+  chemoreceptor chems (ids 19–30) + their dead synth slots (15–18) rather
+  than append new named chems: no schema bump, no SoA column surgery, no
+  reaction-slot additions, and old saves survive. See §3.0.
+- NEXT — implement modalities in order pH → electric → vibration → light →
+  magnetism (each repurposes its chems, each its own golden rebaseline).
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy
@@ -167,7 +180,50 @@ Appended at ids 46–55 (after `atp`=45): `NAMED_CHEMICAL_COUNT 46→56`,
 generic band `50→40` (ids 56–95), `CHEMICAL_COUNT` stays 96 (genome ABI
 `%96` unchanged).
 
-### 3.1 Preserving interesting generic-chem pathways (IMPORTANT)
+### 3.0 De-risking: REPURPOSE the retired chemoreceptor chems (REVISED — preferred)
+
+The retired CHEMO branch left **12 inert named chems at ids 19–30** (4
+`chemoreceptor*` + 8 `activatedChemo*X/Y`) plus their **synth reactions at
+slots 15–18 (rate 0, never fire)**. Per the repo's "delete dead surface /
+no inert members" rule, the new senses should **repurpose these** rather
+than append 10 brand-new named chems. This collapses the risk of the whole
+effort:
+
+- **No `NAMED_CHEMICAL_COUNT` change, no new `core.ts` SoA columns, no new
+  reaction slots, no `NAMED_HEAD` bump** — the columns, ids, and synth
+  slots already exist; we rename + rewire them.
+- **No `SAVE_SCHEMA` bump for the chem layout** — counts/ids are unchanged.
+  Old saves still load: a renamed dead chem's key is absent in old saves so
+  it reads 0 (which it always was). The user's in-progress world survives.
+- Cells **build a receptor via `SYNTH CAT <slot 15..18>`** (those slots
+  already produce chems 19–22; just raise their rate 0→0.15 like
+  mech/thermo/magneto).
+
+Proposed mapping (10 of the 12 dead chems; 2 spare):
+
+| New chem | Reuses dead chem (id) | Built by synth slot |
+|---|---|---|
+| `electroreceptor` | `chemoreceptorBiopolymer` (19) | 15 |
+| `activatedElectroX/Y` | `activatedChemoBiopolymerX/Y` (23/24) | — |
+| `vibroreceptor` | `chemoreceptorMinerals` (20) | 16 |
+| `activatedVibX/Y` | `activatedChemoMineralsX/Y` (25/26) | — |
+| `phreceptor` | `chemoreceptorFa` (21) | 17 |
+| `activatedPh` | `activatedChemoFaX` (27) | — |
+| `activatedLightX/Y` | `activatedChemoMarker0X/Y` (29/30) | — (reuses visible photoreceptor) |
+| spare | `chemoreceptorMarker0` (22), `activatedChemoFaY` (28) | 18 |
+
+Magnetism reuses the existing magnetoreceptor/`activatedMag`. Still NEW:
+`OP.EMIT` + 4 emission columns + the perceptual-field pass (for the
+neighbour-sourced channels). pH needs NONE of that (purely chemical) — so
+**pH is the cheapest first modality**: rename Fa→ph, raise slot-17 rate,
+add one `runActivation` term, add a founder gene + an acidophile archetype.
+
+This supersedes appending 10 new chems (§3, §6). Recommended commit order:
+pH (no new infra) → EMIT op + emission columns + pass + electric →
+vibration → light (emission/reflection) → magnetism map/emit. Each repurposes
+its chems, each its own golden rebaseline.
+
+### 3.1 Preserving interesting generic-chem pathways (IMPORTANT — only if appending new chems)
 
 Generic reactions draw substrate/product ids from the **full 0–95 space**
 (`buildReactionTable`, `pickInt(CHEMICAL_COUNT)`), so the abstract generic
