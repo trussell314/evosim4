@@ -4237,6 +4237,11 @@ const MAG_BASE_Y = -1;
 const MAG_DECLINATION = 0.6;
 const MAG_DEPTH_GAIN = 1.0;
 const _MAG = new Float32Array(2);
+// Magnetite coupling: how strongly mineral-deposit gradients bend the
+// sensed magnetic field. Tuned so a rich deposit gives a bearing
+// comparable to the baseline geofield (~1) without swamping the compass.
+const MAG_MATERIAL_GAIN = 12;
+const _MINGRAD = new Float32Array(2);
 function magFieldAt(world: World, x: number, y: number, out: Float32Array): void {
   const w = world.width > 0 ? world.width : 1;
   const h = world.height > 0 ? world.height : 1;
@@ -4326,6 +4331,16 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
         mfx += (w * dx) / d;
         mfy += (w * dy) / d;
       });
+    }
+    // Magnetite: minerals are ferromagnetic, so mineral-rich water bends the
+    // local field. A magnetoreceptor therefore also senses the bearing
+    // toward mineral deposits -- the most-productive nutrient (every
+    // biosynth consumes minerals), so magnetotaxis doubles as prospecting.
+    // (Reuses the existing per-chem gradient; minerals is a SENSOR_CHEM.)
+    if (host === undefined) {
+      chemGradient(c.x, c.y, c.senseRange, CHEM_MIN, _MINGRAD);
+      mfx += _MINGRAD[0] * MAG_MATERIAL_GAIN;
+      mfy += _MINGRAD[1] * MAG_MATERIAL_GAIN;
     }
     cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * mfx * dt;
     cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * mfy * dt;

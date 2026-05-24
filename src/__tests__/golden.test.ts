@@ -363,7 +363,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // the floor over the day instead of always pointing straight down. The
     // seeded run's photosynthesis/photoreception light now varies with the
     // sun's azimuth. Intended.
-    const GOLDEN = "e36f0f50";
+    // Bumped again: minerals are magnetic (magnetite) -- a magnetoreceptor's
+    // act_mag now also tracks the mineral gradient, so magnetotaxis cells in
+    // the seeded run drift toward deposits. Intended.
+    const GOLDEN = "d26a706f";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
