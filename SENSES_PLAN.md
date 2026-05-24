@@ -86,9 +86,16 @@ Progress:
   autotrophs. Golden rebaselined; occlusion test added. (Path-occlusion of
   emitted light between two cells -- true line-of-sight blocking -- remains
   deferred; this is column-shade from the sun.)
-- OPTIONAL / remaining: active vibration EMIT + the invented magnetic-emit
-  channel (the `EMIT` multi-channel infra supports both; each is a small
-  add). Path/line-of-sight occlusion of cell-emitted light.
+- DONE — **active vibration + magnetic EMIT.** `EMIT_CHANNELS` 2→4
+  (vibration=2, magnetic=3). Vibration EMIT adds a deliberate wake on top of
+  motion (`activeVibEmit` → `vibrationEmission`); magnetic EMIT broadcasts a
+  pulse with NO passive term (`activeMagEmit` → `magneticEmission`), detected
+  long-range and NOT rock-occluded (its distinguishing affordance: signals
+  through obstacles) -- superimposed on the `act_mag` map. Added `thumper`
+  (vibration) + `magneto-relay` (through-rock) archetypes. Golden unchanged
+  (no seeded cell emits these); VM EMIT test covers all 4 channels.
+- All five channels now have full detect + (where meaningful) emit. Only
+  optional remainder: path/line-of-sight occlusion of cell-emitted light.
 
 Unifies five perceptual channels under one engine, each with symmetric
 **detection + emission**, consistent with the substrate philosophy

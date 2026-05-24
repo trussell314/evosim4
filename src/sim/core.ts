@@ -462,6 +462,12 @@ const CREATURE_F32_COLS = [
   // pass; multiplies the cell's sky-light reads (photosynthesis,
   // photoreception, reflection) so a shaded cell makes/senses/reflects less.
   "shadeFactor",
+  // Active-emission accumulators for the remaining EMIT channels (mirror
+  // activeLightEmit): activeVibEmit folds into vibrationEmission; magnetic
+  // has no passive term so activeMagEmit is materialized straight into
+  // magneticEmission (the field other magnetoreceptors read -- long range,
+  // not rock-occluded). All reset per turn, read next tick by the pass.
+  "activeVibEmit", "activeMagEmit", "magneticEmission",
 ] as const;
 const CREATURE_I32_COLS = ["repairTicks"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
@@ -569,6 +575,9 @@ export class CreatureStore {
   vibrationEmission!: Float32Array;
   activeLightEmit!: Float32Array;
   shadeFactor!: Float32Array;
+  activeVibEmit!: Float32Array;
+  activeMagEmit!: Float32Array;
+  magneticEmission!: Float32Array;
   // Generic catalyst pool: one Float32Array per catalyst slot. Sized
   // to CATALYST_COUNT. Each catalyst k's pool multiplies its target
   // reaction's rate via (1 + pool/CAT_REF). Each slot is a view over
@@ -690,6 +699,9 @@ export class CreatureStore {
     this.vibrationEmission = new Float32Array(b, o.base.vibrationEmission, cap);
     this.activeLightEmit = new Float32Array(b, o.base.activeLightEmit, cap);
     this.shadeFactor = new Float32Array(b, o.base.shadeFactor, cap);
+    this.activeVibEmit = new Float32Array(b, o.base.activeVibEmit, cap);
+    this.activeMagEmit = new Float32Array(b, o.base.activeMagEmit, cap);
+    this.magneticEmission = new Float32Array(b, o.base.magneticEmission, cap);
     // Path 1: ATP is a first-class chemical. `energy` is the same
     // backing array as the m_atp molecule column (== molCols[atp] ==
     // chemCols[CHEM_ATP]); every store.energy / c.energy / c.molecules

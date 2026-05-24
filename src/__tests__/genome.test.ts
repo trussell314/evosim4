@@ -296,9 +296,12 @@ describe("VM actuators", () => {
   it("PREDATE flag", () => {
     expect(exec([OP.PREDATE, HALT_MARK]).out.predate).toBe(true);
   });
-  it("EMIT accumulates a clamped magnitude into the electric channel", () => {
-    expect(exec([OP.PUSH8, 50, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(50);
-    // two emits accumulate
+  it("EMIT accumulates a clamped magnitude into the addressed channel", () => {
+    expect(exec([OP.PUSH8, 50, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(50); // electric
+    expect(exec([OP.PUSH8, 40, OP.EMIT, 1, HALT_MARK]).out.emit[1]).toBe(40); // light
+    expect(exec([OP.PUSH8, 30, OP.EMIT, 2, HALT_MARK]).out.emit[2]).toBe(30); // vibration
+    expect(exec([OP.PUSH8, 20, OP.EMIT, 3, HALT_MARK]).out.emit[3]).toBe(20); // magnetic
+    // two emits to the same channel accumulate
     expect(exec([OP.PUSH8, 20, OP.EMIT, 0, OP.PUSH8, 10, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(30);
     // negative magnitude (high byte -> i8 negative) clamps to 0
     expect(exec([OP.PUSH8, 200, OP.EMIT, 0, HALT_MARK]).out.emit[0]).toBe(0);

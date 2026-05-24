@@ -652,6 +652,33 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "thumper",
+      label: "vib thumper",
+      cls: "direct",
+      desc: "Acoustic signaller: spends ATP to EMIT a vibration pulse every tick (a deliberate 'thump' on top of any motion wake). Substrate for emergent acoustic communication, mate/alarm calls, or a noise that lures vibration-hunters / startles skitterers -- the ATP cost makes loud calling a real tradeoff. Pairs against the skitterer (which flees wakes).",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
+        ["PUSH8", 40], ["EMIT", 2], // vibration channel
+        ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
+      id: "magneto-relay",
+      label: "magneto relay",
+      cls: "direct",
+      desc: "Through-rock signaller: EMITs a magnetic pulse (channel 3) that -- unlike electric/light -- is NOT blocked by rock and carries long range, so cells separated by obstacles can still sense each other. Also builds a magnetoreceptor so it both broadcasts and listens. Substrate for obstacle-spanning coordination / long-range rendezvous. (Cell-emitted magnetism is an invented affordance, not a real biological channel -- included for completeness.)",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MAGNETO], // listen on the magnetic channel
+        ["PUSH8", 40], ["EMIT", 3], // broadcast a magnetic pulse
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30), // forage while relaying
+        ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
       id: "anglerfish",
       label: "anglerfish lure",
       cls: "direct",

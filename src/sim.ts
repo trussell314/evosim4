@@ -30,6 +30,8 @@ import {
   PARTITION_CAP,
   EMIT_CHANNEL_ELECTRIC,
   EMIT_CHANNEL_LIGHT,
+  EMIT_CHANNEL_VIBRATION,
+  EMIT_CHANNEL_MAGNETIC,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
@@ -4189,6 +4191,13 @@ const SHADE_FLOOR = 0.5;
 // VIB_RANGE: long (sound carries far); 1/r falloff in the detector. Tunable.
 const VIB_GAIN = 0.5;
 const VIB_RANGE = 180;
+// Active-emission gains (emitted field per unit ATP spent) for the
+// vibration + magnetic channels. MAG_EMIT_RANGE is long and the detector
+// does NOT apply rock occlusion -- magnetic signalling carries through
+// obstacles, its one distinguishing affordance.
+const VIB_EMIT_GAIN = 20;
+const MAG_EMIT_GAIN = 20;
+const MAG_EMIT_RANGE = 260;
 const TEMP_BASELINE = 15;         // °C; activated_thermo encodes departure
 // Geomagnetic MAP. Baseline points "up" (-Y = north). Two positional
 // gradients make it a map rather than a bare compass:
@@ -4272,9 +4281,34 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
   // (|act_mag| ~ depth, the x/y ratio ~ where you are). Enables homing /
   // depth-keeping / migration, not just a fixed compass.
   const magR = cols[CHEM_MAGNETORECEPTOR][i];
-  magFieldAt(world, c.x, c.y, _MAG);
-  cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * _MAG[0] * dt;
-  cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * _MAG[1] * dt;
+  if (magR > 0) {
+    magFieldAt(world, c.x, c.y, _MAG);
+    let mfx = _MAG[0], mfy = _MAG[1];
+    // Superimpose EMITted magnetic pulses from nearby cells (a deliberate
+    // long-range signal that -- unlike electric/light -- is NOT blocked by
+    // rock, so it works through obstacles). Bearing toward the source, 1/r.
+    // Note: this rides the same act_mag chems as the compass/map, so a
+    // signal and the geofield add (ambiguous by design for the MVP).
+    if (host === undefined) {
+      const cx = c.x, cy = c.y, R2 = MAG_EMIT_RANGE * MAG_EMIT_RANGE;
+      forCreaturesNear(cx, cy, MAG_EMIT_RANGE, (o) => {
+        const em = o.store.magneticEmission[o.idx];
+        if (em <= 0 || o === c) return;
+        const dx = o.x - cx, dy = o.y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 1e-6 || d2 > R2) return;
+        const d = Math.sqrt(d2);
+        const w = em / d;
+        mfx += (w * dx) / d;
+        mfy += (w * dy) / d;
+      });
+    }
+    cols[CHEM_ACT_MAG_X][i] = cols[CHEM_ACT_MAG_X][i] * k + magR * mfx * dt;
+    cols[CHEM_ACT_MAG_Y][i] = cols[CHEM_ACT_MAG_Y][i] * k + magR * mfy * dt;
+  } else {
+    cols[CHEM_ACT_MAG_X][i] *= k;
+    cols[CHEM_ACT_MAG_Y][i] *= k;
+  }
   // pH / ACIDITY: receptor * local acidity above baseline. Acidity is
   // proxied by dissolved CO2 (carbonic acid): the cell's own CO2 pool +
   // the ambient CO2 of its region, so a cell senses both its metabolic
@@ -6375,7 +6409,12 @@ function updateCreatures(world: World, dt: number): void {
       // proportional (fresh from current velocity). Active EMIT vibration
       // would add on top later. Fresh (not lagged) like reflection.
       const vx = st.vx[ix], vy = st.vy[ix];
-      st.vibrationEmission[ix] = VIB_GAIN * Math.sqrt(vx * vx + vy * vy);
+      st.vibrationEmission[ix] = VIB_GAIN * Math.sqrt(vx * vx + vy * vy)
+        + st.activeVibEmit[ix];
+      // Emitted magnetic field (no passive term -- magnetism isn't radiated
+      // by just existing; only by a deliberate EMIT pulse). Materialized
+      // from last tick's accumulator so neighbour reads are order-independent.
+      st.magneticEmission[ix] = st.activeMagEmit[ix];
     }
   }
   // SENSOR_BIN_* is only read by chemGradient() inside runActivation
@@ -6399,6 +6438,8 @@ function updateCreatures(world: World, dt: number): void {
     // emission pass above) before this tick's spends/emits land.
     c.store.atpSpentTick[c.idx] = 0;
     c.store.activeLightEmit[c.idx] = 0;
+    c.store.activeVibEmit[c.idx] = 0;
+    c.store.activeMagEmit[c.idx] = 0;
 
     updateCreatureRadius(c);
 
@@ -6698,6 +6739,18 @@ function updateCreatures(world: World, dt: number): void {
     if (emitLight > 0) {
       const spent = spendATP(c, EMIT_ATP_PER_UNIT * emitLight * dtT, ATP_OTHER);
       c.store.activeLightEmit[c.idx] += LIGHT_EMIT_GAIN * spent;
+    }
+    // Deliberate vibration (sound on top of any motion wake).
+    const emitVib = vmOut.emit[EMIT_CHANNEL_VIBRATION];
+    if (emitVib > 0) {
+      const spent = spendATP(c, EMIT_ATP_PER_UNIT * emitVib * dtT, ATP_OTHER);
+      c.store.activeVibEmit[c.idx] += VIB_EMIT_GAIN * spent;
+    }
+    // Magnetic pulse (no passive term; long range, passes through rock).
+    const emitMag = vmOut.emit[EMIT_CHANNEL_MAGNETIC];
+    if (emitMag > 0) {
+      const spent = spendATP(c, EMIT_ATP_PER_UNIT * emitMag * dtT, ATP_OTHER);
+      c.store.activeMagEmit[c.idx] += MAG_EMIT_GAIN * spent;
     }
 
     let ax = vmOut.thrustX;

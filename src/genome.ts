@@ -240,11 +240,15 @@ OPERANDS[OP.EMIT] = 1;
 
 // Active-emission channels addressable by OP.EMIT (operand % EMIT_CHANNELS).
 // Channel ids are stable; new channels append as modalities land.
-// 0 = electric (burn ATP -> louder bioelectric glow),
-// 1 = light    (burn ATP -> bioluminescence on top of reflection).
-export const EMIT_CHANNELS = 2;
+// 0 = electric  (burn ATP -> louder bioelectric glow),
+// 1 = light     (burn ATP -> bioluminescence on top of reflection),
+// 2 = vibration (burn ATP -> deliberate wake/sound on top of motion),
+// 3 = magnetic  (burn ATP -> a magnetic pulse; long range, passes rock).
+export const EMIT_CHANNELS = 4;
 export const EMIT_CHANNEL_ELECTRIC = 0;
 export const EMIT_CHANNEL_LIGHT = 1;
+export const EMIT_CHANNEL_VIBRATION = 2;
+export const EMIT_CHANNEL_MAGNETIC = 3;
 // Per-tick magnitude clamp so a runaway stack value can't request an
 // absurd ATP burn in one op.
 const EMIT_MAG_CAP = 1000;
