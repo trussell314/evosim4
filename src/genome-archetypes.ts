@@ -21,6 +21,8 @@ import {
   CHEM_ACT_THERMO,
   CHEM_ACT_MAG_X,
   CHEM_ACT_MAG_Y,
+  CHEM_ACT_MECH_X,
+  CHEM_ACT_MECH_Y,
   CHEM_BIOPOLYMER,
   CHEM_GLU,
   CHEM_CO2,
@@ -39,6 +41,7 @@ import {
   RX_SLOT_DIGEST_BIOP,
   RX_SLOT_SYNTH_MEM_FA,
   RX_SLOT_SYNTH_PHOTO_V,
+  RX_SLOT_SYNTH_MECH,
   RX_SLOT_SYNTH_THERMO,
   RX_SLOT_SYNTH_MAGNETO,
   RX_SLOT_SYNTH_BOND,
@@ -136,6 +139,20 @@ function climbParticleGradient(chemId: number, gain: number): Instr[] {
     ["SWAP"],                 // [gy*gain, gx]
     ["PUSH8", gain], ["MUL"], // [gy*gain, gx*gain]
     ["SWAP"],                 // [gx*gain, gy*gain]
+    ["THRUST"],
+  ];
+}
+
+// Flee a chem's PARTICLE-field gradient -- thrust DOWN-gradient (away
+// from the source). Mirror of climbParticleGradient with both components
+// negated before THRUST. Used for avoidance/escape behaviours.
+function fleeParticleGradient(chemId: number, gain: number): Instr[] {
+  return [
+    ["SENSE_OUT", chemId],          // [gx, gy]
+    ["PUSH8", gain], ["MUL"], ["NEG"], // [gx, -gy*gain]
+    ["SWAP"],                        // [-gy*gain, gx]
+    ["PUSH8", gain], ["MUL"], ["NEG"], // [-gy*gain, -gx*gain]
+    ["SWAP"],                        // [-gx*gain, -gy*gain]
     ["THRUST"],
   ];
 }
@@ -521,6 +538,46 @@ function build(): Archetype[] {
         ["PUSH8", 30],
         ["EXCRETE", CHEM_MARKER0],
         ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
+      id: "swarmer",
+      label: "kin swarmer",
+      cls: "direct",
+      desc: "Social aggregator: emits a marker0 plume AND climbs the marker0 gradient, so clonal kin (who shed the same marker) accrete into drifting swarms. Aggregation is fully emergent from one shared chemical channel -- no group rule. Pairs well with the colony/greenbeard bonding seeds (a dense swarm is where bonds can form). Watch for quorum-like density build-up vs. dispersal.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["PUSH8", 30],
+        ["EXCRETE", CHEM_MARKER0],
+        ...climbParticleGradient(CHEM_MARKER0, 30),
+        ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
+      id: "rheotroph",
+      label: "current rider",
+      cls: "direct",
+      desc: "Mechanosensory disperser: builds a mechanoreceptor and thrusts along the net force it feels (currents, swells, gust disturbance), so it rides bulk water motion to colonise new regions instead of fighting it -- passive long-range dispersal on the back of the physics. Illustrates mechanoreception (act_mech x/y) driving behaviour rather than just gating.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MECH], // build the mechanoreceptor
+        ...climbGradient(CHEM_ACT_MECH_X, CHEM_ACT_MECH_Y, 20),
+        ...reproduceWhenGrown(32, "np"),
+      ],
+    },
+    {
+      id: "scout",
+      label: "toxin scout",
+      cls: "direct",
+      desc: "Avoidance forager: climbs the food (biopolymer) gradient but FLEES the waste gradient, so it grazes detritus while steering clear of allelopath toxin plumes and dense-respiration dead zones. The two opposing chemotaxes sum each tick, so it threads between food and poison -- emergent risk-balanced foraging.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 30),
+        ...fleeParticleGradient(CHEM_WASTE, 30),
+        ...reproduceWhenGrown(32, "np"),
       ],
     },
     {
