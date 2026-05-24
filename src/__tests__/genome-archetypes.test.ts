@@ -12,9 +12,9 @@ import { createWorld, spawnSpeciesInstance, step } from "../sim";
 
 describe("genome archetypes", () => {
   it("the catalogue has unique ids/labels and both classes", () => {
-    expect(ARCHETYPES.length).toBe(30);
-    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(30);
-    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(30);
+    expect(ARCHETYPES.length).toBe(31);
+    expect(new Set(ARCHETYPES.map((a) => a.id)).size).toBe(31);
+    expect(new Set(ARCHETYPES.map((a) => a.label)).size).toBe(31);
     expect(ARCHETYPES.some((a) => a.cls === "direct")).toBe(true);
     expect(ARCHETYPES.some((a) => a.cls === "seed")).toBe(true);
   });
@@ -51,7 +51,10 @@ describe("genome archetypes", () => {
     // chemolithoautotroph is sessile: it ingests the vent's stationary
     // fuel seep without thrusting (viableGenome assumes ingest => must
     // chase food). Self-sufficient at the vent, just not by that rule.
-    const exempt = new Set(["endoparasite", "virus", "chemolithoautotroph"]);
+    // anglerfish is a sit-and-lure ambush predator: it EMITs a light lure
+    // and lets prey come to it (no thrust), so the same ingest=>must-move
+    // rule exempts it -- it banks on prey approaching, like the seeds.
+    const exempt = new Set(["endoparasite", "virus", "chemolithoautotroph", "anglerfish"]);
     for (const a of ARCHETYPES) {
       if (exempt.has(a.id)) continue;
       expect(viableGenome(a.genome), `${a.id} should be viable`).toBe(true);

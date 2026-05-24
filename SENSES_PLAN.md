@@ -66,9 +66,15 @@ Progress:
 - ALL FIVE CHANNELS now have detection (light · vibration · electric · pH ·
   magnetism) + the shared emission infra (emission columns, order-independent
   pre-loop pass, grid neighbour scan, `OP.EMIT`).
-- OPTIONAL / remaining: bioluminescence (LIGHT channel on `EMIT` + active
-  light fold-in), active vibration EMIT, the invented magnetic-emit channel,
-  and the PENDING light-occlusion/shade term (see below).
+- DONE — **bioluminescence (active light emission).** Added a LIGHT channel
+  to `EMIT` (`EMIT_CHANNELS` 1→2; electric=0, light=1) + an `activeLightEmit`
+  SoA column. `EMIT light` burns ATP -> `LIGHT_EMIT_GAIN·spent` folds into
+  `lightEmission` on top of reflection, so a cell can glow in the dark where
+  reflection is zero. Added an `anglerfish` lure archetype (glow → ambush
+  light-seeing prey). Golden unchanged (no seeded cell emits light);
+  bioluminescence test added.
+- OPTIONAL / remaining: active vibration EMIT, the invented magnetic-emit
+  channel, and the PENDING light-occlusion/shade term (see below).
 - PENDING (revisit before wrapping up, per request) — **light occlusion /
   shade**: cells currently don't shadow each other or block each other's
   emitted/reflected light (transparent). Cheapest add: attenuate

@@ -2376,6 +2376,38 @@ describe("mass conservation", () => {
     expect(loneAct).toBe(0);
   });
 
+  it("bioluminescence: an EMIT(light) cell reads brighter than a plain one", () => {
+    // EMIT light spends ATP to glow on top of reflection. An eye next to a
+    // bioluminescing neighbour should read a stronger act_light than an eye
+    // next to an equidistant non-emitting (reflection-only) neighbour.
+    const CHEM_PHOTO_V_ID = 13;
+    const CHEM_ACT_LIGHT_X_ID = 29;
+    const w = quietWorld();
+    w.surfaceY = 8;
+    w.dayPhase = 0.25;
+    const mol = { membrane: 50, mrna: 5, aminoAcid: 2, enzyme: 1 };
+    // Eye A next to a bioluminescent emitter (genome EMITs light each tick).
+    const eyeA = makeCreature({ x: 150, y: 20, energy: 50,
+      genome: new Uint8Array([HALT_MARK]), molecules: mol });
+    eyeA.store.chemCols[CHEM_PHOTO_V_ID][eyeA.idx] = 2;
+    w.creatures.push(eyeA);
+    w.creatures.push(makeCreature({ x: 190, y: 20, energy: 80,
+      genome: new Uint8Array([OP.PUSH8, 60, OP.EMIT, 1]), // channel 1 = light
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 2, enzyme: 1 } }));
+    // Eye B next to a plain (reflection-only) neighbour, far away.
+    const eyeB = makeCreature({ x: 500, y: 20, energy: 50,
+      genome: new Uint8Array([HALT_MARK]), molecules: mol });
+    eyeB.store.chemCols[CHEM_PHOTO_V_ID][eyeB.idx] = 2;
+    w.creatures.push(eyeB);
+    w.creatures.push(makeCreature({ x: 540, y: 20, energy: 80,
+      genome: new Uint8Array([HALT_MARK]),
+      molecules: { membrane: 80, mrna: 5, aminoAcid: 2, enzyme: 1 } }));
+    for (let i = 0; i < 30; i++) step(w, 1 / 60);
+    const aBright = Math.abs(eyeA.store.chemCols[CHEM_ACT_LIGHT_X_ID][eyeA.idx]);
+    const bBright = Math.abs(eyeB.store.chemCols[CHEM_ACT_LIGHT_X_ID][eyeB.idx]);
+    expect(aBright).toBeGreaterThan(bBright);
+  });
+
   it("vibration sense: a vibroreceptor hears a moving neighbour, not a still one", () => {
     const CHEM_VIBRORECEPTOR_ID = 20;
     const CHEM_ACT_VIB_X_ID = 25;

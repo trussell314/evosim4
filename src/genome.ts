@@ -239,10 +239,12 @@ OPERANDS[OP.SYNTH] = 2;
 OPERANDS[OP.EMIT] = 1;
 
 // Active-emission channels addressable by OP.EMIT (operand % EMIT_CHANNELS).
-// Channel ids are stable; new channels append as modalities land. Today:
-// 0 = electric (the only emission channel wired in the sim).
-export const EMIT_CHANNELS = 1;
+// Channel ids are stable; new channels append as modalities land.
+// 0 = electric (burn ATP -> louder bioelectric glow),
+// 1 = light    (burn ATP -> bioluminescence on top of reflection).
+export const EMIT_CHANNELS = 2;
 export const EMIT_CHANNEL_ELECTRIC = 0;
+export const EMIT_CHANNEL_LIGHT = 1;
 // Per-tick magnitude clamp so a runaway stack value can't request an
 // absurd ATP burn in one op.
 const EMIT_MAG_CAP = 1000;

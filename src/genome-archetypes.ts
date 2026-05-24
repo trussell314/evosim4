@@ -652,6 +652,20 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "anglerfish",
+      label: "anglerfish lure",
+      cls: "direct",
+      desc: "Bioluminescent ambush predator: spends ATP to EMIT visible light (a lure that shines even in the dark, where reflection is zero), then strikes (PREDATE) + engulfs whatever swims in. Light-seeing prey (light-shoaler / light-vision lineages) home on the glow and get eaten -- an emergent lure-and-ambush trap from the light field. The ATP cost of glowing is the tradeoff. Best in deep/dark water where the lure stands out.",
+      prog: [
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        ["PUSH8", 60], ["EMIT", 1], // bioluminescent lure (channel 1 = light)
+        ["PREDATE"],
+        ["ENGULF"],
+        ...reproduceWhenGrown(34, "np"),
+      ],
+    },
+    {
       id: "electric-beacon",
       label: "electric beacon",
       cls: "direct",

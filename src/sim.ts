@@ -29,6 +29,7 @@ import {
   GENE_FRAGMENT_CAP,
   PARTITION_CAP,
   EMIT_CHANNEL_ELECTRIC,
+  EMIT_CHANNEL_LIGHT,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
 import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
@@ -4171,6 +4172,8 @@ const EMIT_ATP_PER_UNIT = 0.02;
 // light carries before 1/r^2 + water make it undetectable. Tunable.
 const LIGHT_ALBEDO = 0.5;
 const LIGHT_RANGE = 110;
+// Bioluminescence: emitted light per unit ATP spent on EMIT(light).
+const LIGHT_EMIT_GAIN = 20;
 // Vibration (hydroacoustic) sense. VIB_GAIN: wake strength per unit speed.
 // VIB_RANGE: long (sound carries far); 1/r falloff in the detector. Tunable.
 const VIB_GAIN = 0.5;
@@ -6336,6 +6339,10 @@ function updateCreatures(world: World, dt: number): void {
       // blocking); see SENSES_PLAN occlusion follow-up. Bioluminescence
       // (active EMIT light) will add onto this later.
       st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y);
+      // Light = passive reflection of sky-light + active bioluminescence
+      // (last tick's EMIT light). Biolum is the only term that works in the
+      // dark, where reflection -> 0.
+      st.lightEmission[ix] += st.activeLightEmit[ix];
       // Vibration output: a moving cell makes a wake/pressure wave. Speed-
       // proportional (fresh from current velocity). Active EMIT vibration
       // would add on top later. Fresh (not lagged) like reflection.
@@ -6360,9 +6367,10 @@ function updateCreatures(world: World, dt: number): void {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
     const vmOut = c.vmOut;
-    // Reset the per-tick ATP-spend accumulator (read last tick by the
-    // bioelectric-emission pass above) before this tick's spends land.
+    // Reset the per-tick scratch accumulators (read last tick by the
+    // emission pass above) before this tick's spends/emits land.
     c.store.atpSpentTick[c.idx] = 0;
+    c.store.activeLightEmit[c.idx] = 0;
 
     updateCreatureRadius(c);
 
@@ -6651,6 +6659,15 @@ function updateCreatures(world: World, dt: number): void {
     // signalling / lures. Electric is the only wired channel today.
     const emitElec = vmOut.emit[EMIT_CHANNEL_ELECTRIC];
     if (emitElec > 0) spendATP(c, EMIT_ATP_PER_UNIT * emitElec * dtT, ATP_OTHER);
+    // Bioluminescence: burn ATP to emit visible light (added to lightEmission
+    // next tick, on top of passive reflection). Unlike electric (which rides
+    // atpSpentTick), light needs its own accumulator -- glow scales with the
+    // ATP actually paid, so it works in the dark where reflection is zero.
+    const emitLight = vmOut.emit[EMIT_CHANNEL_LIGHT];
+    if (emitLight > 0) {
+      const spent = spendATP(c, EMIT_ATP_PER_UNIT * emitLight * dtT, ATP_OTHER);
+      c.store.activeLightEmit[c.idx] += LIGHT_EMIT_GAIN * spent;
+    }
 
     let ax = vmOut.thrustX;
     let ay = vmOut.thrustY;
