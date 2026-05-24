@@ -1206,6 +1206,21 @@ export function solarLight(world: { dayPhase: number }): number {
   return Math.max(0, Math.sin(2 * Math.PI * world.dayPhase));
 }
 
+// The sun travels a daytime arc: it rises at 5% of world width (dayPhase 0),
+// climbs overhead at midday (dayPhase 0.25), and sets at 95% (dayPhase 0.5).
+// Night (dayPhase >= 0.5) carries no light. sunXFrac is the horizontal
+// position [0..1]; sunShadowSlope is the resulting shadow offset (world px
+// per px of depth): 0 at midday (sun overhead -> vertical shadows), large
+// and signed near rise/set (low sun -> long shadows cast away from it).
+const SUN_SHADOW_SLOPE = 1.5;
+export function sunXFrac(dayPhase: number): number {
+  let f = dayPhase / 0.5; if (f < 0) f = 0; else if (f > 1) f = 1;
+  return 0.05 + 0.90 * f;
+}
+function sunShadowSlope(dayPhase: number): number {
+  return SUN_SHADOW_SLOPE * (sunXFrac(dayPhase) - 0.5);
+}
+
 // Rock occlusion of sunlight. Light comes from above and rock blocks the
 // direct beam, but water scatters light into shadows, so the edge is a
 // soft penumbra rather than a hard step (the old binary 0/1 looked like
@@ -1226,7 +1241,7 @@ const LIGHT_PENUMBRA_PX = 20;
 const LIGHT_TAPS = 9;
 const LIGHT_TAP_HALF = (LIGHT_TAPS - 1) / 2;
 export function lightOcclusion(
-  env: { terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
+  env: { dayPhase?: number; terrainHeightmap?: ArrayLike<number> }, x: number, y: number,
 ): number {
   const hm = env.terrainHeightmap;
   if (!hm || hm.length === 0) return 1;
@@ -1235,9 +1250,14 @@ export function lightOcclusion(
   // has scattered more light sideways, so shadows soften and bleed wider.
   let spread = y * 0.09; if (spread < 5) spread = 5; else if (spread > 60) spread = 60;
   const stepPx = spread / LIGHT_TAP_HALF;
+  // Directional shadow: as the sun moves off overhead the occluding rim is
+  // sampled at a horizontal offset proportional to depth, so rock shadows
+  // sweep across the floor over the day (0 at midday). Missing dayPhase ->
+  // overhead (vertical), preserving old behaviour for callers that omit it.
+  const shadowShift = sunShadowSlope(env.dayPhase ?? 0.25) * y;
   let lit = 0;
   for (let t = -LIGHT_TAP_HALF; t <= LIGHT_TAP_HALF; t++) {
-    let ix = Math.round(x + t * stepPx);
+    let ix = Math.round(x + shadowShift + t * stepPx);
     if (ix < 0) ix = 0; else if (ix >= n) ix = n - 1;
     const rim = hm[ix]; // +Infinity where no rock -> fully lit tap
     // smoothstep over [rim - P, rim + P]: 0 (lit) above the rim, 1
@@ -4184,7 +4204,11 @@ const LIGHT_EMIT_GAIN = 20;
 // (tune SHADE_K / SHADE_FLOOR against headless population health).
 const SHADE_RADIUS = 24;
 const SHADE_DEPTH = 60;
-const SHADE_RANGE = 60;   // forCreaturesNear square half-size (>= both above)
+// Square half-size for the neighbour scan. 60 keeps forCreaturesNear at a
+// 1-bucket span (3x3 = ~±64px), which already covers SHADE_DEPTH and the
+// directional shadow offset (<=~64px) -- bumping it to a 2-bucket span was
+// a ~2.8x cost in dense clusters for no real coverage gain.
+const SHADE_RANGE = 60;
 const SHADE_K = 0.05;
 const SHADE_FLOOR = 0.5;
 // Vibration (hydroacoustic) sense. VIB_GAIN: wake strength per unit speed.
@@ -6379,6 +6403,8 @@ function updateCreatures(world: World, dt: number): void {
   // loop then resets atpSpentTick and re-accumulates this tick's spend.
   {
     const cs = world.creatures;
+    // Sun shadow slope is constant this tick; cell shadows fall along it.
+    const sunSlope = sunShadowSlope(world.dayPhase);
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i]; const st = c.store; const ix = c.idx;
       st.electricEmission[ix] = ELEC_PASSIVE_GAIN * st.atpSpentTick[ix];
@@ -6388,22 +6414,35 @@ function updateCreatures(world: World, dt: number): void {
       // black. Feeds photosynthesis + photoreception + reflection below, so
       // a cell can be shaded by neighbours (shade-avoidance, hiding, swarm
       // self-shading) -- cells are no longer optically transparent.
-      let shadow = 0;
-      const sx = c.x, sy = c.y;
-      forCreaturesNear(sx, sy, SHADE_RANGE, (o) => {
-        if (o === c) return;
-        const up = sy - o.y;            // >0 if o is above (toward surface)
-        if (up <= 0 || up > SHADE_DEPTH) return;
-        if (Math.abs(o.x - sx) > SHADE_RADIUS) return;
-        shadow += o.r;
-      });
-      const shade = SHADE_FLOOR + (1 - SHADE_FLOOR) * Math.exp(-SHADE_K * shadow);
-      st.shadeFactor[ix] = shade;
+      // Only cells that actually USE sky-light (photosynthesise via
+      // chlorophyll, or sense it via a photoreceptor) pay for the O(neighbour)
+      // shade scan; everyone else gets shadeFactor=1. (A non-light cell's
+      // only shade-affected output is its reflection, a second-order
+      // visibility effect, so leaving it un-shaded is a fine trade for
+      // skipping the scan on the heterotroph majority -- and dense
+      // non-photosynthetic blooms no longer cost O(N^2).)
+      if (st.m_chlorophyll[ix] > 0.05 || st.m_photoreceptorVisible[ix] > 0.05) {
+        let shadow = 0;
+        const sx = c.x, sy = c.y;
+        forCreaturesNear(sx, sy, SHADE_RANGE, (o) => {
+          if (o === c) return;
+          const up = sy - o.y;            // >0 if o is above (toward surface)
+          if (up <= 0 || up > SHADE_DEPTH) return;
+          // Shadow falls along the sun direction: the occluder sits at the
+          // ray's x for this height (sx + slope*up), not straight overhead, so
+          // cell shadows sweep with the sun like the rock shadows do.
+          if (Math.abs(o.x - (sx + sunSlope * up)) > SHADE_RADIUS) return;
+          shadow += o.r;
+        });
+        st.shadeFactor[ix] = SHADE_FLOOR + (1 - SHADE_FLOOR) * Math.exp(-SHADE_K * shadow);
+      } else {
+        st.shadeFactor[ix] = 1;
+      }
       // Visible-light output: reflection of the local sky-light (albedo *
       // ambient * shade) + active bioluminescence (last tick's EMIT light;
       // self-generated, so NOT shaded). Biolum is the only term that works
       // in the dark, where reflection -> 0.
-      st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y) * shade
+      st.lightEmission[ix] = LIGHT_ALBEDO * ambientLightAt(world, c.x, c.y) * st.shadeFactor[ix]
         + st.activeLightEmit[ix];
       // Vibration output: a moving cell makes a wake/pressure wave. Speed-
       // proportional (fresh from current velocity). Active EMIT vibration

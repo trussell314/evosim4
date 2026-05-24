@@ -74,6 +74,7 @@ import {
   VENT_BASE_INTENSITY,
   shoalAt,
   solarLight,
+  sunXFrac,
   lightOcclusion,
   LIGHT_DECAY,
   takeSnapshot,
@@ -2615,6 +2616,27 @@ function render(): void {
   for (let x = width; x >= 0; x -= SURFACE_VIS_STEP) ctx.lineTo(x, surfaceYAt(snapshot, x));
   ctx.closePath();
   ctx.fill();
+
+  // Sun: arcs across the sky over the day -- rises at 5% of width, climbs
+  // overhead at midday, sets at 95%. Drawn only in daylight; its position
+  // is what drives the directional rock + cell shadows below the surface.
+  {
+    const sl = solarLight(snapshot);
+    if (sl > 0.001) {
+      const f = Math.min(1, Math.max(0, snapshot.dayPhase / 0.5)); // day fraction
+      const sxs = sunXFrac(snapshot.dayPhase) * width;
+      const sky = surfaceYAt(snapshot, sxs);
+      const sunY = sky - (sky - 6) * Math.sin(Math.PI * f);
+      const r = 7;
+      const glow = ctx.createRadialGradient(sxs, sunY, 0, sxs, sunY, r * 3.5);
+      glow.addColorStop(0, `rgba(255,238,170,${0.7 * sl})`);
+      glow.addColorStop(1, "rgba(255,238,170,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(sxs, sunY, r * 3.5, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = `rgba(255,246,214,${0.5 + 0.45 * sl})`;
+      ctx.beginPath(); ctx.arc(sxs, sunY, r, 0, 2 * Math.PI); ctx.fill();
+    }
+  }
 
   // Water column -- fill below the wavy surface line.
   const grad = ctx.createLinearGradient(0, surfaceY, 0, height);

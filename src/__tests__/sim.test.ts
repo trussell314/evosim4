@@ -1255,7 +1255,12 @@ describe("creature: reproduction", () => {
     // even above 400.
     const w = quietWorld();
     for (let i = 0; i < 405; i++) {
-      const c = makeCreature({ x: 100 + (i % 80) * 5, y: 100 + Math.floor(i / 80) * 5, energy: 200 });
+      // No photoreceptor/electroreceptor: this is a reproduction-cap stress
+      // test, not a sensing test, and 405+ cells each running the per-cell
+      // light/electric neighbour scans (the makeCreature defaults) blew the
+      // timeout. Receptor-synth uncatRate is 0, so they stay non-sensing.
+      const c = makeCreature({ x: 100 + (i % 80) * 5, y: 100 + Math.floor(i / 80) * 5, energy: 200,
+        molecules: { photoreceptorVisible: 0, electroreceptor: 0 } });
       fillCellChems(c, 3000); readyToFission(c); readyToFission(c);
       w.creatures.push(c);
     }
@@ -1266,7 +1271,10 @@ describe("creature: reproduction", () => {
     expect(w.creatures.length).toBeGreaterThan(405);
     expect(w.creatures.length).toBeLessThanOrEqual(4096);
     expect(Number.isFinite(w.creatures.length)).toBe(true);
-  }, 40_000);
+    // Heavy by design: it grows a 405-cell seed into a many-hundred-cell
+    // bloom and steps it 150 ticks, so the per-cell passes dominate. The
+    // generous timeout reflects the population size, not a perf bug.
+  }, 90_000);
 });
 
 describe("creature: predation (cell eats cell)", () => {

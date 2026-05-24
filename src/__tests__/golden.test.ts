@@ -358,7 +358,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // sky-light (photosynthesis + photoreception + reflection) -- cells are
     // no longer optically transparent -- so the seeded run's autotroph
     // light economy shifts. Mild + floored. Intended.
-    const GOLDEN = "b393095f";
+    // Bumped again: the sun now travels a daytime arc (rise 5% -> overhead
+    // -> set 95%), so rock + cell shadows are DIRECTIONAL and sweep across
+    // the floor over the day instead of always pointing straight down. The
+    // seeded run's photosynthesis/photoreception light now varies with the
+    // sun's azimuth. Intended.
+    const GOLDEN = "e36f0f50";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
