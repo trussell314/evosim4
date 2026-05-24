@@ -4,6 +4,21 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
+- **New sensory modalities — light/vibration/electric/pH/magnetism
+  (detect + emit).** Full design in **`SENSES_PLAN.md`** (status: design
+  only, under review — NOT started). Unifies five perceptual channels
+  under one engine: each is a single field with both a natural
+  (environmental) source and a biotic (cell-emitted) source, read by a
+  receptor via the existing `runActivation` pattern. Adds a
+  perceptual-field pass over `buildCreatureGrid` (no new global grids),
+  one `EMIT` opcode, and 10 named chems (generic→named, `SAVE_SCHEMA`
+  bump + golden rebaseline). See the plan for per-channel operation,
+  scale-ups (electrolocation, biosonar, counter-illumination, colony
+  action-potentials, pH stress/kinetics, magnetic map), the
+  generic-chem-preservation methodology (§3.1), and the phased commit
+  sequence. Open decision noted in-plan: lead magnetism with the map
+  sense vs. the (invented) emittable channel.
+
 - **Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
   Analysis (2026-05-19) of the engine's full timescale ladder:
   ingest cooldowns (0.15s) ≪ surface waves (7s) ≪ swells/updraft
