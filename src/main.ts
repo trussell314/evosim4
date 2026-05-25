@@ -2037,6 +2037,33 @@ overlayWrap.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn);
 renderCtrlCollapsed();
 renderOverlayCollapsed();
 
+// Live zoom readout: a small label pinned to the top-left of the world
+// area, shown only when zoomed past the fit (1.0x) so it stays out of the
+// way at the default view. Position tracks the side panels via
+// positionWorldButtons; text/visibility update each frame in render().
+const zoomReadout = document.createElement("div");
+zoomReadout.title = "Double-click the world to reset zoom";
+zoomReadout.style.cssText =
+  "position:fixed;z-index:9;display:none;padding:2px 7px;border-radius:4px;" +
+  "background:rgba(2,12,18,0.82);border:1px solid #1a3340;color:#9ee;" +
+  "pointer-events:none;white-space:nowrap;" + HUD_FONT;
+root.appendChild(zoomReadout);
+function positionZoomReadout(): void {
+  zoomReadout.style.left = `${leftPanelWidth() + 6}px`;
+  zoomReadout.style.top = `${topReserveH() + 6}px`;
+}
+let lastZoomLabel = "";
+function updateZoomReadout(): void {
+  if (viewZoom > 1.005) {
+    const label = `${viewZoom.toFixed(1)}×`;
+    if (label !== lastZoomLabel) { zoomReadout.textContent = label; lastZoomLabel = label; }
+    if (zoomReadout.style.display === "none") zoomReadout.style.display = "";
+  } else if (zoomReadout.style.display !== "none") {
+    zoomReadout.style.display = "none";
+    lastZoomLabel = "";
+  }
+}
+
 // Geometry: span between the side panels, anchored to screen bottom;
 // measure real height so the world fit can reserve exactly that.
 function positionWorldButtons(): void {
@@ -2073,6 +2100,7 @@ function positionWorldButtons(): void {
   // Keep the status strip clear of the left slide-out's tab/panel.
   hud.style.left = `${L + 8}px`;
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
+  positionZoomReadout();
 }
 // The HUD grows/shrinks a line as its stats text wraps (longer sim
 // time, bigger population). Re-fit the world whenever its measured
@@ -2583,6 +2611,7 @@ function render(): void {
   // (touch gestures, wheel, future hooks) gets the correction without
   // having to remember to call clampPan itself.
   clampPan();
+  updateZoomReadout();
   const { width, height, depth, surfaceY } = snapshot;
   // Day/night tint applied to both surface and depth water colors so
   // the whole scene gets dimmer at night. 1 = full day, ~0.4 = deep
