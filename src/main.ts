@@ -2485,13 +2485,11 @@ canvas.addEventListener("dblclick", () => { resetView(); });
 // unified. Cells are unaffected (drawn separately).
 const PARTICLE_RENDER_R = 2;
 const N_BUCKETS = 8;
-// Render only the front N_RENDER_BUCKETS depth layers. The deepest
-// bucket gets the heaviest canvas blur (3.2px) and lowest alpha
-// (0.64), so dropping it from the render loop skips one full
-// filter+composite pass per frame for minimal visual cost.
-const N_RENDER_BUCKETS = 7;
-const BLURS = [0, 0.3, 0.7, 1.2, 1.7, 2.2, 2.7, 3.2];
-const ALPHAS = [1.0, 0.96, 0.91, 0.85, 0.79, 0.73, 0.68, 0.64];
+// Render all N_RENDER_BUCKETS depth layers; the deepest bucket gets the
+// heaviest canvas blur (1.6px) and lowest alpha (0.82).
+const N_RENDER_BUCKETS = 8;
+const BLURS = [0, 0.15, 0.35, 0.6, 0.85, 1.1, 1.35, 1.6];
+const ALPHAS = [1.0, 0.98, 0.955, 0.925, 0.895, 0.865, 0.84, 0.82];
 // One sub-bucket per (depth bucket, chem id) so the renderer can issue
 // a single beginPath + many arcs + single fill per group. With 12k+
 // particles, dropping from one canvas op per particle to one per group
