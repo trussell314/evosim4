@@ -12,6 +12,7 @@ import {
   CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
   CHEM_NAMED_MOL_IDX,
 } from "./chem-ids";
+import { CHEM_BASE_DENSITY } from "./chemistry";
 import type { RxnStats } from "./rxn-stats";
 import type { WorldProfile } from "./profile";
 
@@ -1440,4 +1441,33 @@ export interface VentState {
   // Accumulator for emission cadence: emit one batch every so many sim
   // seconds while active.
   emitClock: number;
+}
+
+// Body-mass helpers. Mass is an intrinsic property of a Particle /
+// Creature, used by collision (momentum), buoyancy, predation, and
+// division. Particles are spheres; the rendered circle is the
+// equatorial cross-section.
+export function mass(p: Particle): number {
+  const d = p.density ?? CHEM_BASE_DENSITY[p.chemId];
+  return d * (4 / 3) * Math.PI * p.r * p.r * p.r;
+}
+
+// Mass of a single cell excluding its contents -- used to avoid recursion
+// when summing up an engulfed prey's contribution to its container's mass.
+export function creatureSelfMass(c: Creature): number {
+  // ATP counted via MOLECULE_IDS (it is the `atp` molecule == energy).
+  let m = 0;
+  for (const k of MOLECULE_IDS) m += c.molecules[k];
+  return m;
+}
+
+export function creatureTotalMass(c: Creature): number {
+  // Path 1: ATP is the `atp` molecule (== c.energy, aliased), so it
+  // is summed by the MOLECULE_IDS loop -- no separate c.energy term
+  // (that would double-count).
+  let m = 0;
+  for (const k of MOLECULE_IDS) m += c.molecules[k];
+  // Engulfed prey lives in our vacuole; its mass still occupies our volume.
+  for (const inner of c.contents) m += creatureSelfMass(inner);
+  return m;
 }

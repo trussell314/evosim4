@@ -121,6 +121,7 @@ import {
   pushParticle, removeParticleAt, newCreature,
   resetCreatureIdCounter, setParticleSlotReusedHook,
   PARTICLE_STORE_PREALLOC_CAP, MIN_CREATURE_R,
+  mass, creatureTotalMass,
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
@@ -3836,13 +3837,6 @@ function crossoverGenomes(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 
-// Particle mass = density * (4/3) * pi * r^3. Particles are spheres; the
-// circle we render is the equatorial cross-section. Same convention as cells.
-function mass(p: Particle): number {
-  const d = p.density ?? CHEM_BASE_DENSITY[p.chemId];
-  return d * (4 / 3) * Math.PI * p.r * p.r * p.r;
-}
-
 // Inverse: given a target mass and material density, what sphere radius
 // does it correspond to?
 function radiusForMass(m: number, density: number): number {
@@ -5818,26 +5812,6 @@ function predationCost(target: Creature, targetMass: number): number {
     + PREDATION_ENERGY_PER_MASS * targetMass
     + PREDATION_ENERGY_PER_MEMBRANE * target.molecules.membrane
     + PREDATION_ENERGY_PER_COHESION * cohesion;
-}
-
-function creatureTotalMass(c: Creature): number {
-  // Path 1: ATP is the `atp` molecule (== c.energy, aliased), so it
-  // is summed by the MOLECULE_IDS loop -- no separate c.energy term
-  // (that would double-count).
-  let m = 0;
-  for (const k of MOLECULE_IDS) m += c.molecules[k];
-  // Engulfed prey lives in our vacuole; its mass still occupies our volume.
-  for (const inner of c.contents) m += creatureSelfMass(inner);
-  return m;
-}
-
-// Mass of a single cell excluding its contents -- used to avoid recursion
-// when summing up an engulfed prey's contribution to its container's mass.
-function creatureSelfMass(c: Creature): number {
-  // ATP counted via MOLECULE_IDS (it is the `atp` molecule == energy).
-  let m = 0;
-  for (const k of MOLECULE_IDS) m += c.molecules[k];
-  return m;
 }
 
 // Has the cell exhausted every fuel it could turn into ATP?
