@@ -40,11 +40,10 @@ import {
   RX_MAINT_MEMBRANE, RX_MAINT_ENZ, RX_MAINT_CHL, RX_MAINT_MRNA,
   RX_MAINT_RECEPTOR, RX_MAINT_CATALYST, RX_TOXIFY, RX_DEATH_CATDENATURE,
   RX_DENATURE_WASTE, RX_SYNTH_CATALYST, RX_BIOGENESIS, RX_THERMAL_DENATURE,
-  NREACT, RX_LOC_CELL, RX_LOC_FIELD, rxIdx,
+  NREACT, RX_LOC_CELL, RX_LOC_FIELD,
   ATP_IDLE, ATP_VM, ATP_THRUST, ATP_EXCRETE, ATP_INGEST, ATP_ENGULF,
   ATP_PREDATE, ATP_REPRODUCE, ATP_RXN_ENDO, ATP_RXN_EXO, ATP_OTHER,
 } from "./sim/rxn-ids";
-import type { RxnWindow } from "./sim/rxn-stats";
 import {
   type RxnStats, type SavedRxnStats, newRxnStats,
   serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
@@ -153,6 +152,9 @@ import {
 import {
   rebuildObstacleIndex, evacuateRocks, resolveObstacleCollisions,
 } from "./sim/obstacle-collision";
+import {
+  recordRxn, recordAtp, rollReactionWindow, setRxnStatsWorld,
+} from "./sim/reaction-recording";
 export {
   REGION_PX, regionCols, regionRows, regionVolumeL, regionDissolvedCapacity,
   regionTempAt, VENT_BASE_INTENSITY, diffuseReserve,
@@ -404,60 +406,6 @@ const INH_ATP_COST = 4;
 const INH_DECAY_PER_SEC = 0.005;
 const INH_K = 1;
 
-// ===================================================================
-// Reaction / ATP accounting -------------------------------------------
-// Raw occurrence counts for every chemical transformation (the 256-slot
-// REACTIONS table run in cells/organelles, catalyst synthesis, plus the
-// non-table conversions: maintenance decay, toxify, death catalyst
-// denature, waste denature), split by location (in a cell vs in a
-// field) and whether a catalyst was present. Plus a separate ATP
-// ledger: how much ATP each source consumed/produced. Bucketed into
-// 60-second windows; windows older than 1h compact to 5-minute
-// buckets. Persisted with the save.
-// Reaction-id space + ATP-ledger labels live in ./sim/rxn-ids
-// (imported at the top of this file).
-// RxnStats data model + (de)serialization live in ./sim/rxn-stats
-// (imported at the top of this file). Only the World-coupled recording
-// hot path stays here.
-// Set once per step() (chemistry is single-threaded in the sim worker)
-// so the deep reaction/decay/spendATP paths can record without
-// threading `world` through five hot signatures.
-let RXN_STATS_WORLD: World | undefined;
-function recordRxn(id: number, loc: number, cat: number): void {
-  const rs = RXN_STATS_WORLD && RXN_STATS_WORLD.rxnStats;
-  if (rs) rs.curRxn[rxIdx(id, loc, cat)]++;
-}
-function recordAtp(label: number, consumed: number, produced: number): void {
-  const rs = RXN_STATS_WORLD && RXN_STATS_WORLD.rxnStats;
-  if (!rs) return;
-  if (consumed) rs.curAtp[label * 2] += consumed;
-  if (produced) rs.curAtp[label * 2 + 1] += produced;
-}
-const RXN_WINDOW_SEC = 60;
-const RXN_FINE_RETAIN_SEC = 3600; // keep 60s windows for the last hour
-const RXN_COARSE_SEC = 300;       // older windows compact to 5-minute buckets
-function rollReactionWindow(world: World): void {
-  const rs = world.rxnStats;
-  if (!rs) return;
-  while (world.t - rs.windowStart >= RXN_WINDOW_SEC) {
-    rs.fine.push({ t0: rs.windowStart, rxn: rs.curRxn.slice(), atp: rs.curAtp.slice() });
-    rs.curRxn.fill(0);
-    rs.curAtp.fill(0);
-    rs.windowStart += RXN_WINDOW_SEC;
-  }
-  const cutoff = world.t - RXN_FINE_RETAIN_SEC;
-  while (rs.fine.length > 0 && rs.fine[0].t0 < cutoff) {
-    const w = rs.fine.shift() as RxnWindow;
-    const bucket = Math.floor(w.t0 / RXN_COARSE_SEC) * RXN_COARSE_SEC;
-    const last = rs.coarse.length > 0 ? rs.coarse[rs.coarse.length - 1] : undefined;
-    if (last && last.t0 === bucket) {
-      for (let i = 0; i < w.rxn.length; i++) last.rxn[i] += w.rxn[i];
-      for (let i = 0; i < w.atp.length; i++) last.atp[i] += w.atp[i];
-    } else {
-      rs.coarse.push({ t0: bucket, rxn: w.rxn, atp: w.atp });
-    }
-  }
-}
 // --- Reaction catalog: stable per-reaction metadata (what each
 // reaction consumes/produces + a human label) so the UI can show,
 // for any material, which reactions are its producers vs consumers
@@ -4184,7 +4132,7 @@ export function step(world: World, dt: number): void {
   world.t += dt;
   // Reaction/ATP accounting: bind the world for the deep record hooks
   // (chemistry is single-threaded here) and roll the 60s window.
-  RXN_STATS_WORLD = world;
+  setRxnStatsWorld(world);
   rollReactionWindow(world);
   // Snapshot living CODING genomes at the *start* of this step so we
   // can count genome extinctions at the end (any coding-key alive going
