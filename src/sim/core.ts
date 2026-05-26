@@ -403,6 +403,11 @@ export interface ParticleData {
 // generous, never-grown allocation.
 export const CREATURE_STORE_PREALLOC_CAP = 4096;
 
+// Minimum creature radius (px). Floors cell size for physics, drag, and
+// the reaction surface-area scaling. A fundamental creature dimension
+// shared across the engine, so it lives with the creature store.
+export const MIN_CREATURE_R = 4;
+
 // Layout descriptor for CreatureStore. Mirrors ParticleSharedLayout's
 // role: subworkers receive this in their init message and rebuild
 // Float32 / Int32 / Uint32 views over the shared buffer.
