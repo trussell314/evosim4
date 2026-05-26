@@ -4244,12 +4244,19 @@ const _MAG = new Float32Array(2);
 // comparable to the baseline geofield (~1) without swamping the compass.
 const MAG_MATERIAL_GAIN = 12;
 const _MINGRAD = new Float32Array(2);
-function magFieldAt(world: World, x: number, y: number, out: Float32Array): void {
-  const w = world.width > 0 ? world.width : 1;
-  const h = world.height > 0 ? world.height : 1;
+// Base geomagnetic field as a pure function of world dimensions + position
+// (no dynamic state), so the renderer can sample it for the magnetic-field
+// overlay without a World. magFieldAt delegates here; the magnetite
+// gradient coupling is layered on separately in the activation loop.
+export function magFieldBaseAt(width: number, height: number, x: number, y: number, out: Float32Array): void {
+  const w = width > 0 ? width : 1;
+  const h = height > 0 ? height : 1;
   const intensity = 1 + MAG_DEPTH_GAIN * (y / h);
   out[0] = (MAG_BASE_X + MAG_DECLINATION * (x / w - 0.5)) * intensity;
   out[1] = MAG_BASE_Y * intensity;
+}
+function magFieldAt(world: World, x: number, y: number, out: Float32Array): void {
+  magFieldBaseAt(world.width, world.height, x, y, out);
 }
 // Phase 5 retired the CHEMO branch of runActivation; the per-target
 // receptor/signal-chem arrays it iterated were deleted along with it.
@@ -9163,6 +9170,10 @@ export interface CreatureSnapshot {
   vmPc: number;
   vmStack: number[];
   bondsCount: number;
+  // Per-cell perceptual-field emission (this tick), for the sense
+  // overlays: bioelectric glow and hydroacoustic wake.
+  electricEmission: number;
+  vibrationEmission: number;
   contents: InnerCreatureSnapshot[];
   division: { progress: number; axis: number; childR: number; childColor: string } | null;
 }
@@ -9225,6 +9236,10 @@ export interface RenderSnapshot extends WorldEnv {
   // local temperature including vent heat + diffusion, not the
   // analytical baseline.
   regionTemp: Float32Array;
+  // Per-region ambient CO2 (mass), the acidity proxy the pH sense reads
+  // (act_ph ~ cellCO2 + ambientCO2 - PH_BASELINE). Same row-major layout
+  // as ambientPE; for the pH/acidity overlay.
+  acidityField: Float32Array;
   // Density-overlay material filter: the focused chem and its
   // per-region dissolved/reserve PE (present only when one is focused).
   densityChem?: number;
@@ -9296,6 +9311,8 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
     // is enough and keeps the per-tick clone small.
     vmStack: c.vm.stack.slice(),
     bondsCount: c.bonds.length,
+    electricEmission: c.store.electricEmission[c.idx],
+    vibrationEmission: c.store.vibrationEmission[c.idx],
     contents: c.contents.map(snapshotInner),
     division: c.division
       ? {
@@ -9378,6 +9395,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
   // all three sources on one footing.
   const ambientPE = new Float32Array(nReg);
   const reservePE = new Float32Array(nReg);
+  const acidityField = new Float32Array(nReg);
   let densityChemAmbPE: Float32Array | undefined;
   let densityChemResPE: Float32Array | undefined;
   {
@@ -9398,6 +9416,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
       }
       ambientPE[ri] = aPE;
       reservePE[ri] = rPE;
+      acidityField[ri] = amb[base + CHEM_CO2];
     }
     // Per-region PE for the UI's focus chem (density overlay material
     // filter). Only when a valid chem is focused -- nReg floats each.
@@ -9506,6 +9525,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     chemReserveCount,
     ambientPE,
     reservePE,
+    acidityField,
     regionTemp: world.regionTemp.slice(),
     densityChem: world.densityChem,
     densityChemAmbPE,

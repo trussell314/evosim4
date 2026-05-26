@@ -14,8 +14,8 @@ Living list of deferred work. Newest/explicit asks at top.
   occlusion, positional magnetic map, and ~12 sense archetypes (see
   `GENOME_ARCHETYPES.md`). Full record in **`SENSES_PLAN.md`** (status:
   IMPLEMENTED). Only deferred remainder: path/line-of-sight occlusion of
-  cell-emitted light. Sense overlays in the UI are also still pending
-  (see Gradient overlay modes below).
+  cell-emitted light. Sense overlays (pH / electric / vibration /
+  magnetic) shipped — see the field-overlays item below.
 
 - **DONE — Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
   Shipped: `createWorld` default is now 600 (`src/sim.ts`), golden
@@ -189,11 +189,17 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## UI
 
-- **Gradient overlay modes.** The overlay `<select>` is the extension
-  point (None/Temperature/Particle density today). Add per-chemical
-  ambient-field gradient mode(s) — pick a chem, tint by
-  `world.ambient` concentration (snapshot already has per-region PE;
-  per-chem would need per-region-per-chem or a selected-chem field).
+- **DONE — sense / field overlays.** Added overlay modes for the new
+  senses: `pH / acidity` (per-region ambient CO2, the acidity proxy the
+  pH sense reads — new `snapshot.acidityField`), `electric field` and
+  `vibration field` (bin per-cell bioelectric/wake emission from new
+  `electricEmission`/`vibrationEmission` snapshot fields into the
+  heatmap grid), and `magnetic field` (vector field via the exported
+  pure `magFieldBaseAt`). Light already had an overlay; the density
+  overlay (with a focused chem) covers general per-chem ambient fields.
+  All read-only — no sim-behavior / golden / determinism change.
+  (Still open: a dedicated per-chem ambient *concentration* gradient
+  mode distinct from density, if wanted.)
 
 - **Panel-internal reorg.** "Full reorg" was chosen but panel/HUD DOM
   restructuring (merge controls into a settings panel, header/tab

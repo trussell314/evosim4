@@ -77,6 +77,7 @@ import {
   sunXFrac,
   lightOcclusion,
   LIGHT_DECAY,
+  magFieldBaseAt,
   takeSnapshot,
   chemName,
   reactionName,
@@ -1968,7 +1969,7 @@ parWrap.append(parTitle, parMinus, parValue, parPlus);
 gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap);
 
 // ---- view: overlay / density sources / material / grid ----
-type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce";
+type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
@@ -1978,7 +1979,7 @@ const SELECT_CSS =
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay";
 overlaySelectEl.style.cssText = SELECT_CSS;
-for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"], ["light", "overlay: light"], ["health", "overlay: cell health"], ["reproduce", "overlay: reproduce readiness"]] as [HeatmapMode, string][]) {
+for (const [val, txt] of [["off", "overlay: none"], ["temp", "overlay: temperature"], ["density", "overlay: density"], ["light", "overlay: light"], ["ph", "overlay: pH / acidity"], ["electric", "overlay: electric field"], ["vibration", "overlay: vibration field"], ["magnetic", "overlay: magnetic field"], ["health", "overlay: cell health"], ["reproduce", "overlay: reproduce readiness"]] as [HeatmapMode, string][]) {
   const o = document.createElement("option");
   o.value = val; o.textContent = txt; overlaySelectEl.appendChild(o);
 }
@@ -3012,6 +3013,97 @@ function drawHeatmap(): void {
         const avg = sum[i] / cnt[i];
         ctx.fillStyle = isHealth ? healthColor(avg) : reproduceColor(avg);
         ctx.fillRect(c * cell, surfaceY + r * cell, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (heatmapMode === "ph") {
+    // Acidity field: ambient CO2 per region (the proxy the pH sense
+    // reads). High CO2 = acidic = warm red; low = cool blue.
+    const f = snapshot.acidityField;
+    const rCols = Math.max(1, Math.ceil(width / REGION_PX));
+    const rRows = Math.max(1, Math.ceil(height / REGION_PX));
+    if (f && f.length === rCols * rRows) {
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const x = c * cell, y = surfaceY + r * cell;
+          let rx = Math.floor((x + cell / 2) / REGION_PX); if (rx < 0) rx = 0; else if (rx >= rCols) rx = rCols - 1;
+          let ry = Math.floor((y + cell / 2) / REGION_PX); if (ry < 0) ry = 0; else if (ry >= rRows) ry = rRows - 1;
+          // PH_ACID_SCALE: CO2 mass that reads as "fully acidic" in the
+          // overlay. Tuned so vent/dead-zone plumes light up without
+          // saturating the whole field.
+          const acidity = Math.max(0, Math.min(1, f[ry * rCols + rx] / 12));
+          const rr = Math.round(40 + 200 * acidity);
+          const gg = Math.round(90 - 50 * acidity);
+          const bb = Math.round(170 - 130 * acidity);
+          ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+          ctx.fillRect(x, y, cell, cell);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (heatmapMode === "electric" || heatmapMode === "vibration") {
+    // Cell-emission fields: bin each top-level cell's emission into the
+    // heatmap grid (the field IS the cells -- there's no standing array).
+    // electric = bioelectric glow of metabolizing cells; vibration =
+    // hydroacoustic wake of moving cells.
+    const isElec = heatmapMode === "electric";
+    const field = new Float32Array(cols * rows);
+    for (const c of snapshot.creatures) {
+      const em = isElec ? c.electricEmission : c.vibrationEmission;
+      if (em <= 0) continue;
+      const cx = Math.floor(c.x / cell);
+      const cy = Math.floor((c.y - surfaceY) / cell);
+      if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) continue;
+      field[cy * cols + cx] += em;
+    }
+    let maxE = 1e-6;
+    for (let i = 0; i < field.length; i++) if (field[i] > maxE) maxE = field[i];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const v = field[r * cols + c];
+        if (v <= 0) continue;
+        const x = Math.max(0, Math.min(1, v / maxE));
+        // electric -> electric-blue; vibration -> teal/green.
+        ctx.fillStyle = isElec
+          ? `rgb(${Math.round(60 + 120 * x)},${Math.round(140 + 80 * x)},${Math.round(180 + 75 * x)})`
+          : `rgb(${Math.round(40 + 80 * x)},${Math.round(150 + 90 * x)},${Math.round(120 + 60 * x)})`;
+        ctx.fillRect(c * cell, surfaceY + r * cell, cell, cell);
+      }
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (heatmapMode === "magnetic") {
+    // Geomagnetic map as a vector field: short segments along the local
+    // field direction, brightness scaling with intensity (which rises
+    // with depth). Drawn as lines (not fills) so it reads as a compass
+    // field rather than a heat blob.
+    const step = REGION_PX; // one arrow per region-ish
+    const vec = new Float32Array(2);
+    const len = step * 0.34;
+    ctx.lineCap = "round";
+    for (let y = surfaceY + step / 2; y < height; y += step) {
+      for (let x = step / 2; x < width; x += step) {
+        magFieldBaseAt(width, height, x, y, vec);
+        const mag = Math.hypot(vec[0], vec[1]) || 1;
+        const ux = vec[0] / mag, uy = vec[1] / mag;
+        const inten = Math.max(0, Math.min(1, (mag - 1) / 1.2));
+        const a = (0.25 + 0.55 * inten).toFixed(2);
+        ctx.strokeStyle = `rgba(150,90,235,${a})`;
+        ctx.lineWidth = 1 + 1.6 * inten;
+        ctx.beginPath();
+        ctx.moveTo(x - ux * len, y - uy * len);
+        ctx.lineTo(x + ux * len, y + uy * len);
+        ctx.stroke();
+        // arrowhead dot at the leading (field-direction) end.
+        ctx.beginPath();
+        ctx.arc(x + ux * len, y + uy * len, 1.3 + 1.2 * inten, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(190,140,255,${a})`;
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
