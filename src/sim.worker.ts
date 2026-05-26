@@ -34,6 +34,7 @@ import {
   type SpawnPlacement,
   type World,
 } from "./sim";
+import { buildScenarioWorld, type ScenarioSpec } from "./scenario-dsl";
 
 const FIXED_DT = 1 / 60;
 // How often to post a render snapshot to the main thread. The renderer
@@ -73,7 +74,7 @@ let advancedSinceSnapshot = 0;
 let simMsSinceSnapshot = 0;
 
 type WorkerInbound =
-  | { type: "init"; width: number; height: number; savedJson?: string | null }
+  | { type: "init"; width: number; height: number; savedJson?: string | null; scenario?: ScenarioSpec }
   | { type: "setTurbo"; turbo: boolean }
   | { type: "toggleProfile" }
   | { type: "applySaved"; json: string }
@@ -140,13 +141,19 @@ self.addEventListener("message", (e: MessageEvent) => {
       return;
     }
     case "init": {
-      world = createWorld(m.width, m.height, { delayedSpawn: true });
+      if (m.scenario) {
+        // World-builder: build a fresh world from a declarative scenario
+        // spec (custom size/env + seeded populations). Ignores savedJson.
+        world = buildScenarioWorld(m.scenario);
+      } else {
+        world = createWorld(m.width, m.height, { delayedSpawn: true });
+      }
       // Enable in-engine sub-step profile by default so the [prof] log
       // can break down the "creature" bucket into pheromone / bonds /
       // forces / updateCreatures / particleColl / etc. The toggleProfile
       // message still flips it off-on if a caller needs to.
       world.profile = makeProfile();
-      if (m.savedJson) {
+      if (!m.scenario && m.savedJson) {
         try {
           applySavedWorld(world, m.savedJson);
         } catch {

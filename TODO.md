@@ -216,22 +216,23 @@ Living list of deferred work. Newest/explicit asks at top.
   initial archetypes feature. Touch points: the `archPanel` block in
   `main.ts`, `spawnSpeciesInstance` (already supports repeated calls).
 
-- **DSLs for creatures + scenarios, and creation dialogs (UI).** A
-  creature DSL already exists at the assembly level (`src/genome-asm.ts`:
-  `asm(Instr[])` with named ops/labels, used by `genome-archetypes.ts`),
-  and a scenario *harness* exists (`scripts/scenario.ts`, founders-off
-  per-archetype probe) -- but neither is user-facing or high-level.
-  Consider: (a) a higher-level creature DSL (named behaviors/traits ->
-  genome bytes, above raw asm) so cells can be authored without hand-
-  writing op tuples; (b) a declarative scenario DSL (world size, seeded
-  populations, environment knobs, success metrics) that the smoke/scenario
-  harness consumes. Add-on: **in-app dialogs for creating new cells and
-  worlds** -- a cell-builder (pick senses/behaviors/metabolism -> compiled
-  genome, spawn it) layered on the creature DSL, and a world-builder
-  (dimensions, vents, light/wind, founder mix) layered on the scenario
-  DSL. Pairs with the existing archetypes panel + the new sensory
-  substrate (SENSES_PLAN.md). Touch points: `genome-asm.ts`,
-  `genome-archetypes.ts`, `scripts/scenario.ts`, `main.ts` (panels/dialogs).
+- **DONE — DSLs for creatures + scenarios, and creation dialogs (UI).**
+  (a) **Creature DSL** (`src/creature-dsl.ts`): a declarative
+  `CreatureSpec` (trophic mode, senses + seek/flee tropisms, foraging,
+  predation, emission, greenbeard bonding, leaky sharing, stress
+  tolerance, reproduce threshold) compiled to genome bytes above raw
+  asm. Pure + deterministic. (b) **Scenario DSL** (`src/scenario-dsl.ts`):
+  a `ScenarioSpec` (size, day length, wind, founder policy, particle cap,
+  seeded populations from archetypes OR creature specs, success criteria)
+  with `buildScenarioWorld` + headless `runScenarioSpec`. (c) **Cell-
+  builder dialog**: a modal off the archetypes panel that compiles a spec
+  and spawns it. (d) **World-builder dialog**: a modal that stashes a
+  ScenarioSpec and reloads; the bootstrap hands it to the worker's init
+  (`buildScenarioWorld`); the renderer now tracks live world dims so a
+  custom size fits. Tests: creature-dsl (14), scenario-dsl (6). Still
+  open: a vent on/off toggle in the world-builder (needs threading a flag
+  through obstacle generation), and wiring the scenario DSL into
+  `scripts/scenario.ts` proper.
 
 - **In-app "import save from file"** button so headless-run results
   (`scripts/headless.ts` writes the save JSON) load in one click

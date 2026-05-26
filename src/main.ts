@@ -108,6 +108,7 @@ import {
   type CreatureSpec, type TrophicMode as DslTrophicMode,
   type SenseChannel, type EmitChannel,
 } from "./creature-dsl";
+import type { ScenarioSpec, PopulationSpec } from "./scenario-dsl";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -319,6 +320,9 @@ const WORLD_LANDSCAPE = { w: 800, h: 600 };
 const WORLD_PORTRAIT = { w: 600, h: 800 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const SAVE_KEY = "evosim4:save";
+// World-builder stashes a ScenarioSpec here, then reloads; the bootstrap
+// consumes it on next load (takes precedence over the saved world).
+const PENDING_SCENARIO_KEY = "evosim4:pendingScenario";
 
 // Read whatever's in localStorage (if anything); it's either a gzip-
 // compressed blob (current format) or legacy raw JSON. Decompression is
@@ -617,11 +621,23 @@ void (async () => {
   // Seed the export cache so "export" works right after load, unless a
   // fresh "save" message already populated it during the brief decode.
   if (savedJson && latestSaveJson === null) latestSaveJson = savedJson;
+  // World-builder: a pending scenario (stashed just before a reload)
+  // takes precedence over the saved world. Consume it once.
+  let pendingScenario: ScenarioSpec | null = null;
+  try {
+    const raw = localStorage.getItem(PENDING_SCENARIO_KEY);
+    if (raw) { pendingScenario = JSON.parse(raw) as ScenarioSpec; localStorage.removeItem(PENDING_SCENARIO_KEY); }
+  } catch { /* ignore malformed */ }
+  if (pendingScenario) {
+    WORLD_SIZE.w = pendingScenario.width;
+    WORLD_SIZE.h = pendingScenario.height;
+  }
   simWorker.postMessage({
     type: "init",
     width: WORLD_SIZE.w,
     height: WORLD_SIZE.h,
-    savedJson,
+    savedJson: pendingScenario ? null : savedJson,
+    scenario: pendingScenario ?? undefined,
   });
   // Re-establish cull protection for pinned species. FIFO message
   // order guarantees the worker has built (or restored) its world
@@ -654,6 +670,14 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
   if (msg.type === "snapshot") {
     const tIntake = performance.now();
     snapshot = msg.snapshot;
+    // Track the live world dimensions so the view fit adapts to a custom
+    // (world-builder) size or a differently-sized loaded save -- the draw
+    // path already uses snapshot dims; this keeps the fit transform in sync.
+    if (snapshot.width !== WORLD_SIZE.w || snapshot.height !== WORLD_SIZE.h) {
+      WORLD_SIZE.w = snapshot.width;
+      WORLD_SIZE.h = snapshot.height;
+      resize();
+    }
     if (snapshot.particleTarget !== particleCap) {
       particleCap = snapshot.particleTarget;
       renderCapLabel();
@@ -1931,6 +1955,129 @@ function checkGroup(items: string[], cols = 4): { wrap: HTMLDivElement; get: () 
   const openBtn = mkBtn("✚ build cell", "Open the cell-builder: design a genome from senses + behaviours");
   setBtn(openBtn, false, T_TEAL);
   openBtn.addEventListener("click", () => { modal.open(); refresh(); });
+  archWrap.appendChild(openBtn);
+}
+
+// ---- world-builder dialog ------------------------------------------
+{
+  const modal = makeModal("Build a world");
+  const b = modal.body;
+
+  const numI = (val: number, min: number, max: number): HTMLInputElement => {
+    const el = document.createElement("input");
+    el.type = "number"; el.value = String(val); el.min = String(min); el.max = String(max);
+    el.style.cssText = SELECT_CSS + "width:90px;";
+    return el;
+  };
+  const widthI = numI(WORLD_SIZE.w, 300, 4000);
+  const heightI = numI(WORLD_SIZE.h, 300, 4000);
+  const dayI = numI(600, 10, 100000);
+  const windI = numI(0, -60, 60);
+  const capI = numI(5000, 0, 50000);
+  const foundersCb = document.createElement("input");
+  foundersCb.type = "checkbox"; foundersCb.checked = true; foundersCb.style.cursor = "pointer";
+
+  // Seeded populations: archetype + count + placement, added to a list.
+  const popArche = document.createElement("select");
+  popArche.style.cssText = SELECT_CSS + "max-width:18ch;";
+  for (const a of ARCHETYPES) {
+    if (a.uiHidden) continue;
+    const o = document.createElement("option"); o.value = a.id; o.textContent = a.label; popArche.appendChild(o);
+  }
+  const popCount = numI(10, 1, 500); popCount.style.cssText = SELECT_CSS + "width:70px;";
+  const popPlace = document.createElement("select");
+  popPlace.style.cssText = SELECT_CSS;
+  for (const p of ["scatter", "clump"]) { const o = document.createElement("option"); o.value = p; o.textContent = p; popPlace.appendChild(o); }
+  const addPopBtn = mkBtn("+ add", "Add this population to the world");
+  setBtn(addPopBtn, false, T_TEAL);
+
+  const pops: PopulationSpec[] = [];
+  const popList = document.createElement("div");
+  popList.style.cssText = "margin:4px 0;display:flex;flex-direction:column;gap:2px;";
+  function renderPops(): void {
+    popList.textContent = "";
+    if (pops.length === 0) {
+      const e = document.createElement("div"); e.textContent = "(no seeded populations -- founders only)";
+      e.style.cssText = "color:#789;"; popList.appendChild(e); return;
+    }
+    pops.forEach((p, i) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;";
+      const t = document.createElement("span");
+      t.textContent = `${p.archetype} ×${p.count} (${p.placement})`;
+      const rm = mkBtn("✕", "Remove"); rm.style.cssText = CBTN + "padding:0 6px;";
+      rm.addEventListener("click", () => { pops.splice(i, 1); renderPops(); });
+      row.append(t, rm); popList.appendChild(row);
+    });
+  }
+  renderPops();
+  addPopBtn.addEventListener("click", () => {
+    pops.push({ archetype: popArche.value, count: Math.max(1, Number(popCount.value) | 0), placement: popPlace.value as "scatter" | "clump" });
+    renderPops();
+  });
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:8px;color:#8cc;min-height:1.3em;";
+
+  function readSpec(): ScenarioSpec {
+    return {
+      width: Math.max(300, Math.min(4000, Number(widthI.value) | 0)),
+      height: Math.max(300, Math.min(4000, Number(heightI.value) | 0)),
+      dayPeriod: Math.max(10, Number(dayI.value) || 600),
+      wind: Number(windI.value) || 0,
+      foundersEnabled: foundersCb.checked,
+      particleCap: Math.max(0, Number(capI.value) | 0),
+      populations: pops.slice(),
+    };
+  }
+
+  let armed = false; let armTimer: ReturnType<typeof setTimeout> | null = null;
+  const createBtn = mkBtn("create world", "Replace the current world (reloads the page)");
+  setBtn(createBtn, false, T_GREEN);
+  function disarm(): void { armed = false; createBtn.textContent = "create world"; setBtn(createBtn, false, T_GREEN); if (armTimer) clearTimeout(armTimer); }
+  createBtn.addEventListener("click", () => {
+    if (!armed) {
+      armed = true; createBtn.textContent = "confirm: replaces world"; setBtn(createBtn, true, T_RED);
+      status.style.color = "#fda"; status.textContent = "This discards the current world. Click again to confirm.";
+      armTimer = setTimeout(disarm, 4000);
+      return;
+    }
+    try {
+      const spec = readSpec();
+      localStorage.setItem(PENDING_SCENARIO_KEY, JSON.stringify(spec));
+      resetting = true;              // suppress the autosave-on-unload of the old world
+      try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+      location.reload();
+    } catch (err) {
+      status.style.color = "#fdd"; status.textContent = "error: " + (err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  const dims = document.createElement("div");
+  dims.style.cssText = "display:flex;align-items:center;gap:6px;";
+  dims.append(widthI, document.createTextNode("×"), heightI);
+  const foundLbl = document.createElement("label");
+  foundLbl.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+  foundLbl.append(foundersCb, document.createTextNode("random founders"));
+  const popAdder = document.createElement("div");
+  popAdder.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+  popAdder.append(popArche, popCount, popPlace, addPopBtn);
+
+  b.append(
+    fieldRow("dimensions", dims),
+    fieldRow("day length (s)", dayI),
+    fieldRow("wind / current", windI),
+    fieldRow("particle cap", capI),
+    fieldRow("founders", foundLbl),
+    fieldRow("add population", popAdder),
+    popList,
+    status,
+    createBtn,
+  );
+
+  const openBtn = mkBtn("✚ build world", "Open the world-builder: size, environment, and seeded populations");
+  setBtn(openBtn, false, T_TEAL);
+  openBtn.addEventListener("click", () => { disarm(); status.textContent = ""; modal.open(); });
   archWrap.appendChild(openBtn);
 }
 
