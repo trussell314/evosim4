@@ -263,8 +263,8 @@ Living list of deferred work. Newest/explicit asks at top.
 
 Behavior-preserving split of the `sim.ts` monolith. **Paused at a
 clean, fully-green checkpoint** (golden hash, determinism
-byte-identical, mass conservation, `madge --circular` all green;
-pushed to `claude/develop`).
+byte-identical, mass conservation, cycle gate all green; pushed to
+`claude/develop`).
 
 - **Done.** `sim.ts` 9559 → 7444 lines; 12 cycle-free modules under
   `src/sim/`: `genome-id`, `rxn-ids`, `rxn-stats`, `chem-ids`,
@@ -278,26 +278,28 @@ pushed to `claude/develop`).
   force/collision dispatcher pattern) and `resetCreatureIdCounter()`
   (imported bindings are read-only).
 
-- **Blocked on one decision.** Every remaining stage has a back-edge
-  into `sim.ts`'s environment / world-construction layer. Pick an
-  approach before continuing:
-  - **(A) Keep chaining cohesive extractions** — pull the environment
-    + world-construction subsystem (`WorldEnv`, `createWorld`,
-    `generateObstacles`, surface/temperature/light) into its own
-    module next; then `snapshot`, `serialize`, `regions`, `step` fall
-    out cleanly.
-  - **(B) Switch the cycle gate to ESLint `import/no-cycle`** —
-    permits lean `import type` back-edges, enabling smaller modules
-    without the chained mega-extractions.
+- **Decision RESOLVED — went with (B): the cycle gate is now ESLint
+  `import-x/no-cycle`** (`eslint.config.js`, `npm run lint:cycles`).
+  It catches runtime cycles like madge did, but PERMITS type-only
+  (`import type`) back-edges (erased at compile time, so they can't form
+  a runtime cycle) — which lets the remaining stages keep lean type-only
+  references to `sim.ts`'s environment / world-construction layer instead
+  of forcing chained mega-extractions. `madge --circular` is retained as
+  a secondary cross-check (`npm run lint:cycles:madge`).
 
-- **Concrete back-edges to resolve:** `snapshot` →
+- **Next stages, now unblocked.** Extract the remaining cohesive units
+  (environment / world-construction: `WorldEnv`, `createWorld`,
+  `generateObstacles`, surface/temperature/light; then `snapshot`,
+  `serialize`, `regions`, `step`), using type-only back-edges where a
+  runtime split would be awkward. Concrete back-edges: `snapshot` →
   `RenderSnapshot extends WorldEnv`; `serialize` → `applySavedWorld`
-  calls `createWorld`/`generateObstacles`; `regions`/`step` →
-  `simRng` + environment helpers.
+  calls `createWorld`/`generateObstacles`; `regions`/`step` → `simRng`
+  + environment helpers.
 
 - **Invariant for every future step:** golden hash + determinism
-  (byte-identical) + mass conservation + `madge --circular` must all
-  stay green; refactor in small individually-green commits.
+  (byte-identical) + mass conservation + the cycle gate (`npm run
+  lint:cycles`) must all stay green; refactor in small individually-green
+  commits.
 
 ## Hygiene / before merge
 

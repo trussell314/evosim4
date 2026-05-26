@@ -40,8 +40,10 @@ be evolvable.
   top-level execution order and RNG draw order (the reaction/chemistry
   tables build from fixed seeds at import time; the world RNG draws at
   runtime — moving code must not reorder either).
-- **Validate every step.** `npx tsc --noEmit`, `npx vitest run`, and
-  `npx vite build` must all pass before a commit. Refactor in small,
+- **Validate every step.** `npx tsc --noEmit`, `npx vitest run`,
+  `npx vite build`, and the import-cycle gate `npm run lint:cycles`
+  (ESLint `import-x/no-cycle`; allows type-only back-edges, forbids
+  runtime cycles) must all pass before a commit. Refactor in small,
   individually-green commits, not one big-bang change.
 - **No semantic drift between code and its dependents.** When you
   change an op's semantics, a chemistry rule, or any other interface
