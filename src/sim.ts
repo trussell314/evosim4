@@ -2349,7 +2349,7 @@ export function createWorld(
     anchorGenome: new Uint8Array(0),
     brownianAmp: 18,
     dayPhase: 0.2, // start a bit before noon so first day shows
-    dayPeriod: 90,
+    dayPeriod: 600, // Earth-like: 1 day ~= 1 current/diffusion cycle
     disturbanceIntensity: 0,
     disturbanceStartedAt: 0,
     disturbanceUntil: 0,

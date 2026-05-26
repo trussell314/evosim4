@@ -17,7 +17,11 @@ Living list of deferred work. Newest/explicit asks at top.
   cell-emitted light. Sense overlays in the UI are also still pending
   (see Gradient overlay modes below).
 
-- **Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
+- **DONE — Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
+  Shipped: `createWorld` default is now 600 (`src/sim.ts`), golden
+  rebaselined, vent-schedule comments updated. The night-stress lever
+  (`MEMBRANE_DECAY_PER_SEC` 0.003) was already in place. Analysis kept
+  below as the rationale.
   Analysis (2026-05-19) of the engine's full timescale ladder:
   ingest cooldowns (0.15s) ≪ surface waves (7s) ≪ swells/updraft
   (18-28s) ≈ cell generation (~46s; benthic doubled in ~46s in the
@@ -166,15 +170,14 @@ Living list of deferred work. Newest/explicit asks at top.
   facilitated/atpDelta model as v1. Touch points: `TRANSPORT_CHEM_IDS`
   / `installTransporters` in `sim/reactions.ts`.
 
-- **Temperature diffusion / thermal inertia.** Region temperature is
-  rebuilt every tick from a model (baseline + drifting sine patch +
-  depth gradient + a surface/wave term) with no inertia, so the
-  overlay shows fast wave "echoes" near the surface and reads as
-  non-physical. Give region temp real behavior: either low-pass each
-  region's temp per tick (thermal mass) and/or a light Jacobi diffuse
-  pass like `diffuseRegions` does for the dissolved field. Touch
-  points: `sampleRegionTemps`, the temp model, possibly a new
-  `diffuseRegionTemps`. Persist if it becomes stateful.
+- **DONE — Temperature diffusion / thermal inertia.** `sampleRegionTemps`
+  (`src/sim.ts`) steps a stateful `regionTemp` field every tick: a
+  4-neighbour Laplacian diffusion (`TEMP_DIFF_RATE`), relaxation toward
+  the analytical baseline (`TEMP_RELAX_RATE` — the thermal-mass / inertia
+  term, so it no longer snaps to the model each tick), and a vent source
+  term (`TEMP_VENT_INJECT_RATE`). The field re-seeds from the analytical
+  baseline on first call / dim change and re-converges, so it is not
+  persisted (acceptable — bounded transient on load).
 
 - **fa flux not fully closed (accepted regime).** Necromass lipolysis
   + cheaper SYNTH_FA dented the drain (~-66% -> ~-44%) but fa still

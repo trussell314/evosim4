@@ -4,7 +4,7 @@
 // source* in the mass ledger -- emitted mass is recorded on
 // world.ventEmitted so worldMass() can still close.
 //
-// Schedule (sim seconds, world.dayPeriod defaults to 90):
+// Schedule (sim seconds, world.dayPeriod defaults to 600):
 //   - Dormant for ~2 in-game days +/- jitter between eruptions.
 //   - Warmup (intensity 0 -> 1) over WARMUP_SEC.
 //   - Main phase (intensity = 1) for MAIN_SEC.
@@ -22,7 +22,7 @@ import {
   CHEM_O2, CHEM_BIOPOLYMER, CHEM_MEMBRANE, CHEM_MARKER0,
 } from "./chem-ids";
 
-// Schedule constants. Two game days at dayPeriod=90 = 180 sim seconds
+// Schedule constants. Two game days at dayPeriod=600 = 1200 sim seconds
 // between eruptions; small symmetric jitter so the rhythm is
 // recognizable but not perfectly clockwork.
 export const VENT_CYCLE_DAYS = 2;

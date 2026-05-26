@@ -370,7 +370,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // parent and stops before rock (instead of being flung a radius-scaled
     // offset that could tunnel a big cell's daughter through a wall), so
     // near-rock division placement changed. Intended.
-    const GOLDEN = "834878b2";
+    // Bumped again: dayPeriod default 90 -> 600 (Earth-like day). The
+    // seeded run advances dayPhase ~6.7x slower, so the solar-light curve
+    // (photosynthesis/photoreception) differs every tick. Intended.
+    const GOLDEN = "8a55569d";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
