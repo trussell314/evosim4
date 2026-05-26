@@ -363,6 +363,52 @@ function build(): Archetype[] {
       ],
     },
     {
+      id: "metazoan",
+      label: "metazoan tissue",
+      cls: "seed",
+      desc: "Seed: division of labour with THREE castes from ONE genome, extending the germ/soma colony. Adheres to clonal kin (greenbeard tag) and boosts the adhesion-molecule slot so a cluster coheres into a body. The caste determinant is mRNA (translation capacity), PARTITIONed toward the MOTHER at each fission so daughters bud off mRNA-poor and then climb back UP through the castes as they slowly rebuild it -- so a cell CYCLES through roles over its life rather than being fixed. Three roles by inherited mRNA: GERM (mRNA-rich) divides (bloom-braked on size + energy); FEEDER (mid mRNA) chases detritus AND leaks SURPLUS glucose into the shared medium, which bonded kin re-absorb -- emergent leaky inter-cell sharing with no addressed delivery; STRUCTURAL (mRNA-poor, fresh daughters) pours catalyst into membrane synthesis (the body's matrix) and holds position. No engine rule forces any role -- the cell reads its own inherited cytoplasm and switches. Exercises SYNTH BOND + multi-threshold PARTITION + leaky sharing together. Payoff is emergent: spawn many (clump) and let it run.",
+      prog: [
+        // Cohesion: greenbeard tag + boosted CHEM_BOND pool (slot 22 =
+        // aa+fa -> CHEM_BOND) so a clonal cluster physically coheres.
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_BOND],
+        ["SYNTH", "BOND", 23], // distinct kin tag (vs differentiated-colony's 11)
+        // Baseline feeding so the body always has carbon coming in.
+        ...HET_KIT,
+        ["PUSH8", ING_DETRITUS], ["INGEST"],
+        // Asymmetric division: shunt the mRNA determinant toward the
+        // MOTHER (bias -1), so daughters bud off mRNA-poor (structural)
+        // and climb back up through the castes via synth_ribo over time.
+        ["PUSH8", -1],
+        ["PARTITION", CHEM_MRNA],
+        // Caste switch on inherited translation capacity (own mRNA pool).
+        //   high (>3)  GERM       -> divide (size + energy gated)
+        //   mid  (1..3) FEEDER    -> forage + leak surplus glucose to kin
+        //   low  (<1)  STRUCTURAL -> build body membrane, hold
+        ["SENSE_CHEMICAL", CHEM_MRNA],
+        ["PUSH8", 3], ["GT"], ["JZ", "notGerm"],
+        // GERM: divide only when BOTH large and energy-flush, so a
+        // growing cluster settles near carrying capacity (cluster brake).
+        ["SELF_ENERGY"], ["PUSH8", 40], ["GT"], ["JZ", "tissueDone"],
+        ...reproduceWhenGrown(50, "germGate"),
+        ["JMP", "tissueDone"],
+        ["LABEL", "notGerm"],
+        ["SENSE_CHEMICAL", CHEM_MRNA],
+        ["PUSH8", 1], ["GT"], ["JZ", "structural"],
+        // FEEDER: chase detritus, then leak SURPLUS glucose into the
+        // shared medium (bonded kin re-absorb it) -- gated on being
+        // glucose-rich so a feeder never bleeds itself to death.
+        ...climbParticleGradient(CHEM_BIOPOLYMER, 25),
+        ["SENSE_CHEMICAL", CHEM_GLU], ["PUSH8", 20], ["GT"], ["JZ", "tissueDone"],
+        ["PUSH8", 4], ["EXCRETE", CHEM_GLU],
+        ["JMP", "tissueDone"],
+        ["LABEL", "structural"],
+        // STRUCTURAL: pour catalyst into membrane synthesis (the body's
+        // structural matrix) and stay put -- no thrust.
+        ["SYNTH", "CAT", RX_SLOT_SYNTH_MEM_AAFA],
+        ["LABEL", "tissueDone"],
+      ],
+    },
+    {
       id: "chloroplast",
       label: "chloroplast",
       cls: "seed",

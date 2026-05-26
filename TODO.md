@@ -76,17 +76,17 @@ Living list of deferred work. Newest/explicit asks at top.
   normal chem-id transporter (`= CHEM_ATP`, `src/sim/reactions.ts:324`).
   `SAVE_SCHEMA` is at 22 and the golden was rebaselined.
 
-- **Add a multicellular-organism archetype.** Create a founder genome
-  in `src/genome-archetypes.ts` for a multicellular organism (a
-  bonded cell collective with division of labor — beyond the existing
-  `colony` greenbeard seed, which only bonds clones). Should exercise
-  the substrate's multicellularity primitives (`SYNTH BOND` adhesion,
-  `PARTITION` for asymmetric daughter cytoplasm → differentiation,
-  leaky inter-cell sharing) so distinct cell roles can emerge from
-  one genome. Validate with the scenario harness (does a
-  differentiated collective form and persist). See `COLONY_GAPS.md`
-  (#1 differentiation substrate landed via `PARTITION`; #2/#4/#5
-  open) and the `colony` archetype as the starting point.
+- **DONE — multicellular-organism archetype.** Added `metazoan`
+  ("metazoan tissue") to `src/genome-archetypes.ts`, extending the
+  germ/soma `differentiated-colony` from two phenotypes to THREE plus
+  metabolic sharing: greenbeard cohesion + `PARTITION mrna` toward the
+  mother, then a multi-threshold caste switch — GERM (divides),
+  FEEDER (forages + leaks surplus glucose to bonded kin = leaky
+  inter-cell sharing via the shared medium), STRUCTURAL (builds body
+  membrane, holds). Cells cycle through roles as they rebuild mRNA.
+  Exercises `SYNTH BOND` + multi-threshold `PARTITION` + leaky sharing
+  together; assembles, spawns, and steps clean (archetype test). Still
+  open (COLONY_GAPS #2/#4/#5): directed bond-channel transfer, etc.
 
 - **WATCH — unbounded genome growth (pre-existing, latent).** Long
   headless runs grow a pathological lineage's genome into the tens–

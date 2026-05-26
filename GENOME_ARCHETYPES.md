@@ -6,7 +6,7 @@ key ops/SYNTH, behavior loop, what it probes, and feasibility. The
 **substrate gaps** section at the end is the actionable part: each gap
 names the single primitive that would unlock a whole branch of life.
 
-Status: **shipped as injectable seeds.** All 33 archetypes (31 listed +
+Status: **shipped as injectable seeds.** All 34 archetypes (32 listed +
 the two pre-paired composites `farmer-mito` / `farmer-chloroplast`) are
 now hand-authored founder genomes (`src/genome-archetypes.ts`, built
 via the `src/genome-asm.ts` assembler) and spawnable from the
@@ -187,6 +187,21 @@ resolved):
     bloom-crashes. One genome, two phenotypes, switched on inherited
     cytoplasm — the only archetype that exercises `PARTITION`. Payoff is
     emergent over generations.
+7c. **Metazoan tissue (three castes + leaky sharing).** *Authored* (`id:
+    metazoan`, label "metazoan tissue"). Extends 7b from two phenotypes to
+    **three**, and adds metabolic sharing. Same greenbeard cohesion +
+    `PARTITION mrna` toward the mother, but the cell now reads its own
+    inherited mRNA against TWO thresholds: GERM (mRNA > 3) divides
+    (bloom-braked on size + ATP), FEEDER (1 < mRNA ≤ 3) chases detritus
+    AND leaks SURPLUS glucose (`EXCRETE glu`, gated on being glucose-rich)
+    into the shared medium where bonded kin re-absorb it — emergent
+    **leaky inter-cell sharing** with no addressed delivery — and
+    STRUCTURAL (mRNA ≤ 1, fresh daughters) pours catalyst into membrane
+    synthesis (the body's matrix) and holds position. Because daughters
+    bud off mRNA-poor and rebuild over time, a cell *cycles* through
+    structural → feeder → germ across its life rather than being fixed.
+    Exercises `SYNTH BOND` + multi-threshold `PARTITION` + leaky sharing
+    together. Payoff is emergent: spawn many (clump) and let it run.
 
 ## Endosymbiosis candidates
 
@@ -388,7 +403,7 @@ means" note matters. Kept here as the rationale + the exact means.
   abstract generic tokens can also cross membranes (widen via
   `GENERIC_TRANSPORT_COUNT`).
 
-_Status: all 33 archetypes are shipped as injectable founder seeds
+_Status: all 34 archetypes are shipped as injectable founder seeds
 (`src/genome-archetypes.ts` + the `src/genome-asm.ts` assembler +
 the "archetypes" UI panel), authored to the author + sanity-spawn
 bar (assemble well-formed, disassemble clean, spawn + step without
