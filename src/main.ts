@@ -103,6 +103,11 @@ import {
 } from "./sim";
 import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT, emitChannelName } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
+import {
+  compileCreature,
+  type CreatureSpec, type TrophicMode as DslTrophicMode,
+  type SenseChannel, type EmitChannel,
+} from "./creature-dsl";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const canvas = document.createElement("canvas");
@@ -1507,6 +1512,9 @@ const T_AMBER = "background:rgba(60,40,0,.75);color:#ffd49e;border-color:#a87a3a
 const T_TEAL  = "background:rgba(0,40,60,.75);color:#9ee;border-color:#3a7a8a;";
 const T_GREEN = "background:rgba(0,50,20,.75);color:#9efba8;border-color:#3a8a5a;";
 const T_RED   = "background:rgba(60,0,0,.75);color:#fdd;border-color:#a55;";
+const SELECT_CSS =
+  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.5);color:#9ee;cursor:pointer;" + HUD_FONT;
 
 const ctrlBar = document.createElement("div");
 ctrlBar.style.cssText =
@@ -1749,6 +1757,183 @@ renderArchCollapsed();
 archPanel.append(archWrap);
 root.appendChild(archPanel);
 
+// ---- modal helper (cell-builder / world-builder dialogs) -----------
+interface Modal { overlay: HTMLDivElement; body: HTMLDivElement; open: () => void; close: () => void; }
+function makeModal(title: string): Modal {
+  const overlay = document.createElement("div");
+  overlay.style.cssText =
+    "position:fixed;inset:0;z-index:10000;display:none;align-items:center;" +
+    "justify-content:center;background:rgba(0,0,0,0.55);" + HUD_FONT;
+  const panel = document.createElement("div");
+  panel.style.cssText =
+    "max-width:min(560px,92vw);max-height:88vh;overflow:auto;box-sizing:border-box;" +
+    "padding:14px 16px;border:1px solid #2a4a5a;border-radius:8px;" +
+    "background:rgba(4,16,22,0.98);color:#9ee;box-shadow:0 8px 40px rgba(0,0,0,.6);";
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;";
+  const h = document.createElement("div");
+  h.textContent = title;
+  h.style.cssText = `font-size:${UI_FONT_PX + 3}px;color:#cff;`;
+  const x = mkBtn("✕", "Close");
+  const body = document.createElement("div");
+  const close = () => { overlay.style.display = "none"; };
+  const open = () => { overlay.style.display = "flex"; };
+  x.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  head.append(h, x);
+  panel.append(head, body);
+  overlay.append(panel);
+  root.appendChild(overlay);
+  return { overlay, body, open, close };
+}
+// Form-row helpers shared by both builders.
+function fieldRow(label: string, control: HTMLElement): HTMLDivElement {
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;align-items:center;gap:8px;margin:5px 0;";
+  const l = document.createElement("label");
+  l.textContent = label; l.style.cssText = "min-width:120px;color:#9ee;";
+  row.append(l, control);
+  return row;
+}
+function checkGroup(items: string[], cols = 4): { wrap: HTMLDivElement; get: () => string[]; boxes: Map<string, HTMLInputElement> } {
+  const wrap = document.createElement("div");
+  wrap.style.cssText = `display:grid;grid-template-columns:repeat(${cols},auto);gap:2px 12px;`;
+  const boxes = new Map<string, HTMLInputElement>();
+  for (const it of items) {
+    const l = document.createElement("label");
+    l.style.cssText = "display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.style.cursor = "pointer";
+    boxes.set(it, cb);
+    l.append(cb, document.createTextNode(it));
+    wrap.appendChild(l);
+  }
+  return { wrap, boxes, get: () => [...boxes].filter(([, c]) => c.checked).map(([k]) => k) };
+}
+
+// ---- cell-builder dialog -------------------------------------------
+{
+  const modal = makeModal("Build a cell");
+  const b = modal.body;
+
+  const nameI = document.createElement("input");
+  nameI.type = "text"; nameI.value = "custom"; nameI.maxLength = 40;
+  nameI.style.cssText = SELECT_CSS + "min-width:160px;";
+
+  const trophicSel = document.createElement("select");
+  trophicSel.style.cssText = SELECT_CSS;
+  for (const t of ["photoautotroph", "heterotroph", "chemolithoautotroph"]) {
+    const o = document.createElement("option"); o.value = t; o.textContent = t; trophicSel.appendChild(o);
+  }
+
+  const VECTOR = ["light", "electric", "vibration", "magnetic", "mechanical"];
+  const SCALAR = ["ph", "thermal"];
+  const senses = checkGroup([...VECTOR, ...SCALAR], 4);
+  // per-vector-sense seek/flee response selects (shown inline after the box)
+  const respSel = new Map<string, HTMLSelectElement>();
+  for (const v of VECTOR) {
+    const sel = document.createElement("select");
+    sel.style.cssText = SELECT_CSS + "margin-left:2px;font-size:" + (UI_FONT_PX - 1) + "px;";
+    for (const r of ["seek", "flee"]) { const o = document.createElement("option"); o.value = r; o.textContent = r; sel.appendChild(o); }
+    respSel.set(v, sel);
+    senses.boxes.get(v)!.parentElement!.appendChild(sel);
+  }
+
+  const behaviors = checkGroup(["seekFood", "fleeWaste", "predator", "leakGlucose", "stressTolerant"], 3);
+  const emits = checkGroup(["electric", "light", "vibration", "magnetic"], 4);
+
+  const reproI = document.createElement("input");
+  reproI.type = "number"; reproI.value = "40"; reproI.min = "5"; reproI.max = "120";
+  reproI.style.cssText = SELECT_CSS + "width:70px;";
+  const bondI = document.createElement("input");
+  bondI.type = "number"; bondI.placeholder = "none"; bondI.min = "0"; bondI.max = "255";
+  bondI.style.cssText = SELECT_CSS + "width:70px;";
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:8px;color:#8cc;min-height:1.3em;";
+
+  const countSel = document.createElement("select");
+  countSel.style.cssText = SELECT_CSS;
+  for (const n of [1, 5, 10, 25]) { const o = document.createElement("option"); o.value = String(n); o.textContent = "×" + n; countSel.appendChild(o); }
+  const placeSel = document.createElement("select");
+  placeSel.style.cssText = SELECT_CSS;
+  for (const p of ["scatter", "clump"]) { const o = document.createElement("option"); o.value = p; o.textContent = p; placeSel.appendChild(o); }
+
+  function readSpec(): CreatureSpec {
+    const chosen = senses.get().slice(0, 3);
+    const bondRaw = bondI.value.trim();
+    return {
+      name: nameI.value.trim() || "custom",
+      trophic: trophicSel.value as DslTrophicMode,
+      senses: chosen.map((ch) => ({
+        channel: ch as SenseChannel,
+        response: respSel.has(ch) ? (respSel.get(ch)!.value as "seek" | "flee") : undefined,
+      })),
+      seekFood: behaviors.boxes.get("seekFood")!.checked,
+      fleeWaste: behaviors.boxes.get("fleeWaste")!.checked,
+      predator: behaviors.boxes.get("predator")!.checked,
+      leakGlucose: behaviors.boxes.get("leakGlucose")!.checked,
+      stressTolerant: behaviors.boxes.get("stressTolerant")!.checked,
+      emit: emits.get() as EmitChannel[],
+      reproduceAt: Math.max(5, Math.min(120, Number(reproI.value) || 40)),
+      bondTag: bondRaw === "" ? undefined : Math.max(0, Math.min(255, Number(bondRaw) | 0)),
+    };
+  }
+  function refresh(): void {
+    try {
+      const { genome } = compileCreature(readSpec());
+      const n = senses.get().length;
+      status.style.color = "#8cc";
+      status.textContent = `genome: ${genome.length} bytes` + (n > 3 ? `  (only first 3 of ${n} senses used)` : "");
+    } catch (err) {
+      status.style.color = "#fdd";
+      status.textContent = "compile error: " + (err instanceof Error ? err.message : String(err));
+    }
+  }
+  for (const el of [nameI, trophicSel, reproI, bondI, ...respSel.values()]) el.addEventListener("change", refresh);
+  for (const m of [senses, behaviors, emits]) for (const cb of m.boxes.values()) cb.addEventListener("change", refresh);
+
+  const spawnBtn = mkBtn("spawn", "Compile + spawn this cell");
+  setBtn(spawnBtn, false, T_GREEN);
+  spawnBtn.addEventListener("click", () => {
+    try {
+      const { genome } = compileCreature(readSpec());
+      simWorker.postMessage({
+        type: "spawnSpecies",
+        genome: Array.from(genome),
+        count: Number(countSel.value) || 1,
+        placement: placeSel.value as "scatter" | "clump",
+      });
+      status.style.color = "#9efba8";
+      status.textContent = `spawned ×${countSel.value} ✓`;
+    } catch (err) {
+      status.style.color = "#fdd";
+      status.textContent = "compile error: " + (err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+  actions.append(countSel, placeSel, spawnBtn);
+
+  b.append(
+    fieldRow("name", nameI),
+    fieldRow("trophic mode", trophicSel),
+    fieldRow("senses (max 3)", senses.wrap),
+    fieldRow("behaviors", behaviors.wrap),
+    fieldRow("emit (ATP cost)", emits.wrap),
+    fieldRow("reproduce at", reproI),
+    fieldRow("bond tag (0-255)", bondI),
+    status,
+    actions,
+  );
+  refresh();
+
+  const openBtn = mkBtn("✚ build cell", "Open the cell-builder: design a genome from senses + behaviours");
+  setBtn(openBtn, false, T_TEAL);
+  openBtn.addEventListener("click", () => { modal.open(); refresh(); });
+  archWrap.appendChild(openBtn);
+}
+
 // ---- run: reset / turbo / profile / export ----
 const resetBtn = mkBtn("reset", "Clear saved world and start fresh");
 let resetArmedUntil = 0;
@@ -1973,9 +2158,6 @@ type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce"
 let heatmapMode: HeatmapMode = "off";
 const HEATMAP_CELL = 32;
 const HEATMAP_ALPHA = 0.28;
-const SELECT_CSS =
-  "padding:3px 6px;border:1px solid #1a3340;border-radius:4px;" +
-  "background:rgba(0,0,0,.5);color:#9ee;cursor:pointer;" + HUD_FONT;
 const overlaySelectEl = document.createElement("select");
 overlaySelectEl.title = "Field overlay";
 overlaySelectEl.style.cssText = SELECT_CSS;
