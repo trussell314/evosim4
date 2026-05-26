@@ -14,6 +14,8 @@ import {
   CHEM_WASTE, CHEM_CHL, CHEM_ENZ, CHEM_MRNA, CHEM_BIOPOLYMER, CHEM_MEMBRANE,
 } from "./chem-ids";
 import { CHEMICALS } from "./chemistry";
+import type { World } from "./core";
+import { temperatureAt } from "./environment";
 
 // World temperature baseline. activated_thermo encodes departure from
 // this; the solubility temperature factor is identity here so a baseline
@@ -112,4 +114,122 @@ export function regionDissolvedCapacity(
   const vL = regionVolumeL(world);
   return sMolar * solubilityTempFactor(chemId, tempC) * vL * AVOGADRO
     / PARTICLE_MOLECULE_MULTIPLIER;
+}
+
+// Per-region temperature field. STATE-BEARING: each tick we diffuse
+// heat between neighbouring regions, relax slowly toward the analytical
+// baseline (depth gradient + patch wave from temperatureAt), and inject
+// a Gaussian source from the active vent. This is what makes vent heat
+// linger and spread instead of stamping a fixed bubble that disappears
+// the moment the eruption ends. Consumed by chemistry (dissolution
+// capacity, region dissolve thresholds), creature reads (Q10, THERMO
+// receptor), and the heatmap overlay.
+//
+// Time constants in 1/sec. DIFF spreads local hot spots; RELAX pulls
+// each region back toward its analytical equilibrium -- and is the
+// distributed heat SINK that keeps the bulk water at its depth-gradient
+// baseline no matter how hard the vent injects (so a hotter vent can't
+// boil the whole world, only its local zone). VENT_INJECT sets how fast
+// the local peak builds.
+//
+// The vent is an ALWAYS-ON heat source: a persistent base intensity
+// (VENT_BASE_INTENSITY) keeps a standing hot zone around the mouth at
+// all times, and an eruption envelope spikes on top. RELAX is slow
+// enough that the zone lingers rather than dissipating the moment the
+// puff ends.
+const TEMP_DIFF_RATE = 0.35;
+const TEMP_RELAX_RATE = 0.1;
+const TEMP_VENT_INJECT_RATE = 0.15;
+const VENT_TEMP_PEAK_AMP = 100;
+const VENT_TEMP_RADIUS_PX = 95;
+// Standing heat the vent emits between eruptions (fraction of full
+// intensity). Eruptions ramp from this base up to 1 and back. Exported
+// so the renderer animates the persistent plume off the same value.
+export const VENT_BASE_INTENSITY = 0.4;
+export function sampleRegionTemps(world: World, dt: number): void {
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  const n = cols * rows;
+  // First call, or dims changed: allocate world.regionTemp and seed
+  // with the analytical baseline. Skip the stepping for this tick --
+  // the field has no history yet.
+  if (world.regionTemp.length !== n) {
+    world.regionTemp = new Float32Array(n);
+    world.regionTempNext = new Float32Array(n);
+    for (let ry = 0; ry < rows; ry++) {
+      const cy = Math.min(world.height - 1, ry * REGION_PX + REGION_PX / 2);
+      for (let rx = 0; rx < cols; rx++) {
+        const cx = Math.min(world.width - 1, rx * REGION_PX + REGION_PX / 2);
+        world.regionTemp[ry * cols + rx] = temperatureAt(world, cx, cy);
+      }
+    }
+    return;
+  }
+  const cur = world.regionTemp;
+  const next = world.regionTempNext;
+  const v = world.vent;
+  const hasVent = v != null;
+  const vx = hasVent ? v!.x : 0;
+  const vy = hasVent ? v!.y : 0;
+  // Always-on heat: persistent base + the eruption envelope on top.
+  const eruptI = hasVent && v!.active ? v!.intensity : 0;
+  const vIntensity = hasVent
+    ? VENT_BASE_INTENSITY + (1 - VENT_BASE_INTENSITY) * eruptI
+    : 0;
+  const r2 = VENT_TEMP_RADIUS_PX * VENT_TEMP_RADIUS_PX;
+  const rejectR2 = 9 * r2;
+  for (let ry = 0; ry < rows; ry++) {
+    const cy = Math.min(world.height - 1, ry * REGION_PX + REGION_PX / 2);
+    const rowBase = ry * cols;
+    for (let rx = 0; rx < cols; rx++) {
+      const i = rowBase + rx;
+      const T = cur[i];
+      // 4-neighbour Laplacian (Neumann BC: edges use available
+      // neighbours only). Stored as the avg-vs-self difference so the
+      // rate constant is wall-time independent of cell size.
+      let nsum = 0, ncount = 0;
+      if (rx > 0)        { nsum += cur[i - 1];    ncount++; }
+      if (rx < cols - 1) { nsum += cur[i + 1];    ncount++; }
+      if (ry > 0)        { nsum += cur[i - cols]; ncount++; }
+      if (ry < rows - 1) { nsum += cur[i + cols]; ncount++; }
+      const diff = ncount > 0 ? (nsum / ncount - T) * TEMP_DIFF_RATE * dt : 0;
+      // Relax toward analytical baseline (depth gradient + patch wave;
+      // NOT vent -- that's the source term below).
+      const cx = Math.min(world.width - 1, rx * REGION_PX + REGION_PX / 2);
+      const eq = temperatureAt(world, cx, cy);
+      const relax = (eq - T) * TEMP_RELAX_RATE * dt;
+      // Vent source: Gaussian bubble * intensity, injected as a rate.
+      let vent = 0;
+      if (hasVent) {
+        const dx2 = (cx - vx) * (cx - vx);
+        const dy2 = (cy - vy) * (cy - vy);
+        const d2 = dx2 + dy2;
+        if (d2 < rejectR2) {
+          vent = VENT_TEMP_PEAK_AMP * vIntensity * Math.exp(-d2 / r2)
+            * TEMP_VENT_INJECT_RATE * dt;
+        }
+      }
+      next[i] = T + diff + relax + vent;
+    }
+  }
+  // Copy back into world.regionTemp; the swap-by-reference would
+  // change Float32Array identity, and any caller that captured the
+  // array reference (snapshot serializer, parallel workers) expects
+  // it to stay stable.
+  for (let i = 0; i < n; i++) cur[i] = next[i];
+}
+
+// Effective local temperature: reads from the diffused, state-bearing
+// regionTemp field on the world (which sampleRegionTemps steps every
+// tick). Falls back to the analytical baseline if the field hasn't
+// been initialised yet (e.g. a freshly-built world before its first
+// tick).
+export function regionTempAt(world: World, x: number, y: number): number {
+  const field = world.regionTemp;
+  if (!field || field.length === 0) return temperatureAt(world, x, y);
+  const cols = regionCols(world);
+  const rows = regionRows(world);
+  let rx = (x / REGION_PX) | 0; if (rx < 0) rx = 0; else if (rx >= cols) rx = cols - 1;
+  let ry = (y / REGION_PX) | 0; if (ry < 0) ry = 0; else if (ry >= rows) ry = rows - 1;
+  return field[ry * cols + rx];
 }
