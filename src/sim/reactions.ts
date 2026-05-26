@@ -8,7 +8,7 @@
 // touch Creature state / the rxn-stats recorder.
 
 import { mulberry32 } from "../rng";
-import { CHEMICAL_COUNT } from "./chem-ids";
+import { CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT } from "./chem-ids";
 import {
   CHEM_GLU, CHEM_O2, CHEM_CO2, CHEM_FA, CHEM_AA, CHEM_MIN, CHEM_CHL,
   CHEM_ENZ, CHEM_MRNA, CHEM_MEMBRANE, CHEM_BIOPOLYMER, CHEM_WASTE,
@@ -311,6 +311,22 @@ export const TRANSPORT_CHEM_IDS: readonly number[] = [
   CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA,
   CHEM_FA, CHEM_MIN, CHEM_ADP, CHEM_WASTE,
 ];
+// Generic-chem transporters: a sub-band so the abstract generic chems
+// (ids NAMED_CHEMICAL_COUNT..95) can ALSO be moved across membranes,
+// opening emergent generic-chem economies / signalling (a cell can
+// evolve to import or leak a generic token to/from the medium or a
+// bonded neighbour). Deliberately a SUB-BAND, not all 50 generics: each
+// transporter overwrites one procedurally-generated generic *reaction*
+// slot, so transporting all of them would cost ~1/5 of the table. The
+// first GENERIC_TRANSPORT_COUNT generic ids are covered; widen by
+// raising the constant (re-baselines golden). Same facilitated /
+// down-gradient model as the metabolite transporters; latent until a
+// genome SYNTHs the catalyst, so it forces nothing.
+export const GENERIC_TRANSPORT_COUNT = 16;
+export const GENERIC_TRANSPORT_CHEM_IDS: readonly number[] = Array.from(
+  { length: Math.min(GENERIC_TRANSPORT_COUNT, CHEMICAL_COUNT - NAMED_CHEMICAL_COUNT) },
+  (_, i) => NAMED_CHEMICAL_COUNT + i,
+);
 // ATP translocase sentinel (NOT a chem id -- ATP is the per-creature
 // ATP translocase target. Path 1: ATP is now a real chemical
 // (CHEM_ATP, == the aliased `energy` column), so this is a normal
@@ -322,11 +338,14 @@ export const TRANSPORT_CHEM_IDS: readonly number[] = [
 // the VACUOLAR membrane only -- the outer-membrane applier skips
 // CHEM_ATP (there is no ambient ATP).
 export const TRANSPORT_ATP = CHEM_ATP;
-// The transport band: the 8 small-molecule metabolites plus the ATP
-// translocase. One contiguous post-build-overwritten band so the
-// seeded buildReactionTable draw order stays byte-identical.
+// The transport band: the 8 small-molecule metabolites, the generic-chem
+// sub-band, then the ATP translocase LAST. One contiguous post-build-
+// overwritten tail so the seeded buildReactionTable draw order stays
+// byte-identical. Order matters: CHEM_GLU stays at index 2
+// (TRANSPORT_GLU_SLOT) and TRANSPORT_ATP stays last (TRANSPORT_ATP_SLOT).
 export const TRANSPORT_TARGETS: readonly number[] = [
   ...TRANSPORT_CHEM_IDS,
+  ...GENERIC_TRANSPORT_CHEM_IDS,
   TRANSPORT_ATP,
 ];
 export const TRANSPORT_SLOT_BASE = N_REACTIONS - TRANSPORT_TARGETS.length;

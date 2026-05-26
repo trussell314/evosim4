@@ -48,6 +48,7 @@ import {
 } from "../sim";
 import { ARCHETYPES } from "../genome-archetypes";
 import { OP, SYNTH_KIND, SYNTH_BIT_COMPETENCE, SYNTH_BIT_BOND, newVMState, newOutputs, GENE_FRAGMENT_CAP, type VMState } from "../genome";
+import { GENERIC_TRANSPORT_CHEM_IDS } from "../sim/reactions";
 
 // Local viable-heterotroph genome for test creatures. Mirrors the
 // production curated default that used to exist before founders went
@@ -3101,6 +3102,24 @@ describe("standing transporters (Substrate B, sub-commit 1: cell<->world)", () =
     setAmbient(w, K, 50);
     runTransportReactions(c, w, 1);
     expect(s.chemCols[K][i]).toBe(0);
+  });
+
+  it("a GENERIC chem can also be transported (door opened past metabolites)", () => {
+    const w = quietWorld();
+    const c = makeCreature();
+    w.creatures.push(c);
+    const s = c.store, i = c.idx;
+    const gChem = GENERIC_TRANSPORT_CHEM_IDS[0]; // first generic-transport id
+    // generic transporters sit right after the metabolite band
+    const gSlot = TRANSPORT_SLOT_BASE + TRANSPORT_CHEM_IDS.length + 0;
+    s.chemCols[gChem][i] = 0;
+    s.catalystCols[gSlot][i] = 10; // built the generic-chem transporter
+    setAmbient(w, gChem, 40);
+    const before = s.chemCols[gChem][i] + ambTotal(w, gChem);
+    runTransportReactions(c, w, 1);
+    expect(s.chemCols[gChem][i]).toBeGreaterThan(0);        // imported
+    const after = s.chemCols[gChem][i] + ambTotal(w, gChem);
+    expect(after).toBeCloseTo(before, 6);                   // mass-exact
   });
 
   it("runs the gradient the other way (export) when the cell is richer", () => {

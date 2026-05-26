@@ -383,8 +383,10 @@ means" note matters. Kept here as the rationale + the exact means.
   metabolite at the outer + vacuolar membranes, composing with
   `INGEST`/`EXCRETE` and diffusion. Scope lines: facilitated only
   (active/uphill `atpDelta` pumping reserved); *signature-gated*
-  selectivity not built; only the 8 small-molecule metabolites
-  (generic-chem transporters deferred — `TODO.md`).
+  selectivity not built. Covers the 8 small-molecule metabolites PLUS a
+  generic-chem sub-band (`GENERIC_TRANSPORT_CHEM_IDS`, ids 46–61) so
+  abstract generic tokens can also cross membranes (widen via
+  `GENERIC_TRANSPORT_COUNT`).
 
 _Status: all 33 archetypes are shipped as injectable founder seeds
 (`src/genome-archetypes.ts` + the `src/genome-asm.ts` assembler +

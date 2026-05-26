@@ -153,22 +153,19 @@ Living list of deferred work. Newest/explicit asks at top.
   `runGenericReactions` (skips transport slots),
   `runTransportReactions`, `runInnerCell` (vacuolar wiring).
 
-- **Consider extending transporters to generic chemicals (later).**
-  v1 deliberately covers only the 8 small-molecule metabolites (chem
-  ids 0–7) — the species a real membrane carrier moves. The generic
-  abstract chems (ids ~45–95) were excluded as transport-for-its-own-
-  sake and to spare the reaction-slot budget (each transporter eats one
-  procedurally-generated generic slot we overwrite post-build; 8 is
-  ~3% of that band, all 96 would be ~⅓ of the whole table). Worth
-  revisiting if emergent generic-chem signaling/economies appear that
-  would benefit from selective cross-membrane transport — e.g. a small
-  evolvable sub-band of generic-chem transporters rather than all of
-  them. Constraints to preserve: overwrite a contiguous post-build
-  band (keeps the seeded `buildReactionTable` rng draw order byte-
-  identical → determinism), don't encroach on the named head [0,26),
-  and weigh generic-reaction slots lost vs transport gained. Same
-  facilitated/atpDelta model as v1. Touch points: `TRANSPORT_CHEM_IDS`
-  / `installTransporters` in `sim/reactions.ts`.
+- **DONE — extend transporters to generic chemicals.** Added a
+  generic-chem transporter sub-band (`GENERIC_TRANSPORT_CHEM_IDS`,
+  `GENERIC_TRANSPORT_COUNT = 16`, ids 46–61) folded into
+  `TRANSPORT_TARGETS` between the 8 metabolites and the ATP translocase
+  (so `TRANSPORT_GLU_SLOT`/`TRANSPORT_ATP_SLOT` invariants hold). A cell
+  can now evolve a carrier to import/leak a generic token to/from the
+  medium or a bonded neighbour — opening emergent generic-chem
+  economies/signalling. Kept a conservative sub-band (not all 50) to
+  spare the procedural reaction-slot budget; widen by raising the
+  constant. Same facilitated/down-gradient model; latent until the
+  catalyst is SYNTHed. RNG draw order preserved (contiguous post-build
+  overwrite) → golden unchanged + determinism byte-identical; no
+  schema change. Test: "a GENERIC chem can also be transported".
 
 - **DONE — Temperature diffusion / thermal inertia.** `sampleRegionTemps`
   (`src/sim.ts`) steps a stateful `regionTemp` field every tick: a
