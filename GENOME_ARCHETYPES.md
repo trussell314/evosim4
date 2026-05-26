@@ -6,7 +6,8 @@ key ops/SYNTH, behavior loop, what it probes, and feasibility. The
 **substrate gaps** section at the end is the actionable part: each gap
 names the single primitive that would unlock a whole branch of life.
 
-Status: **shipped as injectable seeds.** All 15 archetypes below are
+Status: **shipped as injectable seeds.** All 33 archetypes (31 listed +
+the two pre-paired composites `farmer-mito` / `farmer-chloroplast`) are
 now hand-authored founder genomes (`src/genome-archetypes.ts`, built
 via the `src/genome-asm.ts` assembler) and spawnable from the
 collapsible "archetypes" UI panel. Substrate stance is preserved: a
@@ -50,10 +51,17 @@ constitutive floor instead of being declared by a genome op.
 `SYNTH CAT/INH`): respiration=0, ferment=1, beta-ox=2, photosynth=3,
 synth_aa=4, synth_fa=5, synth_chl=6, synth_enz=7, synth_ribo=8,
 synth_membrane(aa+fa)=9, digest_biopolymer=10, synth_membrane(fa)=11,
-photoreceptor_visible=12, _long=13, _surface=14, mechanoreceptor=19,
-thermoreceptor=20, magnetoreceptor=21, bond=22, repair=23,
+photoreceptor_visible=12, _long=13, _surface=14, electroreceptor=15,
+vibroreceptor=16, phreceptor=17, mechanoreceptor=19, thermoreceptor=20,
+magnetoreceptor=21, bond=22, repair=23,
 ATP_translocase=TRANSPORT_ATP_SLOT (last transport-band slot).
 Exported as named constants from `src/sim/reactions.ts`.
+
+**Active emission — `OP.EMIT <channel>`** (a standalone op, not a SYNTH
+kind). Pops a magnitude and deliberately spends ATP to broadcast on one
+of `EMIT_CHANNELS=4`: electric=0, light=1 (bioluminescence), vibration=2,
+magnetic=3. This is the emit half of the sensory substrate (detection is
+the activation pass + receptors); several sense archetypes below use it.
 
 ## Toolkit recap
 
@@ -201,6 +209,18 @@ resolved):
     `INGEST` from the host pool until the host autolyzes and releases
     the brood. **Fully expressible.** (No longer the *closest* thing to
     a virus — see #15, now a literal one.)
+10b. **Mitochondrion (faithful ATP-exporting endosymbiont).** *Authored*
+    (`id: mitochondria`). Minimal soma + marker0 engulf-lure, respiration/
+    digestion catalyst boosts, an **ATP translocase** (`SYNTH CAT
+    TRANSPORT_ATP_SLOT`) exporting ATP across the vacuolar membrane, and a
+    **glucose transporter** importing host glucose. With glucose
+    permeability 0, an engulfed mito must express the carrier to feed and a
+    free one starves — the obligate-symbiont property. ATP flows
+    organelle→host whenever the mito is respiration-richer than the host.
+    **Fully expressible.** Two pre-paired composite seeds also ship
+    (`farmer-mito`, `farmer-chloroplast`): a farmer host spawned with the
+    organelle already engulfed, to study whether the pairing persists and
+    reproduces in tandem.
 
 15. **True virus / mobile genetic element.** `SYNTH PACKAGE` to shed
     fragments of its own genome as decaying eDNA carriers; victims that
@@ -284,6 +304,46 @@ confirmed substrate gap (see below + `COLONY_GAPS.md` GAP #6).
     source (validated, low-risk) + the archetype itself — not a
     chemistry change.
 
+## Sensory & signaling ecology (light · vibration · electric · pH · magnetism)
+
+The sensory substrate (detection + `OP.EMIT`) shipped a family of authored
+seeds, each illustrating one channel driving behavior. All are fully
+expressible and spawnable from the archetypes panel.
+
+- **swarmer** — emits a marker0 plume AND climbs the marker0 gradient, so
+  clonal kin accrete into drifting swarms. Emergent aggregation from one
+  shared chemical channel.
+- **scout** — climbs the food (biopolymer) gradient but FLEES the waste
+  gradient, threading between food and allelopath/dead-zone poison.
+- **rheotroph** — builds a mechanoreceptor and thrusts along the net force
+  it feels (currents, swells), riding bulk water motion to disperse.
+- **acidophile** — builds a phreceptor + heat-shock chaperone; uses the
+  acidity reading bistably to seek and niche-lock to the acidic vent zone.
+  pH driving habitat selection. Spawn near a vent.
+- **magneto-navigator** — swims along the positional geomagnetic field
+  vector (declination across x, intensity with depth) → directed
+  migration / depth-keeping; substrate for homing.
+- **magneto-relay** — `EMIT`s a magnetic pulse that is NOT rock-occluded
+  and carries long range, so cells separated by obstacles still sense each
+  other; also listens. Obstacle-spanning coordination.
+- **skitterer** — builds a vibroreceptor and bolts AWAY from the bearing
+  of any nearby moving cell (hears a wake, flees before contact). Sets up a
+  speed-vs-stealth arms race.
+- **thumper** — spends ATP to `EMIT` a vibration pulse every tick.
+  Substrate for acoustic communication / alarm / luring.
+- **light-shoaler** — boosts its visible photoreceptor and swims up the
+  reflected-light bearing toward sunlit neighbors → visible schooling in
+  lit water.
+- **anglerfish** — `EMIT`s visible light (a lure that shines in the dark)
+  then PREDATEs + engulfs light-seeing prey that home on the glow. Emergent
+  lure-and-ambush; best in deep water.
+- **electric-beacon** — broadcasts a bioelectric pulse (`EMIT` electric)
+  every tick. Substrate for electrocommunication / kin signalling / luring
+  / jamming; the ATP cost makes loud signalling a real tradeoff.
+- **electro-hunter** — builds an electroreceptor and homes on the
+  bioelectric glow of metabolically-active cells, then strikes on contact.
+  Hunts by electroreception even with no chemical trail or light.
+
 ## Substrate gaps → what each unlocks (the guide)
 
 **All five gaps below are now RESOLVED** — each closed via a substrate
@@ -326,7 +386,7 @@ means" note matters. Kept here as the rationale + the exact means.
   selectivity not built; only the 8 small-molecule metabolites
   (generic-chem transporters deferred — `TODO.md`).
 
-_Status: all 15 archetypes are shipped as injectable founder seeds
+_Status: all 33 archetypes are shipped as injectable founder seeds
 (`src/genome-archetypes.ts` + the `src/genome-asm.ts` assembler +
 the "archetypes" UI panel), authored to the author + sanity-spawn
 bar (assemble well-formed, disassemble clean, spawn + step without

@@ -4,20 +4,18 @@ Living list of deferred work. Newest/explicit asks at top.
 
 ## Simulation
 
-- **New sensory modalities — light/vibration/electric/pH/magnetism
-  (detect + emit).** Full design in **`SENSES_PLAN.md`** (status: design
-  only, under review — NOT started). Unifies five perceptual channels
-  under one engine: each is a single field with both a natural
-  (environmental) source and a biotic (cell-emitted) source, read by a
-  receptor via the existing `runActivation` pattern. Adds a
-  perceptual-field pass over `buildCreatureGrid` (no new global grids),
-  one `EMIT` opcode, and 10 named chems (generic→named, `SAVE_SCHEMA`
-  bump + golden rebaseline). See the plan for per-channel operation,
-  scale-ups (electrolocation, biosonar, counter-illumination, colony
-  action-potentials, pH stress/kinetics, magnetic map), the
-  generic-chem-preservation methodology (§3.1), and the phased commit
-  sequence. Open decision noted in-plan: lead magnetism with the map
-  sense vs. the (invented) emittable channel.
+- **DONE — New sensory modalities — light/vibration/electric/pH/
+  magnetism (detect + emit).** All five channels shipped with symmetric
+  detection + active emission (`OP.EMIT`, `EMIT_CHANNELS=4`). The chems
+  were carried by REPURPOSING the 12 retired chemoreceptor chems (ids
+  19–30) + dead synth slots 15–18 rather than appending — so
+  `NAMED_CHEMICAL_COUNT` stayed 46 and no chem-layout schema bump was
+  needed. Includes reflected-light vision, bioluminescence, column-shade
+  occlusion, positional magnetic map, and ~12 sense archetypes (see
+  `GENOME_ARCHETYPES.md`). Full record in **`SENSES_PLAN.md`** (status:
+  IMPLEMENTED). Only deferred remainder: path/line-of-sight occlusion of
+  cell-emitted light. Sense overlays in the UI are also still pending
+  (see Gradient overlay modes below).
 
 - **Bump `dayPeriod` 90 → 600 (Earth-like day vs current cycle).**
   Analysis (2026-05-19) of the engine's full timescale ladder:
@@ -44,9 +42,11 @@ Living list of deferred work. Newest/explicit asks at top.
   thresholds were tuned for the short-pulse cycle. Under the long
   cycle they get a much longer growth burst by day (good) but a
   real night-stress to survive (some lineages may not). Re-balance
-  lever: nudge `MEMBRANE_DECAY_PER_SEC` 0.005 → ~0.003 so a single
-  night costs ~60% instead of ~78%. Heterotrophs (forager / benthic
-  / vent / predator) read no light and should be unaffected.
+  lever (ALREADY APPLIED): `MEMBRANE_DECAY_PER_SEC` is now **0.003**
+  (was 0.005), so a single 300s night would cost ~60% instead of ~78%
+  — i.e. the decay half of this item already shipped; only the
+  `dayPeriod` bump itself remains. Heterotrophs (forager / benthic /
+  vent / predator) read no light and should be unaffected.
 
   **Other timescales stay sensible** under the bump (everything
   scales relatively): physical waves get more numerous per day,
@@ -57,55 +57,20 @@ Living list of deferred work. Newest/explicit asks at top.
   by the day change.
 
   Touch points: `dayPeriod: 90` in `createWorld`'s defaults
-  (`src/sim.ts` around line 1893); optional matching tweak to
-  `MEMBRANE_DECAY_PER_SEC` (~line 809); `SAVE_SCHEMA` bump + golden
-  re-baseline (photic timing shifts the seeded fingerprint); run
-  photoautotroph + phototaxis scenarios to confirm post-night
-  viability.
+  (`src/sim.ts:2352`); `MEMBRANE_DECAY_PER_SEC` (`src/sim.ts:850`,
+  already 0.003); `SAVE_SCHEMA` bump + golden re-baseline (photic timing
+  shifts the seeded fingerprint); run photoautotroph + phototaxis
+  scenarios to confirm post-night viability.
 
-- **Path 1 — make ATP a first-class chemical (`CHEM_ATP`).** Path 2
-  (ATP translocase / ANT analog, host<->organelle) is DONE & green
-  (`c0c7980`); mito wired to it (`df9dcf6`). Path 1 is the general
-  fix ("not having ATP first-class has caused problems") but is a
-  larger, higher-risk refactor than first scoped — needs a dedicated
-  effort. Findings that raise the cost: `energy` is its OWN region of
-  the SoA worker shared-buffer (`o.base.energy` offset; `new
-  Float32Array(b, o.base.energy, cap)`), not a chemCols column; and
-  the engine has a dual store (`molCols`/`Molecules` vs the 96-wide
-  `chemCols`, bridged by `CHEM_NAMED_MOL_IDX`). Staged plan:
-  1. **Storage cutover (REVISED, lower-risk -- do NOT use 96->97).**
-     Convert one GENERIC chem slot into the named `CHEM_ATP`:
-     `NAMED_CHEMICAL_COUNT 45->46`, `GENERIC 51->50`,
-     **`CHEMICAL_COUNT` stays 96**. This PRESERVES the genome ABI
-     (`%CHEMICAL_COUNT` unchanged -> existing genomes' chem-addressing
-     intact) and the seeded reaction-table RNG order (chem-id draws
-     still 0..95). Add `Molecules.atp` (a new `m_atp` column),
-     `CHEM_ATP = 45` (first ex-generic slot), update MOLECULE_IDS /
-     NAMED_CHEMICALS / CHEM_NAMED_MOL_IDX; repoint `Creature.energy`
-     get/set + `newCreature` init + the alloc-zero onto `m_atp`
-     (chemCols[CHEM_ATP]); drop the standalone `energy` F32 column
-     from CREATURE_F32_COLS. `creatureTotalMass` must STOP adding the
-     explicit `c.energy` term (atp now summed once via MOLECULE_IDS --
-     else double-count). Unavoidable: **`SAVE_SCHEMA` bump** (embeds
-     NAMED_CHEMICAL_COUNT) + **golden re-verify/rebaseline** (named/
-     generic boundary moves; likely small). Mass invariant stays
-     green by the dedupe above.
-  2. **Generalise transport:** retire the Path-2 `TRANSPORT_ATP`
-     sentinel -> a normal chem-id transporter on `CHEM_ATP` (slot +
-     `SYNTH CAT` genome expression survive; only
-     `transport: TRANSPORT_ATP` -> `transport: CHEM_ATP`; update mito
-     genome ref). Keep ATP non-diffusible at the OUTER membrane (a
-     free cell must not bleed ATP to water — matches reality);
-     vacuolar transport unchanged in behavior.
-  3. **Cleanup + validate:** remove scalar-special-casing now routed
-     through the chem path; unit test ATP-as-chem == prior scalar for
-     spendATP/respiration/maintenance; full suite + determinism +
-     mass + new golden + build.
-  Touch points: `sim/core.ts` (shared-buffer layout, store,
-  `Creature.energy`), `sim/chem-ids.ts`, `sim/reactions.ts`
-  (transport target, table), `sim.ts` (serialize/restore, snapshot,
-  every `energy` site is already behind the accessor),
-  `__tests__/golden.test.ts` (rebaseline), `SAVE_SCHEMA`.
+- **DONE — make ATP a first-class chemical (`CHEM_ATP`).** Both paths
+  shipped. Path 2 (ATP translocase / ANT analog, host↔organelle) green
+  (`c0c7980`), mito wired (`df9dcf6`). Path 1 (the storage cutover) is
+  also done: `CHEM_ATP = 45` (`src/sim/chem-ids.ts:194`),
+  `NAMED_CHEMICAL_COUNT = 46` / `GENERIC = 50` with `CHEMICAL_COUNT`
+  still 96, a real `m_atp` molecule column with `store.energy` aliased
+  onto it (`src/sim/core.ts:447,571,709`), and `TRANSPORT_ATP` is now a
+  normal chem-id transporter (`= CHEM_ATP`, `src/sim/reactions.ts:324`).
+  `SAVE_SCHEMA` is at 22 and the golden was rebaselined.
 
 - **Add a multicellular-organism archetype.** Create a founder genome
   in `src/genome-archetypes.ts` for a multicellular organism (a
@@ -216,12 +181,6 @@ Living list of deferred work. Newest/explicit asks at top.
   net-declines; the world runs at a stable lower carrying capacity.
   Reopen only if a self-sustaining equilibrium is wanted. Membrane
   decay rate was tried and reverted (regressed it).
-
-- **ATP as a literal `CHEM_ATP`** array entry (its own chemistry-panel
-  row, in `chemCols`/`ambient`). ATP is already conserved matter via
-  the energy column + accounted biogenesis; the 96->97 chem reindex
-  (procedural reaction table + save schema) is the deferred,
-  higher-risk structural version.
 
 - **CO2 vent strength.** Creeps up slightly late-run (arrested, not
   runaway) now autotrophs are established. Possible lever: raise the

@@ -1,8 +1,12 @@
 # Regional dissolved / reserve chemical system — implementation plan
 
-Status: in progress. Phases land independently; each is gated by the
+Status: **SHIPPED / in production.** All phases landed; the regional
+dissolved + reserve + Jacobi-diffusion system is the live chemistry
+substrate (`REGION_PX = 50`, per-region `ambient`/`reserve`,
+`CHEM_MOLAR_SOLUBILITY`, density-drift). Each phase was gated by the
 mass-conservation invariant test, the reproducibility test, and the
-≤10% per-phase perf bar from `CHEMISTRY_OVERHAUL.md`.
+≤10% per-phase perf bar from `CHEMISTRY_OVERHAUL.md`. Retained as the
+design record.
 
 ## Locked parameters
 

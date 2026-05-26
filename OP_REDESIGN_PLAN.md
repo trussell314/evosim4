@@ -9,6 +9,12 @@ PACKAGE` only; `SYNTH_KIND_COUNT = 5`. See `GENOME_ARCHETYPES.md`
 "Current SYNTH ABI" section for the live reference. This doc is
 kept as the historical design record.
 
+**Post-plan addition not covered below: `OP.EMIT` (byte `0x60`, 1
+operand).** The sensory substrate added an active-emission op,
+addressing one of `EMIT_CHANNELS = 4` (electric=0, light=1,
+vibration=2, magnetic=3) — it pops a magnitude and spends ATP to
+broadcast. See `SENSES_PLAN.md`. The op-surface tables below predate it.
+
 ## Goal
 
 Collapse the special-cased genome surface into a small set of

@@ -6,34 +6,43 @@ aspiration. Update if the ABI changes.
 
 ## Sensable chemicals
 
-Two distinct channels:
+Three distinct channels:
 
 - **Internal pool — any of the 96.** `SENSE_CHEMICAL <id>` reads
   `chemConc[id mod 96]`, the cell's *own* pool of that chem. So a
   genome can sense the internal concentration of **every** chemical —
-  all 45 named + all 51 generic — including the `activated_*` signal
-  chems. Plus three direct self readouts: `SELF_ENERGY` (ATP),
-  `SELF_MASS` (sum of named pool), `SELF_MEMBRANE`.
-- **External / environmental — only via receptors, fixed set.** The
-  activation pass writes a signal into the pool only if the cell has
-  `SYNTH`'d the matching receptor. Externally-sensable modalities are
-  exactly: PHOTO ×3 bands (visible / long / surface); CHEMO ×4
-  *targets only* — `biopolymer`, `minerals`, `fa`, `marker0` (X/Y
-  gradient each); MECH (X/Y); THERMO; MAGNETO (X/Y). Spatial gradient
-  sensing of the world is limited to those 4 CHEMO target chems;
-  everything else is internal-pool only.
+  all 46 named + all 50 generic — including the `activated_*` signal
+  chems the activation pass writes. Plus three direct self readouts:
+  `SELF_ENERGY` (ATP), `SELF_MASS` (sum of named pool), `SELF_MEMBRANE`.
+- **Spatial gradient — any chem, no receptor.** `SENSE_OUT <chemId>`
+  pushes the local ambient-field gradient `[gx, gy]` of *any* chemical
+  at the cell's position (so `SENSE_OUT c; THRUST` climbs/descends the
+  `c` plume). This is universal — it needs no synthesized receptor and
+  folds in the retired `SENSE_GRAD_X/Y/DENSITY` ops.
+- **External modalities — via a synthesized receptor.** The activation
+  pass writes an `activated_*` signal into the pool (read back with
+  `SENSE_CHEMICAL`) only if the cell has `SYNTH`'d the matching
+  receptor: PHOTO ×3 bands (visible / long / surface); ELECTRO (X/Y,
+  bioelectric glow of metabolizing cells); VIBRATION (X/Y, motion
+  wakes at range); pH (scalar acidity); LIGHT (X/Y, reflected +
+  emitted cell-light); MECH (X/Y, contact force); THERMO (scalar);
+  MAGNETO (X/Y, positional field map). The old CHEMO ×4 gradient
+  targets were **retired** — chemical-plume gradients are now sensed
+  universally through `SENSE_OUT`, and the freed receptor slots carry
+  the electric / vibration / pH senses.
 
 ## Ingestable chemicals
 
-`INGEST <op mod 6>` opts into 6 material slots = `SENSOR_CHEMS`:
-**minerals, biopolymer, fa, O₂, CO₂, glucose**. Additionally,
-**generic chems (ids 45–95) and waste** are eaten under the
-*biopolymer* slot (their fallback). Molecule-tagged corpse/excretion
-particles deposit their full molecule payload directly when ingested.
-Everything else — aa, chl, enz, mrna, membrane, receptors, bondChem,
-repairChem, marker0 — is **not** directly ingestible as a free
-particle (no sensor slot, not generic, not waste). Organelle uptake
-uses the same 6 `SENSOR_CHEMS` against the host pool.
+`INGEST` is **zero-operand**: it pops a bond-energy *threshold* off the
+stack (scaled by `INGEST_TH_SCALE`). The cell then eats — from food
+particles on contact and from its region's dissolved reserve — the
+**most abundant** chemical whose per-chem bond potential
+(`CHEM_BOND_POTENTIAL[chem]`) clears that threshold. So a low threshold
+grazes low-energy detritus while a high one is selective for rich food;
+chems with bond potential 0 are never ingestible. There is no fixed
+6-material selector anymore. Molecule-tagged corpse/excretion particles
+deposit their full molecule payload when ingested. Organelle uptake
+uses the same threshold against the host pool.
 
 ## Excretable chemicals
 
@@ -58,10 +67,10 @@ Two different "marker" notions:
   one chem that is both freely excretable *and* a universal-gradient
   sense target, so a cell can `EXCRETE marker0` and others can sense
   its spatial gradient via `SENSE_OUT CHEM_MARKER0` (Phase 3
-  universal gradient sense — no receptor required). Exactly one such
-  channel — no marker1/2. Any other chem can carry information via
-  internal sensing or local ambient, but only marker0 is the canonical
-  spatially-gradient-sensable signal.
+  universal gradient sense — no receptor required). Markers 1–3 exist
+  as plain chems (ids 42–44) and any chem is gradient-sensable via
+  `SENSE_OUT`, but only `marker0` has the canonical constant + special
+  handling as the designated scent channel.
 - Surface fingerprint exists but is engine-internal and **not
   VM-addressable**.
 

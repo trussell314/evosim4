@@ -11,7 +11,21 @@ predate the K-4 unified-`SYNTH` op rewrite *and* the Phase 4a/4b/5
 retirement of the named kinds. The current live ABI has only one
 SYNTH op with five live kinds (CAT / INH / BOND / COMPETENCE /
 PACKAGE) — see `GENOME_ARCHETYPES.md` → "Current SYNTH ABI". Older
-sections here are kept as the historical design record.
+sections here are kept as the historical design record. Further drift
+in the historical sections, superseded by later work:
+
+- **Senses shipped.** Sections marking pH / electric / vibration as
+  "out of scope" or "future backlog" are stale: all five perceptual
+  channels (light · vibration · electric · pH · magnetism) now have
+  detection + emission. See `SENSES_PLAN.md` (IMPLEMENTED).
+- **Chem-table layout differs.** The "locked layout" tables here show
+  ids 19–30 as chemoreceptor/activated-chemo chems and
+  `NAMED_CHEMICAL_COUNT 45`. The live layout repurposed ids 19–30 for
+  the new senses, `NAMED_CHEMICAL_COUNT = 46` / generic = 50 (ATP is
+  the named `CHEM_ATP = 45`), `CHEMICAL_COUNT` still 96. `chem-ids.ts`
+  is the source of truth.
+- **SYNTH kind table superseded.** The "Unified SYNTH op (locked)"
+  14-kind table is historical; only 5 kinds are live (above).
 
 ## Goal
 

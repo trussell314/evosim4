@@ -66,7 +66,7 @@ export const OP = {
   // into a perceptual field (active emission). The ATP cost raises the
   // cell's metabolic-glow term, so emitting makes it louder on that
   // channel than baseline metabolism alone. Channel = operand %
-  // EMIT_CHANNELS (currently only electric; grows as modalities land).
+  // EMIT_CHANNELS (4: electric=0, light=1, vibration=2, magnetic=3).
   // Reclaims the byte of the retired pre-overhaul EMIT op.
   EMIT:          0x60,
   SENSE_AMP:     0x64,
@@ -170,9 +170,9 @@ export const SYNTH_BIT_PACKAGE = 2;
 export const CATALYST_COUNT = 256;
 // Alias for code that reads more naturally with "reaction" wording.
 export const N_REACTIONS = CATALYST_COUNT;
-// Number of distinct chemical species the cell pool tracks (8 named
-// + 56 generic, defined in sim.ts). Exposed here because the VM mods
-// SENSE_CHEMICAL's operand by it -- part of the genome ABI.
+// Number of distinct chemical species the cell pool tracks (46 named
+// + 50 generic, defined in sim/chem-ids.ts). Exposed here because the
+// VM mods SENSE_CHEMICAL's operand by it -- part of the genome ABI.
 export const CHEMICAL_COUNT = 96;
 
 // --- Multi-element genome (chromosomes + plasmids) ---------------------
@@ -346,10 +346,12 @@ export function newVMState(): VMState {
 export interface VMSensors {
   // Internal chemical concentration, indexed by chemical id. SENSE_CHEMICAL
   // <id> mod CHEMICAL_COUNT reads this. All external sensing has been
-  // collapsed onto this primitive: the K-3 activation pass writes
-  // activated_photo/chemo/mech/thermo/mag chems into the same pool, so
-  // a genome that wants "light" reads SENSE_CHEMICAL CHEM_ACT_PHOTO,
-  // "gradient toward food" reads SENSE_CHEMICAL CHEM_ACT_CHEMO_*_X, etc.
+  // collapsed onto this primitive: the activation pass writes the
+  // activated_photo / electro / vib / pH / light / mech / thermo / mag
+  // chems into the same pool, so a genome that wants "light" reads
+  // SENSE_CHEMICAL CHEM_ACT_PHOTO, "bioelectric bearing" reads
+  // SENSE_CHEMICAL CHEM_ACT_ELECTRO_X, etc. (Chemical-plume gradients are
+  // sensed separately and universally via SENSE_OUT <chemId>.)
   chemConc: Float32Array;
   // Local spatial gradient of a chem's particle field at the cell's
   // position. Writes [gx, gy] into `out`. Supplied by the engine

@@ -29,22 +29,24 @@ Recommendation: unify both under a single `CHEM_REPAIR` enzyme-pool
 mechanism. One coherent system drives both somatic mitigation and
 germline fidelity — less code, biologically sensible.
 
-## Current state (as of this note)
+## Current state (refreshed against code)
 
 - Germline mutation: `mutateGenome(genome, rng)` at fission, fixed
   per-byte rate.
-- Somatic mutation: `sim.ts` (~6655–6690). `mutP = min(0.02,
-  SOMATIC_MUTATION_AGE_COEF * age^2 * dt)`. `SYNTH REPAIR` →
-  `c.repairTicks` → hard-zeroes `mutP` while > 0. Candidate edit gated
-  by `viableGenome(candidate)`.
-- `SYNTH REPAIR` kind already exists and sets `SYNTH_BIT_REPAIR`
-  (`genome.ts`). Codebase comments already reference an intended
-  `CHEM_REPAIR` pool.
-- **Determinism gotcha:** somatic mutation currently rolls
-  `Math.random()` (`sim.ts:~6668`), NOT the seeded world RNG. This is
-  why re-enabling somatic mutation did not break the reproducibility
-  test. Any expansion MUST move this to the seeded world RNG or
-  determinism / repro testing breaks. Treat this as a prerequisite.
+- Somatic mutation: `mutP = min(0.02, SOMATIC_MUTATION_AGE_COEF *
+  age^2 * dt)`. `repairTicks` (which suppresses `mutP` while > 0) is now
+  refreshed each tick by the **`CHEM_REPAIR` pool crossing
+  `REPAIR_ACTIVE_THRESH`** — produced by reaction slot 23
+  (`RX_SLOT_SYNTH_REPAIR`, i.e. `SYNTH CAT 23`) — NOT by a `SYNTH
+  REPAIR` op (that op was retired; see the ABI note above). The somatic
+  edit has **no** `viableGenome` guard.
+- `CHEM_REPAIR` is already a dual-purpose chaperone in the chem table:
+  it both suppresses somatic mutation and raises the thermal-
+  denaturation ceiling (see `CHEM_IO_REFERENCE.md`).
+- **Determinism: already satisfied.** Somatic mutation rolls the seeded
+  `simRng()`, not `Math.random()`, so it is deterministic today. The
+  "move it to the seeded RNG" prerequisite this note originally flagged
+  is **done** — no longer a blocker for picking the plan up.
 
 ## Part 1 — Evolvable germline mutation rate
 

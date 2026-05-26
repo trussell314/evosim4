@@ -1,6 +1,20 @@
 # Sensory-substrate plan: light · vibration · electric · pH · magnetism
 
-Status: **design + reachability landed; modality substrate not yet built.**
+Status: **IMPLEMENTED.** All five channels (light · vibration · electric ·
+pH · magnetism) have detection + active emission shipped. The only deferred
+remainder is path/line-of-sight occlusion of cell-emitted light (column
+shade from the sun is done). The design body in §0–§7 below is retained as
+the original plan; where the shipped code differs from it, the chronological
+**Progress** log immediately below is authoritative. Two notable deltas:
+
+- **No new named chems / no chem-layout schema bump.** The plan (§3, §0
+  "Invariant discipline") called for appending chems and bumping
+  `NAMED_CHEMICAL_COUNT`. The shipped path instead REPURPOSED the 12 retired
+  chemoreceptor chems (ids 19–30) + dead synth slots 15–18 (see §3.0), so
+  `NAMED_CHEMICAL_COUNT` stayed 46 and no chem-layout schema bump was needed.
+- **`OP.EMIT` channel numbering is electric=0, light=1, vibration=2,
+  magnetic=3** (`genome.ts` `EMIT_CHANNEL_*`), the order channels landed —
+  not the "0 light, 1 vibration, 2 electric, 3 magnetic" listed in §2.
 
 Progress:
 - DONE — every procedural founder now gets 1–3 distinct wired senses

@@ -21,6 +21,22 @@ It's design-philosophy clean: the substrate provides the *elements* and the
 whether to reproduce sexually, and whether to carry plasmids. Nothing forces a
 strategy.
 
+> **Status (partially landed — dormant).** The §3 data model and the §4
+> multi-element expression/combine are **BUILT and run every tick**:
+> `Creature.genomes: GenomeElement[]` with `ELEMENT_KIND {CHROMOSOME,
+> PLASMID}` (`src/sim/core.ts`), and `expressCell` + `mergeVmOutputs`
+> (`src/sim.ts`) iterate all elements and combine outputs by the rules in
+> §4 (union for catalyst/inhibitor synthesis, additive for
+> excrete/transport/emit/thrust, OR for reproduce/predate/engulf, min for
+> ingestThreshold, summed instruction cost). **What is NOT built:** nothing
+> ever *creates* a second element. Founders build one chromosome;
+> `mutateGenome` / `crossoverGenomes` / `tryReproduce` / `divideInner` /
+> HGT-append all operate on `genomes[0]` only, and the genome-identity fns
+> (`genomeKey`, `genomeCodingKey`) key off `genomes[0].bytes`. So ploidy is
+> effectively 1 and plasmids/diploidy/meiosis/conjugation (§5–§6, Phases
+> 2–4) remain UNBUILT. Treat §3/§4 as DONE; the open work is everything
+> that would spawn, inherit, or transfer a second element.
+
 ---
 
 ## 1. Why (motivation)
@@ -53,8 +69,10 @@ strategy.
   signaling — useful if homologous chromosomes need to regulate each other.
 - **Genome identity/util:** `genomeCodingKey`, `genomeKey`, `genomeColor`,
   `genomeDistance` (`src/genome-id.ts`), `mutateGenome`, `somaticMutateOnce`,
-  `makeRandomViableGenome` (`src/genome.ts`). All currently assume one flat
-  `Uint8Array` — these are the main refactor surface.
+  `makeRandomViableGenome` (`src/genome.ts`). These still operate on a flat
+  `Uint8Array` and run against `genomes[0]` only — so multi-element *identity*
+  (hashing/distance over the whole element set) is the remaining surface, even
+  though the storage + expression refactor (§3/§4) already landed.
 
 ---
 
@@ -102,6 +120,8 @@ introduce multi-element behavior gradually, behind founder prevalence.
 
 - **Asexual (mitosis):** copy *all* elements to the daughter, each mutated
   independently. Diploid → diploid; plasmids segregate/copy (see §6).
+  *(Not built: `tryReproduce`/`divideInner` currently copy `genomes[0]` only,
+  so any extra elements would be dropped — this is part of the open work.)*
 - **Sexual (meiosis + syngamy):**
   - **Meiosis:** recombine homologous chromosomes (`crossoverGenomes`, already
     present) → a **haploid gamete** (one chromosome set).
