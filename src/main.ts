@@ -2936,6 +2936,38 @@ function tempToColor(T: number): string {
 // source of truth so the rendered line matches the physical wall.
 const SURFACE_VIS_STEP = 3;
 
+// Night sky: a fixed star field that twinkles and fades in with the
+// night (see render()). Positions must be stable across frames -- a
+// Math.random per frame would make every star jump -- so they come from
+// a deterministic LCG seeded once and reseeded only when the sky box
+// resizes. Render-only; no sim/determinism impact.
+interface Star { x: number; y: number; r: number; phase: number; speed: number; }
+let starField: Star[] = [];
+let starFieldW = 0;
+let starFieldH = 0;
+function rebuildStarField(width: number, skyH: number): void {
+  let s = 0x9e3779b1 >>> 0;
+  const rnd = (): number => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+  const n = Math.max(24, Math.round((width * skyH) / 1400)); // density ~ area
+  const stars: Star[] = [];
+  for (let i = 0; i < n; i++) {
+    stars.push({
+      x: rnd() * width,
+      // rnd*rnd biases stars toward the top of the sky (few at the waterline).
+      y: rnd() * rnd() * skyH,
+      r: 0.4 + rnd() * 1.1,
+      phase: rnd() * Math.PI * 2,
+      speed: 1.5 + rnd() * 3,
+    });
+  }
+  starField = stars;
+  starFieldW = width;
+  starFieldH = skyH;
+}
+
 function render(): void {
   // Re-clamp pan every frame so any path that mutates viewPan / viewZoom
   // (touch gestures, wheel, future hooks) gets the correction without
@@ -2984,6 +3016,46 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
+  // Night sky: twinkling stars + a full moon. nightAmount peaks at solar
+  // midnight (dayPhase 0.75) and is 0 through the day, so both fade in at
+  // dusk and out at dawn. Drawn over the sky band, under the water.
+  const nightAmount = Math.max(0, -Math.sin(2 * Math.PI * snapshot.dayPhase));
+  if (nightAmount > 0.01) {
+    const skyH = Math.max(1, surfaceY);
+    if (starField.length === 0 || starFieldW !== width || starFieldH !== skyH) {
+      rebuildStarField(width, skyH);
+    }
+    const tw = performance.now() / 1000; // wall-clock twinkle (render-only)
+    for (const st of starField) {
+      const a = nightAmount * (0.55 + 0.45 * Math.sin(tw * st.speed + st.phase));
+      if (a <= 0.02) continue;
+      ctx.fillStyle = `rgba(235,242,255,${a.toFixed(3)})`;
+      ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 2 * Math.PI); ctx.fill();
+    }
+
+    // Full moon: rides the sun's arc exactly half a cycle behind it, so it
+    // is always 180deg off the sun -- rising in the east as the sun sets,
+    // overhead at solar midnight, setting in the west by sunrise. Anchored
+    // to the flat baseline surface like the sun (no wave jitter).
+    const nf = Math.min(1, Math.max(0, (snapshot.dayPhase - 0.5) / 0.5));
+    const mx = (0.05 + 0.90 * nf) * width;
+    const my = surfaceY - (surfaceY - 6) * Math.sin(Math.PI * nf);
+    const mr = 9;
+    const mglow = ctx.createRadialGradient(mx, my, 0, mx, my, mr * 3);
+    mglow.addColorStop(0, `rgba(220,228,245,${0.35 * nightAmount})`);
+    mglow.addColorStop(1, "rgba(220,228,245,0)");
+    ctx.fillStyle = mglow;
+    ctx.beginPath(); ctx.arc(mx, my, mr * 3, 0, 2 * Math.PI); ctx.fill();
+    // Fully-lit disc (full moon -> no crescent).
+    ctx.fillStyle = `rgba(238,242,250,${(0.55 + 0.4 * nightAmount).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(mx, my, mr, 0, 2 * Math.PI); ctx.fill();
+    // Faint maria for a little texture.
+    ctx.fillStyle = `rgba(203,210,226,${(0.45 * nightAmount).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(mx - 2.6, my - 1.4, 2.1, 0, 2 * Math.PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(mx + 2.3, my + 2.1, 1.5, 0, 2 * Math.PI); ctx.fill();
+    ctx.beginPath(); ctx.arc(mx + 1.0, my - 2.9, 1.0, 0, 2 * Math.PI); ctx.fill();
+  }
+
   // Sun: arcs across the sky over the day -- rises at 5% of width, climbs
   // overhead at midday, sets at 95%. Drawn only in daylight; its position
   // is what drives the directional rock + cell shadows below the surface.
@@ -2992,7 +3064,10 @@ function render(): void {
     if (sl > 0.001) {
       const f = Math.min(1, Math.max(0, snapshot.dayPhase / 0.5)); // day fraction
       const sxs = sunXFrac(snapshot.dayPhase) * width;
-      const sky = surfaceYAt(snapshot, sxs);
+      // Anchor to the flat baseline surface, NOT surfaceYAt (the live wavy
+      // line): a distant sun shouldn't jitter up and down with local wave
+      // chop. The water line itself stays wavy; only the sun is steadied.
+      const sky = surfaceY;
       const sunY = sky - (sky - 6) * Math.sin(Math.PI * f);
       const r = 7;
       const glow = ctx.createRadialGradient(sxs, sunY, 0, sxs, sunY, r * 3.5);
