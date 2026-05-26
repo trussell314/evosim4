@@ -26,6 +26,10 @@ export const TEMP_BASELINE = 15; // °C
 // 50x50 px region footprint; a region is a 50x50x world.depth box.
 // "Someday adjustable" -- keep all region math derived from this.
 export const REGION_PX = 50;
+// Physical radius of a particle precipitated out of a supersaturated
+// region. Also the particle-equivalent unit for dissolved/reserve mass
+// readouts (chemAmountToParticles).
+export const PRECIP_R = 2;
 // The whole vertical extent of the world maps to 10 m. Scale is
 // isotropic (x, y, z all use this) and used ONLY to turn px volumes
 // into litres for the molar-solubility capacity formula and to
