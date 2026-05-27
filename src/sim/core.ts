@@ -1452,22 +1452,16 @@ export function mass(p: Particle): number {
   return d * (4 / 3) * Math.PI * p.r * p.r * p.r;
 }
 
-// Mass of a single cell excluding its contents -- used to avoid recursion
-// when summing up an engulfed prey's contribution to its container's mass.
-export function creatureSelfMass(c: Creature): number {
-  // ATP counted via MOLECULE_IDS (it is the `atp` molecule == energy).
-  let m = 0;
-  for (const k of MOLECULE_IDS) m += c.molecules[k];
-  return m;
-}
-
 export function creatureTotalMass(c: Creature): number {
-  // Path 1: ATP is the `atp` molecule (== c.energy, aliased), so it
-  // is summed by the MOLECULE_IDS loop -- no separate c.energy term
-  // (that would double-count).
+  // ATP is the `atp` molecule (== c.energy, aliased), so it is summed by
+  // the MOLECULE_IDS loop -- no separate c.energy term (double-count).
   let m = 0;
   for (const k of MOLECULE_IDS) m += c.molecules[k];
-  // Engulfed prey lives in our vacuole; its mass still occupies our volume.
-  for (const inner of c.contents) m += creatureSelfMass(inner);
+  // Engulfed prey lives in our vacuole; its mass still occupies our
+  // volume. Recurse through every nesting level: a cell we engulfed may
+  // itself hold prey it had engulfed, and all of it rides inside us.
+  // Contents form a strict tree (engulf moves a cell out of the world
+  // into one container), so this terminates.
+  for (const inner of c.contents) m += creatureTotalMass(inner);
   return m;
 }

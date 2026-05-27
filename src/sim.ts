@@ -3575,7 +3575,7 @@ function runInnerCell(
   // m_atp column), so the ATP translocase is just the generic
   // chem-transport path below -- no special energy branch. It is
   // mass-exact (1:1; both endpoints inside the host's mass ledger,
-  // host total includes inner via creatureSelfMass) and the ANT
+  // host total includes inner via creatureTotalMass recursion) and the ANT
   // analog: it only runs here (vacuolar), the outer applier skips
   // CHEM_ATP, and ATP permeability 0 blocks any passive crossing.
   for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
