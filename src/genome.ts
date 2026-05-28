@@ -1672,7 +1672,14 @@ const P_DELETE = 0.0003;
 export function mutateGenome(
   genome: Uint8Array,
   rng: () => number = Math.random,
+  // Global rate multiplier (world.mutationRateMul). 1 = shipped rates and
+  // identical RNG draws (determinism/golden unaffected); the controls panel
+  // dials it up/down to tune evolutionary mutation pressure live.
+  rateMul = 1,
 ): Uint8Array {
+  const pPoint = Math.min(0.5, P_POINT * rateMul);
+  const pInsert = Math.min(0.5, P_INSERT * rateMul);
+  const pDelete = Math.min(0.5, P_DELETE * rateMul);
   // New bytes (inserts + point-mutation replacements) are drawn from
   // the *parent's* observed op-bias. A lineage that's 30% noop keeps
   // generating ~30% noop on mutation; a tight bacterium stays tight.
@@ -1685,15 +1692,15 @@ export function mutateGenome(
   // Plus one trailing-insert chance so the genome can grow at the end.
   const out: number[] = [];
   for (let i = 0; i < genome.length; i++) {
-    if (rng() < P_DELETE) continue;
-    if (rng() < P_INSERT) {
+    if (rng() < pDelete) continue;
+    if (rng() < pInsert) {
       out.push(randMutByte(rng, opBias));
     }
     let b = genome[i];
-    if (rng() < P_POINT) b = randMutByte(rng, opBias);
+    if (rng() < pPoint) b = randMutByte(rng, opBias);
     out.push(b);
   }
-  if (rng() < P_INSERT) {
+  if (rng() < pInsert) {
     out.push(randMutByte(rng, opBias));
   }
   // Every byte happened to delete: keep the genome non-empty with a

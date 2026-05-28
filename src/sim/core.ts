@@ -1344,6 +1344,10 @@ export interface World {
   // multiply through this so cells experience a real day/night rhythm.
   dayPhase: number;
   dayPeriod: number;
+  // Global germline-mutation rate multiplier (1 = shipped rates). Scales
+  // mutateGenome's per-byte point/insert/delete probabilities; dialed live
+  // from the controls panel to tune evolutionary mutation pressure.
+  mutationRateMul: number;
   // Disturbance events ("storms"). intensity 0..1 ramps up + down across
   // an event; surfaceAmp/brownian/zStir scale with it at use sites. The
   // scheduler picks the next event time uniformly within [60s, 1200s]

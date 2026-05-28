@@ -686,6 +686,10 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
       parallelMinUI = snapshot.parallelMin;
       renderParLabel();
     }
+    if (snapshot.mutationRateMul !== mutRateUI) {
+      mutRateUI = snapshot.mutationRateMul;
+      renderMutLabel();
+    }
     syncFoundersBtn(snapshot.foundersEnabled !== false);
     syncFounderMode(snapshot.founderCapEnabled !== false, snapshot.founderTarget ?? founderCapValue);
     syncSeedingBtn(snapshot.ongoingSeeding === true);
@@ -2298,7 +2302,36 @@ parPlus.addEventListener("click", () => nudgePar(PARALLEL_MIN_RANGE.step));
 renderParLabel();
 parWrap.append(parTitle, parMinus, parValue, parPlus);
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap);
+// Germline mutation-rate multiplier (world.mutationRateMul). Live knob on
+// evolutionary mutation pressure: scales mutateGenome's per-byte rates.
+const MUT_RATE_STEP = 0.25;
+const MUT_RATE_MAX = 10;
+let mutRateUI = 1;
+const mutWrap = document.createElement("div");
+mutWrap.style.cssText = capWrap.style.cssText;
+mutWrap.title = "Germline mutation-rate multiplier at fission (1x = shipped rate). " +
+  "Scales the per-byte point/insert/delete probabilities; raise for faster drift, " +
+  "lower (or 0) to freeze genomes.";
+const mutTitle = document.createElement("span");
+mutTitle.textContent = "mut×"; mutTitle.style.cssText = "opacity:0.7;";
+const mutValue = document.createElement("span");
+mutValue.style.cssText = "font-weight:bold;min-width:5ch;text-align:right;color:#cfe;";
+const mutMinus = mkBtn("−", `Lower the mutation rate by ${MUT_RATE_STEP}x`);
+const mutPlus = mkBtn("+", `Raise the mutation rate by ${MUT_RATE_STEP}x`);
+mutMinus.style.cssText = CBTN + "padding:1px 9px;";
+mutPlus.style.cssText = CBTN + "padding:1px 9px;";
+function renderMutLabel(): void { mutValue.textContent = `${mutRateUI.toFixed(2)}×`; }
+function nudgeMut(delta: number): void {
+  mutRateUI = Math.max(0, Math.min(MUT_RATE_MAX, Math.round((mutRateUI + delta) * 100) / 100));
+  renderMutLabel();
+  simWorker.postMessage({ type: "setMutationRate", mul: mutRateUI });
+}
+mutMinus.addEventListener("click", () => nudgeMut(-MUT_RATE_STEP));
+mutPlus.addEventListener("click", () => nudgeMut(MUT_RATE_STEP));
+renderMutLabel();
+mutWrap.append(mutTitle, mutMinus, mutValue, mutPlus);
+
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";

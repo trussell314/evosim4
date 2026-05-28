@@ -1114,6 +1114,7 @@ export function createWorld(
     nextSpeciesLane: 0,
     anchorGenome: new Uint8Array(0),
     brownianAmp: 18,
+    mutationRateMul: 1,
     dayPhase: 0.2, // start a bit before noon so first day shows
     dayPeriod: 600, // Earth-like: 1 day ~= 1 current/diffusion cycle
     disturbanceIntensity: 0,
@@ -3208,7 +3209,7 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(inner),
     ATP_REPRODUCE,
   );
-  const childGenome = mutateGenome(inner.genome, simRng);
+  const childGenome = mutateGenome(inner.genome, simRng, world.mutationRateMul);
   // Same genome-replication material tax a free cell pays, charged
   // before the cytoplasm split.
   chargeGenomeReplication(inner, childGenome);
@@ -5568,7 +5569,7 @@ function tryReproduce(parent: Creature, world: World): void {
     const partner = parent.bonds[Math.floor(simRng() * parent.bonds.length)];
     parentGenome = crossoverGenomes(parent.genome, partner.genome);
   }
-  const childGenome = mutateGenome(parentGenome, simRng);
+  const childGenome = mutateGenome(parentGenome, simRng, world.mutationRateMul);
   // Pay the genome-replication material tax before partitioning the
   // cytoplasm, so the child's proportional share is taken from what
   // the parent has left after copying the DNA.
@@ -6048,6 +6049,7 @@ interface SavedWorld {
   extinctionCount: number;
   founderTarget: number;
   dayPhase: number;
+  mutationRateMul?: number;
   disturbanceIntensity: number;
   disturbanceStartedAt: number;
   disturbanceUntil: number;
@@ -6180,6 +6182,7 @@ export function serializeWorld(w: World): string {
     ongoingSeeding: w.ongoingSeeding,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
+    mutationRateMul: w.mutationRateMul,
     atmosphere: { ...w.atmosphere },
     ambient: (() => {
       const out: Array<{ i: number; v: number }> = [];
@@ -6328,6 +6331,7 @@ export function applySavedWorld(world: World, json: string): boolean {
     ? deserializeRxnStats(saved.rxnStats)
     : newRxnStats();
   world.dayPhase = saved.dayPhase;
+  world.mutationRateMul = saved.mutationRateMul ?? 1;
   world.disturbanceIntensity = saved.disturbanceIntensity;
   world.disturbanceStartedAt = saved.disturbanceStartedAt;
   world.disturbanceUntil = saved.disturbanceUntil;
@@ -6517,6 +6521,9 @@ export interface RenderSnapshot extends WorldEnv {
   // Day-cycle length in sim-seconds. Lets the HUD relabel elapsed time
   // so one full day/night cycle reads as 24h regardless of dayPeriod.
   dayPeriod: number;
+  // Live germline mutation-rate multiplier, surfaced so the controls
+  // panel reflects the current / loaded value.
+  mutationRateMul: number;
   particleTarget: number;
   parallelMin: number;
   extinctionCount: number;
@@ -6813,6 +6820,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     tempPatchPeriod: world.tempPatchPeriod,
     dayPhase: world.dayPhase,
     dayPeriod: world.dayPeriod,
+    mutationRateMul: world.mutationRateMul,
     wind: world.wind,
     windExposureFromLeft: world.windExposureFromLeft,
     windExposureFromRight: world.windExposureFromRight,
