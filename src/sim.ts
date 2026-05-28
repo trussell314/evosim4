@@ -6382,8 +6382,21 @@ export function applySavedWorld(world: World, json: string): boolean {
   //   (c) save has geologySeed but no obstacles array -- regenerate
   //       from the saved seed (round-trips through ROCK_POLYGONS).
   if (saved.geologySeed === undefined) {
-    let migrated = 0;
-    while (migrated === 0) migrated = (Math.random() * 0x100000000) >>> 0;
+    // Pre-geology save migration: derive the seed DETERMINISTICALLY from
+    // the save's own content (FNV-1a over anchorGenome + a few scalars)
+    // so the same save reloads to the same geometry every time. Using
+    // Math.random() here would re-roll the geology on every reload --
+    // exactly the bug we're fixing.
+    let migrated = 2166136261; // FNV offset basis
+    const mix = (b: number): void => {
+      migrated = (migrated ^ (b & 0xff)) >>> 0;
+      migrated = Math.imul(migrated, 16777619) >>> 0;
+    };
+    for (let i = 0; i < saved.anchorGenome.length; i++) mix(saved.anchorGenome[i]);
+    mix(saved.t | 0); mix((saved.t | 0) >> 8); mix((saved.t | 0) >> 16);
+    mix(saved.extinctionCount | 0); mix(saved.nextLineageRoot | 0);
+    mix(saved.width | 0); mix(saved.height | 0);
+    if (migrated === 0) migrated = 1;
     world.geologySeed = migrated;
     world.obstacles = [];
     generateObstacles(world);
