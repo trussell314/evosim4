@@ -3077,9 +3077,8 @@ function render(): void {
   ctx.closePath();
   ctx.fill();
 
-  // Night sky: twinkling stars + a full moon. nightAmount peaks at solar
-  // midnight (dayPhase 0.75) and is 0 through the day, so both fade in at
-  // dusk and out at dawn. Drawn over the sky band, under the water.
+  // Stars: night-only, twinkle on wall-clock time. nightAmount peaks at
+  // solar midnight (dayPhase 0.75) and is 0 through the day.
   const nightAmount = Math.max(0, -Math.sin(2 * Math.PI * snapshot.dayPhase));
   if (nightAmount > 0.01) {
     const skyH = Math.max(1, surfaceY);
@@ -3093,28 +3092,80 @@ function render(): void {
       ctx.fillStyle = `rgba(235,242,255,${a.toFixed(3)})`;
       ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 2 * Math.PI); ctx.fill();
     }
+  }
 
-    // Full moon: rides the sun's arc exactly half a cycle behind it, so it
-    // is always 180deg off the sun -- rising in the east as the sun sets,
-    // overhead at solar midnight, setting in the west by sunrise. Anchored
-    // to the flat baseline surface like the sun (no wave jitter).
-    const nf = Math.min(1, Math.max(0, (snapshot.dayPhase - 0.5) / 0.5));
-    const mx = (0.05 + 0.90 * nf) * width;
-    const my = surfaceY - (surfaceY - 6) * Math.sin(Math.PI * nf);
-    const mr = 9;
-    const mglow = ctx.createRadialGradient(mx, my, 0, mx, my, mr * 3);
-    mglow.addColorStop(0, `rgba(220,228,245,${0.35 * nightAmount})`);
-    mglow.addColorStop(1, "rgba(220,228,245,0)");
-    ctx.fillStyle = mglow;
-    ctx.beginPath(); ctx.arc(mx, my, mr * 3, 0, 2 * Math.PI); ctx.fill();
-    // Fully-lit disc (full moon -> no crescent).
-    ctx.fillStyle = `rgba(238,242,250,${(0.55 + 0.4 * nightAmount).toFixed(3)})`;
-    ctx.beginPath(); ctx.arc(mx, my, mr, 0, 2 * Math.PI); ctx.fill();
-    // Faint maria for a little texture.
-    ctx.fillStyle = `rgba(203,210,226,${(0.45 * nightAmount).toFixed(3)})`;
-    ctx.beginPath(); ctx.arc(mx - 2.6, my - 1.4, 2.1, 0, 2 * Math.PI); ctx.fill();
-    ctx.beginPath(); ctx.arc(mx + 2.3, my + 2.1, 1.5, 0, 2 * Math.PI); ctx.fill();
-    ctx.beginPath(); ctx.arc(mx + 1.0, my - 2.9, 1.0, 0, 2 * Math.PI); ctx.fill();
+  // Moon -- phase-aware, visible whenever it's above the horizon (which
+  // sometimes overlaps daytime, like a daytime first-quarter moon). The
+  // moon's daily arc lags the sun by moonPhase of a full cycle: a new
+  // moon rises with the sun, a full moon rises as the sun sets. The lit
+  // side always faces the actual sun position (including below horizon).
+  {
+    const sl = solarLight(snapshot);
+    const lunarPeriodSimSec =
+      LUNAR_CYCLE_MODERN_HOURS * 3600 * snapshot.dayPeriod / SECONDS_PER_DISPLAY_DAY;
+    const moonPhase = (snapshot.t / lunarPeriodSimSec) % 1; // 0 = new, 0.5 = full
+    const moonDayPhase = ((snapshot.dayPhase - moonPhase) % 1 + 1) % 1;
+    if (moonDayPhase > 0 && moonDayPhase < 0.5) {
+      const nf = moonDayPhase / 0.5;
+      const mx = (0.05 + 0.90 * nf) * width;
+      const my = surfaceY - (surfaceY - 6) * Math.sin(Math.PI * nf);
+      // Sun's screen position, with below-horizon extrapolation, so the
+      // moon's lit side correctly faces it at night too.
+      let sunScreenX: number; let sunScreenY: number;
+      if (snapshot.dayPhase <= 0.5) {
+        const snf = snapshot.dayPhase / 0.5;
+        sunScreenX = (0.05 + 0.90 * snf) * width;
+        sunScreenY = surfaceY - (surfaceY - 6) * Math.sin(Math.PI * snf);
+      } else {
+        const snf = (snapshot.dayPhase - 0.5) / 0.5;
+        sunScreenX = (0.95 - 0.90 * snf) * width;
+        sunScreenY = surfaceY + (surfaceY - 6) * Math.sin(Math.PI * snf);
+      }
+      const angleToSun = Math.atan2(sunScreenY - my, sunScreenX - mx);
+
+      // Daytime moon fades against the bright sky; nighttime fully visible.
+      const visScale = 1 - 0.6 * sl;
+      if (visScale > 0.05) {
+        const mr = MOON_RADIUS;
+        const mglow = ctx.createRadialGradient(mx, my, 0, mx, my, mr * 3);
+        mglow.addColorStop(0, `rgba(220,228,245,${(0.35 * nightAmount).toFixed(3)})`);
+        mglow.addColorStop(1, "rgba(220,228,245,0)");
+        ctx.fillStyle = mglow;
+        ctx.beginPath(); ctx.arc(mx, my, mr * 3, 0, 2 * Math.PI); ctx.fill();
+
+        ctx.save();
+        ctx.translate(mx, my);
+        ctx.rotate(angleToSun); // +x in the rotated frame points at the sun
+
+        // Unlit base (whole disc) so the dark half is dimly visible.
+        ctx.fillStyle = `rgba(68,76,96,${(0.35 * visScale).toFixed(3)})`;
+        ctx.beginPath(); ctx.arc(0, 0, mr, 0, 2 * Math.PI); ctx.fill();
+
+        // Lit overlay. k = cos(2π*phase): +1 at new (nothing lit), 0 at
+        // quarter (half disc), -1 at full (whole disc). |k| is the
+        // terminator ellipse's semi-axis along the moon-sun line.
+        const k = Math.cos(2 * Math.PI * moonPhase);
+        const litAlpha = visScale * (0.55 + 0.45 * nightAmount);
+        if (moonPhase < 0.005 || moonPhase > 0.995) {
+          // New moon: no lit overlay.
+        } else if (Math.abs(moonPhase - 0.5) < 0.005) {
+          // Full moon: whole disc lit.
+          ctx.fillStyle = `rgba(238,242,250,${litAlpha.toFixed(3)})`;
+          ctx.beginPath(); ctx.arc(0, 0, mr, 0, 2 * Math.PI); ctx.fill();
+        } else {
+          // Crescent (k > 0) or gibbous (k < 0): the sun-side semicircle
+          // plus an ellipse arc that either subtracts (curves toward +x,
+          // crescent) or adds (curves toward -x, gibbous).
+          ctx.fillStyle = `rgba(238,242,250,${litAlpha.toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(0, 0, mr, -Math.PI / 2, Math.PI / 2, false);
+          ctx.ellipse(0, 0, Math.abs(k) * mr, mr, 0, Math.PI / 2, -Math.PI / 2, k >= 0);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+    }
   }
 
   // Sun: arcs across the sky over the day -- rises at 5% of width, climbs
@@ -4667,9 +4718,19 @@ function tracedWobblyBody(cx: number, cy: number, r: number, t: number, phase: n
 // Format seconds as "1h02m" / "12m04s" / "47.3s" so age is readable across
 // the wide range a long-running simulation can produce.
 // Relabel elapsed sim-time so one full day/night cycle (dayPeriod
-// sim-seconds) reads as a 24h day. Scale = 86400 / dayPeriod (144x at the
-// default 600s day). Display-only -- the simulation is untouched.
-const SECONDS_PER_DISPLAY_DAY = 86400;
+// sim-seconds) reads as a 13h ancient day -- the best estimate for
+// Earth's day length at ~3.5 Ga when single-celled life first appeared
+// (Farhat et al. 2022 Earth-Moon tidal-dynamics fit). Display-only --
+// the simulation is untouched.
+const SECONDS_PER_DISPLAY_DAY = 13 * 3600;
+// ~3.5 Ga synodic lunar period (full moon to full moon): ~23 of today's
+// 24h days. The Moon was at ~332,000 km vs 384,400 km today, ~85% of
+// current distance, hence both the shorter month and the slightly
+// larger apparent moon in the renderer.
+const LUNAR_CYCLE_MODERN_HOURS = 23 * 24;
+// Moon disc radius (px). Bumped from the modern-distance baseline 9 to
+// reflect the ~16% larger apparent size at ~332,000 km away.
+const MOON_RADIUS = 11;
 function formatDayClock(simSec: number, dayPeriod: number): string {
   const sec = simSec * (SECONDS_PER_DISPLAY_DAY / Math.max(1, dayPeriod));
   const days = Math.floor(sec / SECONDS_PER_DISPLAY_DAY);
