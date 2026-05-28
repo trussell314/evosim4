@@ -151,6 +151,7 @@ function quietWorld(): World {
     dayPhase: 0.25, // midday for tests so photosynthesis works normally
     dayPeriod: 90,
     mutationRateMul: 1,
+    geologySeed: 0,
     disturbanceIntensity: 0,
     disturbanceStartedAt: 0,
     disturbanceUntil: 0,

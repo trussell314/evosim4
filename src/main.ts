@@ -632,12 +632,18 @@ void (async () => {
     WORLD_SIZE.w = pendingScenario.width;
     WORLD_SIZE.h = pendingScenario.height;
   }
+  // Roll a random non-zero seed so a fresh production world gets varied
+  // rocks by default. Loading a save overrides this with the saved
+  // geologySeed; scenarios bake their own terrain via buildScenarioWorld.
+  let initGeologySeed = 0;
+  while (initGeologySeed === 0) initGeologySeed = (Math.random() * 0x100000000) >>> 0;
   simWorker.postMessage({
     type: "init",
     width: WORLD_SIZE.w,
     height: WORLD_SIZE.h,
     savedJson: pendingScenario ? null : savedJson,
     scenario: pendingScenario ?? undefined,
+    geologySeed: initGeologySeed,
   });
   // Re-establish cull protection for pinned species. FIFO message
   // order guarantees the worker has built (or restored) its world
@@ -689,6 +695,13 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     if (snapshot.mutationRateMul !== mutRateUI) {
       mutRateUI = snapshot.mutationRateMul;
       renderMutLabel();
+    }
+    if (snapshot.geologySeed !== lastBuiltGeologySeed) {
+      // Geology changed (loaded save, or the user clicked "adjust geology"
+      // and the worker reran perturbation). Drop the cached terrain
+      // bitmap so the next render rebuilds it from the new obstacles.
+      lastBuiltGeologySeed = snapshot.geologySeed;
+      terrainBitmap = null;
     }
     syncFoundersBtn(snapshot.foundersEnabled !== false);
     syncFounderMode(snapshot.founderCapEnabled !== false, snapshot.founderTarget ?? founderCapValue);
@@ -2331,7 +2344,20 @@ mutPlus.addEventListener("click", () => nudgeMut(MUT_RATE_STEP));
 renderMutLabel();
 mutWrap.append(mutTitle, mutMinus, mutValue, mutPlus);
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap);
+// "adjust geology" -- rerolls procedural rock perturbation in place.
+// Rocks (silhouette + collision lobes), heightmap, and surface modifiers
+// rebuild around the new seed; the vent stays at its same relative
+// position; sim time + population keep running.
+const geologyBtn = mkBtn("geology", "Reroll the procedural rock geometry (terrain only; sim keeps running).");
+geologyBtn.addEventListener("click", () => {
+  // Random non-zero u32 seed so a re-roll always produces fresh geology
+  // (seed 0 is reserved for the un-perturbed identity / legacy / tests).
+  let seed = 0;
+  while (seed === 0) seed = (Math.random() * 0x100000000) >>> 0;
+  simWorker.postMessage({ type: "setGeologySeed", seed });
+});
+
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";
@@ -3990,6 +4016,11 @@ function hslAdjustL(hsl: string, lDelta: number): string {
 // run every frame in the main render loop is baked into an offscreen
 // canvas once. The main loop then blits it with a single drawImage().
 let terrainBitmap: HTMLCanvasElement | null = null;
+// Tracks the geology seed the cached terrainBitmap was built for. When
+// the snapshot's geologySeed changes (load, or "adjust geology"), this
+// drops to force a rebuild from the new obstacles. -1 is a sentinel that
+// any real seed (incl. 0) differs from on the first snapshot.
+let lastBuiltGeologySeed = -1;
 // Corner-rounding radius for the rendered rock silhouette. Render-only:
 // collision runs against the lobe circles, not this polygon, so softening
 // the drawn corners has zero physics/determinism impact.

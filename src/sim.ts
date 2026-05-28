@@ -124,6 +124,7 @@ import {
   mass, creatureTotalMass,
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
+import { perturbPolygons } from "./sim/geology";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
 import { VENT_FUEL_CHEMS } from "./sim/chemolith";
 // Pure ambient-field helpers (surface profile, baseline temperature,
@@ -867,14 +868,41 @@ export function generateObstacles(world: World): void {
   // directional lighting + crack mask; keeping one base tone here
   // avoids "this rock is darker than that one for no reason" patches.
   const baseTone = "#4a4038";
-  for (const poly of ROCK_POLYGONS) {
-    pushTerrainPolygon(world, scalePolygon(poly, W, H), baseTone);
+  // Procedural variance: jitter each polygon's vertices (no-op when
+  // geologySeed == 0, so default/test worlds use ROCK_POLYGONS exactly).
+  // The vent point is guarded so the seafloor's notch can't close over it.
+  const scaled = ROCK_POLYGONS.map((p) => scalePolygon(p, W, H));
+  const vent = { x: VENT_ORIGIN.x * W, y: VENT_ORIGIN.y * H };
+  const perturbed = perturbPolygons(scaled, W, H, world.geologySeed, vent);
+  for (const pts of perturbed) {
+    pushTerrainPolygon(world, pts, baseTone);
   }
 
+  rebuildTerrainDerived(world);
+}
+
+// Live geology swap: set a new procedural-geology seed and regenerate
+// the rocks (polygons + collision lobes), heightmap, surface maps, and
+// vent. The collision spatial index is rebuilt against the new lobes.
+// Existing particles + cells that happen to sit inside a new rock are
+// pushed out by the next tick's evacuateRocks pass.
+export function regenerateGeology(world: World, seed: number): void {
+  world.geologySeed = seed >>> 0;
+  generateObstacles(world);
+  rebuildObstacleIndex(world);
+}
+
+// Rebuild the heightmap / surface-modifier maps / vent from the current
+// world.obstacles. Split out so a save restore can populate obstacles
+// directly and then refresh the derived caches without re-running rock
+// generation (which would overwrite the loaded geometry).
+export function rebuildTerrainDerived(world: World): void {
+  world.terrainHeightmap = undefined;
+  if (!TERRAIN_ENABLED) return;
+  const W = world.width;
+  const H = world.height;
   const heightmap = buildTerrainHeightmap(world.obstacles, W);
-
   world.terrainHeightmap = heightmap;
-
   // Surface-modifier maps (wind exposure, wave origin, shoaling) keyed
   // off the still water level; the heavy per-column math lives in
   // ./sim/terrain.
@@ -1017,7 +1045,7 @@ let simRng: () => number = Math.random;
 export function createWorld(
   width: number,
   height: number,
-  opts?: { delayedSpawn?: boolean; seed?: number },
+  opts?: { delayedSpawn?: boolean; seed?: number; geologySeed?: number },
 ): World {
   // Install the seeded generator before ANY random draw below (the
   // world literal's nextDisturbanceAt, generateObstacles, founder
@@ -1115,6 +1143,7 @@ export function createWorld(
     anchorGenome: new Uint8Array(0),
     brownianAmp: 18,
     mutationRateMul: 1,
+    geologySeed: (opts?.geologySeed ?? 0) >>> 0,
     dayPhase: 0.2, // start a bit before noon so first day shows
     dayPeriod: 600, // Earth-like: 1 day ~= 1 current/diffusion cycle
     disturbanceIntensity: 0,
@@ -6050,6 +6079,9 @@ interface SavedWorld {
   founderTarget: number;
   dayPhase: number;
   mutationRateMul?: number;
+  // Procedural-geology seed (0 / absent = un-perturbed legacy geometry).
+  // Saved alongside the obstacles for explicit reproducibility.
+  geologySeed?: number;
   disturbanceIntensity: number;
   disturbanceStartedAt: number;
   disturbanceUntil: number;
@@ -6183,6 +6215,7 @@ export function serializeWorld(w: World): string {
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     mutationRateMul: w.mutationRateMul,
+    geologySeed: w.geologySeed,
     atmosphere: { ...w.atmosphere },
     ambient: (() => {
       const out: Array<{ i: number; v: number }> = [];
@@ -6338,12 +6371,18 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.nextDisturbanceAt = saved.nextDisturbanceAt;
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
   world.liveCodingKeys = new Set(saved.liveCodingKeys);
-  // Terrain is procedural and deterministic-from-fresh; we don't
-  // serialize it. Regenerate from the world dimensions instead of
-  // restoring any obstacles the save may have carried. (Per project
-  // policy: no save-state compatibility, see CHEMISTRY_OVERHAUL.md.)
-  world.obstacles = [];
-  generateObstacles(world);
+  // Terrain restore: the save carries the actual polygons + lobes so a
+  // perturbed (procedural-geology) world reloads with the SAME rocks.
+  // Old saves without obstacles fall back to regenerating from
+  // ROCK_POLYGONS + geologySeed (also restored, default 0 = un-perturbed).
+  world.geologySeed = (saved.geologySeed ?? 0) >>> 0;
+  if (saved.obstacles && saved.obstacles.length > 0) {
+    world.obstacles = saved.obstacles;
+    rebuildTerrainDerived(world);
+  } else {
+    world.obstacles = [];
+    generateObstacles(world);
+  }
   rebuildObstacleIndex(world);
   if (saved.atmosphere) {
     const atm = world.atmosphere;
@@ -6524,6 +6563,9 @@ export interface RenderSnapshot extends WorldEnv {
   // Live germline mutation-rate multiplier, surfaced so the controls
   // panel reflects the current / loaded value.
   mutationRateMul: number;
+  // Geology seed. Surfaced so main can invalidate the cached terrain
+  // bitmap when "adjust geology" rolls a new seed.
+  geologySeed: number;
   particleTarget: number;
   parallelMin: number;
   extinctionCount: number;
@@ -6821,6 +6863,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     dayPhase: world.dayPhase,
     dayPeriod: world.dayPeriod,
     mutationRateMul: world.mutationRateMul,
+    geologySeed: world.geologySeed,
     wind: world.wind,
     windExposureFromLeft: world.windExposureFromLeft,
     windExposureFromRight: world.windExposureFromRight,

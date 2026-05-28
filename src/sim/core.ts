@@ -1341,6 +1341,10 @@ export interface World {
   // Day/night: phase 0..1 advances at 1/dayPeriod each sec. Solar light
   // multiplier = max(0, sin(2*pi*phase + offset)); midday at phase 0.25,
   // dead night at phase 0.75. Photosynthesis and the light sensor both
+  // Procedural-variance seed for the rock geometry. 0 = identity (rocks
+  // use the un-perturbed ROCK_POLYGONS exactly, same as legacy / tests).
+  // Non-zero = per-world rock shapes; "adjust geology" rolls a new seed.
+  geologySeed: number;
   // multiply through this so cells experience a real day/night rhythm.
   dayPhase: number;
   dayPeriod: number;

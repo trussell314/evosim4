@@ -17,6 +17,7 @@ import {
   createWorld,
   getCollisionSharedLayout,
   makeProfile,
+  regenerateGeology,
   resetProfile,
   serializeWorld,
   setCollisionPhaseDispatcher,
@@ -74,7 +75,7 @@ let advancedSinceSnapshot = 0;
 let simMsSinceSnapshot = 0;
 
 type WorkerInbound =
-  | { type: "init"; width: number; height: number; savedJson?: string | null; scenario?: ScenarioSpec }
+  | { type: "init"; width: number; height: number; savedJson?: string | null; scenario?: ScenarioSpec; geologySeed?: number }
   | { type: "setTurbo"; turbo: boolean }
   | { type: "toggleProfile" }
   | { type: "applySaved"; json: string }
@@ -87,6 +88,7 @@ type WorkerInbound =
   | { type: "setFounderTarget"; target: number }
   | { type: "setFounderCapEnabled"; on: boolean }
   | { type: "setMutationRate"; mul: number }
+  | { type: "setGeologySeed"; seed: number }
   | { type: "killCell"; id: number }
   | { type: "setDensityChem"; chem: number }
   | {
@@ -147,7 +149,7 @@ self.addEventListener("message", (e: MessageEvent) => {
         // spec (custom size/env + seeded populations). Ignores savedJson.
         world = buildScenarioWorld(m.scenario);
       } else {
-        world = createWorld(m.width, m.height, { delayedSpawn: true });
+        world = createWorld(m.width, m.height, { delayedSpawn: true, geologySeed: m.geologySeed });
       }
       // Enable in-engine sub-step profile by default so the [prof] log
       // can break down the "creature" bucket into pheromone / bonds /
@@ -201,6 +203,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setMutationRate":
       if (world) world.mutationRateMul = Math.max(0, m.mul);
+      break;
+    case "setGeologySeed":
+      if (world) regenerateGeology(world, m.seed >>> 0);
       break;
     case "killCell":
       if (world) (world.killRequests ??= new Set()).add(m.id);
