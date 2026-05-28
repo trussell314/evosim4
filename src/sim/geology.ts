@@ -12,8 +12,10 @@
 //     The off-axis stays clamped, so the rock never lifts off the wall.
 //   - interior: free offset in a random direction within the magnitude.
 //
-// Magnitude is *relative*: capped at MAGNITUDE * min(adjacent edge len),
-// so big edges jitter visibly and tight crags don't tear.
+// Magnitude is *relative*: capped at MAGNITUDE * avg(adjacent edge len).
+// (Tried min(adjacent) initially -- collapsed to invisible jitter on
+// polygons with many short edges because one short neighbour pinned the
+// cap to ~1px. avg lets dense-vertex polygons still vary visibly.)
 //
 // Topology guard: every candidate polygon must (a) have no non-adjacent
 // self-intersection, (b) not cross any other rock's polygon, (c) not
@@ -24,8 +26,14 @@
 
 export interface Vec { x: number; y: number; }
 
-const RETRIES = 16;
-const MAGNITUDES = [0.20, 0.10, 0.05];
+const RETRIES = 32;
+// Per-vertex offset cap = MAG * avg(adjacent edge lengths). Using the
+// AVERAGE (not min) of the two adjacent edges keeps a vertex with one
+// tiny + one long neighbour from collapsing to invisible perturbation.
+// The schedule starts large and falls back to smaller mags if the
+// topology guard keeps rejecting -- worst case (still rejected at the
+// smallest mag) the polygon falls back to the un-perturbed original.
+const MAGNITUDES = [0.60, 0.40, 0.25, 0.10];
 
 // Boundary classification against the world box [0,W] x [0,H]. Bitmask:
 // 1=left (x==0), 2=right (x==W), 4=top (y==0), 8=bottom (y==H).
@@ -124,7 +132,7 @@ function perturbOnce(
     const next = pts[(i + 1) % n];
     const eLenA = Math.hypot(p.x - prev.x, p.y - prev.y);
     const eLenB = Math.hypot(next.x - p.x, next.y - p.y);
-    const cap = Math.min(eLenA, eLenB) * mag;
+    const cap = ((eLenA + eLenB) / 2) * mag;
     const mask = boundaryMask(p, W, H);
     if (mask === 0) {
       // Interior: random direction, magnitude in [-cap, +cap] along each axis.

@@ -4024,7 +4024,7 @@ let lastBuiltGeologySeed = -1;
 // Corner-rounding radius for the rendered rock silhouette. Render-only:
 // collision runs against the lobe circles, not this polygon, so softening
 // the drawn corners has zero physics/determinism impact.
-const ROCK_CORNER_R = 4;
+const ROCK_CORNER_R = 10;
 // Trace a closed polygon with its corners filleted to ~`r` px instead of
 // hard vector points. arcTo between edge midpoints bounds each fillet to
 // half the adjacent edge; an extra per-corner clamp keeps short edges
