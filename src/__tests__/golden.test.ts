@@ -373,7 +373,9 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Bumped again: dayPeriod default 90 -> 600 (Earth-like day). The
     // seeded run advances dayPhase ~6.7x slower, so the solar-light curve
     // (photosynthesis/photoreception) differs every tick. Intended.
-    const GOLDEN = "8a55569d";
+    // Bumped again: FOUNDER_TARGET 10 -> 20 (default cap doubled), so the
+    // seeded pool maintains 2x the founders. Intended.
+    const GOLDEN = "0ccbbafb";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

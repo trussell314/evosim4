@@ -1051,18 +1051,12 @@ export function createWorld(
   // world literal's nextDisturbanceAt, generateObstacles, founder
   // spawn all consume it).
   simRng = opts?.seed != null ? mulberry32(opts.seed >>> 0) : Math.random;
-  // Density-invariant budgets: scale the particle + founder targets with
-  // world area (referenced to the 800x600 baseline) so a larger world
-  // holds proportionally more food + founders instead of the same count
-  // spread thin. createWorld(800, 600, ...) yields areaScale == 1 and the
-  // exact legacy values (1000 / 10), so the determinism + golden tests
-  // -- which build 800x600 worlds -- are byte-identical.
-  const areaScale = (width * height) / (800 * 600);
-  const particleTarget = Math.max(
-    PARTICLE_TARGET_MIN,
-    Math.min(PARTICLE_TARGET_MAX, Math.round(INITIAL_PARTICLE_TARGET * areaScale)),
-  );
-  const founderTarget = Math.max(1, Math.round(FOUNDER_TARGET * areaScale));
+  // Fixed initial budgets, independent of world area. (Area-scaling was
+  // tried, but the resulting density at 1600x1200 was too crowded to
+  // see what's happening; we'd rather start sparser and let the user
+  // crank the cap up live via the controls bar if they want more.)
+  const particleTarget = INITIAL_PARTICLE_TARGET;
+  const founderTarget = FOUNDER_TARGET;
   const world: World = {
     width, height,
     depth: 24,
@@ -1212,7 +1206,7 @@ export function createWorld(
 // batch" constants any more.
 // Cap of 10 distinct founder-derived coding lineages: once 10+ such
 // species are alive, the top-up stops spawning new founders.
-const FOUNDER_TARGET = 10;
+const FOUNDER_TARGET = 20;
 // Active immigration model. Each trickle interval, if the live lineage
 // pool is below FOUNDER_TARGET, spawn the ENTIRE remaining deficit
 // (founderTarget - live) so the pool is topped straight back to the cap.

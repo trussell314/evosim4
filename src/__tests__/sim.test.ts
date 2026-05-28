@@ -279,22 +279,20 @@ describe("createWorld", () => {
     // the live count lands below the cap but well populated.
     expect(w.particles.length).toBeGreaterThan(w.particleTarget * 0.4);
     expect(w.particles.length).toBeLessThanOrEqual(w.particleTarget);
-    expect(w.creatures.length).toBeGreaterThanOrEqual(5);
-    expect(w.creatures.length).toBeLessThanOrEqual(10);
+    expect(w.creatures.length).toBeGreaterThanOrEqual(10);
+    expect(w.creatures.length).toBeLessThanOrEqual(20);
     expect(w.extinctionCount).toBe(0);
     expect(w.particleTarget).toBeGreaterThan(0);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
   });
 
-  it("initial particle + founder targets scale with world area (density-invariant)", () => {
+  it("initial particle + founder targets are fixed defaults, independent of world size", () => {
     const small = createWorld(800, 600);
-    const big = createWorld(1600, 1200); // 4x area
-    // Anchored to the 800x600 baseline: same density, proportionally more
-    // food + founders in a larger world.
+    const big = createWorld(1600, 1200);
     expect(small.particleTarget).toBe(1000);
-    expect(big.particleTarget).toBe(4000);
-    expect(small.founderTarget).toBe(10);
-    expect(big.founderTarget).toBe(40);
+    expect(big.particleTarget).toBe(1000);
+    expect(small.founderTarget).toBe(20);
+    expect(big.founderTarget).toBe(20);
   });
 
   it("resizeWorld does not rescale the particle target", () => {
@@ -410,8 +408,8 @@ describe("createWorld", () => {
     const w = createWorld(800, 600);
     // FOUNDER_TARGET=10 -> a 6-10 founder cohort, each random genome its
     // own root. Founders are at firstSeen=0 with no parent.
-    expect(w.species.size).toBeGreaterThanOrEqual(5);
-    expect(w.species.size).toBeLessThanOrEqual(10);
+    expect(w.species.size).toBeGreaterThanOrEqual(10);
+    expect(w.species.size).toBeLessThanOrEqual(20);
     for (const sp of w.species.values()) {
       // Founders enter at world creation time. createWorld in the
       // test path bumps w.t past the warmup delays before spawning,
