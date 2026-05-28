@@ -6503,6 +6503,9 @@ export interface RenderSnapshot extends WorldEnv {
   // World geometry / scalars used by the renderer.
   width: number;
   depth: number;
+  // Day-cycle length in sim-seconds. Lets the HUD relabel elapsed time
+  // so one full day/night cycle reads as 24h regardless of dayPeriod.
+  dayPeriod: number;
   particleTarget: number;
   parallelMin: number;
   extinctionCount: number;
@@ -6798,6 +6801,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     tempPatchLength: world.tempPatchLength,
     tempPatchPeriod: world.tempPatchPeriod,
     dayPhase: world.dayPhase,
+    dayPeriod: world.dayPeriod,
     wind: world.wind,
     windExposureFromLeft: world.windExposureFromLeft,
     windExposureFromRight: world.windExposureFromRight,

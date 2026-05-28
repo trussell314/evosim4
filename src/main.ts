@@ -4449,29 +4449,35 @@ function drawCreature(c: CreatureSnapshot, selected: boolean, kin = false): void
 }
 
 // Draw a vacuole's engulfed cells inside a parent circle, recursing
-// into engulfed-within-engulfed nests. Each level shrinks; bottoms out
-// when the dots get sub-pixel or the nesting is implausibly deep, so a
-// pathological chain can't blow the frame budget.
+// into engulfed-within-engulfed nests. Each prey is drawn at its TRUE
+// radius (world units, same scale as the host) so relative sizes read
+// honestly; only clamped so a near-host-sized prey can't spill past the
+// host disk. Bottoms out when a dot would be sub-pixel on screen or the
+// nesting is implausibly deep, so a pathological chain can't blow the
+// frame budget. Host volume always contains its prey (creatureTotalMass
+// sums contents), so an unclamped inner.r never exceeds parentR anyway.
 function drawVacuole(
   list: InnerCreatureSnapshot[], cx: number, cy: number,
   parentR: number, depth: number,
 ): void {
-  const innerR = Math.min(parentR * 0.45, 6);
-  if (innerR < 0.75 || depth > 4) return;
+  if (depth > 4) return;
+  const offR = list.length === 1 ? 0 : parentR * 0.4;
   for (let i = 0; i < list.length; i++) {
+    const inner = list[i];
+    const ir = Math.min(inner.r, parentR - offR);
+    if (ir * viewScale < 0.6) continue; // sub-pixel on screen -> skip
     const angle = (i / Math.max(1, list.length)) * Math.PI * 2;
-    const offR = list.length === 1 ? 0 : parentR * 0.35;
     const ix = cx + Math.cos(angle) * offR;
     const iy = cy + Math.sin(angle) * offR;
-    ctx.fillStyle = list[i].color;
+    ctx.fillStyle = inner.color;
     ctx.beginPath();
-    ctx.arc(ix, iy, innerR, 0, Math.PI * 2);
+    ctx.arc(ix, iy, ir, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.55)";
     ctx.lineWidth = 1;
     ctx.stroke();
-    const sub = list[i].contents;
-    if (sub && sub.length > 0) drawVacuole(sub, ix, iy, innerR, depth + 1);
+    const sub = inner.contents;
+    if (sub && sub.length > 0) drawVacuole(sub, ix, iy, ir, depth + 1);
   }
 }
 
@@ -4498,6 +4504,20 @@ function tracedWobblyBody(cx: number, cy: number, r: number, t: number, phase: n
 
 // Format seconds as "1h02m" / "12m04s" / "47.3s" so age is readable across
 // the wide range a long-running simulation can produce.
+// Relabel elapsed sim-time so one full day/night cycle (dayPeriod
+// sim-seconds) reads as a 24h day. Scale = 86400 / dayPeriod (144x at the
+// default 600s day). Display-only -- the simulation is untouched.
+const SECONDS_PER_DISPLAY_DAY = 86400;
+function formatDayClock(simSec: number, dayPeriod: number): string {
+  const sec = simSec * (SECONDS_PER_DISPLAY_DAY / Math.max(1, dayPeriod));
+  const days = Math.floor(sec / SECONDS_PER_DISPLAY_DAY);
+  const rem = sec - days * SECONDS_PER_DISPLAY_DAY;
+  const h = Math.floor(rem / 3600);
+  const m = Math.floor((rem - h * 3600) / 60);
+  const hm = `${h}h${m.toString().padStart(2, "0")}m`;
+  return days > 0 ? `${days}d ${hm}` : hm;
+}
+
 function formatAge(sec: number): string {
   if (sec < 60) return `${sec.toFixed(1)}s`;
   if (sec < 3600) {
@@ -4549,7 +4569,7 @@ function updateInspector(): void {
     `parts=${snapshot.particles.length}/${snapshot.particleTarget}`;
   // Bottom HUD: clock / perf / build, fixed order.
   bottomHud.textContent =
-    `t=${formatAge(snapshot.t)}  ` +
+    `t=${formatDayClock(snapshot.t, snapshot.dayPeriod)}  ` +
     `fps=${perfFps.toFixed(0)}  ` +
     `sim=${perfSimRate.toFixed(1)}x  ` +
     `r=${perfRenderMs.toFixed(1)}ms  ` +
