@@ -2606,13 +2606,23 @@ function magFieldAt(world: World, x: number, y: number, out: Float32Array): void
 // senses the host cytoplasm's CONCENTRATION of each target chem
 // (option 1). That value goes in the X activation slot; Y is inert
 // (no direction inside a host).
-function runActivation(c: Creature, world: World, dt: number, host?: Creature): void {
+function runActivation(
+  c: Creature, world: World, dt: number,
+  host?: Creature,
+  // Optional precomputed values to skip redundant recompute when the
+  // caller has already done them for THIS exact position (occ + tempOff
+  // are functions of c.x, c.y, which is the host's position for every
+  // inner cell -- so a host with K engulfed organelles can share one
+  // pair across host's own activation + K inner activations).
+  cachedOcc?: number,
+  cachedTempOff?: number,
+): void {
   const s = c.store; const i = c.idx;
   const cols = s.chemCols;
   const k = Math.max(0, 1 - ACT_DECAY * dt);
   // Rock blocks light, so all three photo bands scale by the soft rock
   // occlusion (penumbra + scattered-light floor) at the cell.
-  const occ = lightOcclusion(world, c.x, c.y);
+  const occ = cachedOcc !== undefined ? cachedOcc : lightOcclusion(world, c.x, c.y);
   // shadeFactor: dimming from cells overhead (materialized in the pre-loop
   // emission pass). Folds into the photoreceptor reading so a cell can
   // SENSE that it's shaded (shade-avoidance). engulfed organelles get 1.
@@ -2634,7 +2644,7 @@ function runActivation(c: Creature, world: World, dt: number, host?: Creature): 
     + cols[CHEM_PHOTORECEPTOR_SURFACE][i] * lightSurf * dt;
   // THERMO: receptor * (local temp - baseline). Reads the diffused
   // regional cache so vent heat actually reaches the receptor.
-  const tempOff = regionTempAt(world, c.x, c.y) - TEMP_BASELINE;
+  const tempOff = cachedTempOff !== undefined ? cachedTempOff : (regionTempAt(world, c.x, c.y) - TEMP_BASELINE);
   cols[CHEM_ACT_THERMO][i] = cols[CHEM_ACT_THERMO][i] * k
     + cols[CHEM_THERMORECEPTOR][i] * tempOff * dt;
   // MECH: receptor * (net force + velocity contribution).
@@ -3403,6 +3413,11 @@ function runInnerCell(
   light: number,
   eatenInner: Set<Creature>,
   predatedInner: Set<Creature>,
+  // Inner cells share the host's position, so light occlusion + the
+  // (region temp - baseline) value are identical for every inner of one
+  // host. Caller hands them in once instead of recomputing per inner.
+  cachedOcc: number,
+  cachedTempOff: number,
 ): void {
   // The organelle experiences the host's location so the penetrating
   // outside fields (light at depth, temperature, magnetic) reach it
@@ -3414,7 +3429,7 @@ function runInnerCell(
   // Sense -> decide. Same activation + sensor snapshot + VM run a free
   // cell gets. VM_SENSORS/VM_SELF are shared scratch; we populate and
   // consume them synchronously here before the host loop reuses them.
-  runActivation(inner, world, dt, host);
+  runActivation(inner, world, dt, host, cachedOcc, cachedTempOff);
   populateSensors(inner, world, true);
   VM_SELF.energy = inner.energy;
   {
@@ -4728,6 +4743,14 @@ function updateCreatures(world: World, dt: number): void {
     const localTemp = regionTempAt(world, c.x, c.y);
     const km = tempMult(localTemp);
     const dtT = dt * km;
+    // Cache occlusion + temp-offset once per host. lightOcclusion samples
+    // the heightmap (~9 taps); regionTempAt is an O(1) region lookup but
+    // it gets called another two times below (ambientLight + thermo
+    // receptor). For a host with K engulfed organelles we previously did
+    // K+2 lightOcclusion calls and 3 regionTempAt calls at the same x,y;
+    // now it's exactly one of each, shared with host + inner activations.
+    const cachedOcc = lightOcclusion(world, c.x, c.y);
+    const cachedTempOff = localTemp - TEMP_BASELINE;
 
     // Cost of being alive. ATP turns into ADP, mass conserved. Drain
     // scales with temperature like the rest of metabolism.
@@ -4752,7 +4775,9 @@ function updateCreatures(world: World, dt: number): void {
     // Shade from cells overhead dims photosynthesis too (not just sensing),
     // so dense canopies actually compete for light -> shade-avoidance is a
     // real selective pressure, not just a readout.
-    const ambientLight = ambientLightAt(world, c.x, c.y) * c.store.shadeFactor[c.idx];
+    // Inlined ambientLightAt using cached occ (the regular helper would
+    // re-call lightOcclusion redundantly).
+    const ambientLight = solarLight(world) * Math.exp(-c.y / LIGHT_DECAY) * cachedOcc * c.store.shadeFactor[c.idx];
     runGenericReactions(c, dtT, ambientLight);
     // Standing transporters across the outer membrane (cell<->world).
     // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a
@@ -4789,7 +4814,7 @@ function updateCreatures(world: World, dt: number): void {
       for (let ic = 0; ic < nInnerThisTick; ic++) {
         const inn = c.contents[ic];
         if (eatenInner.has(inn)) continue; // eaten by an earlier sibling
-        runInnerCell(inn, c, world, dt, dtT, ambientLight, eatenInner, predatedInner);
+        runInnerCell(inn, c, world, dt, dtT, ambientLight, eatenInner, predatedInner, cachedOcc, cachedTempOff);
       }
       // Rebuild contents if anything died OR was consumed by a sibling.
       let dirty = eatenInner.size > 0;
@@ -4876,7 +4901,7 @@ function updateCreatures(world: World, dt: number): void {
     // (receptor pool * stimulus) before the VM reads them. Runs
     // before populateSensors so chemConc snapshot reflects this
     // tick's activations.
-    runActivation(c, world, dt);
+    runActivation(c, world, dt, undefined, cachedOcc, cachedTempOff);
 
     populateSensors(c, world);
 
