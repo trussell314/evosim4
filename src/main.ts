@@ -3957,6 +3957,34 @@ function hslAdjustL(hsl: string, lDelta: number): string {
 // run every frame in the main render loop is baked into an offscreen
 // canvas once. The main loop then blits it with a single drawImage().
 let terrainBitmap: HTMLCanvasElement | null = null;
+// Corner-rounding radius for the rendered rock silhouette. Render-only:
+// collision runs against the lobe circles, not this polygon, so softening
+// the drawn corners has zero physics/determinism impact.
+const ROCK_CORNER_R = 4;
+// Trace a closed polygon with its corners filleted to ~`r` px instead of
+// hard vector points. arcTo between edge midpoints bounds each fillet to
+// half the adjacent edge; an extra per-corner clamp keeps short edges
+// from over-rounding.
+function traceRoundedPolygon(
+  g: CanvasRenderingContext2D, pts: { x: number; y: number }[], r: number,
+): void {
+  const n = pts.length;
+  if (n < 3) return;
+  const mx = (a: { x: number }, b: { x: number }): number => (a.x + b.x) / 2;
+  const my = (a: { y: number }, b: { y: number }): number => (a.y + b.y) / 2;
+  const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+    Math.hypot(a.x - b.x, a.y - b.y);
+  g.moveTo(mx(pts[n - 1], pts[0]), my(pts[n - 1], pts[0]));
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i - 1 + n) % n];
+    const cur = pts[i];
+    const next = pts[(i + 1) % n];
+    const rr = Math.min(r, dist(prev, cur) / 2, dist(cur, next) / 2);
+    g.arcTo(cur.x, cur.y, mx(cur, next), my(cur, next), rr);
+  }
+  g.closePath();
+}
+
 function buildTerrainBitmap(): void {
   const w = WORLD_SIZE.w;
   const h = WORLD_SIZE.h;
@@ -3988,11 +4016,7 @@ function buildTerrainBitmap(): void {
   for (const ob of snapshot.obstacles) {
     octx.beginPath();
     if (ob.polygon && ob.polygon.length >= 3) {
-      octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
-      for (let i = 1; i < ob.polygon.length; i++) {
-        octx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
-      }
-      octx.closePath();
+      traceRoundedPolygon(octx, ob.polygon, ROCK_CORNER_R);
     } else {
       for (const l of ob.lobes) {
         octx.moveTo(l.x + l.r, l.y);
@@ -4110,11 +4134,7 @@ function buildTerrainBitmap(): void {
   for (const ob of snapshot.obstacles) {
     if (!ob.polygon || ob.polygon.length < 3) continue;
     octx.beginPath();
-    octx.moveTo(ob.polygon[0].x, ob.polygon[0].y);
-    for (let i = 1; i < ob.polygon.length; i++) {
-      octx.lineTo(ob.polygon[i].x, ob.polygon[i].y);
-    }
-    octx.closePath();
+    traceRoundedPolygon(octx, ob.polygon, ROCK_CORNER_R);
     octx.stroke();
   }
   octx.restore();
