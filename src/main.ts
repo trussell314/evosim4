@@ -676,6 +676,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
   if (msg.type === "snapshot") {
     const tIntake = performance.now();
     snapshot = msg.snapshot;
+    workerSnapshotSeen = true;
     // Track the live world dimensions so the view fit adapts to a custom
     // (world-builder) size or a differently-sized loaded save -- the draw
     // path already uses snapshot dims; this keeps the fit transform in sync.
@@ -3190,7 +3191,7 @@ function render(): void {
   // paints over particles that would otherwise visibly overlap the
   // surface. Particles are physically pushed out by collision; this
   // is the visual confirmation of impenetrability.
-  if (!terrainBitmap) buildTerrainBitmap();
+  if (!terrainBitmap && workerSnapshotSeen) buildTerrainBitmap();
 
   // Wind streaks: short horizontal slashes drifting through the air
   // band, intensity scaling with |wind|, faded out where rock occupies
@@ -4016,6 +4017,12 @@ function hslAdjustL(hsl: string, lDelta: number): string {
 // run every frame in the main render loop is baked into an offscreen
 // canvas once. The main loop then blits it with a single drawImage().
 let terrainBitmap: HTMLCanvasElement | null = null;
+// The bootstrap world (rendered until the worker delivers its first
+// snapshot) has geologySeed = 0, i.e. un-perturbed legacy rocks -- which
+// differ from whatever the worker is about to restore from save. Gating
+// the bitmap on this flag avoids a visible "wrong rocks -> right rocks"
+// flicker on load: the bitmap simply isn't built off the bootstrap state.
+let workerSnapshotSeen = false;
 // Tracks the geology seed the cached terrainBitmap was built for. When
 // the snapshot's geologySeed changes (load, or "adjust geology"), this
 // drops to force a rebuild from the new obstacles. -1 is a sentinel that
