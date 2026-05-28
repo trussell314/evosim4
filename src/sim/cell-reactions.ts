@@ -29,7 +29,9 @@ const INH_K = 1;
 // so newborns don't drain themselves dry growing.
 const BIOSYNTH_ATP_FLOOR = 4;
 
-export function runGenericReactions(c: Creature, dt: number, ambientLight: number): void {
+export function runGenericReactions(
+  c: { store: Creature["store"]; idx: number }, dt: number, ambientLight: number,
+): void {
   const s = c.store; const i = c.idx;
   const KM = KM_DEFAULT;
   const chemCols = s.chemCols;
