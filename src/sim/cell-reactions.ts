@@ -32,6 +32,16 @@ const BIOSYNTH_ATP_FLOOR = 4;
 export function runGenericReactions(c: Creature, dt: number, ambientLight: number): void {
   const s = c.store; const i = c.idx;
   const KM = KM_DEFAULT;
+  const chemCols = s.chemCols;
+  // Hoist column refs (constant for this cell). Values must be read
+  // per-iteration because earlier slots in this same call can write to
+  // CHEM_MRNA / CHEM_CHL / CHEM_ENZ / CHEM_ADP (biosynth slots produce
+  // them), and a later slot must see those writes -- determinism + golden
+  // pin on that ordering.
+  const mrnaCol = chemCols[CHEM_MRNA];
+  const chlCol = chemCols[CHEM_CHL];
+  const enzCol = chemCols[CHEM_ENZ];
+  const adpCol = chemCols[CHEM_ADP];
   for (let slot = 0; slot < N_REACTIONS; slot++) {
     const rxn = REACTIONS[slot];
     // Transport-flavored slots are not intra-pool reactions; the
@@ -39,26 +49,43 @@ export function runGenericReactions(c: Creature, dt: number, ambientLight: numbe
     if (rxn.transport !== undefined) continue;
     const pool = s.catalystCols[slot][i];
     if (rxn.uncatRate <= 0 && pool <= 0) continue;
-    // Light gate
+    // Hoisted cheap gates: skip BEFORE the substrate loop / kinetics math
+    // when the slot can't possibly fire this cell this tick. Previously
+    // these lived after the substrate-ratio + satProduct loop, so a
+    // photosynthesis-needing cell without chlorophyll still walked all
+    // its substrates first.
+    if (rxn.lightIn > 0 && ambientLight <= 0) continue;
+    const mrnaVal = rxn.mrnaScale ? mrnaCol[i] : 0;
+    if (rxn.mrnaScale && mrnaVal <= 0) continue;
+    const chlVal = rxn.chlScale ? chlCol[i] : 0;
+    if (rxn.chlScale && chlVal <= 0) continue;
+    const enzVal = rxn.enzScale ? enzCol[i] : 0;
+    if (rxn.enzScale && enzVal <= 0) continue;
+    const inhPool = s.inhibitorCols[slot][i];
+    // Fully inhibited iff (1 - INH_K * inhPool/CAT_REF) <= 0.
+    if (inhPool > 0 && INH_K * inhPool >= CAT_REF) continue;
+    // Light multiplier (we know light is non-zero past this point).
     let lightMult = 1;
     if (rxn.lightIn > 0) {
-      if (ambientLight <= 0) continue;
       lightMult = ambientLight / rxn.lightIn;
       if (lightMult > 1) lightMult = 1;
     }
-    // Substrate gate + MM saturation
+    // Substrate gate + MM saturation. Early break on the first empty
+    // substrate rather than walking the rest and discovering limit=0.
     let limit = Infinity;
     let satProduct = 1;
     const sChem = rxn.sChem;
     const sCount = rxn.sCount;
+    let substrateOK = true;
     for (let j = 0; j < sChem.length; j++) {
-      const have = s.chemCols[sChem[j]][i];
+      const have = chemCols[sChem[j]][i];
+      if (have <= 0) { substrateOK = false; break; }
       const need = sCount[j];
       const ratio = have / need;
       if (ratio < limit) limit = ratio;
       satProduct *= ratio / (ratio + KM);
     }
-    if (limit <= 0) continue;
+    if (!substrateOK) continue;
     // ATP / ADP handling.
     const atpD = rxn.atpDelta;
     if (atpD < 0) {
@@ -72,67 +99,46 @@ export function runGenericReactions(c: Creature, dt: number, ambientLight: numbe
       satProduct *= eAvail / (eAvail + KM);
     } else if (atpD > 0) {
       // Exergonic: phosphorylates ADP back to ATP. Need ADP available.
-      const adpAvail = s.chemCols[CHEM_ADP][i] / atpD;
+      const adpAvail = adpCol[i] / atpD;
       if (adpAvail <= 0) continue;
       if (adpAvail < limit) limit = adpAvail;
       satProduct *= adpAvail / (adpAvail + KM);
     }
     const surface = rxn.surfaceScale ? (s.r[i] / MIN_CREATURE_R) : 1;
-    // Named-molecule multipliers: mRNA are the cell's protein-
-    // synthesis machinery (mandatory on every biosynth reaction);
-    // chlorophyll is the photosynth pigment (mandatory on slot 3).
-    // Both gate hard at zero -- no pigment, no photosynth; no
-    // mRNA, no biosynthesis. cells must build these molecules
-    // via SYNTH_MRNA / SYNTH_CHL to actually grow / fix carbon.
+    // Named-molecule multipliers, now that we've already passed their
+    // non-zero gates above: build the products directly.
     let machineryMult = 1;
-    if (rxn.mrnaScale) {
-      const r = s.chemCols[CHEM_MRNA][i];
-      if (r <= 0) continue;
-      machineryMult *= r / MRNA_REF;
-    }
+    if (rxn.mrnaScale) machineryMult *= mrnaVal / MRNA_REF;
     if (rxn.chlScale) {
-      const ch = s.chemCols[CHEM_CHL][i];
-      if (ch <= 0) continue;
       // Saturating, not linear: per-cell light harvesting is capped by
       // finite incident photons. An unbounded chl/CHL_REF made the
       // light reaction (out[25]) autocatalytic without diminishing
       // returns -- cells hoarded carbon as excess chlorophyll (chl
       // ran away to 4000+) instead of building fa/membranes/dividing.
       // Flat above CHL_REF removes that incentive; identical below.
-      machineryMult *= Math.min(1, ch / CHL_REF);
+      machineryMult *= Math.min(1, chlVal / CHL_REF);
     }
-    if (rxn.enzScale) {
-      const en = s.chemCols[CHEM_ENZ][i];
-      if (en <= 0) continue;
-      machineryMult *= en / ENZ_REF;
-    }
-    // Allosteric inhibitor dampens the effective rate (Phase 4b).
-    // inhPool/CAT_REF = 1 with INH_K=1 zeros the slot; below that
-    // it linearly scales the (uncat + catalyzed) rate down.
-    const inhPool = s.inhibitorCols[slot][i];
-    let inhMult = 1;
-    if (inhPool > 0) {
-      inhMult = 1 - INH_K * (inhPool / CAT_REF);
-      if (inhMult <= 0) continue;
-    }
+    if (rxn.enzScale) machineryMult *= enzVal / ENZ_REF;
+    // Allosteric inhibitor: 1 at inhPool=0, scales linearly down.
+    const inhMult = inhPool > 0 ? 1 - INH_K * (inhPool / CAT_REF) : 1;
     const rate = (rxn.uncatRate + rxn.vmax * (pool / CAT_REF)) * satProduct * lightMult * surface * machineryMult * inhMult;
     let amt = rate * dt;
     if (amt > limit) amt = limit;
     if (amt <= 0) continue;
     // Apply substrates
     for (let j = 0; j < sChem.length; j++) {
-      s.chemCols[sChem[j]][i] -= sCount[j] * amt;
+      chemCols[sChem[j]][i] -= sCount[j] * amt;
     }
     // Apply products
     const pChem = rxn.pChem;
     const pCount = rxn.pCount;
     for (let j = 0; j < pChem.length; j++) {
-      s.chemCols[pChem[j]][i] += pCount[j] * amt;
+      chemCols[pChem[j]][i] += pCount[j] * amt;
     }
     // ATP / ADP conversion (mass-conserving)
     if (atpD !== 0) {
       s.energy[i] += atpD * amt;
-      s.chemCols[CHEM_ADP][i] -= atpD * amt;
+      adpCol[i] -= atpD * amt;
     }
     // Accounting: one firing of this slot (cell), catalyzed iff a
     // catalyst pool actually boosted it. ATP flux into the ledger.
