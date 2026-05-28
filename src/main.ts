@@ -316,8 +316,8 @@ disasmBar.append(disasmHeader, copyDisasmBtn);
 // only changes the canvas's visual scale, never the underlying world.
 // Two presets so the world fills the viewport reasonably in either
 // orientation:
-const WORLD_LANDSCAPE = { w: 800, h: 600 };
-const WORLD_PORTRAIT = { w: 600, h: 800 };
+const WORLD_LANDSCAPE = { w: 1600, h: 1200 };
+const WORLD_PORTRAIT = { w: 1200, h: 1600 };
 const WORLD_SIZE = window.innerWidth >= window.innerHeight ? WORLD_LANDSCAPE : WORLD_PORTRAIT;
 const SAVE_KEY = "evosim4:save";
 // World-builder stashes a ScenarioSpec here, then reloads; the bootstrap

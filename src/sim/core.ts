@@ -93,13 +93,15 @@ export interface Obstacle {
 // Invariant: world.particles[i].idx === i. Splice / removeAt
 // routines maintain this via swap-and-pop so iterating by array
 // index is equivalent to iterating store slot by slot.
-// Fixed preallocated cap for the ParticleStore. Big enough to cover
-// the over-cap multiplier on top of particleTarget at the largest
-// world size we ship (currently 800x600 -> particleTarget ~2320,
-// peak ~20x ~46k), with a safety margin. The SAB-backed columns
+// Fixed preallocated cap for the ParticleStore. The measured settle peak
+// is ~1x particleTarget (the no-cap window at world start barely overshoots
+// in practice), so the real ceiling is set by the max user-selectable
+// target (PARTICLE_TARGET_MAX = 50000) plus headroom for the no-cap
+// window above it. 131072 = ~2.6x that max, comfortably covering the
+// 1600x1200 default (target ~4000 by area) too. The SAB-backed columns
 // don't support growth (subworker views would become stale), so we
-// reserve the worst case up front. ~3 MB of memory at this cap.
-export const PARTICLE_STORE_PREALLOC_CAP = 65536;
+// reserve this up front. ~6 MB of memory at this cap.
+export const PARTICLE_STORE_PREALLOC_CAP = 131072;
 
 // Particle store layout. Single backing buffer (SharedArrayBuffer
 // when crossOriginIsolated, plain ArrayBuffer otherwise) so subworkers

@@ -1023,7 +1023,18 @@ export function createWorld(
   // world literal's nextDisturbanceAt, generateObstacles, founder
   // spawn all consume it).
   simRng = opts?.seed != null ? mulberry32(opts.seed >>> 0) : Math.random;
-  const particleTarget = INITIAL_PARTICLE_TARGET;
+  // Density-invariant budgets: scale the particle + founder targets with
+  // world area (referenced to the 800x600 baseline) so a larger world
+  // holds proportionally more food + founders instead of the same count
+  // spread thin. createWorld(800, 600, ...) yields areaScale == 1 and the
+  // exact legacy values (1000 / 10), so the determinism + golden tests
+  // -- which build 800x600 worlds -- are byte-identical.
+  const areaScale = (width * height) / (800 * 600);
+  const particleTarget = Math.max(
+    PARTICLE_TARGET_MIN,
+    Math.min(PARTICLE_TARGET_MAX, Math.round(INITIAL_PARTICLE_TARGET * areaScale)),
+  );
+  const founderTarget = Math.max(1, Math.round(FOUNDER_TARGET * areaScale));
   const world: World = {
     width, height,
     depth: 24,
@@ -1052,7 +1063,7 @@ export function createWorld(
     extinctionCount: 0,
     liveCodingKeys: new Set(),
     nextLineageRoot: 0,
-    founderTarget: FOUNDER_TARGET,
+    founderTarget,
     lastFounderTrickleT: -1e9,
     // Transient set of currently-alive founder cell IDs. Used to give
     // every founder a fixed 180s lifespan after spawn so the founders

@@ -284,11 +284,15 @@ describe("createWorld", () => {
     expect(w.particleSpawnRate).toBeGreaterThan(0);
   });
 
-  it("initial particle target is a fixed cap, independent of world area", () => {
+  it("initial particle + founder targets scale with world area (density-invariant)", () => {
     const small = createWorld(800, 600);
-    const big = createWorld(1600, 1200);
+    const big = createWorld(1600, 1200); // 4x area
+    // Anchored to the 800x600 baseline: same density, proportionally more
+    // food + founders in a larger world.
     expect(small.particleTarget).toBe(1000);
-    expect(big.particleTarget).toBe(1000);
+    expect(big.particleTarget).toBe(4000);
+    expect(small.founderTarget).toBe(10);
+    expect(big.founderTarget).toBe(40);
   });
 
   it("resizeWorld does not rescale the particle target", () => {
