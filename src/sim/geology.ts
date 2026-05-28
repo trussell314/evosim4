@@ -162,6 +162,53 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+// Smooth polygon-wide warp on top of subdivision + per-vertex jitter.
+// Sums a handful of sinusoids evaluated at each vertex's world position:
+// neighbouring vertices sample nearly the same value, so they shift
+// coherently (no relative motion -> topology stays safe at much larger
+// amplitudes than independent per-vertex jitter could afford). That's
+// the lever that finally moves the dense top-left polygon's silhouette
+// rather than just nudging its surface noise. Wall-anchored axes are
+// zeroed before applying so the seal stays exact; corners stay pinned.
+const WARP_MODES = 4;
+const WARP_AMP_FRAC = 0.06; // per-mode peak amplitude as fraction of charSize
+function polygonCharSize(pts: Vec[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    a += (p.x * q.y) - (q.x * p.y);
+  }
+  return Math.sqrt(Math.abs(a) * 0.5);
+}
+function smoothWarp(pts: Vec[], W: number, H: number, rng: () => number, charSize: number): Vec[] {
+  const baseAmp = charSize * WARP_AMP_FRAC;
+  const waves: Array<{ ax: number; ay: number; fx: number; fy: number; px: number; py: number }> = [];
+  for (let k = 0; k < WARP_MODES; k++) {
+    waves.push({
+      ax: rng() * baseAmp,
+      ay: rng() * baseAmp,
+      fx: (0.5 + rng() * 1.5) / charSize, // wavelength on the order of charSize
+      fy: (0.5 + rng() * 1.5) / charSize,
+      px: rng() * Math.PI * 2,
+      py: rng() * Math.PI * 2,
+    });
+  }
+  return pts.map((p) => {
+    const mask = boundaryMask(p, W, H);
+    if (popcount4(mask) >= 2) return { x: p.x, y: p.y };
+    let offX = 0, offY = 0;
+    for (const w of waves) {
+      offX += w.ax * Math.sin(w.fx * p.x + w.px);
+      offY += w.ay * Math.sin(w.fy * p.y + w.py);
+    }
+    if (mask & 3) offX = 0;   // left/right wall: x pinned
+    if (mask & 12) offY = 0;  // top/bottom wall: y pinned
+    const qx = Math.max(0, Math.min(W, p.x + offX));
+    const qy = Math.max(0, Math.min(H, p.y + offY));
+    return { x: qx, y: qy };
+  });
+}
+
 function perturbOnce(
   pts: Vec[], W: number, H: number, rng: () => number, mag: number,
 ): Vec[] {
@@ -220,10 +267,14 @@ export function perturbPolygons(
     // skeleton to work on. Fresh subdivision pattern per reroll (driven
     // by the same rng stream).
     const base = subdivideEdges(scaled[i], W, H, rng);
+    const charSize = polygonCharSize(base);
     let placed = false;
     for (const mag of MAGNITUDES) {
       for (let attempt = 0; attempt < RETRIES; attempt++) {
-        const cand = perturbOnce(base, W, H, rng, mag);
+        // Fresh warp + jitter each attempt -- the topology guard then has
+        // many distinct candidates to find one that holds.
+        const warped = smoothWarp(base, W, H, rng, charSize);
+        const cand = perturbOnce(warped, W, H, rng, mag);
         if (selfIntersects(cand)) continue;
         if (pointInPolygon(vent, cand)) continue;
         let crosses = false;
