@@ -4001,17 +4001,36 @@ const ROCK_CORNER_R = 4;
 function traceRoundedPolygon(
   g: CanvasRenderingContext2D, pts: { x: number; y: number }[], r: number,
 ): void {
-  const n = pts.length;
-  if (n < 3) return;
-  const mx = (a: { x: number }, b: { x: number }): number => (a.x + b.x) / 2;
-  const my = (a: { y: number }, b: { y: number }): number => (a.y + b.y) / 2;
   const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
     Math.hypot(a.x - b.x, a.y - b.y);
-  g.moveTo(mx(pts[n - 1], pts[0]), my(pts[n - 1], pts[0]));
+  // Drop consecutive coincident vertices. scalePolygon snaps off-canvas
+  // anchor points onto the world boundary, which can collapse two distinct
+  // authored points onto the same wall corner (e.g. both -> (0,0)). A
+  // resulting zero-length edge makes arcTo degenerate and can blank the
+  // whole fill -- that's what dropped the wall-anchored rocks.
+  const p: { x: number; y: number }[] = [];
+  for (const a of pts) {
+    if (p.length === 0 || dist(a, p[p.length - 1]) > 1e-3) p.push(a);
+  }
+  if (p.length >= 2 && dist(p[0], p[p.length - 1]) <= 1e-3) p.pop();
+  const n = p.length;
+  if (n < 3) {
+    // Degenerate after dedup: fall back to a plain (un-rounded) outline so
+    // the rock still fills rather than vanishing.
+    if (n > 0) {
+      g.moveTo(p[0].x, p[0].y);
+      for (let i = 1; i < n; i++) g.lineTo(p[i].x, p[i].y);
+      g.closePath();
+    }
+    return;
+  }
+  const mx = (a: { x: number }, b: { x: number }): number => (a.x + b.x) / 2;
+  const my = (a: { y: number }, b: { y: number }): number => (a.y + b.y) / 2;
+  g.moveTo(mx(p[n - 1], p[0]), my(p[n - 1], p[0]));
   for (let i = 0; i < n; i++) {
-    const prev = pts[(i - 1 + n) % n];
-    const cur = pts[i];
-    const next = pts[(i + 1) % n];
+    const prev = p[(i - 1 + n) % n];
+    const cur = p[i];
+    const next = p[(i + 1) % n];
     const rr = Math.min(r, dist(prev, cur) / 2, dist(cur, next) / 2);
     g.arcTo(cur.x, cur.y, mx(cur, next), my(cur, next), rr);
   }
