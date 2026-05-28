@@ -4071,12 +4071,25 @@ function traceRoundedPolygon(
   // Per-vertex fillet start (back along incoming edge) and end (forward
   // along outgoing edge). cutIn / cutOut are independent fractions of
   // their respective adjacent edge -- an oval, not a single radius.
+  // EXCEPTION: a vertex that sits at a WORLD corner (e.g. the seafloor's
+  // bottom-left at (0,H) or bottom-right at (W,H)) keeps a SHARP corner.
+  // Filleting it would route the silhouette diagonally across the corner
+  // area, visibly pulling the rock away from the world corner.
+  const W = WORLD_SIZE.w;
+  const H = WORLD_SIZE.h;
   const fs: { x: number; y: number }[] = new Array(n);
   const fe: { x: number; y: number }[] = new Array(n);
   for (let i = 0; i < n; i++) {
     const prev = p[(i - 1 + n) % n];
     const cur = p[i];
     const next = p[(i + 1) % n];
+    const onLeftRight = cur.x <= 0.5 || cur.x >= W - 0.5;
+    const onTopBottom = cur.y <= 0.5 || cur.y >= H - 0.5;
+    if (onLeftRight && onTopBottom) {
+      fs[i] = { x: cur.x, y: cur.y };
+      fe[i] = { x: cur.x, y: cur.y };
+      continue;
+    }
     const dx1 = cur.x - prev.x, dy1 = cur.y - prev.y;
     const len1 = Math.hypot(dx1, dy1);
     const dx2 = next.x - cur.x, dy2 = next.y - cur.y;

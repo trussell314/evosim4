@@ -57,8 +57,8 @@ function popcount4(n: number): number {
 // SUBDIV_PROB chance to gain one midpoint vertex; for interior edges
 // the midpoint also gets a perpendicular offset proportional to edge
 // length, for wall-shared edges it stays on the wall.
-const SUBDIV_PROB = 0.55;
-const SUBDIV_PERP_FRAC = 0.18;
+const SUBDIV_PROB = 0.75;
+const SUBDIV_PERP_FRAC = 0.30;
 function subdivideEdges(pts: Vec[], W: number, H: number, rng: () => number): Vec[] {
   const n = pts.length;
   const out: Vec[] = [];
@@ -171,7 +171,7 @@ function mulberry32(seed: number): () => number {
 // rather than just nudging its surface noise. Wall-anchored axes are
 // zeroed before applying so the seal stays exact; corners stay pinned.
 const WARP_MODES = 4;
-const WARP_AMP_FRAC = 0.06; // per-mode peak amplitude as fraction of charSize
+const WARP_AMP_FRAC = 0.10; // per-mode peak amplitude as fraction of charSize
 function polygonCharSize(pts: Vec[]): number {
   let a = 0;
   for (let i = 0; i < pts.length; i++) {
