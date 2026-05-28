@@ -4029,16 +4029,21 @@ const ROCK_CORNER_R = 4;
 // hard vector points. arcTo between edge midpoints bounds each fillet to
 // half the adjacent edge; an extra per-corner clamp keeps short edges
 // from over-rounding.
+// Trace a closed polygon with corners filleted to ~`r` px, using only
+// moveTo + lineTo (the corner curves come from sampled quadratic-bezier
+// points, not arcTo). arcTo's behaviour at degenerate / collinear /
+// coincident corners turned out to silently break the fill for several
+// of the wall-anchored rocks; an all-straight-line path fills reliably
+// regardless of vertex pattern. The visual difference vs an exact arc
+// at r=4 with 6 samples per corner is imperceptible.
+const FILLET_SAMPLES = 6;
 function traceRoundedPolygon(
   g: CanvasRenderingContext2D, pts: { x: number; y: number }[], r: number,
 ): void {
   const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
     Math.hypot(a.x - b.x, a.y - b.y);
-  // Drop consecutive coincident vertices. scalePolygon snaps off-canvas
-  // anchor points onto the world boundary, which can collapse two distinct
-  // authored points onto the same wall corner (e.g. both -> (0,0)). A
-  // resulting zero-length edge makes arcTo degenerate and can blank the
-  // whole fill -- that's what dropped the wall-anchored rocks.
+  // Defensive dedup of consecutive coincident vertices (scalePolygon can
+  // collapse multiple off-canvas anchor points onto the same corner).
   const p: { x: number; y: number }[] = [];
   for (const a of pts) {
     if (p.length === 0 || dist(a, p[p.length - 1]) > 1e-3) p.push(a);
@@ -4046,8 +4051,6 @@ function traceRoundedPolygon(
   if (p.length >= 2 && dist(p[0], p[p.length - 1]) <= 1e-3) p.pop();
   const n = p.length;
   if (n < 3) {
-    // Degenerate after dedup: fall back to a plain (un-rounded) outline so
-    // the rock still fills rather than vanishing.
     if (n > 0) {
       g.moveTo(p[0].x, p[0].y);
       for (let i = 1; i < n; i++) g.lineTo(p[i].x, p[i].y);
@@ -4055,15 +4058,42 @@ function traceRoundedPolygon(
     }
     return;
   }
-  const mx = (a: { x: number }, b: { x: number }): number => (a.x + b.x) / 2;
-  const my = (a: { y: number }, b: { y: number }): number => (a.y + b.y) / 2;
-  g.moveTo(mx(p[n - 1], p[0]), my(p[n - 1], p[0]));
+  // Per-vertex fillet start / end points along the adjacent edges.
+  const fs: { x: number; y: number }[] = new Array(n);
+  const fe: { x: number; y: number }[] = new Array(n);
   for (let i = 0; i < n; i++) {
     const prev = p[(i - 1 + n) % n];
     const cur = p[i];
     const next = p[(i + 1) % n];
-    const rr = Math.min(r, dist(prev, cur) / 2, dist(cur, next) / 2);
-    g.arcTo(cur.x, cur.y, mx(cur, next), my(cur, next), rr);
+    const dx1 = cur.x - prev.x, dy1 = cur.y - prev.y;
+    const len1 = Math.hypot(dx1, dy1);
+    const dx2 = next.x - cur.x, dy2 = next.y - cur.y;
+    const len2 = Math.hypot(dx2, dy2);
+    if (len1 === 0 || len2 === 0) {
+      fs[i] = { x: cur.x, y: cur.y };
+      fe[i] = { x: cur.x, y: cur.y };
+      continue;
+    }
+    const cut = Math.min(r, len1 / 2, len2 / 2);
+    fs[i] = { x: cur.x - (dx1 / len1) * cut, y: cur.y - (dy1 / len1) * cut };
+    fe[i] = { x: cur.x + (dx2 / len2) * cut, y: cur.y + (dy2 / len2) * cut };
+  }
+  g.moveTo(fs[0].x, fs[0].y);
+  for (let i = 0; i < n; i++) {
+    const cur = p[i];
+    const f0 = fs[i], f1 = fe[i];
+    // Sample the corner via a quadratic-bezier with control at the
+    // vertex. Skips s=0 (already there from the previous lineTo).
+    for (let s = 1; s <= FILLET_SAMPLES; s++) {
+      const t = s / FILLET_SAMPLES;
+      const u = 1 - t;
+      const x = u * u * f0.x + 2 * u * t * cur.x + t * t * f1.x;
+      const y = u * u * f0.y + 2 * u * t * cur.y + t * t * f1.y;
+      g.lineTo(x, y);
+    }
+    // Walk along the outgoing edge to the next corner's fillet start.
+    const nfs = fs[(i + 1) % n];
+    g.lineTo(nfs.x, nfs.y);
   }
   g.closePath();
 }
