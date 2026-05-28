@@ -4029,16 +4029,19 @@ const ROCK_CORNER_R = 10;
 // hard vector points. arcTo between edge midpoints bounds each fillet to
 // half the adjacent edge; an extra per-corner clamp keeps short edges
 // from over-rounding.
-// Trace a closed polygon with corners filleted to ~`r` px, using only
-// moveTo + lineTo (the corner curves come from sampled quadratic-bezier
-// points, not arcTo). arcTo's behaviour at degenerate / collinear /
-// coincident corners turned out to silently break the fill for several
-// of the wall-anchored rocks; an all-straight-line path fills reliably
-// regardless of vertex pattern. The visual difference vs an exact arc
-// at r=4 with 6 samples per corner is imperceptible.
-const FILLET_SAMPLES = 6;
+// Fillet "cut" per edge as a fraction of edge length. With 0.45 each
+// edge keeps only ~10% straight midspan -- corners run into corners,
+// killing the straight-line appearance. Cap at half so adjacent corners'
+// fillets can't overlap on the same edge.
+const FILLET_FRAC = 0.45;
+const FILLET_SAMPLES = 10;
+// Trace a closed polygon with corners filleted PROPORTIONAL to each
+// adjacent edge length, asymmetric in/out (so a corner between a long
+// edge and a short edge has an oval/asymmetric fillet rather than a
+// circular one). Pure moveTo + lineTo via quadratic-bezier samples;
+// arcTo was unreliable for the wall-anchored rocks.
 function traceRoundedPolygon(
-  g: CanvasRenderingContext2D, pts: { x: number; y: number }[], r: number,
+  g: CanvasRenderingContext2D, pts: { x: number; y: number }[], _rUnused: number,
 ): void {
   const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
     Math.hypot(a.x - b.x, a.y - b.y);
@@ -4058,7 +4061,9 @@ function traceRoundedPolygon(
     }
     return;
   }
-  // Per-vertex fillet start / end points along the adjacent edges.
+  // Per-vertex fillet start (back along incoming edge) and end (forward
+  // along outgoing edge). cutIn / cutOut are independent fractions of
+  // their respective adjacent edge -- an oval, not a single radius.
   const fs: { x: number; y: number }[] = new Array(n);
   const fe: { x: number; y: number }[] = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -4074,16 +4079,15 @@ function traceRoundedPolygon(
       fe[i] = { x: cur.x, y: cur.y };
       continue;
     }
-    const cut = Math.min(r, len1 / 2, len2 / 2);
-    fs[i] = { x: cur.x - (dx1 / len1) * cut, y: cur.y - (dy1 / len1) * cut };
-    fe[i] = { x: cur.x + (dx2 / len2) * cut, y: cur.y + (dy2 / len2) * cut };
+    const cutIn = Math.min(len1 * FILLET_FRAC, len1 * 0.5);
+    const cutOut = Math.min(len2 * FILLET_FRAC, len2 * 0.5);
+    fs[i] = { x: cur.x - (dx1 / len1) * cutIn, y: cur.y - (dy1 / len1) * cutIn };
+    fe[i] = { x: cur.x + (dx2 / len2) * cutOut, y: cur.y + (dy2 / len2) * cutOut };
   }
   g.moveTo(fs[0].x, fs[0].y);
   for (let i = 0; i < n; i++) {
     const cur = p[i];
     const f0 = fs[i], f1 = fe[i];
-    // Sample the corner via a quadratic-bezier with control at the
-    // vertex. Skips s=0 (already there from the previous lineTo).
     for (let s = 1; s <= FILLET_SAMPLES; s++) {
       const t = s / FILLET_SAMPLES;
       const u = 1 - t;
@@ -4091,7 +4095,6 @@ function traceRoundedPolygon(
       const y = u * u * f0.y + 2 * u * t * cur.y + t * t * f1.y;
       g.lineTo(x, y);
     }
-    // Walk along the outgoing edge to the next corner's fillet start.
     const nfs = fs[(i + 1) % n];
     g.lineTo(nfs.x, nfs.y);
   }
@@ -4547,7 +4550,12 @@ function drawCreature(c: CreatureSnapshot, selected: boolean, kin = false): void
   // so its wobble pattern is its own instead of every cell pulsing in sync.
   const phase = c.bornAt * 0.7 + c.x * 0.013 + c.y * 0.019;
   const t = snapshot.t;
-  const screenR = c.r * viewScale;
+  // Effective on-screen radius must account for user zoom too: at the
+  // 1600x1200 world size, fit-only viewScale shrinks a r=4 cell below
+  // the LOD cutoff even when the user has zoomed in, which strips the
+  // outline. Multiplying by viewZoom restores the outline as the user
+  // zooms in past the threshold.
+  const screenR = c.r * viewScale * viewZoom;
   const lod = !selected && !kin && screenR < LOD_MIN_SCREEN_R;
   if (c.division) {
     // Mitosis: render two overlapping wobbly bodies whose centers split

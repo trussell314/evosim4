@@ -50,6 +50,47 @@ function popcount4(n: number): number {
   return (n & 1) + ((n >> 1) & 1) + ((n >> 2) & 1) + ((n >> 3) & 1);
 }
 
+// Inject new vertices along edges -- adds degrees of freedom that the
+// subsequent perturbation can shape independently, so the polygon's
+// silhouette gains genuinely new bumps between rerolls instead of just
+// jittered versions of the same ROCK_POLYGONS skeleton. Each edge has
+// SUBDIV_PROB chance to gain one midpoint vertex; for interior edges
+// the midpoint also gets a perpendicular offset proportional to edge
+// length, for wall-shared edges it stays on the wall.
+const SUBDIV_PROB = 0.55;
+const SUBDIV_PERP_FRAC = 0.18;
+function subdivideEdges(pts: Vec[], W: number, H: number, rng: () => number): Vec[] {
+  const n = pts.length;
+  const out: Vec[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    out.push({ x: a.x, y: a.y });
+    if (rng() >= SUBDIV_PROB) continue;
+    const t = 0.30 + rng() * 0.40; // bias toward the middle, never at the endpoints
+    let mxv = a.x + (b.x - a.x) * t;
+    let myv = a.y + (b.y - a.y) * t;
+    const sharedWall = boundaryMask(a, W, H) & boundaryMask(b, W, H);
+    if (sharedWall === 0) {
+      // Interior edge: optional perpendicular bump. Sign is random; magnitude
+      // is bounded so the topology guard rarely has to reject the whole
+      // perturbation pass over the subdivision alone.
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0) {
+        const sign = rng() > 0.5 ? 1 : -1;
+        const perp = rng() * SUBDIV_PERP_FRAC * len * sign;
+        mxv += (-dy / len) * perp;
+        myv += (dx / len) * perp;
+      }
+    }
+    // Wall-shared edge: keep the new vertex on the wall (no perpendicular),
+    // so the seal stays intact. The perturbation pass will slide it along.
+    out.push({ x: mxv, y: myv });
+  }
+  return out;
+}
+
 // Proper segment intersection: returns true only if the open interiors of
 // the two segments cross. Endpoint touches and collinear overlaps don't
 // count -- adjacent polygon edges share an endpoint and that's fine.
@@ -175,10 +216,14 @@ export function perturbPolygons(
   const rng = mulberry32(seed);
   const result = copyAll(scaled);
   for (let i = 0; i < scaled.length; i++) {
+    // Subdivide once per polygon: gives the perturbation a richer vertex
+    // skeleton to work on. Fresh subdivision pattern per reroll (driven
+    // by the same rng stream).
+    const base = subdivideEdges(scaled[i], W, H, rng);
     let placed = false;
     for (const mag of MAGNITUDES) {
       for (let attempt = 0; attempt < RETRIES; attempt++) {
-        const cand = perturbOnce(scaled[i], W, H, rng, mag);
+        const cand = perturbOnce(base, W, H, rng, mag);
         if (selfIntersects(cand)) continue;
         if (pointInPolygon(vent, cand)) continue;
         let crosses = false;
