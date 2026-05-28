@@ -2323,8 +2323,9 @@ const MUT_RATE_MAX = 10;
 let mutRateUI = 1;
 const mutWrap = document.createElement("div");
 mutWrap.style.cssText = capWrap.style.cssText;
-mutWrap.title = "Germline mutation-rate multiplier at fission (1x = shipped rate). " +
-  "Scales the per-byte point/insert/delete probabilities; raise for faster drift, " +
+mutWrap.title = "Mutation-rate multiplier (1x = shipped rate). Scales BOTH germline " +
+  "mutation at fission (per-byte point/insert/delete probabilities) AND somatic " +
+  "mutation in living cells (per-tick age-driven rate). Raise for faster drift, " +
   "lower (or 0) to freeze genomes.";
 const mutTitle = document.createElement("span");
 mutTitle.textContent = "mut×"; mutTitle.style.cssText = "opacity:0.7;";

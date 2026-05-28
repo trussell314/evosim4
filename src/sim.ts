@@ -3435,7 +3435,7 @@ function runInnerCell(
   // organelle lineage may metabolically reduce (or break) and lives
   // with the consequence.
   const age = world.t - inner.bornAt;
-  let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+  let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * world.mutationRateMul * age * age * dt);
   if (inner.repairTicks > 0) { mutP = 0; inner.repairTicks--; }
   if (age > 0 && simRng() < mutP) inner.genome = somaticMutateOnce(inner.genome, simRng);
   inner.senseRange = computeSenseRange(inner.genome);
@@ -4847,7 +4847,7 @@ function updateCreatures(world: World, dt: number): void {
     const age = world.t - c.bornAt;
     // Clamp at 0.1/tick (10%) so even very old cells don't churn their
     // entire genome every second.
-    let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * age * age * dt);
+    let mutP = Math.min(0.02, SOMATIC_MUTATION_AGE_COEF * world.mutationRateMul * age * age * dt);
     // REPAIR (op 0x63) suppresses somatic mutation while repairTicks > 0.
     // Each REPAIR execution spends ATP and refreshes the window so a cell
     // can choose to invest energy into stability when it matters.
