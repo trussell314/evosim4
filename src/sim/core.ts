@@ -636,7 +636,24 @@ export class CreatureStore {
   sharedLayout(): CreatureSharedLayout {
     return { buffer: this.buffer, cap: this.cap, offsets: this.offsets };
   }
-  private rebuildViews(): void {
+  // Build a view-only CreatureStore over an existing shared buffer. Used
+  // by creature subworkers: they reconstruct the column aliasing on their
+  // side from the layout the sim worker handed them at pool init, so the
+  // chemistry hot path can read/write the same memory through the same
+  // shape it sees on the sim-worker side. free/highWater/n are NOT
+  // mirrored -- workers MUST NOT alloc/release; they only touch existing
+  // populated slots passed to them via the live-idx SAB.
+  static viewsFromSharedLayout(layout: CreatureSharedLayout): CreatureStore {
+    const s = Object.create(CreatureStore.prototype) as CreatureStore;
+    s.cap = layout.cap;
+    s.buffer = layout.buffer;
+    s.offsets = layout.offsets;
+    s.free = [];
+    s.highWater = 0;
+    s.rebuildViews();
+    return s;
+  }
+  rebuildViews(): void {
     const b = this.buffer;
     const o = this.offsets;
     const cap = this.cap;

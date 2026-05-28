@@ -670,6 +670,13 @@ function teardownParticleWorkers(): void {
   }
   particleWorkers = [];
 }
+let creatureWorkers: Worker[] = [];
+function teardownCreatureWorkers(): void {
+  for (const cw of creatureWorkers) {
+    try { cw.terminate(); } catch { /* ignore */ }
+  }
+  creatureWorkers = [];
+}
 
 simWorker.addEventListener("message", (e: MessageEvent) => {
   const msg = e.data;
@@ -749,6 +756,26 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     }
   } else if (msg.type === "teardown-particle-pool") {
     teardownParticleWorkers();
+  } else if (msg.type === "spawn-creature-pool") {
+    teardownCreatureWorkers();
+    const payloads = msg.initPayloads as { workerIndex: number }[];
+    for (let i = 0; i < payloads.length; i++) {
+      const idx = i;
+      const cw = new Worker(new URL("./creature.worker.ts", import.meta.url), { type: "module" });
+      cw.addEventListener("message", (ev: MessageEvent) => {
+        simWorker.postMessage({ type: "creature-pool-message", index: idx, data: ev.data });
+      });
+      cw.addEventListener("error", (ev) => {
+        simWorker.postMessage({ type: "creature-pool-error", index: idx, message: ev.message || "unknown" });
+      });
+      cw.addEventListener("messageerror", () => {
+        simWorker.postMessage({ type: "creature-pool-error", index: idx, message: "messageerror" });
+      });
+      cw.postMessage(payloads[i]);
+      creatureWorkers.push(cw);
+    }
+  } else if (msg.type === "teardown-creature-pool") {
+    teardownCreatureWorkers();
   } else if (msg.type === "diag") {
     // Response to a stall-triggered requestDiag: surface worker liveness +
     // pool state in the diag bar so an intermittent SIM STALLED can be

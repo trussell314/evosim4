@@ -21,6 +21,8 @@ import {
   resetProfile,
   serializeWorld,
   setCollisionPhaseDispatcher,
+  setCreatureChemBuffers,
+  setCreatureChemistryDispatcher,
   setParticleForceDispatcher,
   step,
   takeSnapshot,
@@ -106,6 +108,8 @@ type WorkerInbound =
     }
   | { type: "particle-pool-message"; index: number; data: unknown }
   | { type: "particle-pool-error"; index: number; message: string }
+  | { type: "creature-pool-message"; index: number; data: unknown }
+  | { type: "creature-pool-error"; index: number; message: string }
   | { type: "requestDiag" };
 
 type WorkerOutbound =
@@ -119,6 +123,8 @@ type WorkerOutbound =
   | { type: "save"; json: string }
   | { type: "spawn-particle-pool"; initPayloads: unknown[] }
   | { type: "teardown-particle-pool" }
+  | { type: "spawn-creature-pool"; initPayloads: unknown[] }
+  | { type: "teardown-creature-pool" }
   | { type: "diag"; running: boolean; hasWorld: boolean; t: number; pool: string };
 
 function send(msg: WorkerOutbound): void {
@@ -141,6 +147,16 @@ self.addEventListener("message", (e: MessageEvent) => {
     }
     case "particle-pool-error": {
       teardownPool(`worker ${m.index} error: ${m.message}`);
+      return;
+    }
+    case "creature-pool-message": {
+      // ack-load / ack-init / ack-wake / ack-init-error -- match the
+      // particle-pool ack contract, but creature pool doesn't track
+      // them individually (no diag panel surface yet). Silently drop.
+      return;
+    }
+    case "creature-pool-error": {
+      teardownCreaturePool(`worker ${m.index} error: ${m.message}`);
       return;
     }
     case "init": {
@@ -166,6 +182,7 @@ self.addEventListener("message", (e: MessageEvent) => {
       }
       lastSaveSimT = world.t;
       setupParticlePool(world);
+      setupCreaturePool(world);
       running = true;
       schedule();
       break;
@@ -523,6 +540,94 @@ function setupParticlePool(w: World): void {
   // of view, which works around the silent-load failure observed when
   // spawning module workers from inside another worker.
   send({ type: "spawn-particle-pool", initPayloads });
+}
+
+// =====================================================================
+// Creature subworker pool. Independent ctrl SAB from the particle pool
+// (they don't fire concurrently in practice but the separate counters
+// keep that an explicit "they could later" rather than a hidden coupling).
+// Currently runs ONE command: CMD_CHEMISTRY -- per-cell runGenericReactions.
+// =====================================================================
+const CR_CTRL_PHASE = 0;
+const CR_CTRL_DONE = 1;
+const CR_CTRL_N = 2;
+const CR_CTRL_BARRIER = 3;
+const CR_CTRL_CMD = 4;
+const CR_CTRL_SLOTS = 5;
+const CR_CMD_CHEMISTRY = 0;
+
+interface CreaturePool {
+  ctrl: Int32Array;
+  idxs: Int32Array;
+  scratch: Float32Array;
+  nWorkers: number;
+  phase: number;
+}
+let creaturePool: CreaturePool | null = null;
+
+function teardownCreaturePool(reason: string): void {
+  if (!creaturePool) return;
+  creaturePool = null;
+  setCreatureChemistryDispatcher(null);
+  setCreatureChemBuffers(null);
+  // eslint-disable-next-line no-console
+  console.error("[sim worker] creature pool torn down:", reason);
+  send({ type: "teardown-creature-pool" });
+}
+
+function setupCreaturePool(w: World): void {
+  // SAB availability check -- same gate as the particle pool.
+  if (typeof SharedArrayBuffer === "undefined" ||
+      !(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
+    return;
+  }
+  const creatureLayout = w.creatureStore.sharedLayout();
+  if (!(creatureLayout.buffer instanceof SharedArrayBuffer)) return;
+
+  // Match the particle pool sizing.
+  const hwc = (navigator as { hardwareConcurrency?: number }).hardwareConcurrency ?? 4;
+  const nWorkers = Math.max(1, Math.min(4, hwc - 2));
+  if (nWorkers < 2) return;
+
+  const cap = creatureLayout.cap;
+  const ctrlBuf = new SharedArrayBuffer(CR_CTRL_SLOTS * 4);
+  const idxsBuf = new SharedArrayBuffer(cap * 4);
+  const scratchBuf = new SharedArrayBuffer(cap * 2 * 4);
+  const ctrl = new Int32Array(ctrlBuf);
+  const idxs = new Int32Array(idxsBuf);
+  const scratch = new Float32Array(scratchBuf);
+
+  const initPayloads: unknown[] = [];
+  for (let i = 0; i < nWorkers; i++) {
+    initPayloads.push({
+      type: "init",
+      creatureLayout,
+      controlBuffer: ctrlBuf,
+      idxsBuffer: idxsBuf,
+      scratchBuffer: scratchBuf,
+      workerIndex: i,
+      nWorkers,
+    });
+  }
+  creaturePool = { ctrl, idxs, scratch, nWorkers, phase: 0 };
+  setCreatureChemBuffers({ idxs, scratch });
+  setCreatureChemistryDispatcher(dispatchCreatureChemistry);
+  send({ type: "spawn-creature-pool", initPayloads });
+}
+
+function dispatchCreatureChemistry(n: number): () => void {
+  if (!creaturePool) return () => { /* no-op */ };
+  const { ctrl, nWorkers } = creaturePool;
+  Atomics.store(ctrl, CR_CTRL_CMD, CR_CMD_CHEMISTRY);
+  Atomics.store(ctrl, CR_CTRL_N, n);
+  Atomics.store(ctrl, CR_CTRL_DONE, 0);
+  Atomics.store(ctrl, CR_CTRL_BARRIER, 0);
+  creaturePool.phase++;
+  Atomics.store(ctrl, CR_CTRL_PHASE, creaturePool.phase);
+  Atomics.notify(ctrl, CR_CTRL_PHASE, nWorkers);
+  return () => {
+    waitForBarrier(ctrl, nWorkers, "creature-chem");
+  };
 }
 
 function poolDiagSnapshot(): string {

@@ -14,12 +14,24 @@
 import type { Creature } from "./core";
 import { runGenericReactions } from "./cell-reactions";
 
-// The dispatcher takes the slice of live cells, the per-tick dtT, and
-// ambient light. Returns a barrier closure -- await it before reading
-// any column the workers wrote.
-export type CreatureChemistryDispatcher = (
-  cells: Creature[], dtT: number, ambientLight: number,
-) => () => void;
+// SAB-backed scratch the pool exposes. The caller (updateCreatures)
+// writes:
+//   idxs[k]        = world.creatures[k].idx (CreatureStore slot)
+//   scratch[k*2]   = dtT for that cell
+//   scratch[k*2+1] = ambientLight for that cell
+// for k in [0, n) BEFORE calling the dispatcher with n.
+let creatureChemBuffers: { idxs: Int32Array; scratch: Float32Array } | null = null;
+export function setCreatureChemBuffers(b: { idxs: Int32Array; scratch: Float32Array } | null): void {
+  creatureChemBuffers = b;
+}
+export function getCreatureChemBuffers(): { idxs: Int32Array; scratch: Float32Array } | null {
+  return creatureChemBuffers;
+}
+
+// Returns a barrier closure -- await it before reading any column the
+// workers wrote (chemCols, catalystCols, inhibitorCols of cells in the
+// idxs[0..n) slice).
+export type CreatureChemistryDispatcher = (n: number) => () => void;
 
 let creatureChemistryDispatcher: CreatureChemistryDispatcher | null = null;
 export function setCreatureChemistryDispatcher(d: CreatureChemistryDispatcher | null): void {

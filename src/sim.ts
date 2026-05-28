@@ -125,6 +125,12 @@ import {
 } from "./sim/core";
 import { ROCK_POLYGONS, VENT_ORIGIN, scalePolygon } from "./sim/terrain-shapes";
 import { perturbPolygons } from "./sim/geology";
+export {
+  setCreatureChemistryDispatcher, getCreatureChemistryDispatcher,
+  setCreatureChemBuffers, getCreatureChemBuffers,
+  applyCreatureChemistryRange,
+} from "./sim/creature-pool";
+export type { CreatureChemistryDispatcher } from "./sim/creature-pool";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
 import { VENT_FUEL_CHEMS } from "./sim/chemolith";
 // Pure ambient-field helpers (surface profile, baseline temperature,
