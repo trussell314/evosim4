@@ -6371,17 +6371,31 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.nextDisturbanceAt = saved.nextDisturbanceAt;
   world.anchorGenome = new Uint8Array(saved.anchorGenome);
   world.liveCodingKeys = new Set(saved.liveCodingKeys);
-  // Terrain restore: the save carries the actual polygons + lobes so a
-  // perturbed (procedural-geology) world reloads with the SAME rocks.
-  // Old saves without obstacles fall back to regenerating from
-  // ROCK_POLYGONS + geologySeed (also restored, default 0 = un-perturbed).
-  world.geologySeed = (saved.geologySeed ?? 0) >>> 0;
-  if (saved.obstacles && saved.obstacles.length > 0) {
-    world.obstacles = saved.obstacles;
-    rebuildTerrainDerived(world);
-  } else {
+  // Terrain restore. Three paths:
+  //   (a) save carries a non-zero geologySeed -- perturbed save, use its
+  //       polygons + lobes verbatim so the same world reloads identical.
+  //   (b) save carries no geologySeed field -- pre-geology save. The
+  //       embedded obstacles are the un-perturbed legacy geometry, which
+  //       has the wall-anchored rendering bug; migrate by rolling a
+  //       fresh non-zero seed and regenerating from ROCK_POLYGONS. The
+  //       user's sim state is preserved, only the rocks update.
+  //   (c) save has geologySeed but no obstacles array -- regenerate
+  //       from the saved seed (round-trips through ROCK_POLYGONS).
+  if (saved.geologySeed === undefined) {
+    let migrated = 0;
+    while (migrated === 0) migrated = (Math.random() * 0x100000000) >>> 0;
+    world.geologySeed = migrated;
     world.obstacles = [];
     generateObstacles(world);
+  } else {
+    world.geologySeed = saved.geologySeed >>> 0;
+    if (saved.obstacles && saved.obstacles.length > 0) {
+      world.obstacles = saved.obstacles;
+      rebuildTerrainDerived(world);
+    } else {
+      world.obstacles = [];
+      generateObstacles(world);
+    }
   }
   rebuildObstacleIndex(world);
   if (saved.atmosphere) {
