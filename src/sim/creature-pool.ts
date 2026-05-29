@@ -11,8 +11,6 @@
 // world.ambient), engulf/predate/ingest, division all stay on the
 // sim worker. Biosynth + maintenance + toxify can land in a follow-up.
 
-import type { Creature } from "./core";
-import { runGenericReactions } from "./cell-reactions";
 
 // SAB-backed scratch the pool exposes. The caller (updateCreatures)
 // writes:
@@ -41,15 +39,3 @@ export function getCreatureChemistryDispatcher(): CreatureChemistryDispatcher | 
   return creatureChemistryDispatcher;
 }
 
-// Per-slice executor the subworker calls on [start, end). Each cell
-// only touches its own SAB columns, so different workers can't race.
-export function applyCreatureChemistryRange(
-  cells: Creature[], start: number, end: number,
-  dtT: number, ambientLight: number,
-): void {
-  for (let k = start; k < end; k++) {
-    const c = cells[k];
-    if (!c) continue;
-    runGenericReactions(c, dtT, ambientLight);
-  }
-}

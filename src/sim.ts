@@ -128,7 +128,6 @@ import { perturbPolygons } from "./sim/geology";
 export {
   setCreatureChemistryDispatcher, getCreatureChemistryDispatcher,
   setCreatureChemBuffers, getCreatureChemBuffers,
-  applyCreatureChemistryRange,
 } from "./sim/creature-pool";
 export type { CreatureChemistryDispatcher } from "./sim/creature-pool";
 import {
