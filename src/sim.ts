@@ -131,6 +131,10 @@ export {
   applyCreatureChemistryRange,
 } from "./sim/creature-pool";
 export type { CreatureChemistryDispatcher } from "./sim/creature-pool";
+import {
+  getCreatureChemistryDispatcher as _getCreatureChemistryDispatcher,
+  getCreatureChemBuffers as _getCreatureChemBuffers,
+} from "./sim/creature-pool";
 import { makeVentState, stepVent, VENT_EMISSION_CHEMS } from "./sim/vent";
 import { VENT_FUEL_CHEMS } from "./sim/chemolith";
 // Pure ambient-field helpers (surface profile, baseline temperature,
@@ -4730,61 +4734,104 @@ function updateCreatures(world: World, dt: number): void {
   // ENGULF in the per-cell loop below see consistent values for
   // both self and neighbor (rather than mid-update mixes).
   refreshSurfaceFingerprints(world);
+
+  // Parallel-chemistry path: when a creature subworker pool has set a
+  // dispatcher, run the per-cell pre-chem ops + chemistry as separate
+  // phases (Pass 1 sequential, chemistry parallel, Pass 2 sequential).
+  // When the dispatcher is null (test path, no SAB, hwc < 2), the
+  // per-cell loop's else-branch below runs the original inline body --
+  // byte-identical to before this change, so golden + determinism stay
+  // pinned.
+  const _crDispatch = _getCreatureChemistryDispatcher();
+  const _crBufs = _crDispatch ? _getCreatureChemBuffers() : null;
+  const _pcDtT = _crDispatch ? new Float32Array(n) : null;
+  const _pcAmb = _crDispatch ? new Float32Array(n) : null;
+  const _pcOcc = _crDispatch ? new Float32Array(n) : null;
+  const _pcOff = _crDispatch ? new Float32Array(n) : null;
+  if (_crDispatch !== null && _crBufs !== null && n > 0) {
+    for (let cIdx = 0; cIdx < n; cIdx++) {
+      const c = world.creatures[cIdx];
+      // Eaten is empty in Pass 1 (no engulf has run yet this tick).
+      c.store.atpSpentTick[c.idx] = 0;
+      c.store.activeLightEmit[c.idx] = 0;
+      c.store.activeVibEmit[c.idx] = 0;
+      c.store.activeMagEmit[c.idx] = 0;
+      updateCreatureRadius(c);
+      const localTemp = regionTempAt(world, c.x, c.y);
+      const km = tempMult(localTemp);
+      const dtT = dt * km;
+      const cachedOcc = lightOcclusion(world, c.x, c.y);
+      const cachedTempOff = localTemp - TEMP_BASELINE;
+      const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
+      spendATP(c, idleDrain, ATP_IDLE);
+      diffuseAmbient(c, world, dt);
+      const ambientLight = solarLight(world) * Math.exp(-c.y / LIGHT_DECAY) * cachedOcc * c.store.shadeFactor[c.idx];
+      _pcDtT![cIdx] = dtT;
+      _pcAmb![cIdx] = ambientLight;
+      _pcOcc![cIdx] = cachedOcc;
+      _pcOff![cIdx] = cachedTempOff;
+      _crBufs.idxs[cIdx] = c.idx;
+      _crBufs.scratch[cIdx * 2] = dtT;
+      _crBufs.scratch[cIdx * 2 + 1] = ambientLight;
+    }
+    // Dispatch parallel chemistry across the subworker pool + barrier.
+    _crDispatch(n)();
+  }
+
   for (let cIdx = 0; cIdx < n; cIdx++) {
     const c = world.creatures[cIdx];
     if (eaten.has(c)) continue;
     const vmOut = c.vmOut;
-    // Reset the per-tick scratch accumulators (read last tick by the
-    // emission pass above) before this tick's spends/emits land.
-    c.store.atpSpentTick[c.idx] = 0;
-    c.store.activeLightEmit[c.idx] = 0;
-    c.store.activeVibEmit[c.idx] = 0;
-    c.store.activeMagEmit[c.idx] = 0;
 
-    updateCreatureRadius(c);
+    let dtT: number, ambientLight: number, cachedOcc: number, cachedTempOff: number;
+    if (_crDispatch !== null) {
+      // Parallel path: Pass 1 already did the pre-chem ops and the
+      // chemistry phase ran in parallel just above. Read the cached
+      // locals so the post-chem code below sees the same values it would
+      // have computed inline.
+      dtT = _pcDtT![cIdx];
+      ambientLight = _pcAmb![cIdx];
+      cachedOcc = _pcOcc![cIdx];
+      cachedTempOff = _pcOff![cIdx];
+    } else {
+      // Serial path: original inline pre-chem + chemistry. Byte-identical
+      // to before the dispatcher hook landed.
+      c.store.atpSpentTick[c.idx] = 0;
+      c.store.activeLightEmit[c.idx] = 0;
+      c.store.activeVibEmit[c.idx] = 0;
+      c.store.activeMagEmit[c.idx] = 0;
 
-    // Temperature multiplies every enzyme-catalyzed rate (and the matching
-    // idle drain) -- warm cells run hot; cold cells slow down. Q10 = 2.
-    // Reads regionTempAt so cells near an active vent feel its heat.
-    const localTemp = regionTempAt(world, c.x, c.y);
-    const km = tempMult(localTemp);
-    const dtT = dt * km;
-    // Cache occlusion + temp-offset once per host. lightOcclusion samples
-    // the heightmap (~9 taps); regionTempAt is an O(1) region lookup but
-    // it gets called another two times below (ambientLight + thermo
-    // receptor). For a host with K engulfed organelles we previously did
-    // K+2 lightOcclusion calls and 3 regionTempAt calls at the same x,y;
-    // now it's exactly one of each, shared with host + inner activations.
-    const cachedOcc = lightOcclusion(world, c.x, c.y);
-    const cachedTempOff = localTemp - TEMP_BASELINE;
+      updateCreatureRadius(c);
 
-    // Cost of being alive. ATP turns into ADP, mass conserved. Drain
-    // scales with temperature like the rest of metabolism.
-    const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
-    spendATP(c, idleDrain, ATP_IDLE);
+      // Temperature multiplies every enzyme-catalyzed rate (and the matching
+      // idle drain) -- warm cells run hot; cold cells slow down. Q10 = 2.
+      // Reads regionTempAt so cells near an active vent feel its heat.
+      const localTemp = regionTempAt(world, c.x, c.y);
+      const km = tempMult(localTemp);
+      dtT = dt * km;
+      // Cache occlusion + temp-offset once per host. lightOcclusion samples
+      // the heightmap (~9 taps); regionTempAt is an O(1) region lookup but
+      // it gets called another two times below (ambientLight + thermo
+      // receptor). For a host with K engulfed organelles we previously did
+      // K+2 lightOcclusion calls and 3 regionTempAt calls at the same x,y;
+      // now it's exactly one of each, shared with host + inner activations.
+      cachedOcc = lightOcclusion(world, c.x, c.y);
+      cachedTempOff = localTemp - TEMP_BASELINE;
 
-    // Catabolism is now handled by the biopolymer-digest reaction in
-    // runGenericReactions (REACTIONS[10]), gated on enzyme.
+      // Cost of being alive. ATP turns into ADP, mass conserved. Drain
+      // scales with temperature like the rest of metabolism.
+      const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
+      spendATP(c, idleDrain, ATP_IDLE);
 
-    // Passive gas exchange with the surrounding water. Diffusion is
-    // physical, not enzymatic -- left at the base dt.
-    diffuseAmbient(c, world, dt);
+      // Passive gas exchange with the surrounding water. Diffusion is
+      // physical, not enzymatic -- left at the base dt.
+      diffuseAmbient(c, world, dt);
 
-    // All in-cell chemistry runs through one unified loop: named
-    // reactions live at REACTIONS[0..9] with uncatRate > 0, so they
-    // fire on every cell every tick; generic reactions at [10..255]
-    // only fire when the cell has built the relevant catalyst. The
-    // only genome-controlled metabolic axis is which catalyst/inhibitor
-    // slots get expressed (catSynthMask/inhSynthMask, below) -- the old
-    // SYNTH_AA/FA/BIO/CHL/ENZ/RIBO synthMask bits no longer exist (the
-    // VM only sets BOND/COMPETENCE/PACKAGE on synthMask now).
-    // Shade from cells overhead dims photosynthesis too (not just sensing),
-    // so dense canopies actually compete for light -> shade-avoidance is a
-    // real selective pressure, not just a readout.
-    // Inlined ambientLightAt using cached occ (the regular helper would
-    // re-call lightOcclusion redundantly).
-    const ambientLight = solarLight(world) * Math.exp(-c.y / LIGHT_DECAY) * cachedOcc * c.store.shadeFactor[c.idx];
-    runGenericReactions(c, dtT, ambientLight);
+      // Inlined ambientLightAt using cached occ (the regular helper would
+      // re-call lightOcclusion redundantly).
+      ambientLight = solarLight(world) * Math.exp(-c.y / LIGHT_DECAY) * cachedOcc * c.store.shadeFactor[c.idx];
+      runGenericReactions(c, dtT, ambientLight);
+    }
     // Standing transporters across the outer membrane (cell<->world).
     // A transporter is a SYNTH'd catalyst (SYNTH CAT param=slot) for a
     // transport-flavored reaction slot; selective uptake/excretion of
