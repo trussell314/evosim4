@@ -288,8 +288,7 @@ function build(): Archetype[] {
       id: "armored",
       label: "armored tank",
       cls: "direct",
-      desc: "Indigestible prey strategy: pours additional catalyst into the two membrane-synth slots so its structural reserve builds faster (breach cost scales with membrane), grazes slowly, divides only when very large. RETAINED BUT UI-DISABLED: controlled 2x2 (SCENARIO_RESULTS.md) showed the apparent predation-resistance edge is the high reproduce gate (deferred division -> size refuge past the 1.14x breach gate), NOT the membrane investment -- armor is not a separately selectable axis. Kept for scenarios/tests; not user-spawnable.",
-      uiHidden: true,
+      desc: "Indigestible prey strategy: pours additional catalyst into the two membrane-synth slots so its structural envelope builds DENSITY (predationCost now scales with membrane mass per unit area, so thick = real armor regardless of body size), grazes slowly, divides only when very large. Wave-2 note: under the old per-pool armor formula a controlled 2x2 (SCENARIO_RESULTS.md) showed the apparent predation-resistance edge was the high reproduce gate's size refuge, not the membrane investment. Under per-area density, membrane *thickness* IS the armor primitive directly -- this archetype's kit now selects for exactly what predationCost rewards, and is worth re-running.",
       prog: [
         ...HET_KIT,
         // Extra membrane investment: both aa+fa->mem and fa-only->mem
@@ -474,7 +473,7 @@ function build(): Archetype[] {
       id: "endoparasite",
       label: "endoparasite",
       cls: "seed",
-      desc: "Seed: minimal soma, leaks a marker0 lure, low membrane (cheap to engulf). Wants to be eaten, then blooms inside the host (engulfed internal division is uncapped). Reproduces aggressively but gated on a low membrane floor so it doesn't self-lyse before a host takes it up. No catalyst kit -- a parasite that bulks up costs more to engulf, defeating the strategy.",
+      desc: "Seed: minimal soma, leaks a marker0 lure, divides aggressively on a low membrane floor so it stays small (the membrane growth gate keeps it from ballooning, mass it can't wrap doesn't get absorbed). Wants to be eaten by lure-following predators, then blooms inside the host (engulfed internal division is uncapped). Wave-2 note: armor is now per-area density rather than pool size, so 'low membrane = cheap to engulf' no longer holds at small body sizes (small + thin still reads as dense per area) -- the marker0 lure is now the dominant engulf-trigger, not the discounted breach cost. No catalyst kit -- a parasite that bulks up trips the tear ceiling, and the larger body costs more to engulf anyway.",
       prog: [
         ["PUSH8", ING_DETRITUS], ["INGEST"],
         ["THRUST"],
