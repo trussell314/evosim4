@@ -213,6 +213,14 @@ export const CHEMICALS: ChemicalDef[] = buildChemicalTable();
 // dispatch on CHEMICALS[id] every particle.
 export const CHEM_BASE_DENSITY = new Float32Array(CHEMICAL_COUNT);
 for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_BASE_DENSITY[i] = CHEMICALS[i].density;
+// Per-chem signal flag. Signal chems (activated sensor readouts) are
+// stored in chemCols alongside real molecules but they carry SIGNED
+// amplitudes (sensor directions / electric field components), not
+// physical material. Any function that sums "mass" or "density"
+// across chems must skip these or it can land in nonsense (negative
+// mass when a sensor activation is strongly negative).
+export const CHEM_IS_SIGNAL = new Uint8Array(CHEMICAL_COUNT);
+for (let i = 0; i < CHEMICAL_COUNT; i++) CHEM_IS_SIGNAL[i] = CHEMICALS[i].isSignal ? 1 : 0;
 // Molar-mass LUT. Chemistry stores AMOUNT; physical mass = amount *
 // molarMass. Every chem<->physical conversion uses this.
 export const CHEM_MM = new Float32Array(CHEMICAL_COUNT);

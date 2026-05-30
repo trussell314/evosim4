@@ -66,7 +66,7 @@ import {
   REGION_PX,
   CHEM_COLORS,
   SENSOR_CHEM_LABELS,
-  MOLECULE_IDS,
+  MASS_MOLECULE_IDS,
   surfaceYAt,
   windExposureAt,
   WIND_MAX,
@@ -2673,10 +2673,10 @@ function flushTooltip(): void {
   const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
   if (!c) { tooltip.style.display = "none"; return; }
   // ATP is the `atp` molecule (aliased onto c.energy in the store), so
-  // it's already in MOLECULE_IDS -- adding c.energy here would double-
-  // count it. Mirror the creatureTotalMass convention.
+  // it's already in MASS_MOLECULE_IDS -- adding c.energy here would
+  // double-count it. Sensor activations (signed amplitudes) are excluded.
   let mass = 0;
-  for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
+  for (const mk of MASS_MOLECULE_IDS) mass += c.molecules[mk];
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   // Surface engulfed + bonded counts so the user can tell a fat
   // single cell from a host carrying endosymbionts from an adhered
@@ -3945,8 +3945,8 @@ function drawPhylogeny(): void {
     // Membrane is the structural reserve in the chemistry-overhaul
     // model (replaces the retired biomass chemical).
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
-    let tm = c.energy;
-    for (const k of MOLECULE_IDS) tm += c.molecules[k];
+    let tm = 0;
+    for (const k of MASS_MOLECULE_IDS) tm += c.molecules[k];
     massByKey.set(c.speciesKey, (massByKey.get(c.speciesKey) ?? 0) + tm);
   }
   // Update the main-side peak map from this sample. The phylogeny
@@ -4894,10 +4894,10 @@ function updateInspector(): void {
   disasmBar.style.display = "flex";
   disasmBody.style.display = disasmExpanded ? "" : "none";
   // ATP is the `atp` molecule (aliased onto c.energy), so it's already
-  // in MOLECULE_IDS -- adding c.energy here would double-count it.
-  // Mirror the creatureTotalMass convention.
+  // in MASS_MOLECULE_IDS -- adding c.energy here would double-count it.
+  // Sensor activations excluded (signed amplitudes, not material).
   let molMass = 0;
-  for (const k of MOLECULE_IDS) molMass += c.molecules[k];
+  for (const k of MASS_MOLECULE_IDS) molMass += c.molecules[k];
   const totalMass = molMass;
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
@@ -5078,8 +5078,8 @@ type AnalysisRow = {
 function computeRankedRows(): AnalysisRow[] {
   const massByKey = new Map<string, number>();
   for (const c of snapshot.creatures) {
-    let m = c.energy;
-    for (const k of MOLECULE_IDS) m += c.molecules[k];
+    let m = 0;
+    for (const k of MASS_MOLECULE_IDS) m += c.molecules[k];
     massByKey.set(c.speciesKey, (massByKey.get(c.speciesKey) ?? 0) + m);
   }
   const rows: AnalysisRow[] = [];
@@ -5669,8 +5669,11 @@ function reproduceColor(frac: number): string {
 }
 
 function reproduceReadiness(genome: Uint8Array, c: CellVals): number | null {
-  let total = c.energy;
-  for (const k of MOLECULE_IDS) total += c.molecules[k];
+  // Mirror the runtime VM's SELF_MASS computation (sim.ts populateSelf):
+  // sum every mass-bearing molecule, skip signal chems (signed sensor
+  // amplitudes don't count as physical mass).
+  let total = 0;
+  for (const k of MASS_MOLECULE_IDS) total += c.molecules[k];
   let found: number | null = null;
   let i = 0, inGene = false, gStart = 0;
   while (i < genome.length) {

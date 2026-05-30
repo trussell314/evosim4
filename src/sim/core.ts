@@ -8,7 +8,7 @@
 
 import { CATALYST_COUNT, newOutputs, ELEMENT_KIND, type VMState, type VMOutputs, type GenomeElement } from "../genome";
 import {
-  type Molecules, MOLECULE_IDS,
+  type Molecules, MOLECULE_IDS, MASS_MOLECULE_IDS,
   CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
   CHEM_NAMED_MOL_IDX,
 } from "./chem-ids";
@@ -1481,9 +1481,12 @@ export function mass(p: Particle): number {
 
 export function creatureTotalMass(c: Creature): number {
   // ATP is the `atp` molecule (== c.energy, aliased), so it is summed by
-  // the MOLECULE_IDS loop -- no separate c.energy term (double-count).
+  // the MASS_MOLECULE_IDS loop -- no separate c.energy term. Signal
+  // chems (sensor activation vectors) are EXCLUDED: they live in the
+  // same molecule pool but carry signed amplitudes, not material, so
+  // summing them as mass can drive the total negative.
   let m = 0;
-  for (const k of MOLECULE_IDS) m += c.molecules[k];
+  for (const k of MASS_MOLECULE_IDS) m += c.molecules[k];
   // Engulfed prey lives in our vacuole; its mass still occupies our
   // volume. Recurse through every nesting level: a cell we engulfed may
   // itself hold prey it had engulfed, and all of it rides inside us.

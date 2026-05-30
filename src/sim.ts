@@ -53,7 +53,7 @@ export {
   serializeRxnStats, deserializeRxnStats, reactionWindowSeries,
 };
 import {
-  type Molecules, MOLECULE_IDS, MOLECULE_INDEX, emptyMolecules,
+  type Molecules, MOLECULE_IDS, MASS_MOLECULE_IDS, MOLECULE_INDEX, emptyMolecules,
   CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT, GENERIC_CHEMICAL_COUNT,
   NAMED_CHEMICALS,
   CHEM_O2, CHEM_CO2, CHEM_GLU, CHEM_AA, CHEM_FA, CHEM_MIN, CHEM_ADP,
@@ -72,18 +72,18 @@ import {
   CHEM_BOND, CHEM_REPAIR, CHEM_MARKER0,
 } from "./sim/chem-ids";
 export {
-  type Molecules, MOLECULE_IDS, emptyMolecules,
+  type Molecules, MOLECULE_IDS, MASS_MOLECULE_IDS, emptyMolecules,
   NAMED_CHEMICAL_COUNT, NAMED_CHEMICALS,
 };
 import {
   type ChemPhase, type ChemRole, type ChemicalDef,
-  GENERIC_SPAWN_ORDER, CHEMICALS, CHEM_BASE_DENSITY, CHEM_MM,
+  GENERIC_SPAWN_ORDER, CHEMICALS, CHEM_BASE_DENSITY, CHEM_IS_SIGNAL, CHEM_MM,
   CHEM_COLORS, CHEM_NAMES, CHEM_MOLAR_MASS,
   CHEM_IDS, SENSOR_CHEMS, CHEM_BOND_POTENTIAL,
 } from "./sim/chemistry";
 export {
   type ChemPhase, type ChemRole, type ChemicalDef,
-  CHEM_BASE_DENSITY, CHEM_COLORS, CHEM_NAMES, CHEM_MOLAR_MASS, CHEM_IDS,
+  CHEM_BASE_DENSITY, CHEM_IS_SIGNAL, CHEM_COLORS, CHEM_NAMES, CHEM_MOLAR_MASS, CHEM_IDS,
 };
 import {
   REACTIONS, NAMED_REACTION_COUNT,
@@ -3486,7 +3486,10 @@ function runInnerCell(
     let selfMass = 0;
     const cols = inner.store.chemCols;
     const ii = inner.idx;
-    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) selfMass += cols[k][ii];
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+      if (CHEM_IS_SIGNAL[k]) continue; // skip signed sensor activations
+      selfMass += cols[k][ii];
+    }
     VM_SELF.mass = selfMass;
   }
   VM_SELF.membrane = inner.molecules.membrane;
@@ -5025,7 +5028,10 @@ function updateCreatures(world: World, dt: number): void {
     let selfMass = 0;
     const chemColsC = c.store.chemCols;
     const iC = c.idx;
-    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) selfMass += chemColsC[k][iC];
+    for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+      if (CHEM_IS_SIGNAL[k]) continue; // skip signed sensor activations
+      selfMass += chemColsC[k][iC];
+    }
     VM_SELF.mass = selfMass;
     VM_SELF.membrane = c.molecules.membrane;
 
@@ -6090,6 +6096,10 @@ export function updateCreatureRadius(c: Creature): void {
     const cols = s.chemCols;
     let weighted = 0;
     for (let k = 0; k < NAMED_CHEMICAL_COUNT; k++) {
+      // Skip signal chems (sensor activations live in chemCols but are
+      // signed amplitudes, not material -- excluding them keeps density
+      // from spiking with strong sensor input).
+      if (CHEM_IS_SIGNAL[k]) continue;
       weighted += cols[k][i] * CHEM_BASE_DENSITY[k];
     }
     const raw = weighted / m;

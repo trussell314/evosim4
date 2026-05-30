@@ -387,7 +387,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // of r (Fick's law / projected area). Predation membrane armor is
     // now per-area thickness, not pool size (thin envelope on a huge
     // cell is no harder to crack than thin on a small cell). Intended.
-    const GOLDEN = "718f770e";
+    // Mass = physical chems only: sensor-activation slots (signed
+    // amplitudes) are excluded from creatureTotalMass, SELF_MASS, and
+    // density weighting. Pre-existing nonsense (a strong negative-x
+    // electric/mag signal made the cell's "mass" go negative); now the
+    // signal pool is treated as state, not material, in every mass-or-
+    // density sum. Intended.
+    const GOLDEN = "361ab4c9";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

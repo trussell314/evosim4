@@ -99,6 +99,29 @@ export const MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
   "atp",
 ];
 
+// Sensor-activation chems are stored in the molecule pool alongside
+// real material, but they carry SIGNED signal amplitudes (vector
+// components of light/mech/mag/electric/vib bearings, scalar pH and
+// thermo offsets), not physical matter. Summing them as if they were
+// chemical mass produces nonsense -- a single strong negative-x
+// magnetic signal makes the total mass go negative. MASS_MOLECULE_IDS
+// is the same list with those filtered out; anything that wants
+// "physical mass of the cell" should iterate this instead.
+export const SIGNAL_MOLECULE_IDS: ReadonlyArray<keyof Molecules> = [
+  "activatedPhotoVisible", "activatedPhotoLong", "activatedPhotoSurface",
+  "activatedElectroX", "activatedElectroY",
+  "activatedVibX", "activatedVibY",
+  "activatedPh", "activatedChemoFaY",
+  "activatedLightX", "activatedLightY",
+  "activatedMechX", "activatedMechY",
+  "activatedThermo",
+  "activatedMagX", "activatedMagY",
+];
+const SIGNAL_SET = new Set<string>(SIGNAL_MOLECULE_IDS as ReadonlyArray<string>);
+export const MASS_MOLECULE_IDS: ReadonlyArray<keyof Molecules> = MOLECULE_IDS.filter(
+  (k) => !SIGNAL_SET.has(k),
+);
+
 export function emptyMolecules(): Molecules {
   // Build from MOLECULE_IDS so adding a new entry above auto-zero-
   // initializes here. Cheap (one allocation per call); used mostly
