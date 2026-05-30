@@ -2732,6 +2732,12 @@ function flushTooltip(): void {
   const vv = window.visualViewport;
   const vw = vv ? vv.width : window.innerWidth;
   const vh = vv ? vv.height : window.innerHeight;
+  // Respect the side panels: never let the tooltip slide under them
+  // (they sit at z-index 20; the tooltip can't out-stack them without
+  // also covering the chem/inspector slideout on open, which would
+  // look worse than a small horizontal shift).
+  const leftEdge = leftPanelWidth() + MARGIN;
+  const rightEdge = vw - (analysisMinimized ? ANALYSIS_PANEL_W_MIN : analysisPanelW()) - MARGIN;
   const w = tooltip.offsetWidth;
   const h = tooltip.offsetHeight;
   const rPix = c.r * viewScale * viewZoom;
@@ -2739,9 +2745,9 @@ function flushTooltip(): void {
   const cy = worldToClientY(c.y);
   let left = cx + OFFSET;
   let top = cy + OFFSET;
-  if (left + w + MARGIN > vw) left = cx - OFFSET - w - rPix * 2;
+  if (left + w > rightEdge) left = cx - OFFSET - w - rPix * 2;
   if (top + h + MARGIN > vh) top = cy - OFFSET - h;
-  if (left < MARGIN) left = MARGIN;
+  if (left < leftEdge) left = leftEdge;
   if (top < MARGIN) top = MARGIN;
   tooltip.style.left = `${left}px`;
   tooltip.style.top = `${top}px`;
