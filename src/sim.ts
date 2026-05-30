@@ -3674,7 +3674,12 @@ function runInnerCell(
   // hook reserved for active pumping), matching the outer membrane.
   const iCat = inner.store.catalystCols;
   const hCat = host.store.catalystCols;
-  const surf = inner.store.r[ii] / MIN_CREATURE_R;
+  // Transmembrane flux is Fick's law: J = A * D * grad(c). Surface area
+  // grows with r^2, not r -- same scaling as the outer-membrane applier
+  // (runTransportReactions); vacuolar membrane wraps the inner cell, so
+  // the inner's r is what counts here.
+  const surfRel = inner.store.r[ii] / MIN_CREATURE_R;
+  const surf = surfRel * surfRel;
   // Path 1: CHEM_ATP is a real chemCols id (== the aliased energy /
   // m_atp column), so the ATP translocase is just the generic
   // chem-transport path below -- no special energy branch. It is

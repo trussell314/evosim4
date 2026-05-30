@@ -2672,7 +2672,10 @@ function flushTooltip(): void {
   if (lockedCellId != null && !snapshotCreatureById.has(lockedCellId)) lockedCellId = null;
   const c = lockedCellId != null ? snapshotCreatureById.get(lockedCellId) : null;
   if (!c) { tooltip.style.display = "none"; return; }
-  let mass = c.energy;
+  // ATP is the `atp` molecule (aliased onto c.energy in the store), so
+  // it's already in MOLECULE_IDS -- adding c.energy here would double-
+  // count it. Mirror the creatureTotalMass convention.
+  let mass = 0;
   for (const mk of MOLECULE_IDS) mass += c.molecules[mk];
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
   // Surface engulfed + bonded counts so the user can tell a fat
@@ -4890,7 +4893,10 @@ function updateInspector(): void {
   inspectorProse.style.display = "";
   disasmBar.style.display = "flex";
   disasmBody.style.display = disasmExpanded ? "" : "none";
-  let molMass = c.energy;
+  // ATP is the `atp` molecule (aliased onto c.energy), so it's already
+  // in MOLECULE_IDS -- adding c.energy here would double-count it.
+  // Mirror the creatureTotalMass convention.
+  let molMass = 0;
   for (const k of MOLECULE_IDS) molMass += c.molecules[k];
   const totalMass = molMass;
   const m = c.molecules;
