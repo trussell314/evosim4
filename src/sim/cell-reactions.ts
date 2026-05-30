@@ -106,7 +106,14 @@ export function runGenericReactions(
       if (adpAvail < limit) limit = adpAvail;
       satProduct *= adpAvail / (adpAvail + KM);
     }
-    const surface = rxn.surfaceScale ? (s.r[i] / MIN_CREATURE_R) : 1;
+    // Surface-area scaling: surface flux (light gathered, transmembrane
+    // diffusion) grows with 4*pi*r^2, not radius. (r/MIN)^2 keeps the
+    // starter cell at exactly 1.0 and matches the physical analog.
+    let surface = 1;
+    if (rxn.surfaceScale) {
+      const rRel = s.r[i] / MIN_CREATURE_R;
+      surface = rRel * rRel;
+    }
     // Named-molecule multipliers, now that we've already passed their
     // non-zero gates above: build the products directly.
     let machineryMult = 1;
@@ -167,7 +174,10 @@ export function runTransportReactions(c: Creature, world: World, dt: number): vo
   const cats = s.catalystCols;
   const ambient = world.ambient;
   const ab = ambientBaseAt(world, s.x[i], s.y[i]);
-  const surface = s.r[i] / MIN_CREATURE_R;
+  // Transmembrane flux is Fick's law: J = A * D * grad(c). Surface area
+  // grows with r^2, not r -- a 4x-radius cell exchanges 16x more, not 4x.
+  const rRel = s.r[i] / MIN_CREATURE_R;
+  const surface = rRel * rRel;
   for (let n = 0; n < TRANSPORT_TARGETS.length; n++) {
     const k = TRANSPORT_TARGETS[n];
     // ATP translocase (ANT) is inner-membrane only: there is no

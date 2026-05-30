@@ -378,7 +378,16 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // Wave 1: REPRODUCE attempt cost now scales with childShare * parentMass
     // (material moved) rather than parentMass alone, and INGEST cooldown
     // scales with surface area (1/r^2) rather than 1/r. Intended.
-    const GOLDEN = "44d564e2";
+    // Wave 2: membrane is now a per-area structural budget. Stretched
+    // envelope (required/actual > 1) accelerates maintenance decay;
+    // INGEST/PREDATE/ENGULF refuse a bite that would push the envelope
+    // past MEMBRANE_TEAR_STRETCH=3x. Membrane decay re-formulated as
+    // per-r^2 (was first-order on pool). Surface-flux reactions
+    // (photosynth + transmembrane transport) now scale with r^2 instead
+    // of r (Fick's law / projected area). Predation membrane armor is
+    // now per-area thickness, not pool size (thin envelope on a huge
+    // cell is no harder to crack than thin on a small cell). Intended.
+    const GOLDEN = "718f770e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });

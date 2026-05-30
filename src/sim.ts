@@ -296,10 +296,13 @@ const PREDATION_RADIUS_RATIO = 1.14;
 const PREDATION_COOLDOWN_SEC = 0.2;
 const PREDATION_ENERGY_BASE = 5;
 const PREDATION_ENERGY_PER_MASS = 0.1;
-// Breaching a target's membrane costs energy in proportion to how
-// much structural envelope there is to rupture -- armor makes prey
-// expensive (or, combined with the hard gate above, impossible) to eat.
-const PREDATION_ENERGY_PER_MEMBRANE = 0.5;
+// Breaching a target's membrane costs energy in proportion to its
+// envelope *thickness* (membrane mass per surface area), not raw pool
+// size. A thin envelope on a huge cell is no harder to crack than a
+// thin one on a small cell; armor must be DENSE to count. Constant
+// absorbs a factor of MIN_CREATURE_R^2 (=16) relative to the pre-Wave-2
+// pool-based formulation so starter-scale armor stays calibrated.
+const PREDATION_ENERGY_PER_MEMBRANE = 8;
 // Extra ATP per unit of target cohesion (its CHEM_BOND pool x its
 // intact bond count) to tear it out of a colony. Tunable: high enough
 // that a lineage investing heavily in SYNTH BOND meaningfully
@@ -692,7 +695,29 @@ function refreshSurfaceFingerprints(world: World): void {
 // cell could afford, so cells bled membrane to the autolysis floor
 // before they could grow + reproduce. A gentler tax lets the modest
 // autotrophic surplus net positive long enough to establish a lineage.
-const MEMBRANE_DECAY_PER_SEC = 0.003;
+// Membrane attrition is per-area: a cell that wraps more surface
+// pays a larger upkeep tax, regardless of pool size. Calibrated so the
+// starter cell (r = MIN_CREATURE_R = 4, r^2 = 16) loses ~0.003 / sec
+// at the well-fed baseline (matching the pre-Wave-2 first-order rate
+// at the starter scale). Big cells now pay a body-scaled price for
+// hauling around their envelope.
+const MEMBRANE_DECAY_PER_RADIUS_SQ = 0.0002;
+// Structural membrane requirement. A cell of radius r needs at least
+// MEMBRANE_PER_RADIUS_SQ * r^2 membrane to wrap its surface without
+// stretching the bilayer. The 4*pi is folded into the constant.
+// Calibration: at starter scale (r=4) the requirement is ~0.16 -- well
+// under the starter's seed of 1.0, so a freshly-spawned founder has
+// headroom to grow before it must invest in membrane biosynth. Used
+// by maintenanceDecay (stretched membrane turns over proportionally
+// faster) and by INGEST/PREDATE/ENGULF (a bite that would push the
+// resulting body past the tear ceiling is refused, mass stays put).
+const MEMBRANE_PER_RADIUS_SQ = 0.01;
+// Tear ceiling: a cell whose required/actual membrane ratio exceeds
+// this is too thin to wrap, and further growth (ingest/predate/engulf)
+// is refused. 3x is loose enough that a brief overload during a bite +
+// biosynth cycle is recoverable, tight enough that a stalled cell
+// can't keep ballooning by ingestion alone.
+const MEMBRANE_TEAR_STRETCH = 3.0;
 // The three mandatory-machinery molecules (chl/enz/ribo) gate hard at
 // zero now, so their decay is what eventually kills a starving cell.
 // Lowered to ~0.001 so cells survive temporary substrate shortages
@@ -3119,7 +3144,19 @@ function maintenanceDecay(c: Creature, dt: number): void {
   // (replaces the old biomass decay path).
   const memb = s.m_membrane[i];
   if (memb > 0) {
-    const lost = memb * MEMBRANE_DECAY_PER_SEC * stressMult * dt;
+    // Per-area structural turnover. The base loss is proportional to
+    // the cell's surface (r^2); the stretch factor accelerates it when
+    // the cell is wrapping more body than its membrane budget allows
+    // (required / actual > 1). A well-budgeted cell sits at the body-
+    // scaled baseline; an over-stretched one bleeds membrane faster,
+    // which is the negative feedback that closes the growth-without-
+    // membrane-investment loop.
+    const r = s.r[i];
+    const baseArea = r * r;
+    const required = MEMBRANE_PER_RADIUS_SQ * baseArea;
+    const stretchMult = required > memb ? required / memb : 1;
+    let lost = MEMBRANE_DECAY_PER_RADIUS_SQ * baseArea * stressMult * stretchMult * dt;
+    if (lost > memb) lost = memb;
     s.m_membrane[i] = memb - lost;
     // Phospholipid hydrolysis: ~65% of bilayer mass is fatty-acyl
     // chains, ~35% glycerophosphate + N head-group (-> aa proxy).
@@ -3548,6 +3585,10 @@ function runInnerCell(
         updateCreatureRadius(other);
         if (!canBreach(inner, other)) continue;
         const otherMass = creatureTotalMass(other);
+        // Membrane budget gate (vacuolar): the inner cell has to wrap
+        // the sibling's mass into its own envelope. Same physics as the
+        // free-cell gate; sibling stays put if the inner is too thin.
+        if (wouldTearOnGrowth(inner, otherMass)) continue;
         const cost = predationCost(other, otherMass);
         if (inner.energy < cost) continue;
         if (inner.vmOut.engulf) {
@@ -3803,6 +3844,13 @@ function ingestFromReserve(world: World, c: Creature, threshold: number): boolea
   }
   if (bestChem < 0 || bestAmt <= 0) return false;
   const bite = Math.min(bestAmt, RESERVE_INGEST_BITE * (c.r / INGEST_REF_R));
+  // Membrane budget gate: refuse the bite if it would push the
+  // envelope past its tear ceiling. Reserve bites are mass-scale-
+  // bounded (per molar mass below the chemCols assignment), but
+  // `bite` is already in chem-amount units; convert to mass for the
+  // gate via CHEM_MM and skip if it can't fit.
+  const biteMass = bite * CHEM_MM[bestChem];
+  if (wouldTearOnGrowth(c, biteMass)) return false;
   res[ri + bestChem] -= bite;
   c.store.chemCols[bestChem][c.idx] += bite; // chemCols[NAMED+k] aliases generics
   spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
@@ -5237,6 +5285,10 @@ function updateCreatures(world: World, dt: number): void {
           updateCreatureRadius(other);
           if (!canBreach(c, other)) return;
           const otherMass = creatureTotalMass(other);
+          // Membrane budget gate: the host has to grow to enclose the
+          // engulfed cell, and an envelope already at its tear ceiling
+          // can't be stretched further. The prey stays free.
+          if (wouldTearOnGrowth(c, otherMass)) return;
           const cost = predationCost(other, otherMass);
           if (c.energy < cost) return;
           // Engulfed cell becomes an endosymbiont. It stays FULLY
@@ -5264,6 +5316,10 @@ function updateCreatures(world: World, dt: number): void {
           updateCreatureRadius(other);
           if (!canBreach(c, other)) return;
           const otherMass = creatureTotalMass(other);
+          // Membrane budget gate: predation absorbs the prey's chem
+          // pool, growing the predator's mass. An envelope already at
+          // its tear ceiling can't wrap any more body. Prey stays alive.
+          if (wouldTearOnGrowth(c, otherMass)) return;
           const cost = predationCost(other, otherMass);
           if (c.energy < cost) return;
           // Predator absorbs the prey's full chem pool. Each chem
@@ -5342,6 +5398,11 @@ function updateCreatures(world: World, dt: number): void {
           const dy = p.y - c.y;
           const dz = p.z - c.z;
           if (dx * dx + dy * dy + dz * dz < cr2) {
+            // Membrane budget gate: refuse the bite if the resulting
+            // body would push the envelope past its tear ceiling. The
+            // particle stays in the world for a less-stretched neighbor
+            // (or this same cell, after it biosynthesizes more membrane).
+            if (wouldTearOnGrowth(c, mass(p))) return;
             if (p.molecules) {
               // Molecule-tagged particle: contents go straight into the
               // cell's molecule pool, bypassing digestion. This is corpse
@@ -5942,6 +6003,23 @@ function populateSensors(c: Creature, _world: World, engulfed = false): void {
 function canBreach(attacker: Creature, target: Creature): boolean {
   return attacker.r >= PREDATION_RADIUS_RATIO * target.r;
 }
+// Growth gate: would absorbing `addedMass` push the cell past its
+// membrane tear ceiling? The new mass projects to a new sphere radius
+// via the same cube-root formula updateCreatureRadius uses, then asks
+// whether the required-vs-actual ratio at that radius would exceed
+// MEMBRANE_TEAR_STRETCH. A cell with zero membrane can't take ANY bite
+// (infinite stretch). Caller refuses the absorption when this returns
+// true; the source matter stays put, so mass conservation is preserved
+// without any explicit refund path. Cheap: one cbrt + multiply + comp.
+function wouldTearOnGrowth(c: Creature, addedMass: number): boolean {
+  const membrane = c.store.m_membrane[c.idx];
+  if (membrane <= 0) return true;
+  const newMass = creatureTotalMass(c) + addedMass;
+  let newR = Math.cbrt((3 * newMass) / (4 * Math.PI));
+  if (newR < MIN_CREATURE_R) newR = MIN_CREATURE_R;
+  const required = MEMBRANE_PER_RADIUS_SQ * newR * newR;
+  return required / membrane > MEMBRANE_TEAR_STRETCH;
+}
 function predationCost(target: Creature, targetMass: number): number {
   // Cohesion penalty: ripping a cell out of a colony costs extra ATP
   // on top of the size/membrane economics. The strength scalar is the
@@ -5952,9 +6030,16 @@ function predationCost(target: Creature, targetMass: number): number {
   // EMERGES from how much a lineage invests in bonding rather than
   // being a hardcoded "colonies are protected" rule.
   const cohesion = target.store.chemCols[CHEM_BOND][target.idx] * target.bonds.length;
+  // Membrane defense is per-area thickness, not pool size: a thin
+  // envelope on a huge cell is no harder to breach than a thin one on
+  // a small cell. PREDATION_ENERGY_PER_MEMBRANE is recalibrated below
+  // to match the previous starter-scale armor (membrane/r^2 at the
+  // founder ~= 1/16, so dividing by r^2 means the constant absorbs a
+  // factor of MIN_CREATURE_R^2 = 16 to keep small-cell armor matched).
+  const armor = PREDATION_ENERGY_PER_MEMBRANE * (target.molecules.membrane / (target.r * target.r));
   return PREDATION_ENERGY_BASE
     + PREDATION_ENERGY_PER_MASS * targetMass
-    + PREDATION_ENERGY_PER_MEMBRANE * target.molecules.membrane
+    + armor
     + PREDATION_ENERGY_PER_COHESION * cohesion;
 }
 

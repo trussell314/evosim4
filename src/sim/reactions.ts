@@ -35,8 +35,9 @@ export interface Reaction {
   // (the bootstrap chemistry every cell gets free); generic reactions
   // leave it 0 -- they only fire when a cell has built the catalyst.
   uncatRate: number;
-  // If true, rate also scales with cell surface area (r / MIN_R) -- only
-  // photosynth uses this today, modeling pigment membrane area.
+  // If true, rate scales with surface area ((r / MIN_R)^2) -- photosynth
+  // uses this to model pigment membrane area (projected light-gathering
+  // cross-section grows with r^2, not r).
   surfaceScale: boolean;
   // Apply BIOSYNTH_ATP_FLOOR when this reaction consumes ATP. True for
   // biosynth slots so newborns don't burn their starting ATP on growth.
