@@ -268,9 +268,9 @@ export function setParticleTarget(world: World, cap: number): void {
 const INGEST_ENERGY_COST = 1.5;
 const INGEST_COOLDOWN_SEC = 0.15;
 // Ingestion is rate-limited by membrane area: a bigger cell has more surface
-// through which to absorb, so its post-ingest cooldown shrinks proportionally
-// (cooldown / (r / INGEST_REF_R)). Below INGEST_REF_R the cooldown stays at
-// the baseline so tiny cells aren't accidentally penalized.
+// through which to absorb, so its post-ingest cooldown shrinks with surface
+// area (cooldown / (r / INGEST_REF_R)^2). Below INGEST_REF_R the cooldown
+// stays at the baseline so tiny cells aren't accidentally penalized.
 const INGEST_REF_R = 4;
 // Edible reserve (Option 1): when a cell runs INGEST but no particle is in
 // reach, it eats a bite of the most-abundant ingestible chem from its
@@ -333,8 +333,12 @@ const THRUST_MASS_REF = 200;
 // REPRODUCE attempt, success or failure. This is the "natural" rate limit
 // on spamming REPRODUCE: a cell that fires the op every tick without the
 // biomass to back it up bleeds ATP and starves itself. The per-mass term
-// reflects that splitting a big cell takes more reorganization than a small
-// one.
+// is proportional to the *material actually shed* into the daughter
+// (childShare * parentMass), so a "queen + pollen" 2% spawn costs ~2% of
+// a 50/50 fission. Spamming with parentShare ~= 1 is self-limiting: each
+// attempt sheds almost no material, so the per-mass term collapses to
+// near-base, but the daughter the genome bothered to fire for is too
+// small to be viable.
 const REPRODUCE_ATTEMPT_ATP_BASE = 0.4;
 const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
 // Newborn yolk constants retired. The genome now fully determines
@@ -3802,7 +3806,10 @@ function ingestFromReserve(world: World, c: Creature, threshold: number): boolea
   res[ri + bestChem] -= bite;
   c.store.chemCols[bestChem][c.idx] += bite; // chemCols[NAMED+k] aliases generics
   spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
-  c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
+  {
+    const k = INGEST_REF_R / c.r; // c.r >= MIN_CREATURE_R == INGEST_REF_R
+    c.ingestCooldown = INGEST_COOLDOWN_SEC * k * k;
+  }
   return true;
 }
 
@@ -5358,8 +5365,13 @@ function updateCreatures(world: World, dt: number): void {
               }
             }
             spendATP(c, INGEST_ENERGY_COST, ATP_INGEST);
-            // c.r >= MIN_CREATURE_R == INGEST_REF_R so the divisor is just c.r.
-            c.ingestCooldown = INGEST_COOLDOWN_SEC * (INGEST_REF_R / c.r);
+            // Surface-area scaling: cooldown ~ 1/r^2 (more "mouth" with bigger
+            // envelope). c.r >= MIN_CREATURE_R == INGEST_REF_R, so the factor
+            // (INGEST_REF_R / c.r)^2 lands in (0, 1].
+            {
+              const k = INGEST_REF_R / c.r;
+              c.ingestCooldown = INGEST_COOLDOWN_SEC * k * k;
+            }
             removeParticleAt(world, p.idx);
             ateParticle = true;
             return true; // ate one; stop
@@ -5650,8 +5662,17 @@ function tryReproduce(parent: Creature, world: World): void {
   // Initiating mitosis costs ATP whether the attempt succeeds or not.
   // This is the rate-limit on REPRODUCE: a cell can't fire it every tick
   // without paying for the failed cycles, so spamming the op starves the
-  // cell instead of being free.
-  spendATP(parent, REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * creatureTotalMass(parent), ATP_REPRODUCE);
+  // cell instead of being free. The per-mass term scales with the
+  // *material moved* (childShare * parentMass), not parentMass alone --
+  // a big mother shedding a small seed pays proportionally less than a
+  // 50/50 fission of the same parent.
+  const childShare = 1 - parent.vmOut.reproduceFraction;
+  spendATP(
+    parent,
+    REPRODUCE_ATTEMPT_ATP_BASE
+      + REPRODUCE_ATTEMPT_ATP_PER_MASS * childShare * creatureTotalMass(parent),
+    ATP_REPRODUCE,
+  );
 
   // The store is the only population ceiling, and it counts EVERY cell --
   // free, engulfed, and nested -- so check canAlloc (which respects the
@@ -5679,8 +5700,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // will autolyze through the normal death pass (which conserves
   // mass back to particles). "Started mitosis, no undo button" was
   // the user's explicit design call.
-  const parentShare = parent.vmOut.reproduceFraction;
-  const childShare = 1 - parentShare;
+  // parentShare / childShare were computed above (attempt-cost scaling).
   // Build-block sufficiency check is also gone -- the parent commits
   // whatever proportional share its current pool gives the child,
   // and if either daughter ends up below MIN_VIABLE_MEMBRANE the

@@ -375,7 +375,10 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // (photosynthesis/photoreception) differs every tick. Intended.
     // Bumped again: FOUNDER_TARGET 10 -> 20 (default cap doubled), so the
     // seeded pool maintains 2x the founders. Intended.
-    const GOLDEN = "0ccbbafb";
+    // Wave 1: REPRODUCE attempt cost now scales with childShare * parentMass
+    // (material moved) rather than parentMass alone, and INGEST cooldown
+    // scales with surface area (1/r^2) rather than 1/r. Intended.
+    const GOLDEN = "44d564e2";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
