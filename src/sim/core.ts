@@ -477,7 +477,7 @@ const CREATURE_F32_COLS = [
   // not rock-occluded). All reset per turn, read next tick by the pass.
   "activeVibEmit", "activeMagEmit", "magneticEmission",
 ] as const;
-const CREATURE_I32_COLS = ["repairTicks"] as const;
+const CREATURE_I32_COLS = ["repairTicks", "childCount"] as const;
 const CREATURE_U32_COLS = ["fpW0", "fpW1", "fpW2", "fpW3"] as const;
 
 function allocCreatureBuffer(cap: number): { buffer: ArrayBufferLike; offsets: CreatureSharedLayout["offsets"] } {
@@ -525,6 +525,11 @@ export class CreatureStore {
   bornAt!: Float32Array;
   ingestCooldown!: Float32Array;
   repairTicks!: Int32Array;
+  // Cumulative successful reproductions by this creature (free fission
+  // OR inner division). Read by the manual / auto cull pass to spare
+  // anything that has demonstrably reproduced; written by the birth
+  // finalize sites. Not used by any tick-hot reaction path.
+  childCount!: Int32Array;
   // Total mechanical force on the cell this tick, recorded by
   // applyForces. Read by populateSensors to feed SENSE_PRESSURE_X/Y.
   // pressureY also gets a static depth term added before VM read.
@@ -733,6 +738,7 @@ export class CreatureStore {
     // .atp / chemCols[CHEM_ATP] access hits one memory location.
     this.energy = this.m_atp;
     this.repairTicks = new Int32Array(b, o.base.repairTicks, cap);
+    this.childCount = new Int32Array(b, o.base.childCount, cap);
     this.fpW0 = new Uint32Array(b, o.base.fpW0, cap);
     this.fpW1 = new Uint32Array(b, o.base.fpW1, cap);
     this.fpW2 = new Uint32Array(b, o.base.fpW2, cap);
@@ -817,6 +823,7 @@ export class CreatureStore {
     this.bornAt[i] = 0;
     this.ingestCooldown[i] = 0;
     this.repairTicks[i] = 0;
+    this.childCount[i] = 0;
     this.fpW0[i] = 0; this.fpW1[i] = 0; this.fpW2[i] = 0; this.fpW3[i] = 0;
     this.ax[i] = 0; this.ay[i] = 0;
     // Zero every molecule column via molCols. Cheaper than listing
@@ -1047,6 +1054,8 @@ export class Creature {
   set ingestCooldown(v: number) { this.store.ingestCooldown[this.idx] = v; }
   get repairTicks(): number { return this.store.repairTicks[this.idx]; }
   set repairTicks(v: number) { this.store.repairTicks[this.idx] = v; }
+  get childCount(): number { return this.store.childCount[this.idx]; }
+  set childCount(v: number) { this.store.childCount[this.idx] = v; }
 }
 
 // Initialization options for a new Creature. Mirrors the field set.
@@ -1059,6 +1068,7 @@ export interface CreatureInit {
   bornAt?: number;
   ingestCooldown?: number;
   repairTicks?: number;
+  childCount?: number;
   genome: Uint8Array;
   vm: VMState;
   color: string;
@@ -1085,6 +1095,7 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
   store.bornAt[idx] = init.bornAt ?? 0;
   store.ingestCooldown[idx] = init.ingestCooldown ?? 0;
   store.repairTicks[idx] = init.repairTicks ?? 0;
+  store.childCount[idx] = init.childCount ?? 0;
   c.genome = init.genome;
   c.vm = init.vm;
   c.color = init.color;
@@ -1167,6 +1178,7 @@ export interface SimStats {
   dMrna: number;        // deaths: mrna below viable
   dAa: number;          // deaths: amino acid below viable
   dOld: number;         // deaths: founder old-age cull
+  dCull: number;        // deaths: manual or auto sterile-cell cull
 }
 export interface World {
   // Optional cumulative counters for instrumentation. Optional so
@@ -1202,6 +1214,20 @@ export interface World {
   // each step (matched cells die like any other death). Transient; not
   // persisted.
   killRequests?: Set<number>;
+  // One-shot cull request, consumed by the next death pass. Either a
+  // manual "Cull now" button or the auto-cull timer sets it; the death
+  // gate kills any non-pinned free cell whose age >= sterileAgeSec and
+  // childCount == 0, then clears the field. Transient; not persisted.
+  cullPending?: { sterileAgeSec: number };
+  // Auto-cull: fires the sterile-cell cull every autoCullIntervalSec
+  // sim-seconds. Disabled by default; user toggles via the UI. The
+  // interval is recomputed against dayPeriod whenever the user toggles
+  // it so "1 game-hour" tracks the ancient-day clock. Persisted so a
+  // save reload preserves the operator's setting.
+  autoCullEnabled?: boolean;
+  autoCullIntervalSec?: number;
+  autoCullSterileAgeSec?: number;
+  autoCullLastAt?: number;
   width: number;
   height: number;
   depth: number;

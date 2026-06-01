@@ -714,6 +714,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     syncFoundersBtn(snapshot.foundersEnabled !== false);
     syncFounderMode(snapshot.founderCapEnabled !== false, snapshot.founderTarget ?? founderCapValue);
     syncSeedingBtn(snapshot.ongoingSeeding === true);
+    syncAutoCullBtn(snapshot.autoCullEnabled === true);
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
@@ -2386,7 +2387,39 @@ geologyBtn.addEventListener("click", () => {
   simWorker.postMessage({ type: "setGeologySeed", seed });
 });
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn);
+// ---- world: cull / auto-cull ----
+// Operator tool for retiring cells that have lived a long time without
+// reproducing. Distinct from the founder cull (which only touches the
+// initial seed generation). Either a one-shot "cull now" button or the
+// auto-cull toggle (off by default) drives it; the engine kills any
+// non-pinned free cell whose age >= 6 game-hours and childCount == 0.
+const cullBtn = mkBtn(
+  "cull now",
+  "Kill every free cell that has lived 6+ game-hours without reproducing. Their mass spills as particles like any other death.",
+);
+cullBtn.addEventListener("click", () => {
+  simWorker.postMessage({ type: "cullNow" });
+});
+let autoCullOn = false;
+const autoCullBtn = mkBtn(
+  "auto-cull off",
+  "When on, fires the sterile-cell cull every game-hour automatically. Default off.",
+);
+setBtn(autoCullBtn, false, T_GREEN);
+autoCullBtn.addEventListener("click", () => {
+  autoCullOn = !autoCullOn;
+  autoCullBtn.textContent = autoCullOn ? "auto-cull on" : "auto-cull off";
+  setBtn(autoCullBtn, autoCullOn, T_GREEN);
+  simWorker.postMessage({ type: "setAutoCull", on: autoCullOn });
+});
+function syncAutoCullBtn(on: boolean): void {
+  if (on === autoCullOn) return;
+  autoCullOn = on;
+  autoCullBtn.textContent = autoCullOn ? "auto-cull on" : "auto-cull off";
+  setBtn(autoCullBtn, autoCullOn, T_GREEN);
+}
+
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";
@@ -2721,7 +2754,7 @@ function flushTooltip(): void {
   tooltip.innerHTML =
     `<span style="display:inline-block;width:8px;height:8px;background:${c.color};border:1px solid #fff;vertical-align:middle;margin-right:4px"></span>` +
     `<b>${genomeTag(c.genome)}</b> (${c.genome.length}b)\n` +
-    `age=${age}\n` +
+    `age=${age}  kids=${c.childCount}\n` +
     `ATP=${c.energy.toFixed(0)}  mass=${mass.toFixed(0)}\n` +
     `r=${c.r.toFixed(1)}  spd=${speed.toFixed(0)}  z=${c.z.toFixed(0)}\n` +
     `${sameSpecies} in species, ${sameLineage} in lineage` +
@@ -4916,7 +4949,7 @@ function updateInspector(): void {
   const age = formatAge(Math.max(0, snapshot.t - c.bornAt), snapshot.dayPeriod);
   inspector.textContent =
     `${statsLine()}\n` +
-    `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
+    `age=${age}  kids=${c.childCount}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
     `vel=(${c.vx.toFixed(1)},${c.vy.toFixed(1)})\n` +
     `r=${c.r.toFixed(1)}  mass=${totalMass.toFixed(0)}  ATP=${c.energy.toFixed(0)}  ADP=${fmt(m.adp)}\n` +
     `ingestCD=${c.ingestCooldown.toFixed(2)}s\n` +

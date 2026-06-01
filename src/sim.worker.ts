@@ -32,6 +32,9 @@ import {
   spawnCompositeInstance,
   pickClumpCenter,
   CHEM_BASE_DENSITY,
+  AUTO_CULL_INTERVAL_DISPLAY_HOURS,
+  CULL_STERILE_DISPLAY_HOURS,
+  displayHoursToSimSec,
   type ParticleForceParams,
   type RenderSnapshot,
   type SpawnPlacement,
@@ -92,6 +95,8 @@ type WorkerInbound =
   | { type: "setMutationRate"; mul: number }
   | { type: "setGeologySeed"; seed: number }
   | { type: "killCell"; id: number }
+  | { type: "cullNow"; sterileDisplayHours?: number }
+  | { type: "setAutoCull"; on: boolean }
   | { type: "setDensityChem"; chem: number }
   | {
       type: "spawnSpecies";
@@ -226,6 +231,32 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "killCell":
       if (world) (world.killRequests ??= new Set()).add(m.id);
+      break;
+    case "cullNow":
+      // Manual sterile-cell cull. Resolved against the current
+      // dayPeriod so threshold tracks the ancient-day clock.
+      if (world) {
+        const hours = typeof m.sterileDisplayHours === "number"
+          ? m.sterileDisplayHours
+          : CULL_STERILE_DISPLAY_HOURS;
+        world.cullPending = { sterileAgeSec: displayHoursToSimSec(world, hours) };
+      }
+      break;
+    case "setAutoCull":
+      if (world) {
+        world.autoCullEnabled = !!m.on;
+        if (world.autoCullEnabled) {
+          // Recompute interval/threshold against the current dayPeriod
+          // so the timer fires at "1 game-hour" regardless of dayPeriod.
+          world.autoCullIntervalSec = displayHoursToSimSec(
+            world, AUTO_CULL_INTERVAL_DISPLAY_HOURS);
+          world.autoCullSterileAgeSec = displayHoursToSimSec(
+            world, CULL_STERILE_DISPLAY_HOURS);
+          // Treat the toggle as the start of the cycle: next fire is
+          // intervalSec from now, not immediately.
+          world.autoCullLastAt = world.t;
+        }
+      }
       break;
     case "setDensityChem":
       if (world) world.densityChem = m.chem;

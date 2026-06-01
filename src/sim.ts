@@ -1113,11 +1113,13 @@ export function createWorld(
     // replenish" behavior so their assertions hold.
     useSeedRamp: !!opts?.delayedSpawn,
     initialSeedDone: !opts?.delayedSpawn,
-    stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0 },
+    stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0, dCull: 0 },
     rxnStats: newRxnStats(),
     foundersEnabled: true,
     founderCapEnabled: true,
     killRequests: new Set(),
+    autoCullEnabled: false,
+    autoCullLastAt: 0,
     ongoingSeeding: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
@@ -1276,6 +1278,45 @@ const FOUNDER_SPAWN_DELAY_SEC = 60;
 // old age, so we can observe whether lineages establish on their own.
 const FOUNDER_CULL_ENABLED = false;
 const FOUNDER_LIFESPAN_SEC = 300;
+
+// Sterile-cell cull. A separate, operator-driven retirement of cells
+// that have lived a long time without ever reproducing -- distinct
+// from the founder cull, which only touches the initial seeded
+// generation. Either a manual "Cull now" button or the auto-cull
+// timer flags world.cullPending; the death gate then kills any free,
+// unpinned cell with age >= sterileAgeSec and childCount == 0. The
+// thresholds are expressed in DISPLAY HOURS (the same 13h ancient-day
+// clock the world time uses, see formatDayClock in main.ts) and
+// converted to sim-seconds against dayPeriod at message time so the
+// user-facing values track the game clock even if dayPeriod changes.
+// One ancient day == 13h, so the conversion is 3600 * dayPeriod /
+// SECONDS_PER_DISPLAY_DAY sim-seconds per display-hour.
+const SECONDS_PER_DISPLAY_DAY = 13 * 3600;
+export const AUTO_CULL_INTERVAL_DISPLAY_HOURS = 1;
+export const CULL_STERILE_DISPLAY_HOURS = 6;
+export function displayHoursToSimSec(world: World, displayHours: number): number {
+  const dp = world.dayPeriod > 0 ? world.dayPeriod : 600;
+  return displayHours * 3600 * dp / SECONDS_PER_DISPLAY_DAY;
+}
+
+// Auto-cull scheduler. No-op when disabled. When enabled, fires the
+// sterile-cell cull every autoCullIntervalSec sim-seconds (default 1
+// game-hour, recomputed against dayPeriod each tick so dayPeriod
+// changes don't strand the timer). The cull itself runs in the death
+// gate -- this just sets cullPending and remembers when it last
+// fired. Determinism: the check is a pure function of world.t /
+// autoCullLastAt, no RNG.
+function maybeFireAutoCull(world: World): void {
+  if (!world.autoCullEnabled) return;
+  const interval = world.autoCullIntervalSec
+    ?? displayHoursToSimSec(world, AUTO_CULL_INTERVAL_DISPLAY_HOURS);
+  const last = world.autoCullLastAt ?? 0;
+  if (world.t - last < interval) return;
+  const sterileAgeSec = world.autoCullSterileAgeSec
+    ?? displayHoursToSimSec(world, CULL_STERILE_DISPLAY_HOURS);
+  world.cullPending = { sterileAgeSec };
+  world.autoCullLastAt = world.t;
+}
 // A founder that hasn't fissioned yet but has measurably advanced
 // from its spawn state earns extra runway before the age cull --
 // "did something interesting" without the binary all-or-nothing of
@@ -3365,6 +3406,9 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
   // Not registered in world.creatures / world.species: organelle
   // lineages live inside hosts, not in the free population.
   host.contents.push(child);
+  // Inner division still counts as a successful reproduction for the
+  // parent inner cell -- mirrors advanceDivision's free-cell path.
+  inner.childCount = inner.childCount + 1;
   updateCreatureRadius(inner);
   updateCreatureRadius(child);
 }
@@ -3984,6 +4028,11 @@ export function step(world: World, dt: number): void {
   // (chemistry is single-threaded here) and roll the 60s window.
   setRxnStatsWorld(world);
   rollReactionWindow(world);
+  // Auto-cull timer. When enabled, flags cullPending every
+  // autoCullIntervalSec sim-seconds so the death gate later in this
+  // tick retires sterile cells. The actual cull predicate is the same
+  // one the manual button uses; this just schedules it.
+  maybeFireAutoCull(world);
   // Snapshot living CODING genomes at the *start* of this step so we
   // can count genome extinctions at the end (any coding-key alive going
   // in but not coming out has gone extinct this step). Coding key
@@ -5491,14 +5540,26 @@ function updateCreatures(world: World, dt: number): void {
     // normal death path so it spills mass + releases contents/slot like
     // any other death.
     const killed = world.killRequests !== undefined && world.killRequests.has(c.id);
-    if (starve || lowMemb || lowMrna || lowAa || founderTooOld || killed) {
+    // Sterile cull: triggered by the manual button or the auto-cull
+    // timer. A cell qualifies if it's been alive long enough and has
+    // never produced a child. Pinned species are spared so a watched
+    // lineage isn't retired out from under the observer. Founder cells
+    // already get handled by founderTooOld; checking childCount catches
+    // every later generation that bricked their reproduction.
+    const culled = world.cullPending !== undefined
+      && c.childCount === 0
+      && world.t - c.bornAt >= world.cullPending.sterileAgeSec
+      && !world.pinnedSpecies.has(c.speciesKey);
+    if (starve || lowMemb || lowMrna || lowAa || founderTooOld || killed || culled) {
       const st = world.stats;
       if (st) {
         if (starve) st.dStarve++;
         else if (lowMemb) st.dMembrane++;
         else if (lowMrna) st.dMrna++;
         else if (lowAa) st.dAa++;
-        else st.dOld++;
+        else if (founderTooOld) st.dOld++;
+        else if (culled) st.dCull++;
+        else st.dOld++; // killed: bucket as "operator-retired"
       }
       dead.push(c);
     }
@@ -5576,6 +5637,10 @@ function updateCreatures(world: World, dt: number): void {
   // Drain kill requests: any handled this step are gone; any whose cell
   // had already died are moot. Either way, don't carry them forward.
   if (world.killRequests && world.killRequests.size > 0) world.killRequests.clear();
+  // Drain the one-shot cull request. The cull predicate already ran in
+  // the death gate above; whether it killed anyone or not, the
+  // request is single-use.
+  if (world.cullPending !== undefined) world.cullPending = undefined;
 }
 
 // On death, return the cell's chem pool to the world as free-floating
@@ -5970,6 +6035,10 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   child.vy = c.vy;
   world.creatures.push(child);
   noteCreatureBirth(world, child, c.speciesKey);
+  // Tally a successful reproduction on the parent. Read by the
+  // sterile-cull predicate to spare any cell that has demonstrably
+  // reproduced at least once.
+  c.childCount = c.childCount + 1;
   // A founder that successfully spawns a viable child has carried its
   // lineage forward -- graduate it out of the lifespan cull (but
   // keep it in founderIds so livingFounderLineages still reflects
@@ -6213,6 +6282,9 @@ interface SavedCreature {
   r: number; density: number; energy: number;
   senseRange: number; thrustAccel: number;
   bornAt: number; ingestCooldown: number; repairTicks: number;
+  // Cumulative successful reproductions. Absent in older saves ->
+  // restored as 0 (sterile until proven otherwise).
+  childCount?: number;
   genome: number[];
   vmPc: number; vmStack: number[];
   color: string; speciesKey: string; lineageRoot: number;
@@ -6290,6 +6362,8 @@ interface SavedWorld {
   founderCapEnabled?: boolean;
   // Ongoing resource-replenishment toggle. Absent (old saves) = off.
   ongoingSeeding?: boolean;
+  // Auto-cull toggle. Absent (old saves) = off.
+  autoCullEnabled?: boolean;
   // Reaction / ATP accounting history. Optional: older saves restore
   // with a fresh empty accumulator.
   rxnStats?: SavedRxnStats;
@@ -6336,6 +6410,7 @@ function snapshotCreature(c: Creature): SavedCreature {
     senseRange: s.senseRange[i], thrustAccel: s.thrustAccel[i],
     bornAt: s.bornAt[i], ingestCooldown: s.ingestCooldown[i],
     repairTicks: s.repairTicks[i],
+    childCount: s.childCount[i] || undefined,
     genome: Array.from(c.genome),
     vmPc: c.vm.pc, vmStack: Array.from(c.vm.stack),
     color: c.color, speciesKey: c.speciesKey, lineageRoot: c.lineageRoot,
@@ -6403,6 +6478,7 @@ export function serializeWorld(w: World): string {
     foundersEnabled: w.foundersEnabled,
     founderCapEnabled: w.founderCapEnabled,
     ongoingSeeding: w.ongoingSeeding,
+    autoCullEnabled: w.autoCullEnabled,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     mutationRateMul: w.mutationRateMul,
@@ -6476,6 +6552,7 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
     color: sc.color,
     ingestCooldown: sc.ingestCooldown,
     repairTicks: sc.repairTicks,
+    childCount: sc.childCount ?? 0,
     bornAt: sc.bornAt,
     speciesKey: sc.speciesKey,
     molecules: mol,
@@ -6551,6 +6628,9 @@ export function applySavedWorld(world: World, json: string): boolean {
   world.foundersEnabled = saved.foundersEnabled !== false;
   // Absent in older saves -> ongoing seeding off (closed system).
   world.ongoingSeeding = saved.ongoingSeeding === true;
+  // Absent in older saves -> auto-cull off.
+  world.autoCullEnabled = saved.autoCullEnabled === true;
+  world.autoCullLastAt = 0;
   world.rxnStats = saved.rxnStats
     ? deserializeRxnStats(saved.rxnStats)
     : newRxnStats();
@@ -6740,6 +6820,10 @@ export interface CreatureSnapshot {
   energy: number;
   ingestCooldown: number;
   bornAt: number;
+  // Cumulative successful reproductions. Shown in the inspector and
+  // read by the cull-preview path so the UI can count how many cells
+  // a given criterion would retire.
+  childCount: number;
   lineageRoot: number;
   parentId: number;
   speciesKey: string;
@@ -6847,6 +6931,8 @@ export interface RenderSnapshot extends WorldEnv {
   founderTarget?: number;
   // Mirrors world.ongoingSeeding so the UI toggle reflects loaded state.
   ongoingSeeding?: boolean;
+  // Mirrors world.autoCullEnabled so the UI toggle reflects loaded state.
+  autoCullEnabled?: boolean;
   // Windowed reaction history (sparse) for the detail time-graph.
   rxnStatsHistory?: SavedRxnStats;
   // Optional per-phase timing. Mirrors world.profile when present.
@@ -6872,6 +6958,7 @@ function snapshotCreatureLive(c: Creature): CreatureSnapshot {
     energy: c.energy,
     ingestCooldown: c.ingestCooldown,
     bornAt: c.bornAt,
+    childCount: c.childCount,
     lineageRoot: c.lineageRoot,
     parentId: c.parentId,
     speciesKey: c.speciesKey,
@@ -7130,6 +7217,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     founderCapEnabled: world.founderCapEnabled !== false,
     founderTarget: world.founderTarget,
     ongoingSeeding: world.ongoingSeeding === true,
+    autoCullEnabled: world.autoCullEnabled === true,
     profile: world.profile,
   };
 }
