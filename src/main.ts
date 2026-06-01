@@ -2677,7 +2677,7 @@ function flushTooltip(): void {
   // double-count it. Sensor activations (signed amplitudes) are excluded.
   let mass = 0;
   for (const mk of MASS_MOLECULE_IDS) mass += c.molecules[mk];
-  const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
+  const age = formatAge(Math.max(0, snapshot.t - c.bornAt), snapshot.dayPeriod);
   // Surface engulfed + bonded counts so the user can tell a fat
   // single cell from a host carrying endosymbionts from an adhered
   // pair drifting close. Only render rows when nonzero to keep
@@ -4777,16 +4777,28 @@ function formatDayClock(simSec: number, dayPeriod: number): string {
   return days > 0 ? `${days}d ${hm}` : hm;
 }
 
-function formatAge(sec: number): string {
+// Format a sim-second duration using the same ancient-day time scale
+// as the world clock (formatDayClock above), so cell age + species
+// duration read in the same units as t= rather than raw sim-seconds.
+// One sim-second maps to SECONDS_PER_DISPLAY_DAY / dayPeriod display-
+// seconds (78x at the default 600s dayPeriod).
+function formatAge(simSec: number, dayPeriod: number): string {
+  const sec = simSec * (SECONDS_PER_DISPLAY_DAY / Math.max(1, dayPeriod));
   if (sec < 60) return `${sec.toFixed(1)}s`;
   if (sec < 3600) {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec - m * 60);
     return `${m}m${s.toString().padStart(2, "0")}s`;
   }
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec - h * 3600) / 60);
-  return `${h}h${m.toString().padStart(2, "0")}m`;
+  if (sec < SECONDS_PER_DISPLAY_DAY) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec - h * 3600) / 60);
+    return `${h}h${m.toString().padStart(2, "0")}m`;
+  }
+  const days = Math.floor(sec / SECONDS_PER_DISPLAY_DAY);
+  const rem = sec - days * SECONDS_PER_DISPLAY_DAY;
+  const h = Math.floor(rem / 3600);
+  return `${days}d ${h.toString().padStart(2, "0")}h`;
 }
 
 // Best-effort plain-English summary of a cell, inferred from genome ops it
@@ -4901,7 +4913,7 @@ function updateInspector(): void {
   const totalMass = molMass;
   const m = c.molecules;
   const fmt = (x: number) => x.toFixed(0);
-  const age = formatAge(Math.max(0, snapshot.t - c.bornAt));
+  const age = formatAge(Math.max(0, snapshot.t - c.bornAt), snapshot.dayPeriod);
   inspector.textContent =
     `${statsLine()}\n` +
     `age=${age}  pos=(${c.x.toFixed(0)},${c.y.toFixed(0)},${c.z.toFixed(1)})  ` +
@@ -5240,10 +5252,10 @@ function renderAnalysisPanel(): void {
 
   if (analysisTab === "top") {
     const rows = computeRankedRows().slice(0, 10);
-    header.textContent = `Top 10 live at t=${formatAge(snapshot.t)} (${snapshot.species.length} tracked)`;
+    header.textContent = `Top 10 live at t=${formatDayClock(snapshot.t, snapshot.dayPeriod)} (${snapshot.species.length} tracked)`;
     rows.forEach((r, i) => {
       const status = r.alive ? "ALIVE" : "EXTINCT";
-      const stats = `duration=${formatAge(r.duration)}  peakBio=${r.biomass.toFixed(0)}  cells=${r.cells}`;
+      const stats = `duration=${formatAge(r.duration, snapshot.dayPeriod)}  peakBio=${r.biomass.toFixed(0)}  cells=${r.cells}`;
       analysisBody.appendChild(buildSpeciesCard(r.genome, r.color, `#${i + 1}`, status, stats));
     });
     return;
@@ -5285,7 +5297,7 @@ function renderAnalysisPanel(): void {
     const status = live && live.alive > 0
       ? `ALIVE (${live.alive} cells)`
       : `EXTINCT`;
-    const stats = `peakBio=${e.peakBio.toFixed(0)}  noted@t=${formatAge(e.at)}`;
+    const stats = `peakBio=${e.peakBio.toFixed(0)}  noted@t=${formatDayClock(e.at, snapshot.dayPeriod)}`;
     // Pinned items get a per-item remove; notable entries don't (they
     // re-accrue automatically as the sim runs, so removal is moot).
     const onRemove = analysisTab === "pinned"
