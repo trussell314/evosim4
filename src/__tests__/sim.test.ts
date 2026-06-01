@@ -306,8 +306,8 @@ describe("createWorld", () => {
     setParticleTarget(w, 5500);
     expect(w.particleTarget).toBe(5500);
     expect(w.particleSpawnRate).toBeGreaterThan(0);
-    setParticleTarget(w, 0); // below min -> clamps up
-    expect(w.particleTarget).toBe(500);
+    setParticleTarget(w, -10); // below min -> clamps up to 0 (the floor)
+    expect(w.particleTarget).toBe(0);
     setParticleTarget(w, 1e9); // above max -> clamps down
     expect(w.particleTarget).toBe(50000);
   });

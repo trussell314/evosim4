@@ -4247,22 +4247,42 @@ function replenishParticles(world: World, dt: number): void {
   // the floor is now static rock terrain (see generateTerrain) --
   // so there's no separate large-grain target padding the cap.
   if (world.t < WATER_FILL_DELAY_SEC) return;
-  if (world.particles.length >= world.particleTarget) return;
+  // The visible-particle cap and the ongoing-seeding pump are
+  // independent knobs: cap controls how much material is rendered as
+  // free particles; seeding (above) controls whether material flows
+  // into the world at all. When the pump fires but the cap is full,
+  // route the would-be particle's mass straight into the regional
+  // reserve so the resource still enters the food web (cells consume
+  // reserve via ingestFromReserve) -- mass-conserving either way. At
+  // particleTarget=0 every spawn becomes a reserve deposit; at normal
+  // caps, only overflow frames see deposits.
   const expected = world.particleSpawnRate * dt;
   let toSpawn = Math.floor(expected);
   if (simRng() < expected - toSpawn) toSpawn++;
-  for (let i = 0; i < toSpawn && world.particles.length < world.particleTarget; i++) {
+  const FOUR_THIRDS_PI = (4 / 3) * Math.PI;
+  const res = world.reserve;
+  for (let i = 0; i < toSpawn; i++) {
     const spec = pickSpawnSpec();
     const r = spawnRadius(spec.chemId);
     const pos = spawnPosForChem(world, r, spec.chemId);
     if (!pos) continue;
-    pushParticle(world, {
-      x: pos.x, y: pos.y, z: pos.z,
-      vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
-      r,
-      chemId: spec.chemId,
-      density: rollChemDensity(spec),
-    });
+    const density = rollChemDensity(spec);
+    if (world.particles.length < world.particleTarget) {
+      pushParticle(world, {
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: 0, vy: pos.vy ?? 0, vz: (simRng() - 0.5) * 20,
+        r,
+        chemId: spec.chemId,
+        density,
+      });
+    } else {
+      // Density is undefined when the spec has no jitter (the spawn
+      // path treats it as "use base density"); mirror that here so the
+      // reserve deposit matches the would-have-been particle's mass.
+      const d = density ?? CHEM_BASE_DENSITY[spec.chemId];
+      res[depositRegionBase(world, pos.x, pos.y) + spec.chemId]
+        += (d * FOUR_THIRDS_PI * r * r * r) / CHEM_MM[spec.chemId];
+    }
   }
 }
 

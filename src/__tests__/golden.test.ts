@@ -393,7 +393,13 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // electric/mag signal made the cell's "mass" go negative); now the
     // signal pool is treated as state, not material, in every mass-or-
     // density sum. Intended.
-    const GOLDEN = "361ab4c9";
+    // Bumped again: replenishParticles decoupled from the visible-
+    // particle cap -- the ongoing-seeding pump now deposits to the
+    // regional reserve when at cap instead of early-returning. Mass-
+    // conserving (same flux enters either way), but RNG draw order and
+    // reserve totals diverge slightly from the old "spawn or no-op"
+    // path. Intended: cap=0 must not disable seeding as a side effect.
+    const GOLDEN = "b8474581";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
