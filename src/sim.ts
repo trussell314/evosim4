@@ -220,7 +220,7 @@ const INITIAL_PARTICLE_TARGET = 1000;
 // Bounds + step for runtime cap adjustment. Max stays well under
 // PARTICLE_STORE_PREALLOC_CAP so the over-cap headroom never overflows
 // the preallocated store.
-export const PARTICLE_TARGET_MIN = 500;
+export const PARTICLE_TARGET_MIN = 0;
 const PARTICLE_TARGET_MAX = 50000;
 export const PARTICLE_TARGET_STEP = 500;
 const PARTICLE_SPAWN_RATIO = (90 / 550) * 0.5;
