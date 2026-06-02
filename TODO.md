@@ -2,6 +2,24 @@
 
 Living list of deferred work. Newest/explicit asks at top.
 
+## Ideas — explore later
+
+- **Distributed processing.** Offload sim work (chemistry slabs, collision
+  cells, snapshot encoding, …) to volunteer compute. Workers register, the
+  authoritative server hands out tagged units of work, accepts verified
+  results, and merges them back into the canonical state. Determinism
+  matters: each unit must be a pure function of inputs so multiple workers
+  can be cross-checked.
+- **Proof-of-work credits for control.** Any computation a volunteer
+  contributes (signed, verified result for a sim work-unit) earns credits
+  in their session. Credits spend on control activities the WS channel
+  already exposes: `spawnSpecies`, `killCell`, `cullNow`, scenario tweaks.
+  Pricing knob per command. Pairs naturally with the headless server
+  (STREAMING_PLAN.md) — control is already a single chokepoint we can
+  meter. Open questions: anti-sybil (one well-paid worker vs many tiny
+  ones), how to verify a unit was actually computed and not just signed,
+  whether credits persist across sessions.
+
 ## Simulation
 
 - **DONE — New sensory modalities — light/vibration/electric/pH/
