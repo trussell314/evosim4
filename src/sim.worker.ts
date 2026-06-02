@@ -97,6 +97,7 @@ type WorkerInbound =
   | { type: "killCell"; id: number }
   | { type: "cullNow"; sterileDisplayHours?: number }
   | { type: "setAutoCull"; on: boolean }
+  | { type: "setParticleCollisions"; on: boolean }
   | { type: "setDensityChem"; chem: number }
   | {
       type: "spawnSpecies";
@@ -241,6 +242,9 @@ self.addEventListener("message", (e: MessageEvent) => {
           : CULL_STERILE_DISPLAY_HOURS;
         world.cullPending = { sterileAgeSec: displayHoursToSimSec(world, hours) };
       }
+      break;
+    case "setParticleCollisions":
+      if (world) world.particleCollisionsEnabled = !!m.on;
       break;
     case "setAutoCull":
       if (world) {

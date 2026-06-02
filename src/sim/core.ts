@@ -1202,6 +1202,12 @@ export interface World {
   // after startup. Persisted. (Non-ramp test worlds ignore this and
   // keep their legacy continuous replenish.)
   ongoingSeeding?: boolean;
+  // Master switch for particle-particle collisions. Absent/true = on
+  // (default, behavior-preserving). When false, resolveCollisions skips
+  // the inner Jacobi sweep entirely -- particles freely interpenetrate.
+  // Particle-vs-rock (resolveObstacleCollisions) and particle-vs-border
+  // (applyWalls) are independent paths and remain active. Persisted.
+  particleCollisionsEnabled?: boolean;
   // Simulation RNG, installed by createWorld. Optional so hand-built
   // test World literals don't need it -- the module falls back to its
   // own simRng for internal draws regardless. Exposed for callers that

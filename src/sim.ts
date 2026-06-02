@@ -1120,6 +1120,7 @@ export function createWorld(
     killRequests: new Set(),
     autoCullEnabled: false,
     autoCullLastAt: 0,
+    particleCollisionsEnabled: true,
     ongoingSeeding: true,
     seedRampClock: SEED_RAMP_PERIOD_SEC, // first tick fires the first batch
     extinctionCount: 0,
@@ -6384,6 +6385,9 @@ interface SavedWorld {
   ongoingSeeding?: boolean;
   // Auto-cull toggle. Absent (old saves) = off.
   autoCullEnabled?: boolean;
+  // Particle-particle collision toggle. Absent (old saves) = on
+  // (behavior-preserving default).
+  particleCollisionsEnabled?: boolean;
   // Reaction / ATP accounting history. Optional: older saves restore
   // with a fresh empty accumulator.
   rxnStats?: SavedRxnStats;
@@ -6499,6 +6503,7 @@ export function serializeWorld(w: World): string {
     founderCapEnabled: w.founderCapEnabled,
     ongoingSeeding: w.ongoingSeeding,
     autoCullEnabled: w.autoCullEnabled,
+    particleCollisionsEnabled: w.particleCollisionsEnabled,
     rxnStats: w.rxnStats ? serializeRxnStats(w.rxnStats) : undefined,
     dayPhase: w.dayPhase,
     mutationRateMul: w.mutationRateMul,
@@ -6651,6 +6656,8 @@ export function applySavedWorld(world: World, json: string): boolean {
   // Absent in older saves -> auto-cull off.
   world.autoCullEnabled = saved.autoCullEnabled === true;
   world.autoCullLastAt = 0;
+  // Absent in older saves -> particle collisions on (legacy default).
+  world.particleCollisionsEnabled = saved.particleCollisionsEnabled !== false;
   world.rxnStats = saved.rxnStats
     ? deserializeRxnStats(saved.rxnStats)
     : newRxnStats();
@@ -6953,6 +6960,9 @@ export interface RenderSnapshot extends WorldEnv {
   ongoingSeeding?: boolean;
   // Mirrors world.autoCullEnabled so the UI toggle reflects loaded state.
   autoCullEnabled?: boolean;
+  // Mirrors world.particleCollisionsEnabled so the UI toggle reflects
+  // loaded state. Absent = default on.
+  particleCollisionsEnabled?: boolean;
   // Windowed reaction history (sparse) for the detail time-graph.
   rxnStatsHistory?: SavedRxnStats;
   // Optional per-phase timing. Mirrors world.profile when present.
@@ -7238,6 +7248,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     founderTarget: world.founderTarget,
     ongoingSeeding: world.ongoingSeeding === true,
     autoCullEnabled: world.autoCullEnabled === true,
+    particleCollisionsEnabled: world.particleCollisionsEnabled !== false,
     profile: world.profile,
   };
 }

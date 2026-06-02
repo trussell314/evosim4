@@ -715,6 +715,7 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     syncFounderMode(snapshot.founderCapEnabled !== false, snapshot.founderTarget ?? founderCapValue);
     syncSeedingBtn(snapshot.ongoingSeeding === true);
     syncAutoCullBtn(snapshot.autoCullEnabled === true);
+    syncParticleCollBtn(snapshot.particleCollisionsEnabled !== false);
     rebuildSnapshotIndexes();
     clearSelectionIfDead();
     workerSimMsThisFrame += msg.simMs;
@@ -2419,7 +2420,30 @@ function syncAutoCullBtn(on: boolean): void {
   setBtn(autoCullBtn, autoCullOn, T_GREEN);
 }
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn);
+// Particle-particle collision toggle. Default on (legacy behavior).
+// Off frees ~60% of step time at typical caps -- particles freely
+// interpenetrate but particle-rock + particle-border collisions and
+// cell-particle ingestion are untouched. Useful for high-cap worlds.
+let particleCollOn = true;
+const particleCollBtn = mkBtn(
+  "particle coll on",
+  "Particle-particle collisions. Off skips the Jacobi sweep entirely -- ~60% of step time at typical caps -- at the cost of letting particles overlap. Rock + border bounces and cell-particle ingestion stay on either way.",
+);
+setBtn(particleCollBtn, true, T_GREEN);
+particleCollBtn.addEventListener("click", () => {
+  particleCollOn = !particleCollOn;
+  particleCollBtn.textContent = particleCollOn ? "particle coll on" : "particle coll off";
+  setBtn(particleCollBtn, particleCollOn, T_GREEN);
+  simWorker.postMessage({ type: "setParticleCollisions", on: particleCollOn });
+});
+function syncParticleCollBtn(on: boolean): void {
+  if (on === particleCollOn) return;
+  particleCollOn = on;
+  particleCollBtn.textContent = particleCollOn ? "particle coll on" : "particle coll off";
+  setBtn(particleCollBtn, particleCollOn, T_GREEN);
+}
+
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn, particleCollBtn);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";

@@ -490,7 +490,13 @@ export function resolveCollisions(
   let pendingP1 = duringPhase1;
   const store = world.particleStore;
   const n = world.particles.length;
-  if (n < 2) {
+  // Operator toggle: when off, skip the P-P Jacobi sweep entirely.
+  // The during-phase hooks (creature collisions in the serial path,
+  // parallel particle dispatch in the SAB path) still fire -- they're
+  // tied to step ordering, not to P-P specifically. Particle-rock and
+  // particle-border collisions live in separate passes
+  // (resolveObstacleCollisions / applyWalls) and remain active.
+  if (n < 2 || world.particleCollisionsEnabled === false) {
     if (pendingP0) pendingP0();
     if (pendingP1) pendingP1();
     return;
