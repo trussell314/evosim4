@@ -213,9 +213,12 @@ const DEFAULT_VM_INSTR_BUDGET = 8;
 // runtime via setParticleTarget(). Resizing the window no longer
 // recomputes it. Lowered 2500 -> 1000 now that reserve mass is edible
 // (cells eat their region's reserve directly), so the cap-overflow food
-// stays in play without rendering as collidable particles -- the
-// per-particle collision passes are ~60% of step time and scale with
-// this count, so halving+ it is the bulk of the perf win.
+// stays in play without rendering as collidable particles. Measured
+// 2026-06: at cap=5000 the P-P collision pass is ~13% of step time
+// (the rest is per-particle force/drag/buoyancy in applyForces, the
+// hottest loop in the sim, plus obstacle bounces and replenish). Cap
+// dominates step time roughly linearly in N; halving the cap roughly
+// halves the per-tick cost regardless of whether P-P collisions are on.
 const INITIAL_PARTICLE_TARGET = 1000;
 // Bounds + step for runtime cap adjustment. Max stays well under
 // PARTICLE_STORE_PREALLOC_CAP so the over-cap headroom never overflows
