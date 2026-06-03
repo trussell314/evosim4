@@ -5484,7 +5484,11 @@ function updateCreatures(world: World, dt: number): void {
     //     it doesn't sit indefinitely just decaying biomass.
     //  5. Sterile cull: operator-driven retirement (manual button or
     //     auto-cull timer) of any cell that has lived past the
-    //     sterileAge threshold without ever producing a child.
+    //     sterileAge threshold without ever producing a child AND is
+    //     the only live cell of its species (a still-populous species
+    //     isn't sterile -- the predicate retires lineages that have
+    //     measurably failed to propagate, not individuals lagging
+    //     behind a healthy population).
     //  6. Operator inspector-kill: explicit per-cell kill request.
     const m = c.molecules;
     const starve = c.energy <= 0 && noFuel(c);
@@ -5496,11 +5500,18 @@ function updateCreatures(world: World, dt: number): void {
     // any other death.
     const killed = world.killRequests !== undefined && world.killRequests.has(c.id);
     // Sterile cull: triggered by the manual button or the auto-cull
-    // timer. A cell qualifies if it's been alive long enough and has
-    // never produced a child. Pinned species are spared so a watched
+    // timer. A cell qualifies if it's been alive long enough, has
+    // never produced a child, AND is the sole living instance of its
+    // species (no other free or engulfed cell shares c.speciesKey).
+    // sp.alive is the pre-death count -- noteCreatureDeath fires in
+    // the removal pass below, so it still counts c itself here; "lone"
+    // means sp.alive <= 1. Pinned species are spared so a watched
     // lineage isn't retired out from under the observer.
+    const cullSp = world.species.get(c.speciesKey);
+    const lone = (cullSp?.alive ?? 0) <= 1;
     const culled = world.cullPending !== undefined
       && c.childCount === 0
+      && lone
       && world.t - c.bornAt >= world.cullPending.sterileAgeSec
       && !world.pinnedSpecies.has(c.speciesKey);
     if (starve || lowMemb || lowMrna || lowAa || killed || culled) {
