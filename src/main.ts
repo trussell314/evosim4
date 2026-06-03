@@ -232,35 +232,52 @@ renderKillBtn(false);
 // collapsible-section copy button at the bottom (activeDisasmRaw),
 // but always visible at the top so the mobile inspector doesn't have
 // to be scrolled past the resource block + disasm bar to grab the
-// bytes. Mirror copyDisasmBtn's element type (<button>) and
-// touch-action so mobile Safari treats it the same way -- a <div>
-// with cursor:pointer is enough for desktop click but iOS sometimes
-// swallows the tap on a styled div without a button role.
-// showCopyToast / copyToClipboard / activeDisasmRaw are defined later
-// in this file; safe to reference because the click handler runs long
-// after module init.
+// bytes. Mirror copyDisasmBtn's element type (<button>) so mobile
+// Safari treats it the same way. We bind to both `pointerup` and
+// `click`: the per-frame inspector reflow (innerHTML re-templating
+// of the resource block + meters every snapshot tick) can defeat
+// click on iOS Safari when the layout shifts during the touchstart
+// -> click window, but pointerup fires immediately on release.
+// A re-entry guard prevents the dup-fire (pointerup synthesizes a
+// click moments later). showCopyToast / copyToClipboard /
+// activeDisasmRaw are defined later in this file; safe to reference
+// because the handler runs long after module init.
 const topCopyGenomeBtn = document.createElement("button");
 topCopyGenomeBtn.type = "button";
 topCopyGenomeBtn.style.cssText =
-  "display:none;align-items:center;gap:6px;padding:4px 10px;" +
-  "border:1px solid #1a3340;border-radius:4px;" +
+  "padding:4px 10px;border:1px solid #1a3340;border-radius:4px;" +
   "background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;" +
   "touch-action:manipulation;user-select:none;" + HUD_FONT;
 topCopyGenomeBtn.title = "Copy genome (one op per line)";
 const topCopyDefaultLabel = `⧉ copy genome`;
 topCopyGenomeBtn.textContent = topCopyDefaultLabel;
-topCopyGenomeBtn.addEventListener("click", async (ev) => {
+let topCopyHandling = false;
+async function handleTopCopyTap(ev: Event): Promise<void> {
   ev.stopPropagation();
+  if (topCopyHandling) return;
+  topCopyHandling = true;
+  // Immediate visual ack so the user sees that the tap registered,
+  // even if the clipboard call later fails or stalls. Cleared by the
+  // post-toast restore below.
+  topCopyGenomeBtn.style.background = "rgba(46,160,67,.45)";
   if (!activeDisasmRaw) {
+    topCopyGenomeBtn.style.background = "rgba(0,0,0,.45)";
+    topCopyHandling = false;
     showCopyToast("no genome loaded", false, topCopyGenomeBtn);
     return;
   }
   const lines = activeDisasmRaw.split("\n").filter((l) => l.length > 0).length;
   const ok = await copyToClipboard(activeDisasmRaw);
   topCopyGenomeBtn.textContent = ok ? `✓ copied` : `✗ copy failed`;
-  setTimeout(() => { topCopyGenomeBtn.textContent = topCopyDefaultLabel; }, 1200);
+  setTimeout(() => {
+    topCopyGenomeBtn.textContent = topCopyDefaultLabel;
+    topCopyGenomeBtn.style.background = "rgba(0,0,0,.45)";
+    topCopyHandling = false;
+  }, 1200);
   showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok, topCopyGenomeBtn);
-});
+}
+topCopyGenomeBtn.addEventListener("pointerup", handleTopCopyTap);
+topCopyGenomeBtn.addEventListener("click", handleTopCopyTap);
 
 // Human-readable genome summary -- the same prose shown on the
 // species cards. Filled by updateInspector when a cell is selected.
@@ -4986,7 +5003,6 @@ function updateInspector(): void {
     if (killArmedId !== null && killArmedId !== c.id) disarmKill();
     inspectorActionRow.style.display = "flex";
     killCellBtn.style.display = "flex";
-    topCopyGenomeBtn.style.display = "flex";
     const col = isPinned ? "#ffd24c" : "#9ee";
     pinSpeciesBtn.innerHTML =
       `<span style="font-weight:bold;line-height:1;color:${col};">` +
