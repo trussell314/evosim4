@@ -1129,10 +1129,33 @@ export function genomeCodingKey(genome: Uint8Array): string {
 // body ops are indented and operand-decoded, and intron bytes (outside
 // any gene) are shown raw as `db 0xNN  ; intron` byte-by-byte -- exactly
 // how the scanner steps over them. SYNTH renders both operands.
-export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<string>): string {
+export function disassemble(
+  genome: Uint8Array,
+  materialNames?: ReadonlyArray<string>,
+  execCounts?: ArrayLike<number>,
+  vmTicks?: number,
+): string {
   const lines: string[] = [];
   let i = 0;
   let executing = false;
+  // Per-line PC and execution-count -- recorded so the renderer can
+  // colorize lines by hotness without re-walking the genome. Encoded
+  // inline as a trailing "; ×N (P%)" comment so plain-text consumers
+  // (the copy button) see it too.
+  const showHits = execCounts !== undefined && execCounts.length >= genome.length;
+  const ticks = vmTicks ?? 0;
+  const hits = (pc: number): string => {
+    if (!showHits) return "";
+    const n = execCounts![pc] | 0;
+    if (n === 0) return "  ; ×0";
+    // Percent-per-tick: how often this PC is hit per VM tick of the
+    // species. >100% is possible (loops revisit). Show "N/A" when the
+    // species hasn't ticked yet (avoid divide-by-zero).
+    if (ticks <= 0) return `  ; ×${n}`;
+    const pct = (100 * n) / ticks;
+    const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+    return `  ; ×${n} (${pctStr}%)`;
+  };
   while (i < genome.length) {
     const op = genome[i];
     const off = i.toString(16).padStart(4, "0") + ": ";
@@ -1142,7 +1165,7 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
       // since nothing executes), so render byte-by-byte. Known op bytes
       // still show their mnemonic + an "; intron" marker; truly unknown
       // bytes fall back to `db`.
-      if (op === OP.GENE) { lines.push(off + "gene"); executing = true; }
+      if (op === OP.GENE) { lines.push(off + "gene" + hits(i)); executing = true; }
       else {
         const nm = NAME_BY_OP[op];
         lines.push(off + "  " + (nm ? nm.toLowerCase() : "db 0x" + op.toString(16).padStart(2, "0")) + "  ; intron");
@@ -1151,8 +1174,8 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
       continue;
     }
     // Inside a gene.
-    if (op === OP.END) { lines.push(off + "end"); executing = false; i += 1; continue; }
-    if (op === OP.GENE) { lines.push(off + "gene"); i += 1; continue; }
+    if (op === OP.END) { lines.push(off + "end" + hits(i)); executing = false; i += 1; continue; }
+    if (op === OP.GENE) { lines.push(off + "gene" + hits(i)); i += 1; continue; }
     const name = NAME_BY_OP[op];
     const operandLen = OPERANDS[op];
     let s = off + "  ";
@@ -1177,6 +1200,7 @@ export function disassemble(genome: Uint8Array, materialNames?: ReadonlyArray<st
     } else {
       s += "db 0x" + op.toString(16).padStart(2, "0");
     }
+    s += hits(i);
     lines.push(s);
     i += 1 + operandLen;
   }

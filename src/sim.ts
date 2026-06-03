@@ -6811,6 +6811,14 @@ export interface SpeciesSnapshot {
   lane: number;
   genome: Uint8Array;
   peakBiomass: number;
+  // Per-PC VM hit counts (length == genome.length) and the number of
+  // times a cell of this species ticked its VM. Together they give a
+  // per-op execution rate (execCounts[pc] / vmTicks). Surfaced so the
+  // inspector can annotate the disasm + gene-aware description with
+  // how hot each op is. Empty array for an idle species; live ones
+  // accumulate continuously across ticks (never reset).
+  execCounts: Uint32Array;
+  vmTicks: number;
 }
 
 export interface RenderSnapshot extends WorldEnv {
@@ -6988,6 +6996,11 @@ function snapshotSpecies(sp: Species): SpeciesSnapshot {
     lane: sp.lane,
     genome: sp.genome,
     peakBiomass: sp.peakBiomass,
+    // Pass the live arrays by reference; postMessage's structured
+    // clone copies them on the way out so the worker keeps mutating
+    // its own version safely.
+    execCounts: sp.execCounts,
+    vmTicks: sp.vmTicks,
   };
 }
 

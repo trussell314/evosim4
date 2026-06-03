@@ -902,10 +902,22 @@ let cachedCodingCount = 0;
 const HUD_COUNT_INTERVAL_MS = 333;
 let lastInspectedGenomeVer = "";
 let inspectorProseCache = "";
+// Throttle for per-op exec-count refresh inside the inspector --
+// rebuild the disasm + prose at most every INSPECTOR_COUNTS_REFRESH_MS
+// even if vmTicks keeps climbing.
+const INSPECTOR_COUNTS_REFRESH_MS = 500;
+let lastInspectedCountsAt = -1e9;
+let lastInspectedTicksVer = -1;
 function refreshActiveDisasm(): void {
   const sel = selectedCell();
   if (sel) {
-    activeDisasmRaw = disassemble(sel.genome, SENSOR_CHEM_LABELS);
+    const sp = snapshotSpeciesByKey.get(sel.speciesKey);
+    activeDisasmRaw = disassemble(
+      sel.genome,
+      SENSOR_CHEM_LABELS,
+      sp?.execCounts,
+      sp?.vmTicks,
+    );
     activeDisasm = formatDisasmColumns(activeDisasmRaw, DISASM_COL_LINES);
   } else {
     activeDisasmRaw = "";
@@ -4996,10 +5008,22 @@ function updateInspector(): void {
   // exact speciesKey shifts). The meters + resource stats below still
   // refresh every frame off the live snapshot.
   const genomeVer = `${c.id}:${c.speciesKey}`;
-  if (genomeVer !== lastInspectedGenomeVer) {
+  // Per-op hit-count refresh runs on a slow cadence (every ~500ms of
+  // wall time) since execCounts climb continuously. Rebuilding the
+  // disasm + prose every frame would be O(genome) churn for ops that
+  // tick maybe twice a second; this keeps the badges live without
+  // hammering the inspector on huge (1500+ byte) genomes.
+  const sp = snapshotSpeciesByKey.get(c.speciesKey);
+  const ticksVer = sp ? sp.vmTicks : 0;
+  const wallNow = performance.now();
+  const countsStale = wallNow - lastInspectedCountsAt >= INSPECTOR_COUNTS_REFRESH_MS
+    && ticksVer !== lastInspectedTicksVer;
+  if (genomeVer !== lastInspectedGenomeVer || countsStale) {
     lastInspectedGenomeVer = genomeVer;
+    lastInspectedTicksVer = ticksVer;
+    lastInspectedCountsAt = wallNow;
     refreshActiveDisasm();
-    inspectorProseCache = describeGenomeRich(c.genome);
+    inspectorProseCache = describeGenomeRich(c.genome, sp?.execCounts, sp?.vmTicks);
     inspectorProse.innerHTML = inspectorProseCache;
     disasmBody.textContent = activeDisasm;
   }
@@ -5591,11 +5615,31 @@ function analyzeGene(genome: Uint8Array, start: number, end: number): {
   return { actions, guards };
 }
 
-function describeGenomeRich(genome: Uint8Array): string {
+function describeGenomeRich(
+  genome: Uint8Array,
+  execCounts?: ArrayLike<number>,
+  vmTicks?: number,
+): string {
   const esc = (s: string): string => s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+  const showHits = execCounts !== undefined && execCounts.length >= genome.length;
+  const ticks = vmTicks ?? 0;
+  // Color-by-rate badge from a precomputed total count. >50% / tick
+  // is "hot" (green), >5% "warm" (cyan), nonzero "cool" (dim green),
+  // zero muted gray. Tells the reader at a glance which gated
+  // branches actually execute.
+  const renderBadge = (n: number): string => {
+    if (!showHits) return "";
+    if (n === 0) return ` <span style="opacity:.45;font-size:90%;">[×0]</span>`;
+    if (ticks <= 0) return ` <span style="opacity:.75;font-size:90%;">[×${n}]</span>`;
+    const rate = n / ticks;
+    const pct = 100 * rate;
+    const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+    const color = rate >= 0.5 ? "#7fe28a" : rate >= 0.05 ? "#7fd8e2" : "#9c9";
+    return ` <span style="color:${color};font-size:90%;">[×${n} (${pctStr}%)]</span>`;
+  };
   // Collect genes (GENE..END spans) and intron byte total.
   let nGenes = 0, intronBytes = 0;
-  const allActions: Array<{ text: string; guard: string; dead: boolean; cat?: number; inh?: number }> = [];
+  const allActions: Array<{ text: string; guard: string; dead: boolean; cat?: number; inh?: number; pc: number }> = [];
   let i = 0;
   let inGene = false, geneStart = 0;
   while (i < genome.length) {
@@ -5612,7 +5656,7 @@ function describeGenomeRich(genome: Uint8Array): string {
         const covering = guards.filter((g) => a.pc >= g.start && a.pc < g.end);
         const guard = covering.map((g) => g.label).join(" and ");
         const dead = covering.some((g) => g.dead);
-        allActions.push({ text: a.text, guard, dead, cat: a.cat, inh: a.inh });
+        allActions.push({ text: a.text, guard, dead, cat: a.cat, inh: a.inh, pc: a.pc });
       }
       inGene = false;
       i += 1;
@@ -5626,18 +5670,30 @@ function describeGenomeRich(genome: Uint8Array): string {
   const gate = (g: string): string => (g ? ` <span style="opacity:.75;">when ${esc(g)}</span>` : ` <span style="opacity:.55;">(every tick)</span>`);
 
   // Behaviour actions (non-SYNTH-cat/inh) grouped, conditions shown.
+  // Sum hit counts across duplicate-line collapses so a feature
+  // implemented across multiple genes shows its total execution.
   const behaviours = allActions.filter((a) => a.text !== "");
-  // De-dupe identical (text+guard+dead) lines so repeated genes collapse.
-  const seen = new Set<string>();
+  type AccAction = { text: string; guard: string; dead: boolean; hits: number };
+  const acc = new Map<string, AccAction>();
+  const order: string[] = [];
   const reproduces = behaviours.some((a) => a.text === "Reproduces" && !a.dead);
   for (const a of behaviours) {
     const key = a.text + "|" + a.guard + "|" + a.dead;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    let row = acc.get(key);
+    if (!row) {
+      row = { text: a.text, guard: a.guard, dead: a.dead, hits: 0 };
+      acc.set(key, row);
+      order.push(key);
+    }
+    if (showHits) row.hits += (execCounts![a.pc] | 0);
+  }
+  for (const key of order) {
+    const a = acc.get(key)!;
+    const badge = renderBadge(a.hits);
     if (a.dead) {
-      lines.push("• " + orange(`${a.text} — never (gate "${esc(a.guard)}" is always false)`));
+      lines.push("• " + orange(`${a.text} — never (gate "${esc(a.guard)}" is always false)`) + badge);
     } else {
-      lines.push("• " + esc(a.text) + gate(a.guard));
+      lines.push("• " + esc(a.text) + gate(a.guard) + badge);
     }
   }
   // Metabolic identity: catalyst boosts / inhibitor damps.
