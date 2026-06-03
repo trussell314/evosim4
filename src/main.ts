@@ -228,6 +228,30 @@ killCellBtn.addEventListener("click", () => {
 });
 renderKillBtn(false);
 
+// Top-of-inspector copy-genome button. Same payload as the
+// collapsible-section copy button at the bottom (activeDisasmRaw),
+// but always visible at the top so the mobile inspector doesn't have
+// to be scrolled past the resource block + disasm bar to grab the
+// bytes. showCopyToast / copyToClipboard / activeDisasmRaw are
+// defined later in this file; safe to reference because the click
+// handler runs long after module init.
+const topCopyGenomeBtn = document.createElement("div");
+topCopyGenomeBtn.style.cssText =
+  "display:none;align-items:center;gap:6px;padding:2px 9px 6px;" +
+  "cursor:pointer;user-select:none;color:#9ee;" + HUD_FONT;
+topCopyGenomeBtn.title = "Copy genome (one op per line)";
+const topCopyDefaultLabel = `<span>⧉ copy genome</span>`;
+topCopyGenomeBtn.innerHTML = topCopyDefaultLabel;
+topCopyGenomeBtn.addEventListener("click", async (ev) => {
+  ev.stopPropagation();
+  if (!activeDisasmRaw) return;
+  const lines = activeDisasmRaw.split("\n").filter((l) => l.length > 0).length;
+  const ok = await copyToClipboard(activeDisasmRaw);
+  topCopyGenomeBtn.innerHTML = ok ? `<span>✓ copied</span>` : `<span>✗ copy failed</span>`;
+  setTimeout(() => { topCopyGenomeBtn.innerHTML = topCopyDefaultLabel; }, 1200);
+  showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok);
+});
+
 // Human-readable genome summary -- the same prose shown on the
 // species cards. Filled by updateInspector when a cell is selected.
 const inspectorProse = document.createElement("div");
@@ -962,6 +986,7 @@ inspectorPane.style.cssText =
 // the collapsible genome disassembly.
 inspectorPane.appendChild(pinSpeciesBtn);
 inspectorPane.appendChild(killCellBtn);
+inspectorPane.appendChild(topCopyGenomeBtn);
 inspectorPane.appendChild(inspectorMeters);
 inspectorPane.appendChild(inspectorProse);
 inspectorPane.appendChild(inspector);
@@ -4913,6 +4938,7 @@ function updateInspector(): void {
     lastInspectedGenomeVer = "";
     pinSpeciesBtn.style.display = "none";
     killCellBtn.style.display = "none";
+    topCopyGenomeBtn.style.display = "none";
     if (killArmedId !== null) disarmKill();
     inspectorMeters.style.display = "none";
     inspectorProse.style.display = "none";
@@ -4941,6 +4967,7 @@ function updateInspector(): void {
     // the second tap can't kill a different cell.
     if (killArmedId !== null && killArmedId !== c.id) disarmKill();
     killCellBtn.style.display = "flex";
+    topCopyGenomeBtn.style.display = "flex";
     const col = isPinned ? "#ffd24c" : "#9ee";
     pinSpeciesBtn.innerHTML =
       `<span style="font-weight:bold;line-height:1;color:${col};">` +
