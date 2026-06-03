@@ -232,23 +232,33 @@ renderKillBtn(false);
 // collapsible-section copy button at the bottom (activeDisasmRaw),
 // but always visible at the top so the mobile inspector doesn't have
 // to be scrolled past the resource block + disasm bar to grab the
-// bytes. showCopyToast / copyToClipboard / activeDisasmRaw are
-// defined later in this file; safe to reference because the click
-// handler runs long after module init.
-const topCopyGenomeBtn = document.createElement("div");
+// bytes. Mirror copyDisasmBtn's element type (<button>) and
+// touch-action so mobile Safari treats it the same way -- a <div>
+// with cursor:pointer is enough for desktop click but iOS sometimes
+// swallows the tap on a styled div without a button role.
+// showCopyToast / copyToClipboard / activeDisasmRaw are defined later
+// in this file; safe to reference because the click handler runs long
+// after module init.
+const topCopyGenomeBtn = document.createElement("button");
+topCopyGenomeBtn.type = "button";
 topCopyGenomeBtn.style.cssText =
-  "display:none;align-items:center;gap:6px;padding:2px 9px 6px;" +
-  "cursor:pointer;user-select:none;color:#9ee;" + HUD_FONT;
+  "display:none;align-items:center;gap:6px;padding:4px 10px;" +
+  "border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;" +
+  "touch-action:manipulation;user-select:none;" + HUD_FONT;
 topCopyGenomeBtn.title = "Copy genome (one op per line)";
-const topCopyDefaultLabel = `<span>⧉ copy genome</span>`;
-topCopyGenomeBtn.innerHTML = topCopyDefaultLabel;
+const topCopyDefaultLabel = `⧉ copy genome`;
+topCopyGenomeBtn.textContent = topCopyDefaultLabel;
 topCopyGenomeBtn.addEventListener("click", async (ev) => {
   ev.stopPropagation();
-  if (!activeDisasmRaw) return;
+  if (!activeDisasmRaw) {
+    showCopyToast("no genome loaded", false, topCopyGenomeBtn);
+    return;
+  }
   const lines = activeDisasmRaw.split("\n").filter((l) => l.length > 0).length;
   const ok = await copyToClipboard(activeDisasmRaw);
-  topCopyGenomeBtn.innerHTML = ok ? `<span>✓ copied</span>` : `<span>✗ copy failed</span>`;
-  setTimeout(() => { topCopyGenomeBtn.innerHTML = topCopyDefaultLabel; }, 1200);
+  topCopyGenomeBtn.textContent = ok ? `✓ copied` : `✗ copy failed`;
+  setTimeout(() => { topCopyGenomeBtn.textContent = topCopyDefaultLabel; }, 1200);
   showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok, topCopyGenomeBtn);
 });
 
