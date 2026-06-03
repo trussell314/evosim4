@@ -435,6 +435,14 @@ const CREATURE_F32_COLS = [
   // m_atp named-molecule column (ATP is a first-class chemical).
   "senseRange", "thrustAccel",
   "bornAt", "ingestCooldown",
+  // Sim-time of the most recent REPRODUCE op fire in this cell's VM
+  // (whether or not tryReproduce committed -- the OP firing is the
+  // signal we want, since "tried to but couldn't" is still a sign of
+  // life). Stamped after expressCell sees vmOut.reproduce. Used by
+  // the sterile-cull predicate so a cell that fissioned a few times
+  // then got stuck in a loop counts as effectively sterile too,
+  // not just cells that never reproduced at all.
+  "lastReproduceFireT",
   "ax", "ay",
   "m_glucose", "m_fattyAcid", "m_aminoAcid", "m_minerals",
   "m_chlorophyll", "m_enzyme", "m_o2", "m_co2",
@@ -524,6 +532,13 @@ export class CreatureStore {
   thrustAccel!: Float32Array;
   bornAt!: Float32Array;
   ingestCooldown!: Float32Array;
+  // See columns[] comment. Stamped to world.t after expressCell when
+  // vmOut.reproduce is true; defaults to bornAt at birth so a
+  // never-fired cell is treated as "last fired at birth" -- which
+  // makes the sterile cull's `t - lastReproduceFireT >= sterileAge`
+  // predicate exactly match the old "never reproduced + old enough"
+  // case for that cohort.
+  lastReproduceFireT!: Float32Array;
   repairTicks!: Int32Array;
   // Cumulative successful reproductions by this creature (free fission
   // OR inner division). Read by the manual / auto cull pass to spare
@@ -675,6 +690,7 @@ export class CreatureStore {
     this.thrustAccel = new Float32Array(b, o.base.thrustAccel, cap);
     this.bornAt = new Float32Array(b, o.base.bornAt, cap);
     this.ingestCooldown = new Float32Array(b, o.base.ingestCooldown, cap);
+    this.lastReproduceFireT = new Float32Array(b, o.base.lastReproduceFireT, cap);
     this.ax = new Float32Array(b, o.base.ax, cap);
     this.ay = new Float32Array(b, o.base.ay, cap);
     this.m_glucose = new Float32Array(b, o.base.m_glucose, cap);
@@ -822,6 +838,7 @@ export class CreatureStore {
     this.thrustAccel[i] = 0;
     this.bornAt[i] = 0;
     this.ingestCooldown[i] = 0;
+    this.lastReproduceFireT[i] = 0;
     this.repairTicks[i] = 0;
     this.childCount[i] = 0;
     this.fpW0[i] = 0; this.fpW1[i] = 0; this.fpW2[i] = 0; this.fpW3[i] = 0;
@@ -1056,6 +1073,8 @@ export class Creature {
   set repairTicks(v: number) { this.store.repairTicks[this.idx] = v; }
   get childCount(): number { return this.store.childCount[this.idx]; }
   set childCount(v: number) { this.store.childCount[this.idx] = v; }
+  get lastReproduceFireT(): number { return this.store.lastReproduceFireT[this.idx]; }
+  set lastReproduceFireT(v: number) { this.store.lastReproduceFireT[this.idx] = v; }
 }
 
 // Initialization options for a new Creature. Mirrors the field set.
@@ -1069,6 +1088,7 @@ export interface CreatureInit {
   ingestCooldown?: number;
   repairTicks?: number;
   childCount?: number;
+  lastReproduceFireT?: number;
   genome: Uint8Array;
   vm: VMState;
   color: string;
@@ -1096,6 +1116,11 @@ export function newCreature(store: CreatureStore, init: CreatureInit): Creature 
   store.ingestCooldown[idx] = init.ingestCooldown ?? 0;
   store.repairTicks[idx] = init.repairTicks ?? 0;
   store.childCount[idx] = init.childCount ?? 0;
+  // Default to bornAt so a never-fired cell behaves like "fired at
+  // birth" -- the sterile cull predicate (t - lastReproduceFireT >=
+  // sterileAgeSec) then reduces to (age >= sterileAgeSec), matching
+  // the old "childCount == 0 && age" gate for that cohort.
+  store.lastReproduceFireT[idx] = init.lastReproduceFireT ?? (init.bornAt ?? 0);
   c.genome = init.genome;
   c.vm = init.vm;
   c.color = init.color;

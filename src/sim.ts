@@ -3634,7 +3634,13 @@ function runInnerCell(
   // Internal fission. No soft cap (per design): the shared store's
   // physical capacity and the same economics a free cell faces are
   // the only regulators.
-  if (inner.vmOut.reproduce) divideInner(inner, host, world);
+  if (inner.vmOut.reproduce) {
+    // Same stamping rationale as the free-cell path -- record the OP
+    // fire so the sterile-cull predicate sees inner cells as "alive"
+    // even when their host context blocks divideInner from committing.
+    inner.lastReproduceFireT = world.t;
+    divideInner(inner, host, world);
+  }
 
   // Passive permeable exchange with the host pool -- the analog of
   // diffuseAmbient against the dissolved field. ONLY diffusable chems
@@ -5083,7 +5089,14 @@ function updateCreatures(world: World, dt: number): void {
       c.vy = nvy;
     }
 
-    if (vmOut.reproduce) tryReproduce(c, world);
+    if (vmOut.reproduce) {
+      // Stamp BEFORE tryReproduce so even an aborted attempt (mid-
+      // division, store full) still counts as a sign of life for the
+      // sterile-cull predicate. The OP firing is the signal; whether
+      // the attempt commits is downstream.
+      c.lastReproduceFireT = world.t;
+      tryReproduce(c, world);
+    }
 
     // Refresh the greenbeard marker whenever the cell expressed SYNTH
     // BOND this tick. Persisted between expressing ticks so a genome
@@ -5500,19 +5513,24 @@ function updateCreatures(world: World, dt: number): void {
     // any other death.
     const killed = world.killRequests !== undefined && world.killRequests.has(c.id);
     // Sterile cull: triggered by the manual button or the auto-cull
-    // timer. A cell qualifies if it's been alive long enough, has
-    // never produced a child, AND is the sole living instance of its
-    // species (no other free or engulfed cell shares c.speciesKey).
-    // sp.alive is the pre-death count -- noteCreatureDeath fires in
-    // the removal pass below, so it still counts c itself here; "lone"
-    // means sp.alive <= 1. Pinned species are spared so a watched
-    // lineage isn't retired out from under the observer.
+    // timer. A cell qualifies if it hasn't fired REPRODUCE in its VM
+    // for at least sterileAgeSec AND is the sole living instance of
+    // its species (no other free or engulfed cell shares
+    // c.speciesKey). Replaces the older childCount === 0 gate, which
+    // missed cells that fissioned a few times then got stuck in a
+    // tight VM loop -- "effectively sterile" rather than "literally
+    // never reproduced". A newborn never-fired cell has
+    // lastReproduceFireT == bornAt so this reduces to the old "old
+    // enough" check for that cohort. sp.alive is the pre-death count
+    // -- noteCreatureDeath fires in the removal pass below, so it
+    // still counts c itself here; "lone" means sp.alive <= 1. Pinned
+    // species are spared so a watched lineage isn't retired out from
+    // under the observer.
     const cullSp = world.species.get(c.speciesKey);
     const lone = (cullSp?.alive ?? 0) <= 1;
     const culled = world.cullPending !== undefined
-      && c.childCount === 0
       && lone
-      && world.t - c.bornAt >= world.cullPending.sterileAgeSec
+      && world.t - c.lastReproduceFireT >= world.cullPending.sterileAgeSec
       && !world.pinnedSpecies.has(c.speciesKey);
     if (starve || lowMemb || lowMrna || lowAa || killed || culled) {
       const st = world.stats;
@@ -6225,7 +6243,7 @@ function applyWalls(world: World): void {
 // emission ledger are not yet persisted, so reloaded saves restart
 // the vent dormant. Old saves without rock terrain would land cells
 // inside the new rocks, so we invalidate them via the schema bump.
-export const SAVE_SCHEMA = `evosim4:22:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
+export const SAVE_SCHEMA = `evosim4:23:${CATALYST_COUNT}:${CHEMICAL_COUNT}:${NAMED_CHEMICAL_COUNT}`;
 
 interface SavedSparse { i: number; v: number }
 interface SavedCreature {
@@ -6237,6 +6255,12 @@ interface SavedCreature {
   // Cumulative successful reproductions. Absent in older saves ->
   // restored as 0 (sterile until proven otherwise).
   childCount?: number;
+  // Sim-time of the most recent REPRODUCE op fire in this cell's VM.
+  // Read by the sterile cull (t - lastReproduceFireT >= sterileAge).
+  // Absent in older saves -> restore handler defaults to bornAt so
+  // the cell behaves like "never fired" (the cull will then check
+  // its actual age).
+  lastReproduceFireT?: number;
   genome: number[];
   vmPc: number; vmStack: number[];
   color: string; speciesKey: string; lineageRoot: number;
@@ -6366,6 +6390,7 @@ function snapshotCreature(c: Creature): SavedCreature {
     bornAt: s.bornAt[i], ingestCooldown: s.ingestCooldown[i],
     repairTicks: s.repairTicks[i],
     childCount: s.childCount[i] || undefined,
+    lastReproduceFireT: s.lastReproduceFireT[i] || undefined,
     genome: Array.from(c.genome),
     vmPc: c.vm.pc, vmStack: Array.from(c.vm.stack),
     color: c.color, speciesKey: c.speciesKey, lineageRoot: c.lineageRoot,
@@ -6510,6 +6535,11 @@ function restoreCreature(world: World, sc: SavedCreature): Creature {
     repairTicks: sc.repairTicks,
     childCount: sc.childCount ?? 0,
     bornAt: sc.bornAt,
+    // Older saves lack the field -- default to bornAt so the cell
+    // reads as "never fired" and the sterile cull treats it like an
+    // unproven cell (will be culled if age > sterileAgeSec, lone,
+    // and unpinned).
+    lastReproduceFireT: sc.lastReproduceFireT ?? sc.bornAt,
     speciesKey: sc.speciesKey,
     molecules: mol,
   });
