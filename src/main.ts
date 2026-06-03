@@ -252,28 +252,36 @@ topCopyGenomeBtn.title = "Copy genome (one op per line)";
 const topCopyDefaultLabel = `⧉ copy genome`;
 topCopyGenomeBtn.textContent = topCopyDefaultLabel;
 let topCopyHandling = false;
+function restoreTopCopyBtn(): void {
+  topCopyGenomeBtn.textContent = topCopyDefaultLabel;
+  topCopyGenomeBtn.style.background = "rgba(0,0,0,.45)";
+  topCopyHandling = false;
+}
 async function handleTopCopyTap(ev: Event): Promise<void> {
   ev.stopPropagation();
   if (topCopyHandling) return;
   topCopyHandling = true;
-  // Immediate visual ack so the user sees that the tap registered,
-  // even if the clipboard call later fails or stalls. Cleared by the
-  // post-toast restore below.
+  // Schedule the visual reset unconditionally up front. The clipboard
+  // call below can hang on some iOS Safari builds (revoked user
+  // activation mid-await), and tying the reset to its completion
+  // would leave the button stuck green; doing it on a wall-clock
+  // timer means the button always returns to neutral.
+  setTimeout(restoreTopCopyBtn, 1500);
+  // Immediate visual ack so the user sees that the tap registered.
   topCopyGenomeBtn.style.background = "rgba(46,160,67,.45)";
   if (!activeDisasmRaw) {
-    topCopyGenomeBtn.style.background = "rgba(0,0,0,.45)";
-    topCopyHandling = false;
     showCopyToast("no genome loaded", false, topCopyGenomeBtn);
     return;
   }
   const lines = activeDisasmRaw.split("\n").filter((l) => l.length > 0).length;
-  const ok = await copyToClipboard(activeDisasmRaw);
+  // Race the clipboard call against a 1s timeout so a stalled write
+  // can't keep the button locked. Most paths resolve in <50ms; a real
+  // failure throws and copyToClipboard returns false synchronously.
+  const ok = await Promise.race<boolean>([
+    copyToClipboard(activeDisasmRaw),
+    new Promise<boolean>((res) => setTimeout(() => res(false), 1000)),
+  ]);
   topCopyGenomeBtn.textContent = ok ? `✓ copied` : `✗ copy failed`;
-  setTimeout(() => {
-    topCopyGenomeBtn.textContent = topCopyDefaultLabel;
-    topCopyGenomeBtn.style.background = "rgba(0,0,0,.45)";
-    topCopyHandling = false;
-  }, 1200);
   showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok, topCopyGenomeBtn);
 }
 topCopyGenomeBtn.addEventListener("pointerup", handleTopCopyTap);
