@@ -1292,12 +1292,12 @@ function ventReport(w: World): string {
   );
 }
 
-interface St { births: number; dStarve: number; dMembrane: number; dAa: number; dMrna: number; dOld: number }
+interface St { births: number; dStarve: number; dMembrane: number; dAa: number; dMrna: number; dCull: number }
 function snap(): St {
   const s = w.stats ?? {};
   return {
     births: s.births ?? 0, dStarve: s.dStarve ?? 0, dMembrane: s.dMembrane ?? 0,
-    dAa: s.dAa ?? 0, dMrna: s.dMrna ?? 0, dOld: s.dOld ?? 0,
+    dAa: s.dAa ?? 0, dMrna: s.dMrna ?? 0, dCull: s.dCull ?? 0,
   };
 }
 function meanCell(chem: number): number {
@@ -1434,8 +1434,8 @@ console.log(
 console.log(
   `# SimStats deltas: births=${e.births - base.births} ` +
     `deaths{starve=${e.dStarve - base.dStarve} mem=${e.dMembrane - base.dMembrane} ` +
-    `aa=${e.dAa - base.dAa} mrna=${e.dMrna - base.dMrna} old=${e.dOld - base.dOld}} ` +
-    `(sum=${(e.dStarve - base.dStarve) + (e.dMembrane - base.dMembrane) + (e.dAa - base.dAa) + (e.dMrna - base.dMrna) + (e.dOld - base.dOld)})`,
+    `aa=${e.dAa - base.dAa} mrna=${e.dMrna - base.dMrna} cull=${e.dCull - base.dCull}} ` +
+    `(sum=${(e.dStarve - base.dStarve) + (e.dMembrane - base.dMembrane) + (e.dAa - base.dAa) + (e.dMrna - base.dMrna) + (e.dCull - base.dCull)})`,
 );
 console.log(
   `# ambient end: CO2=${ambientMean(w, CHEM_CO2).toFixed(1)} MIN=${ambientMean(w, CHEM_MIN).toFixed(1)}`,

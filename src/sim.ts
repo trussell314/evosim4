@@ -1116,7 +1116,7 @@ export function createWorld(
     // replenish" behavior so their assertions hold.
     useSeedRamp: !!opts?.delayedSpawn,
     initialSeedDone: !opts?.delayedSpawn,
-    stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dOld: 0, dCull: 0 },
+    stats: { births: 0, dStarve: 0, dMembrane: 0, dMrna: 0, dAa: 0, dCull: 0 },
     rxnStats: newRxnStats(),
     foundersEnabled: true,
     founderCapEnabled: true,
@@ -1131,15 +1131,10 @@ export function createWorld(
     nextLineageRoot: 0,
     founderTarget,
     lastFounderTrickleT: -1e9,
-    // Transient set of currently-alive founder cell IDs. Used to give
-    // every founder a fixed 180s lifespan after spawn so the founders
-    // can't dominate indefinitely -- their descendants have to take
-    // over the niche, or it goes extinct and the top-up loop seeds a
-    // fresh lineage. NOT persisted across save/load; reloaded saves
-    // lose tracking and existing founders live full lives.
+    // Transient set of currently-alive founder cell IDs. Used by the
+    // HUD's livingFounderLineages count ("lineages whose original
+    // founder cell is still alive"). NOT persisted across save/load.
     founderIds: new Set<number>(),
-    founderReproduced: new Set<number>(),
-    founderBirthScore: new Map(),
     pinnedSpecies: new Set<string>(),
     gravity: 60,
     drag: 0.6,
@@ -1182,7 +1177,11 @@ export function createWorld(
     brownianAmp: 18,
     mutationRateMul: 1,
     geologySeed: (opts?.geologySeed ?? 0) >>> 0,
-    dayPhase: 0.2, // start a bit before noon so first day shows
+    // Start at midnight (dayPhase 0.75). One ancient day = 13 display-hours
+    // and the daylight half of the cycle is dayPhase 0..0.5, so this puts
+    // the middle ~6.5h of the first 13h as day (3.25h pre-dawn night ->
+    // 6.5h daylight -> 3.25h post-sunset night).
+    dayPhase: 0.75,
     dayPeriod: 600, // Earth-like: 1 day ~= 1 current/diffusion cycle
     disturbanceIntensity: 0,
     disturbanceStartedAt: 0,
@@ -1264,40 +1263,21 @@ const FOUNDER_TRICKLE_INTERVAL_SEC = 7.5;
 // and the early dynamics look off. (Terrain is in place from t=0
 // already since it's procedurally generated at world creation.)
 const FOUNDER_SPAWN_DELAY_SEC = 60;
-// Founders live for exactly this many sim-seconds after they're
-// spawned, then autolyze regardless of biomass / energy state. Forces
-// turnover: descendants must take over the niche, otherwise the
-// lineage goes extinct and the top-up loop seeds a fresh genome
-// elsewhere. Replaces the "founder dominance forever" steady state.
-// Bumped 180 -> 300s after K-4/K-5: founders now have to bootstrap a
-// receptor pool (SYNTH CHEMO is mRNA-gated and 0.15/s endergonic)
-// before they can sense food at all, so the first half of a founder's
-// life is spent blind. 300s gives enough room to build receptors,
-// chase a food patch, and reach first fission. Founders that DO
-// reproduce graduate out of the cull entirely (see advanceDivision)
-// so the "no immortal founders" property is preserved -- the cull
-// only takes founders that never managed to spawn a descendant.
-// Master switch for the age-based founder cull. Paused: founders only
-// die from real causes (starvation / membrane / mrna / aa loss), not
-// old age, so we can observe whether lineages establish on their own.
-const FOUNDER_CULL_ENABLED = false;
-const FOUNDER_LIFESPAN_SEC = 300;
 
-// Sterile-cell cull. A separate, operator-driven retirement of cells
-// that have lived a long time without ever reproducing -- distinct
-// from the founder cull, which only touches the initial seeded
-// generation. Either a manual "Cull now" button or the auto-cull
-// timer flags world.cullPending; the death gate then kills any free,
-// unpinned cell with age >= sterileAgeSec and childCount == 0. The
-// thresholds are expressed in DISPLAY HOURS (the same 13h ancient-day
-// clock the world time uses, see formatDayClock in main.ts) and
-// converted to sim-seconds against dayPeriod at message time so the
-// user-facing values track the game clock even if dayPeriod changes.
-// One ancient day == 13h, so the conversion is 3600 * dayPeriod /
-// SECONDS_PER_DISPLAY_DAY sim-seconds per display-hour.
+// Sterile-cell cull. Operator-driven retirement of cells that have
+// lived a long time without ever reproducing. Either a manual "Cull
+// now" button or the auto-cull timer flags world.cullPending; the
+// death gate then kills any free, unpinned cell with age >=
+// sterileAgeSec and childCount == 0. The thresholds are expressed in
+// DISPLAY HOURS (the same 13h ancient-day clock the world time uses,
+// see formatDayClock in main.ts) and converted to sim-seconds against
+// dayPeriod at message time so the user-facing values track the game
+// clock even if dayPeriod changes. One ancient day == 13h, so the
+// conversion is 3600 * dayPeriod / SECONDS_PER_DISPLAY_DAY
+// sim-seconds per display-hour.
 const SECONDS_PER_DISPLAY_DAY = 13 * 3600;
 export const AUTO_CULL_INTERVAL_DISPLAY_HOURS = 1;
-export const CULL_STERILE_DISPLAY_HOURS = 6;
+export const CULL_STERILE_DISPLAY_HOURS = 26;
 export function displayHoursToSimSec(world: World, displayHours: number): number {
   const dp = world.dayPeriod > 0 ? world.dayPeriod : 600;
   return displayHours * 3600 * dp / SECONDS_PER_DISPLAY_DAY;
@@ -1321,40 +1301,7 @@ function maybeFireAutoCull(world: World): void {
   world.cullPending = { sterileAgeSec };
   world.autoCullLastAt = world.t;
 }
-// A founder that hasn't fissioned yet but has measurably advanced
-// from its spawn state earns extra runway before the age cull --
-// "did something interesting" without the binary all-or-nothing of
-// the reproduction graduation. Each met condition adds a fixed
-// bonus, capped so a stuck-but-busy founder still can't live
-// forever (max effective life = FOUNDER_LIFESPAN_SEC + the cap).
-// Conditions are deliberately coarse: they reward genuine growth /
-// machinery buildup, which a paralyzed (aa- or atp-starved) cell
-// cannot fake. Returns seconds to add to the base lifespan.
-const FOUNDER_BONUS_PER_COND = 120;
-const FOUNDER_BONUS_CAP = 480;
-function founderLifespanBonus(world: World, c: Creature): number {
-  const s = world.founderBirthScore.get(c.id);
-  if (s === undefined) return 0;
-  const mol = c.molecules;
-  let bonus = 0;
-  // Grew substantially: total mass at least doubled since spawn
-  // (net anabolism -- ingested/synthesized more than it spent).
-  if (creatureTotalMass(c) >= 2 * s.mass) bonus += FOUNDER_BONUS_PER_COND;
-  // Built up translation capacity: mRNA at least doubled. mRNA gates
-  // every biosynth reaction, so this is hard to reach without a
-  // working metabolism.
-  if (mol.mrna >= 2 * s.mrna) bonus += FOUNDER_BONUS_PER_COND;
-  // Expanded its machinery pool (mRNA + chlorophyll + enzyme)
-  // ~3x -- the cell is investing in its own catalytic apparatus,
-  // not just coasting on the seed.
-  if (mol.mrna + mol.chlorophyll + mol.enzyme >= 3 * s.machinery) {
-    bonus += FOUNDER_BONUS_PER_COND;
-  }
-  // Healthy energy reserve (above the stress-decay threshold) --
-  // it's running a net-positive ATP budget, not slowly dying.
-  if (c.energy >= 8) bonus += FOUNDER_BONUS_PER_COND;
-  return bonus > FOUNDER_BONUS_CAP ? FOUNDER_BONUS_CAP : bonus;
-}
+
 // Defer normal per-material replenish + aeration for the early game.
 // Holds until WATER_FILL_DELAY_SEC so the seed mix dominates the
 // initial chemistry and the column fills gradually instead of all at
@@ -1529,14 +1476,6 @@ function spawnFounder(world: World): Creature | null {
   c.lineageRoot = world.nextLineageRoot++;
   world.creatures.push(c);
   world.founderIds.add(c.id);
-  {
-    const bm = c.molecules;
-    world.founderBirthScore.set(c.id, {
-      mass: creatureTotalMass(c),
-      mrna: bm.mrna,
-      machinery: bm.mrna + bm.chlorophyll + bm.enzyme,
-    });
-  }
   noteCreatureBirth(world, c, undefined);
   return c;
 }
@@ -1974,9 +1913,9 @@ export function pickClumpCenter(world: World): { x: number; y: number } {
 // User-triggered spawn of a specific genome (from the Pinned /
 // Notable species lists). Mirrors spawnFounder's placement +
 // species-tracking bookkeeping, but with a caller-supplied genome and
-// WITHOUT joining founderIds -- a manually conjured cell lives a
-// normal life, it isn't a founding lineage and isn't subject to (or
-// exempt from) the founder age cull. "Use available resources if
+// WITHOUT joining founderIds -- a manually conjured cell isn't a
+// founding lineage and is excluded from the HUD's livingFounderLineages
+// roll-up. "Use available resources if
 // present, otherwise force it" is satisfied by makeCreature: the
 // fixed molecule seed is the forced viability floor and the local
 // particle scoop is the opportunistic resource use. Returns null if
@@ -5543,19 +5482,11 @@ function updateCreatures(world: World, dt: number): void {
     //  4. No amino acid: with the per-op aa cost on growth ops, an
     //     aa-empty cell is functionally paralyzed. Catch it here so
     //     it doesn't sit indefinitely just decaying biomass.
-    //  5. Founder old-age: founders die after FOUNDER_LIFESPAN_SEC so
-    //     they can't sit forever -- descendants have to carry the
-    //     lineage forward or the top-up reseeds with fresh genomes.
+    //  5. Sterile cull: operator-driven retirement (manual button or
+    //     auto-cull timer) of any cell that has lived past the
+    //     sterileAge threshold without ever producing a child.
+    //  6. Operator inspector-kill: explicit per-cell kill request.
     const m = c.molecules;
-    // Cull only founders that never managed to fission. Founders that
-    // produced a viable child graduated into founderReproduced and
-    // live a normal life (so a successful colony's anchor cell can
-    // age out naturally instead of hitting the wall artificially).
-    const founderTooOld = FOUNDER_CULL_ENABLED
-      && world.founderIds.has(c.id)
-      && !world.founderReproduced.has(c.id)
-      && !world.pinnedSpecies.has(c.speciesKey)
-      && world.t - c.bornAt >= FOUNDER_LIFESPAN_SEC + founderLifespanBonus(world, c);
     const starve = c.energy <= 0 && noFuel(c);
     const lowMemb = m.membrane < MIN_VIABLE_MEMBRANE;
     const lowMrna = m.mrna < MIN_VIABLE_RIBOSOME;
@@ -5567,23 +5498,19 @@ function updateCreatures(world: World, dt: number): void {
     // Sterile cull: triggered by the manual button or the auto-cull
     // timer. A cell qualifies if it's been alive long enough and has
     // never produced a child. Pinned species are spared so a watched
-    // lineage isn't retired out from under the observer. Founder cells
-    // already get handled by founderTooOld; checking childCount catches
-    // every later generation that bricked their reproduction.
+    // lineage isn't retired out from under the observer.
     const culled = world.cullPending !== undefined
       && c.childCount === 0
       && world.t - c.bornAt >= world.cullPending.sterileAgeSec
       && !world.pinnedSpecies.has(c.speciesKey);
-    if (starve || lowMemb || lowMrna || lowAa || founderTooOld || killed || culled) {
+    if (starve || lowMemb || lowMrna || lowAa || killed || culled) {
       const st = world.stats;
       if (st) {
         if (starve) st.dStarve++;
         else if (lowMemb) st.dMembrane++;
         else if (lowMrna) st.dMrna++;
         else if (lowAa) st.dAa++;
-        else if (founderTooOld) st.dOld++;
-        else if (culled) st.dCull++;
-        else st.dOld++; // killed: bucket as "operator-retired"
+        else st.dCull++; // culled or operator-killed
       }
       dead.push(c);
     }
@@ -5630,17 +5557,15 @@ function updateCreatures(world: World, dt: number): void {
         // Engulfed cells (in eaten AND in some predator's contents)
         // keep their slot alive until that predator dies and pushes
         // them back to world.creatures via released[]. An engulfed
-        // founder is NOT culled and KEEPS its founder identity, so it
-        // resumes as a founder if it's ever released -- being inside
-        // another cell is a protected state, not a death.
+        // founder KEEPS its founder identity, so it resumes as a
+        // founder if it's ever released -- being inside another cell
+        // is a protected state, not a death.
         const engulfed = eaten.has(c) && inSomeContents.has(c);
         if (!engulfed) {
           // Drop founder tracking for cells that are truly gone
-          // (spilled/dead or predated-absorbed) so the sets don't
+          // (spilled/dead or predated-absorbed) so the set doesn't
           // accumulate stale ids across the run.
           world.founderIds.delete(c.id);
-          world.founderReproduced.delete(c.id);
-          world.founderBirthScore.delete(c.id);
         }
         if (spillSet.has(c)) {
           releaseChemsAsParticles(c, world);
@@ -6063,14 +5988,6 @@ export function advanceDivision(c: Creature, world: World, dt: number): void {
   // sterile-cull predicate to spare any cell that has demonstrably
   // reproduced at least once.
   c.childCount = c.childCount + 1;
-  // A founder that successfully spawns a viable child has carried its
-  // lineage forward -- graduate it out of the lifespan cull (but
-  // keep it in founderIds so livingFounderLineages still reflects
-  // "lineages with a living founder cell"). The cull only exists to
-  // retire founders that never manage to reproduce.
-  if (world.founderIds.has(c.id)) {
-    world.founderReproduced.add(c.id);
-  }
 }
 
 function populateSensors(c: Creature, _world: World, engulfed = false): void {
@@ -6901,10 +6818,10 @@ export interface RenderSnapshot extends WorldEnv {
   particleTarget: number;
   parallelMin: number;
   extinctionCount: number;
-  // Lineage roots whose founder is still alive. Main thread uses this
-  // to count "lineages that outlived the founder cull": a lineage with
-  // live cells whose root isn't in this set has lost its founder and
-  // is being carried by descendants only.
+  // Lineage roots whose founder cell is still alive. Main thread uses
+  // this to flag lineages whose original founder is gone (a lineage
+  // with live cells whose root isn't in this set is being carried by
+  // descendants only).
   livingFounderLineages: number[];
   // HUD aggregates for engulfed cells (not in world.creatures, so the
   // flat creatures[] / species[] arrays miss them). engulfedCount is

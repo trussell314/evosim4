@@ -27,7 +27,7 @@ interface Stats {
   dMembrane: number;
   dMrna: number;
   dAa: number;
-  dOld: number;
+  dCull: number;
 }
 function snap(w: { stats?: Stats }): Stats {
   const s = (w.stats ?? {}) as Partial<Stats>;
@@ -37,7 +37,7 @@ function snap(w: { stats?: Stats }): Stats {
     dMembrane: s.dMembrane ?? 0,
     dMrna: s.dMrna ?? 0,
     dAa: s.dAa ?? 0,
-    dOld: s.dOld ?? 0,
+    dCull: s.dCull ?? 0,
   };
 }
 
@@ -99,7 +99,7 @@ for (const a of ARCHETYPES) {
   const dMem = end.dMembrane - base.dMembrane;
   const dMrna = end.dMrna - base.dMrna;
   const dAa = end.dAa - base.dAa;
-  const dOld = end.dOld - base.dOld;
+  const dCull = end.dCull - base.dCull;
   const finalN = w.creatures.length;
 
   const verdict =
@@ -124,7 +124,7 @@ for (const a of ARCHETYPES) {
   );
   console.log(
     `   peak=${peak} final=${finalN} births=${dB} ` +
-      `deaths{starve=${dStarve} mem=${dMem} mrna=${dMrna} aa=${dAa} old=${dOld}} ` +
+      `deaths{starve=${dStarve} mem=${dMem} mrna=${dMrna} aa=${dAa} cull=${dCull}} ` +
       (extinctAt >= 0 ? `extinct@+${extinctAt.toFixed(0)}s ` : "") +
       `endATP=${meanATP(w).toFixed(1)} endR=${meanR(w).toFixed(1)}`,
   );

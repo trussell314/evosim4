@@ -1177,8 +1177,7 @@ export interface SimStats {
   dMembrane: number;    // deaths: membrane below viable
   dMrna: number;        // deaths: mrna below viable
   dAa: number;          // deaths: amino acid below viable
-  dOld: number;         // deaths: founder old-age cull
-  dCull: number;        // deaths: manual or auto sterile-cell cull
+  dCull: number;        // deaths: manual or auto sterile-cell cull (also operator inspector-kill)
 }
 export interface World {
   // Optional cumulative counters for instrumentation. Optional so
@@ -1294,24 +1293,12 @@ export interface World {
   // serialized -- reloading just resets the trickle clock).
   lastFounderTrickleT: number;
   // Set of creature IDs that were spawned as founders (vs. born from
-  // fission). Used by the age-based founder-cull -- see FOUNDER_LIFESPAN_SEC.
-  // Stays populated for the founder's entire life so the HUD's
-  // livingFounderLineages count reflects "lineages whose original
+  // fission). Stays populated for the founder's entire life so the
+  // HUD's livingFounderLineages count reflects "lineages whose original
   // founder cell is still alive".
   founderIds: Set<number>;
-  // Subset of founderIds whose owner has already committed at least
-  // one fission. These are exempt from the lifespan cull -- the
-  // cull's job is to retire founders that never reproduced, not to
-  // wall off a successful lineage's original cell. Removed alongside
-  // founderIds when the cell finally dies.
-  founderReproduced: Set<number>;
-  // Per-founder snapshot taken at spawn (post-scoop). Lets the
-  // lifespan cull grant a founder extra runway if it has measurably
-  // progressed from what it started with -- see founderLifespanBonus.
-  // Entry removed when the founder leaves world.creatures.
-  founderBirthScore: Map<number, { mass: number; mrna: number; machinery: number }>;
-  // speciesKeys the user has pinned in the UI. A founder whose
-  // speciesKey is in here is exempt from the age cull so a watched
+  // speciesKeys the user has pinned in the UI. Cells whose speciesKey
+  // is in here are exempt from the sterile-cell cull so a watched
   // lineage isn't retired out from under the observer. Set from the
   // main thread via the "setPinnedSpecies" worker message.
   pinnedSpecies: Set<string>;

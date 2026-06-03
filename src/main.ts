@@ -337,8 +337,8 @@ const storedSave = (() => {
 // Marked-species persistence. Two independent collections, both keyed
 // by speciesKey and both storing the FULL genome bytes so an entry
 // survives the species going extinct (and a page reload):
-//   - pinned: user-starred species. Their founders are also exempt
-//     from the age cull (worker is told the key set).
+//   - pinned: user-starred species. Their cells are also exempt
+//     from the sterile cull (worker is told the key set).
 //   - hallOfFame: sim-driven "best so far", auto-maintained, capped.
 // Lineage history is intentionally NOT saved (nice-to-have only).
 interface MarkedSpecies {

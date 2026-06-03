@@ -68,10 +68,12 @@ const ATP_LABELS = ["idle", "vm", "thrust", "excrete", "ingest",
 
 // Per-step founder accounting --------------------------------------
 const seenFounderIds = new Set<number>();   // every id ever in founderIds
-const everReproduced = new Set<number>();   // every id ever in founderReproduced
+const everReproduced = new Set<number>();   // founder ids that have ever fissioned at least once
 function pollFounders(): void {
   for (const id of w.founderIds) seenFounderIds.add(id);
-  for (const id of w.founderReproduced) everReproduced.add(id);
+  for (const c of w.creatures) {
+    if (w.founderIds.has(c.id) && c.childCount > 0) everReproduced.add(c.id);
+  }
 }
 
 const t0 = Date.now();
@@ -89,7 +91,7 @@ interface Sample {
   estLineages: number;        // distinct lineageRoot among non-founder cells
   liveLineages: number;       // distinct lineageRoot among all cells
   spawnedDelta: number; estabDelta: number; estabEff: number;
-  births: number; dStarve: number; dMembrane: number; dMrna: number; dAa: number; dOld: number;
+  births: number; dStarve: number; dMembrane: number; dMrna: number; dAa: number; dCull: number;
   extDelta: number;
   chem: Record<string, number>;
   chemFlux: Record<string, number>;     // net mol this window (prod - cons), reactions only
@@ -157,7 +159,7 @@ for (let i = 0; w.t < RUN_T; i++) {
     const dMe = st.dMembrane - prevStats.dMembrane;
     const dMr = st.dMrna - prevStats.dMrna;
     const dAa = st.dAa - prevStats.dAa;
-    const dOl = st.dOld - prevStats.dOld;
+    const dCu = st.dCull - prevStats.dCull;
     prevStats = { ...st };
     const extDelta = w.extinctionCount - prevExt;
     prevExt = w.extinctionCount;
@@ -190,7 +192,7 @@ for (let i = 0; w.t < RUN_T; i++) {
       t: w.t, cells, foundersAlive, nonFounder: cells - foundersAlive,
       estLineages: estRoots.size, liveLineages: allRoots.size,
       spawnedDelta, estabDelta, estabEff,
-      births: dB, dStarve: dSt, dMembrane: dMe, dMrna: dMr, dAa: dAa, dOld: dOl,
+      births: dB, dStarve: dSt, dMembrane: dMe, dMrna: dMr, dAa: dAa, dCull: dCu,
       extDelta,
       chem, chemFlux: fluxObj, rxn, bioInject, atpProd, atpCons,
       foundersEnabled: w.foundersEnabled !== false,

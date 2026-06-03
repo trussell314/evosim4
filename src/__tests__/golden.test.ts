@@ -399,7 +399,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // conserving (same flux enters either way), but RNG draw order and
     // reserve totals diverge slightly from the old "spawn or no-op"
     // path. Intended: cap=0 must not disable seeding as a side effect.
-    const GOLDEN = "b8474581";
+    // Bumped again: initial dayPhase moved 0.2 -> 0.75 so the first
+    // ancient day starts at midnight (middle 6.5h of the 13h cycle is
+    // daylight). The environment baseline reads dayPhase every tick,
+    // so this shifts solar / aeration / chemistry trajectories from
+    // the very first step. Intended.
+    const GOLDEN = "990a892e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
