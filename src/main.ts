@@ -249,7 +249,7 @@ topCopyGenomeBtn.addEventListener("click", async (ev) => {
   const ok = await copyToClipboard(activeDisasmRaw);
   topCopyGenomeBtn.innerHTML = ok ? `<span>✓ copied</span>` : `<span>✗ copy failed</span>`;
   setTimeout(() => { topCopyGenomeBtn.innerHTML = topCopyDefaultLabel; }, 1200);
-  showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok);
+  showCopyToast(ok ? `copied ${lines} lines` : "copy failed", ok, topCopyGenomeBtn);
 });
 
 // Human-readable genome summary -- the same prose shown on the
@@ -292,8 +292,8 @@ copyToast.style.cssText =
   "background:rgba(0,0,0,.88);pointer-events:none;white-space:nowrap;" + HUD_FONT;
 document.body.appendChild(copyToast);
 let copyToastTimer: ReturnType<typeof setTimeout> | undefined;
-function showCopyToast(msg: string, ok: boolean): void {
-  const r = copyDisasmBtn.getBoundingClientRect();
+function showCopyToast(msg: string, ok: boolean, anchor: Element = copyDisasmBtn): void {
+  const r = anchor.getBoundingClientRect();
   copyToast.textContent = msg;
   copyToast.style.color = ok ? "#9efba8" : "#fdd";
   copyToast.style.border = `1px solid ${ok ? "#2a6" : "#a55"}`;
@@ -985,8 +985,17 @@ inspectorPane.style.cssText =
 // gene-aware genome description, then the resource/stats block, then
 // the collapsible genome disassembly.
 inspectorPane.appendChild(pinSpeciesBtn);
-inspectorPane.appendChild(killCellBtn);
-inspectorPane.appendChild(topCopyGenomeBtn);
+// Action row: destructive kill on the left, copy-genome on the far
+// right (margin-left:auto on the copy button) so taps aimed at copy
+// can't slip onto kill. Whole row is shown/hidden in lockstep with
+// pin via updateInspector; inner buttons keep their own display:flex.
+const inspectorActionRow = document.createElement("div");
+inspectorActionRow.style.cssText =
+  "display:none;align-items:center;gap:6px;";
+topCopyGenomeBtn.style.marginLeft = "auto";
+inspectorActionRow.appendChild(killCellBtn);
+inspectorActionRow.appendChild(topCopyGenomeBtn);
+inspectorPane.appendChild(inspectorActionRow);
 inspectorPane.appendChild(inspectorMeters);
 inspectorPane.appendChild(inspectorProse);
 inspectorPane.appendChild(inspector);
@@ -4937,8 +4946,7 @@ function updateInspector(): void {
     refreshActiveDisasm(); // clears the cached disasm when nothing is selected
     lastInspectedGenomeVer = "";
     pinSpeciesBtn.style.display = "none";
-    killCellBtn.style.display = "none";
-    topCopyGenomeBtn.style.display = "none";
+    inspectorActionRow.style.display = "none";
     if (killArmedId !== null) disarmKill();
     inspectorMeters.style.display = "none";
     inspectorProse.style.display = "none";
@@ -4966,6 +4974,7 @@ function updateInspector(): void {
     // Selection changed out from under an armed confirm -> reset it so
     // the second tap can't kill a different cell.
     if (killArmedId !== null && killArmedId !== c.id) disarmKill();
+    inspectorActionRow.style.display = "flex";
     killCellBtn.style.display = "flex";
     topCopyGenomeBtn.style.display = "flex";
     const col = isPinned ? "#ffd24c" : "#9ee";
