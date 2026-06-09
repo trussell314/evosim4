@@ -55,7 +55,22 @@ const SAVE_INTERVAL_SEC = 60;
 
 let world: World | null = null;
 let running = false;
-let turbo = false;
+// Sim-speed control. Six modes, exposed by main as a row of buttons.
+//   paused: don't step at all (snapshots still post so the UI stays
+//     interactive); the stepOnce message advances exactly one tick.
+//   0.25x / 0.5x: pace sub-real-time by only doing work on every Nth
+//     scheduling slot (subOneSkip counter below).
+//   1x: current normal -- step up to ~4ms per slot, snapshots every
+//     16ms, fits real-time on healthy hardware.
+//   max: run the worker as fast as it can while STILL posting a
+//     snapshot every 16ms (full-rate rendering on main).
+//   maxMinimal: replaces the old "turbo on" -- same per-slot budget
+//     as max, but main throttles its render rate down so the
+//     reduced render workload buys headroom for even more sim ticks.
+type SimSpeed = "paused" | "0.25x" | "0.5x" | "1x" | "max" | "maxMinimal";
+let simSpeed: SimSpeed = "1x";
+let subOneSkip = 0;
+let pendingStepOnce = false;
 let pendingSimError: { message: string; at: number } | null = null;
 
 // Pool / step profiling. Tick-level accumulators flushed every
@@ -81,7 +96,8 @@ let simMsSinceSnapshot = 0;
 
 type WorkerInbound =
   | { type: "init"; width: number; height: number; savedJson?: string | null; scenario?: ScenarioSpec; geologySeed?: number }
-  | { type: "setTurbo"; turbo: boolean }
+  | { type: "setSimSpeed"; speed: SimSpeed }
+  | { type: "stepOnce" }
   | { type: "toggleProfile" }
   | { type: "applySaved"; json: string }
   | { type: "requestSave" }
@@ -200,8 +216,16 @@ self.addEventListener("message", (e: MessageEvent) => {
       send({ type: "diag", running, hasWorld: world !== null,
         t: world ? world.t : -1, pool: poolDiagSnapshot() });
       break;
-    case "setTurbo":
-      turbo = !!m.turbo;
+    case "setSimSpeed":
+      simSpeed = m.speed;
+      // Reset the sub-1x throttle counter so a fresh slow mode starts
+      // with a step rather than spending the next 1-3 slots skipped.
+      subOneSkip = 0;
+      break;
+    case "stepOnce":
+      // Only honored when paused; single-tick advance for frame-by-
+      // frame observation.
+      pendingStepOnce = true;
       break;
     case "setPinnedSpecies":
       if (world) world.pinnedSpecies = new Set(m.keys);
@@ -336,12 +360,43 @@ function tick(): void {
     return;
   }
   const tickEntry = performance.now();
-  // Per-scheduling-slot budget. In normal mode we cap at a few ms so
-  // incoming messages stay responsive; in turbo we go longer per slot
-  // and lean on the snapshot-post rate to keep main responsive.
+  // simSpeed gates the per-slot step budget. paused steps zero ticks
+  // (unless pendingStepOnce); sub-1x modes skip whole scheduling slots
+  // to pace below real-time; 1x runs the historical ~4ms slice;
+  // max / maxMinimal use a longer 12ms slice -- the difference is on
+  // the main side, which throttles render down only when maxMinimal
+  // is active.
+  let sliceBudgetMs = 0;
+  switch (simSpeed) {
+    case "paused":
+      if (pendingStepOnce) {
+        pendingStepOnce = false;
+        sliceBudgetMs = -1; // sentinel: do exactly one step regardless of clock
+      } else {
+        sliceBudgetMs = 0;
+      }
+      break;
+    case "0.25x":
+      // Skip three slots out of four; do one step on the fourth.
+      if (subOneSkip < 3) { subOneSkip++; sliceBudgetMs = 0; }
+      else { subOneSkip = 0; sliceBudgetMs = -1; }
+      break;
+    case "0.5x":
+      if (subOneSkip < 1) { subOneSkip++; sliceBudgetMs = 0; }
+      else { subOneSkip = 0; sliceBudgetMs = -1; }
+      break;
+    case "1x":
+      sliceBudgetMs = 4;
+      break;
+    case "max":
+    case "maxMinimal":
+      sliceBudgetMs = 12;
+      break;
+  }
   const sliceStart = tickEntry;
-  const sliceBudgetMs = turbo ? 12 : 4;
-  while (performance.now() - sliceStart < sliceBudgetMs) {
+  let stepsThisSlot = 0;
+  while (sliceBudgetMs !== 0
+      && (sliceBudgetMs === -1 ? stepsThisSlot < 1 : performance.now() - sliceStart < sliceBudgetMs)) {
     const t0 = performance.now();
     try {
       step(world, FIXED_DT);
@@ -360,6 +415,7 @@ function tick(): void {
     profStepMs += elapsed;
     profTicks += 1;
     if (pool) profPoolTicks += 1;
+    stepsThisSlot++;
   }
   const tBeforeSnap = performance.now();
   maybePostSnapshot();

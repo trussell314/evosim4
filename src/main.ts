@@ -165,9 +165,15 @@ const disasmHeader = document.createElement("div");
 disasmHeader.style.cssText =
   "padding:2px 9px 4px;cursor:pointer;user-select:none;color:#9ee;" + HUD_FONT;
 disasmHeader.textContent = "[+] show genome";
-const disasmBody = document.createElement("pre");
+// Disasm view container. Was a single <pre> dump of the whole genome
+// (multi-column to compress vertical space); now a structured list of
+// per-gene <details> blocks plus a collapsible intron summary, so a
+// 65-gene / 1500-byte genome doesn't crush mobile viewports and the
+// reader can drill into one gene at a time. Each gene's summary
+// shows its address and (after parsing) the actions it performs.
+const disasmBody = document.createElement("div");
 disasmBody.style.cssText =
-  "margin:0;padding:0 9px 6px;color:#9ee;white-space:pre;display:none;" + HUD_FONT;
+  "margin:0;padding:0 9px 6px;color:#9ee;display:none;" + HUD_FONT;
 // HUD is now a static top-left status strip (stats / timings / diag).
 // The selected-cell inspector, pin control and disasm moved into the
 // Inspector tab of the right-side organisms drawer.
@@ -392,6 +398,55 @@ const storedSave = (() => {
   try { return localStorage.getItem(SAVE_KEY); }
   catch { return null; }
 })();
+// One-time onboarding overlay. Shown only on a true first run -- no
+// stored save AND no prior dismissal flag. Tells the user the
+// minimum needed to do something useful: click a cell, find the
+// panels, the hotkeys. Dismiss persists across sessions; tapping
+// anywhere on the card (or its X) closes it. Built inline here so
+// the timing is "before any sim work" and the card is visible
+// during the world bootstrap delay.
+const ONBOARDING_KEY = "evosim4:onboardingDismissed";
+function maybeShowOnboarding(): void {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(ONBOARDING_KEY) === "1"; } catch { /* ignore */ }
+  if (dismissed || storedSave) return;
+  const card = document.createElement("div");
+  card.style.cssText =
+    "position:fixed;z-index:1000;left:50%;top:50%;transform:translate(-50%,-50%);" +
+    "max-width:min(420px,90vw);padding:18px 22px;border-radius:8px;" +
+    "background:rgba(8,20,28,0.94);border:1px solid #2a6;color:#cef;" +
+    "box-shadow:0 8px 32px rgba(0,0,0,.6);" + HUD_FONT;
+  card.innerHTML = `
+    <div style="font-size:15px;font-weight:bold;color:#9ee;margin-bottom:8px;">
+      welcome to evosim4
+    </div>
+    <div style="line-height:1.5;font-size:11.5px;color:#cef;">
+      A primordial-soup substrate where chemistry, physics, and genome
+      VMs run -- behaviours are not scripted, they emerge from selection.
+      <br><br>
+      <b style="color:#9efba8;">▸ click a cell</b> to inspect its genome, traits, and live op-execution counts.
+      <br>
+      <b style="color:#9efba8;">▸ open the side panels</b> (the <code>+</code> tabs at the left/right edges)
+      for chemistry, species rankings, pinned/notable lineages, and overlays.
+      <br>
+      <b style="color:#9efba8;">▸ keys</b>: <code>P</code> profiler, <code>F</code> top-5 phylogeny filter.
+    </div>
+    <div style="margin-top:12px;text-align:right;">
+      <button id="_onb_dismiss" type="button" style="padding:5px 14px;
+        border:1px solid #2a6;border-radius:4px;background:rgba(0,40,20,.6);
+        color:#9efba8;cursor:pointer;touch-action:manipulation;${HUD_FONT}">
+        got it
+      </button>
+    </div>
+  `;
+  document.body.appendChild(card);
+  function dismiss(): void {
+    try { localStorage.setItem(ONBOARDING_KEY, "1"); } catch { /* ignore */ }
+    card.remove();
+  }
+  card.querySelector<HTMLButtonElement>("#_onb_dismiss")?.addEventListener("click", dismiss);
+}
+maybeShowOnboarding();
 
 // Marked-species persistence. Two independent collections, both keyed
 // by speciesKey and both storing the FULL genome bytes so an entry
@@ -512,10 +567,51 @@ function rebuildSnapshotIndexes(): void {
 // of rebuildSnapshotIndexes: that runs once at module-bootstrap
 // before the selectedCellId binding initializes, and touching it
 // there would throw a TDZ ReferenceError and abort the whole module.
+// Memo of the last alive snapshot of the selected cell. Populated
+// every frame while the cell is alive; consulted by updateInspector
+// when the cell dies so the panel can show a "this cell died" banner
+// instead of silently blanking the selection. The follow buttons read
+// id (-> children) and speciesKey (-> any live cell of the species).
+interface SelectionMemo {
+  id: number;
+  speciesKey: string;
+  genomeTag: string;
+  color: string;
+  kids: number;
+  bornAt: number;
+  lastSeenAt: number;
+  diedNoticedAt: number;
+}
+let lastSelectionMemo: SelectionMemo | null = null;
+// How long the "cell died" banner persists in sim-seconds after the
+// death is first noticed. Long enough that a user looking away briefly
+// still finds the follow controls, short enough that an idled tab
+// doesn't show a stale "follow species" days later. Cleared sooner
+// when the user clicks a new cell or hits the clear button.
+const SELECTION_MEMO_TTL_SEC = 180;
 function clearSelectionIfDead(): void {
-  if (selectedCellId != null && !snapshotCreatureById.has(selectedCellId)) {
-    selectedCellId = null;
+  if (selectedCellId == null) return;
+  const live = snapshotCreatureById.get(selectedCellId);
+  if (live) {
+    lastSelectionMemo = {
+      id: live.id,
+      speciesKey: live.speciesKey,
+      genomeTag: genomeTag(live.genome),
+      color: live.color,
+      kids: live.childCount,
+      bornAt: live.bornAt,
+      lastSeenAt: snapshot.t,
+      diedNoticedAt: snapshot.t,
+    };
+    return;
   }
+  // Cell is gone from the snapshot. Keep memo (was just refreshed last
+  // frame while alive), stamp the death notice with the current t, and
+  // drop the selectedCellId so live-cell queries see no selection.
+  if (lastSelectionMemo && lastSelectionMemo.id === selectedCellId) {
+    lastSelectionMemo.diedNoticedAt = snapshot.t;
+  }
+  selectedCellId = null;
 }
 rebuildSnapshotIndexes();
 
@@ -887,8 +983,8 @@ let selectedCellId: number | null = null;
 function selectedCell(): CreatureSnapshot | null {
   return selectedCellId != null ? snapshotCreatureById.get(selectedCellId) ?? null : null;
 }
-let activeDisasm = "";
-// One op per line, unformatted -- what the copy button hands over.
+// One op per line, unformatted -- what the copy button hands over,
+// and what renderStructuredDisasm parses into per-gene <details>.
 let activeDisasmRaw = "";
 // Per-frame render caches (perf). The HUD distinct-genome counts walk
 // genomeCodingKey over every creature; recompute at most a few times a
@@ -908,6 +1004,75 @@ let inspectorProseCache = "";
 const INSPECTOR_COUNTS_REFRESH_MS = 500;
 let lastInspectedCountsAt = -1e9;
 let lastInspectedTicksVer = -1;
+// Render the flat disasm string into the disasmBody container as a
+// list of <details> blocks: one per gene (with the address and the
+// rendered ops inside), one collapsed block for all intron bytes
+// (which the user rarely needs to read). Auto-expand the first
+// DISASM_AUTO_EXPAND_GENES so the common "small genome" case looks
+// the same as before; bigger genomes stay tidy. Plain-text disasm
+// is still kept in activeDisasmRaw for the copy button.
+const DISASM_AUTO_EXPAND_GENES = 3;
+function renderStructuredDisasm(raw: string): void {
+  disasmBody.replaceChildren();
+  if (!raw) return;
+  const lines = raw.split("\n");
+  // Bucket lines into segments. A line starting with "XXXX: gene" or
+  // "XXXX: end" opens a new gene segment; intron lines (suffixed
+  // "; intron") collect into a single intron bucket. Anything else
+  // (ops inside an executing gene) accumulates into the current gene.
+  interface GeneSeg { addr: string; lines: string[] }
+  const introns: string[] = [];
+  const genes: GeneSeg[] = [];
+  let cur: GeneSeg | null = null;
+  for (const ln of lines) {
+    if (!ln) continue;
+    const isIntron = ln.includes("; intron");
+    const isGene = /^[0-9a-f]{4}: gene/.test(ln);
+    const isEnd = /^[0-9a-f]{4}: end/.test(ln);
+    if (isIntron) {
+      introns.push(ln);
+      continue;
+    }
+    if (isGene) {
+      const addr = ln.slice(0, 4);
+      cur = { addr, lines: [ln] };
+      genes.push(cur);
+      continue;
+    }
+    if (cur) {
+      cur.lines.push(ln);
+      if (isEnd) cur = null;
+    }
+  }
+  const fontStyle = "font:11px ui-monospace,Menlo,monospace;white-space:pre;";
+  for (let i = 0; i < genes.length; i++) {
+    const g = genes[i];
+    const d = document.createElement("details");
+    d.style.cssText = "margin:2px 0;padding:1px 0;border-left:2px solid #1a3340;padding-left:5px;";
+    if (i < DISASM_AUTO_EXPAND_GENES) d.open = true;
+    const s = document.createElement("summary");
+    s.style.cssText = "cursor:pointer;color:#9ee;padding:1px 0;";
+    s.textContent = `gene #${i + 1} @ 0x${g.addr} (${g.lines.length - 1} ops)`;
+    const body = document.createElement("pre");
+    body.style.cssText = "margin:2px 0 4px;padding:0;color:#cef;" + fontStyle;
+    body.textContent = g.lines.join("\n");
+    d.append(s, body);
+    disasmBody.appendChild(d);
+  }
+  if (introns.length > 0) {
+    const d = document.createElement("details");
+    d.style.cssText = "margin:4px 0 0;padding:1px 0;border-left:2px solid #604030;padding-left:5px;";
+    const s = document.createElement("summary");
+    s.style.cssText = "cursor:pointer;color:#a98;padding:1px 0;";
+    s.textContent = `intron bytes (${introns.length})`;
+    const body = document.createElement("pre");
+    body.style.cssText = "margin:2px 0;padding:0;color:#987;" + fontStyle;
+    body.textContent = introns.join("\n");
+    d.append(s, body);
+    disasmBody.appendChild(d);
+  }
+}
+
 function refreshActiveDisasm(): void {
   const sel = selectedCell();
   if (sel) {
@@ -918,39 +1083,9 @@ function refreshActiveDisasm(): void {
       sp?.execCounts,
       sp?.vmTicks,
     );
-    activeDisasm = formatDisasmColumns(activeDisasmRaw, DISASM_COL_LINES);
   } else {
     activeDisasmRaw = "";
-    activeDisasm = "";
   }
-}
-// Width budget for the disasm body. Higher = more columns. Tuned to
-// look right against the 9px monospace font in EXPANDED_FONT.
-const DISASM_COL_LINES = 12;
-
-function formatDisasmColumns(disasm: string, colLines: number): string {
-  // Lay out disasm lines in a fixed-rows-per-column grid, column-major.
-  // Each visual row contains one line from each column, padded to the
-  // widest line of the entire disasm so columns align.
-  const lines = disasm ? disasm.split("\n") : [];
-  if (lines.length === 0) return "";
-  const ncols = Math.max(1, Math.ceil(lines.length / colLines));
-  let maxLen = 0;
-  for (const ln of lines) if (ln.length > maxLen) maxLen = ln.length;
-  const gutter = 2;
-  const colWidth = maxLen + gutter;
-  const out: string[] = [];
-  for (let row = 0; row < colLines; row++) {
-    const parts: string[] = [];
-    for (let col = 0; col < ncols; col++) {
-      const idx = col * colLines + row;
-      if (idx >= lines.length) break;
-      parts.push(lines[idx].padEnd(col === ncols - 1 ? 0 : colWidth));
-    }
-    if (parts.length === 0) continue;
-    out.push(parts.join(""));
-  }
-  return out.join("\n");
 }
 refreshActiveDisasm();
 
@@ -959,10 +1094,13 @@ refreshActiveDisasm();
 // never overlap the timeline.
 const PHYLO_STRIP_H = 70;
 // Master visibility switch for the phylogeny strip (and its legend
-// text line). Hidden for now: when false the strip isn't drawn and
-// its vertical band is reclaimed so the world extends to the controls
-// bar (see bottomReserveH / drawPhylogeny).
-const PHYLO_VISIBLE = false;
+// text line). The strip is the flagship lineage-history visualization
+// (see drawPhylogeny / README) -- when on it draws a horizontal swim-
+// lane chart of every live and recently-extinct species' time-on-
+// screen, with speciation/convergence connectors. The "F" hotkey
+// gates it to the top 5 by peak biomass when there's too much going
+// on. Reclaimable strip-bottom space accounted for via bottomReserveH.
+const PHYLO_VISIBLE = true;
 // Rolling phylogeny window. Older history scrolls off the left edge so
 // recent events don't compress into a sliver as the sim runs forever.
 const PHYLO_WINDOW_SEC = 180;
@@ -1032,6 +1170,61 @@ inspectorPane.style.cssText =
 // gene-aware genome description, then the resource/stats block, then
 // the collapsible genome disassembly.
 inspectorPane.appendChild(pinSpeciesBtn);
+// Dead-cell banner. Shown when the selected cell has just died and
+// lastSelectionMemo holds its last-alive stats. Provides two pivot
+// buttons -- "follow species" (any live cell sharing speciesKey) and
+// "follow child" (any live cell whose parentId is this cell's id) --
+// plus a clear button. Hidden when the selected cell is alive OR
+// when there is no memo at all. Wired in updateInspector.
+const deadBanner = document.createElement("div");
+deadBanner.style.cssText =
+  "display:none;flex-direction:column;gap:4px;padding:6px 9px;" +
+  "border-bottom:1px solid #604030;background:rgba(64,32,16,0.4);" +
+  "color:#fed;" + HUD_FONT;
+const deadBannerLine = document.createElement("div");
+const deadBannerRow = document.createElement("div");
+deadBannerRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+const followSpeciesBtn = document.createElement("button");
+followSpeciesBtn.type = "button";
+followSpeciesBtn.textContent = "follow species";
+followSpeciesBtn.style.cssText =
+  "padding:3px 8px;border:1px solid #1a3340;border-radius:4px;" +
+  "background:rgba(0,0,0,.45);color:#9ee;cursor:pointer;" +
+  "touch-action:manipulation;" + HUD_FONT;
+const followChildBtn = document.createElement("button");
+followChildBtn.type = "button";
+followChildBtn.textContent = "follow child";
+followChildBtn.style.cssText = followSpeciesBtn.style.cssText;
+const clearMemoBtn = document.createElement("button");
+clearMemoBtn.type = "button";
+clearMemoBtn.textContent = "clear";
+clearMemoBtn.style.cssText = followSpeciesBtn.style.cssText;
+deadBannerRow.append(followSpeciesBtn, followChildBtn, clearMemoBtn);
+deadBanner.append(deadBannerLine, deadBannerRow);
+inspectorPane.appendChild(deadBanner);
+followSpeciesBtn.addEventListener("click", () => {
+  if (!lastSelectionMemo) return;
+  const key = lastSelectionMemo.speciesKey;
+  for (const c of snapshot.creatures) {
+    if (c.speciesKey === key) {
+      selectedCellId = c.id;
+      lastSelectionMemo = null;
+      return;
+    }
+  }
+});
+followChildBtn.addEventListener("click", () => {
+  if (!lastSelectionMemo) return;
+  const oldId = lastSelectionMemo.id;
+  for (const c of snapshot.creatures) {
+    if (c.parentId === oldId) {
+      selectedCellId = c.id;
+      lastSelectionMemo = null;
+      return;
+    }
+  }
+});
+clearMemoBtn.addEventListener("click", () => { lastSelectionMemo = null; });
 // Action row: destructive kill on the left, copy-genome on the far
 // right (margin-left:auto on the copy button) so taps aimed at copy
 // can't slip onto kill. Whole row is shown/hidden in lockstep with
@@ -1062,12 +1255,16 @@ let analysisTab: AnalysisTab = "inspector";
 const analysisTabs = document.createElement("div");
 analysisTabs.style.cssText =
   "display:none;flex-wrap:wrap;border-bottom:1px solid #1a3340;";
-const TAB_DEFS: { id: AnalysisTab; label: string }[] = [
-  { id: "inspector", label: "Inspector" },
-  { id: "top", label: "Top 10" },
-  { id: "pinned", label: "Pinned" },
-  { id: "notable", label: "Notable" },
-  { id: "genome", label: "Genome" },
+// Sub-headlines explain what each tab carries beyond the label, since
+// "Top 10" vs "Notable" vs "Pinned" was a common discoverability ask.
+// Rendered as a one-line caption under the tab row when its tab is
+// active; see renderTabSubhead.
+const TAB_DEFS: { id: AnalysisTab; label: string; subhead: string }[] = [
+  { id: "inspector", label: "Inspector",  subhead: "the cell you clicked + its genome / live op counts" },
+  { id: "top",       label: "Top 10",     subhead: "live ranking by biomass right now" },
+  { id: "pinned",    label: "Pinned",     subhead: "your starred species -- persist across reload" },
+  { id: "notable",   label: "Hall of fame", subhead: "best-ever (this run only, peak biomass)" },
+  { id: "genome",    label: "Genome",     subhead: "population genome-size histogram" },
 ];
 const tabButtons = new Map<AnalysisTab, HTMLSpanElement>();
 function styleTab(btn: HTMLSpanElement, active: boolean): void {
@@ -1087,6 +1284,16 @@ function applyTabVisibility(): void {
   inspectorPane.style.display = open && analysisTab === "inspector" ? "" : "none";
   genomePane.style.display = open && analysisTab === "genome" ? "" : "none";
 }
+// One-line subhead caption clarifying what the active tab carries.
+// Rendered under the tab row; updated whenever the active tab changes.
+const tabSubhead = document.createElement("div");
+tabSubhead.style.cssText =
+  "padding:3px 9px 5px;font-size:10.5px;color:#9ab;opacity:.85;" +
+  "border-bottom:1px solid #1a3340;" + HUD_FONT;
+function syncTabSubhead(): void {
+  const def = TAB_DEFS.find((d) => d.id === analysisTab);
+  tabSubhead.textContent = def ? def.subhead : "";
+}
 for (const def of TAB_DEFS) {
   const btn = document.createElement("span");
   btn.textContent = def.label;
@@ -1094,14 +1301,17 @@ for (const def of TAB_DEFS) {
   btn.addEventListener("click", () => {
     analysisTab = def.id;
     for (const [id, b] of tabButtons) styleTab(b, id === analysisTab);
+    syncTabSubhead();
     applyTabVisibility();
     renderAnalysisPanel();
   });
   tabButtons.set(def.id, btn);
   analysisTabs.appendChild(btn);
 }
+syncTabSubhead();
 analysisPanel.appendChild(analysisHeader);
 analysisPanel.appendChild(analysisTabs);
+analysisPanel.appendChild(tabSubhead);
 analysisPanel.appendChild(analysisBody);
 analysisPanel.appendChild(inspectorPane);
 analysisPanel.appendChild(genomePane);
@@ -2226,16 +2436,51 @@ resetBtn.addEventListener("click", () => {
   if (resetArmTimer) clearTimeout(resetArmTimer);
   resetArmTimer = setTimeout(disarmReset, 3000);
 });
-let turboMode = false;
+// Sim-speed row. Six modes: pause, two sub-1x, 1x, and two above:
+//   "max" -- full sim throughput but still rendering every snapshot
+//   "max-" -- same throughput, render throttled (was the old "turbo on")
+// Step-once is enabled only when paused; useful for frame-by-frame
+// observation during inspector debugging.
+type SimSpeed = "paused" | "0.25x" | "0.5x" | "1x" | "max" | "maxMinimal";
+let simSpeed: SimSpeed = "1x";
 let turboFrameCounter = 0;
 const TURBO_RENDER_EVERY = 30;
-const turboBtn = mkBtn("turbo", "Run sim flat-out; render once per ~500ms");
-turboBtn.addEventListener("click", () => {
-  turboMode = !turboMode;
+const speedBtns = new Map<SimSpeed, HTMLButtonElement>();
+const SPEED_SPECS: Array<{ id: SimSpeed; label: string; title: string; tint: string }> = [
+  { id: "paused",     label: "⏸",     title: "Pause -- step button steps one tick at a time",     tint: T_AMBER },
+  { id: "0.25x",      label: "0.25×", title: "Quarter speed -- slow-mo for fast events",          tint: T_TEAL  },
+  { id: "0.5x",       label: "0.5×",  title: "Half speed",                                         tint: T_TEAL  },
+  { id: "1x",         label: "1×",    title: "Normal speed (real-time on healthy hardware)",       tint: T_GREEN },
+  { id: "max",        label: "max",   title: "Maximum sim throughput, full rendering",             tint: T_AMBER },
+  { id: "maxMinimal", label: "max-",  title: "Maximum throughput, render throttled (~500ms/frame)", tint: T_AMBER },
+];
+function syncSpeedBtnStyles(): void {
+  for (const spec of SPEED_SPECS) {
+    const b = speedBtns.get(spec.id);
+    if (b) setBtn(b, spec.id === simSpeed, spec.tint);
+  }
+  stepOnceBtn.disabled = simSpeed !== "paused";
+  stepOnceBtn.style.opacity = simSpeed === "paused" ? "1" : "0.4";
+}
+function setSpeed(s: SimSpeed): void {
+  simSpeed = s;
   turboFrameCounter = 0;
-  turboBtn.textContent = turboMode ? "turbo on" : "turbo";
-  setBtn(turboBtn, turboMode, T_AMBER);
-  simWorker.postMessage({ type: "setTurbo", turbo: turboMode });
+  syncSpeedBtnStyles();
+  simWorker.postMessage({ type: "setSimSpeed", speed: s });
+}
+for (const spec of SPEED_SPECS) {
+  const b = mkBtn(spec.label, spec.title);
+  // Tighter padding so all six buttons fit alongside the other run-row
+  // controls on a narrow phone viewport.
+  b.style.cssText = b.style.cssText + "padding:2px 6px;min-width:32px;";
+  b.addEventListener("click", () => setSpeed(spec.id));
+  speedBtns.set(spec.id, b);
+}
+const stepOnceBtn = mkBtn("⏭", "Advance one tick (only enabled when paused)");
+stepOnceBtn.style.cssText = stepOnceBtn.style.cssText + "padding:2px 6px;";
+stepOnceBtn.addEventListener("click", () => {
+  if (simSpeed !== "paused") return;
+  simWorker.postMessage({ type: "stepOnce" });
 });
 let profileOn = false;
 const profileBtn = mkBtn("profile", "Toggle the sim profiler (logs per-phase timings)");
@@ -2257,7 +2502,18 @@ exportBtn.addEventListener("click", () => {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 });
-gRun.append(resetBtn, turboBtn, profileBtn, exportBtn);
+// Speed row gets its own line so the six speed buttons + step don't
+// crowd reset / profile / export on a narrow viewport.
+const gSpeed = document.createElement("div");
+gSpeed.style.cssText = "display:flex;align-items:center;gap:3px;flex-wrap:wrap;";
+for (const spec of SPEED_SPECS) {
+  const b = speedBtns.get(spec.id);
+  if (b) gSpeed.appendChild(b);
+}
+gSpeed.appendChild(stepOnceBtn);
+gRun.append(resetBtn, profileBtn, exportBtn);
+gRun.parentElement?.insertBefore(gSpeed, gRun);
+syncSpeedBtnStyles();
 
 // ---- world: founders / particle cap ----
 let foundersOn = true;
@@ -2758,6 +3014,7 @@ canvas.addEventListener("click", (e) => {
   const best = findCellAt(w.x, w.y);
   if (best >= 0) {
     selectedCellId = best;
+    lastSelectionMemo = null;
     refreshActiveDisasm();
     // Tapping a cell also re-locks the follow-tooltip onto it; on
     // touch devices there's no mousemove to set the initial lock.
@@ -2776,8 +3033,12 @@ canvas.addEventListener("click", (e) => {
 // biomass, species color, and genome length. Skim cells without losing
 // the selected one in the inspector.
 const tooltip = document.createElement("div");
+// Tooltip lives above the side panels (z-index 20) so a hover near
+// the panel edge isn't clipped behind the open panel. Toasts at 9999
+// still win. pointer-events:none so the tooltip itself never
+// intercepts taps even when stacked over the canvas + panel.
 tooltip.style.cssText =
-  "position:fixed;pointer-events:none;display:none;z-index:9;" +
+  "position:fixed;pointer-events:none;display:none;z-index:25;" +
   "background:rgba(0,0,0,.75);color:#dfe;border:1px solid #1a3340;" +
   `padding:4px 6px;font:${UI_FONT_PX}px ${UI_FONT_FAMILY};` +
   "border-radius:3px;white-space:pre;";
@@ -3883,9 +4144,64 @@ function drawHeatmap(): void {
     }
   }
   ctx.globalAlpha = 1;
-  // (Heatmap label removed per user request -- the legend text used
-  // to read "heatmap: density [...] mat:X (max Y/cell)" here.)
   }
+  drawHeatmapLegend();
+}
+
+// Compact in-canvas legend for the active heatmap. A 90x10 gradient
+// bar with the overlay title above and labelled min/max ticks below;
+// pinned to the bottom-right of the world. Without this every overlay
+// just rendered as "colored stuff" with no scale -- you couldn't tell
+// "red = hot" from "red = acidic" by looking. Drawn last so the panel
+// edges and overlay fields don't paint over it.
+const HEATMAP_LEGEND_SPECS: Record<HeatmapMode, {
+  title: string; lo: string; hi: string; color: (x: number) => string;
+} | null> = {
+  off: null,
+  temp: { title: "temperature", lo: "10°", hi: "30°", color: (x) => heatColorTemp(10 + x * 20) },
+  density: { title: "particle density", lo: "sparse", hi: "dense", color: (x) => heatColorDensity(x) },
+  light: { title: "usable sunlight", lo: "dark", hi: "lit",
+    color: (x) => `rgb(${Math.round(20 + 220 * x)},${Math.round(30 + 200 * x)},${Math.round(40 + 110 * x)})` },
+  health: { title: "cell health (avg)", lo: "dying", hi: "healthy", color: (x) => healthColor(x) },
+  reproduce: { title: "reproduce readiness (avg)", lo: "0%", hi: "100%", color: (x) => reproduceColor(x) },
+  ph: { title: "acidity (CO₂ proxy)", lo: "basic", hi: "acidic", color: (x) => {
+    const r = Math.round(40 + 200 * x); const g = Math.round(90 - 50 * x); const b = Math.round(170 - 130 * x);
+    return `rgb(${r},${g},${b})`;
+  } },
+  electric: { title: "bioelectric emission", lo: "quiet", hi: "loud", color: (x) =>
+    `rgb(${Math.round(60 + 120 * x)},${Math.round(140 + 80 * x)},${Math.round(180 + 75 * x)})` },
+  vibration: { title: "vibration emission", lo: "still", hi: "shaking", color: (x) =>
+    `rgb(${Math.round(40 + 80 * x)},${Math.round(150 + 90 * x)},${Math.round(120 + 60 * x)})` },
+  magnetic: { title: "geomagnetic field", lo: "weak", hi: "strong",
+    color: (x) => `rgba(150,90,235,${(0.25 + 0.55 * x).toFixed(2)})` },
+};
+function drawHeatmapLegend(): void {
+  const spec = HEATMAP_LEGEND_SPECS[heatmapMode];
+  if (!spec) return;
+  const W = 96, H = 10;
+  const margin = 8;
+  const x0 = snapshot.width - W - margin;
+  const y0 = snapshot.height - margin - H - 14;
+  // Title above the bar
+  ctx.font = "10px ui-monospace, Menlo, monospace";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(x0 - 4, y0 - 14, W + 8, H + 28);
+  ctx.fillStyle = "#ddd";
+  ctx.fillText(spec.title, x0, y0 - 3);
+  // Gradient bar -- 32 stops is enough for a smooth read at 96px wide.
+  const STOPS = 32;
+  for (let i = 0; i < STOPS; i++) {
+    ctx.fillStyle = spec.color(i / (STOPS - 1));
+    ctx.fillRect(x0 + (i * W) / STOPS, y0, Math.ceil(W / STOPS) + 1, H);
+  }
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x0 + 0.5, y0 + 0.5, W - 1, H - 1);
+  ctx.fillStyle = "#bcd";
+  ctx.fillText(spec.lo, x0, y0 + H + 10);
+  const hiW = ctx.measureText(spec.hi).width;
+  ctx.fillText(spec.hi, x0 + W - hiW, y0 + H + 10);
 }
 
 function heatColorTemp(t: number): string {
@@ -4213,12 +4529,27 @@ function selectionCycleColor(): string {
 // Every cell wears a thin black outline on its wobbly body. The
 // selected cell + its species/lineage kin get a color-cycling outline
 // instead so the family stands out; the selected cell's is thicker.
+// For selected/kin we paint a black halo first, then the cycling
+// color on top -- without the halo the rainbow stroke disappears on
+// pale cells (anchor-coloured / near-white genomes) where the
+// foreground hue blends with the body fill.
 function strokeCellOutline(
   cx: number, cy: number, r: number, selected: boolean, t: number, phase: number,
   kin = false,
 ): void {
-  ctx.strokeStyle = selected || kin ? selectionCycleColor() : "#000000";
-  ctx.lineWidth = selected ? 3 : 1;
+  if (selected || kin) {
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.lineWidth = selected ? 5 : 3;
+    tracedWobblyBody(cx, cy, r, t, phase);
+    ctx.stroke();
+    ctx.strokeStyle = selectionCycleColor();
+    ctx.lineWidth = selected ? 3 : 1;
+    tracedWobblyBody(cx, cy, r, t, phase);
+    ctx.stroke();
+    return;
+  }
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = 1;
   tracedWobblyBody(cx, cy, r, t, phase);
   ctx.stroke();
 }
@@ -4999,9 +5330,36 @@ function updateInspector(): void {
     inspectorProse.style.display = "none";
     disasmBar.style.display = "none";
     disasmBody.style.display = "none";
-    inspector.textContent = `${statsLine()}  (click a cell)`;
+    // If the cell just died, surface a banner with follow controls
+    // instead of silently blanking. Auto-expire the memo after a
+    // generous window so it doesn't linger across long idle sessions.
+    const memo = lastSelectionMemo;
+    if (memo && snapshot.t - memo.diedNoticedAt < SELECTION_MEMO_TTL_SEC) {
+      // Probe live cells once so the buttons can dim if there's no
+      // valid follow target. Cheap: O(creatures) scan, ~O(few thousand).
+      let liveSibling = false; let liveChild = false;
+      for (const cc of snapshot.creatures) {
+        if (!liveSibling && cc.speciesKey === memo.speciesKey) liveSibling = true;
+        if (!liveChild && cc.parentId === memo.id) liveChild = true;
+        if (liveSibling && liveChild) break;
+      }
+      deadBanner.style.display = "flex";
+      const ageStr = formatAge(Math.max(0, memo.lastSeenAt - memo.bornAt), snapshot.dayPeriod);
+      deadBannerLine.innerHTML =
+        `<b>cell died</b> &nbsp;<span style="opacity:.7;">species <b>${memo.genomeTag}</b> &middot; ` +
+        `age ${ageStr} &middot; kids=${memo.kids}</span>`;
+      followSpeciesBtn.disabled = !liveSibling;
+      followSpeciesBtn.style.opacity = liveSibling ? "1" : "0.4";
+      followChildBtn.disabled = !liveChild;
+      followChildBtn.style.opacity = liveChild ? "1" : "0.4";
+      inspector.textContent = statsLine();
+    } else {
+      deadBanner.style.display = "none";
+      inspector.textContent = `${statsLine()}  (click a cell)`;
+    }
     return;
   }
+  deadBanner.style.display = "none";
   // The disasm + gene-aware description are O(genome) string builds.
   // Rebuild them only when the selected genome actually changes -- a
   // new cell selected, or somatic mutation altering the bytes (the
@@ -5025,7 +5383,7 @@ function updateInspector(): void {
     refreshActiveDisasm();
     inspectorProseCache = describeGenomeRich(c.genome, sp?.execCounts, sp?.vmTicks);
     inspectorProse.innerHTML = inspectorProseCache;
-    disasmBody.textContent = activeDisasm;
+    renderStructuredDisasm(activeDisasmRaw);
   }
   {
     const isPinned = pinnedSpecies.has(c.speciesKey);
@@ -5147,7 +5505,11 @@ function frame(): void {
   const advanced = workerAdvancedThisFrame;
   workerAdvancedThisFrame = 0;
   turboFrameCounter = (turboFrameCounter + 1) | 0;
-  const renderThisFrame = !turboMode || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
+  // maxMinimal is the only speed mode that throttles render -- the
+  // sim worker runs flat-out and we paint one frame per ~500ms so
+  // the main thread stays responsive to taps and panel updates.
+  const renderThisFrame = simSpeed !== "maxMinimal"
+    || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
   const tBeforeRender = performance.now();
   if (renderThisFrame) {
     render();
@@ -5422,7 +5784,7 @@ function renderAnalysisPanel(): void {
     : [...src.values()].sort((a, b) => b.peakBio - a.peakBio);
   header.textContent = analysisTab === "pinned"
     ? `Pinned species (${entries.length})`
-    : `Notable: best ${entries.length} ever seen`;
+    : `Hall of fame: best ${entries.length} ever seen`;
   // Clear-all (two-click confirm) -- only when there's something to clear.
   if (entries.length > 0) {
     const isPinned = analysisTab === "pinned";
