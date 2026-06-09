@@ -6078,8 +6078,55 @@ function populateSensors(c: Creature, _world: World, engulfed = false): void {
 // equal-membrane cells mutually un-eatable. No mass score, no
 // recognition table: predator/prey is whatever the genomes' physical
 // investments (size vs. envelope) make it, emergently.
+//
+// Bonded targets get a COLONY refuge: the size comparison runs against
+// the cluster's effective radius (cbrt-derived from total bonded
+// mass), not the individual member's radius. So a clump of small kin
+// presents the predator with one mass-N body, not N independently
+// edible cells. This is the COLONY_GAPS GAP #3 fix: real-world
+// grouping confers a size-based refuge from predation, which an
+// individual-only mass gate was forbidding the substrate from
+// expressing. The attacker is still judged by its OWN radius -- a
+// single predator's wrap/breach is its own physical effort; we don't
+// give attacking colonies a coordinated-attack bonus.
+//
+// Module-level scratch sets/queues so the cluster BFS allocates zero
+// per call. canBreach runs serially inside updateCreatures.
+const _COLONY_VISITED = new Set<Creature>();
+const _COLONY_QUEUE: Creature[] = [];
+function colonyMass(seed: Creature): number {
+  if (seed.bonds.length === 0) return creatureTotalMass(seed);
+  _COLONY_VISITED.clear();
+  _COLONY_QUEUE.length = 0;
+  _COLONY_VISITED.add(seed);
+  _COLONY_QUEUE.push(seed);
+  let total = creatureTotalMass(seed);
+  while (_COLONY_QUEUE.length > 0) {
+    const c = _COLONY_QUEUE.pop() as Creature;
+    const bs = c.bonds;
+    for (let i = 0; i < bs.length; i++) {
+      const partner = bs[i];
+      if (_COLONY_VISITED.has(partner)) continue;
+      _COLONY_VISITED.add(partner);
+      total += creatureTotalMass(partner);
+      _COLONY_QUEUE.push(partner);
+    }
+  }
+  return total;
+}
 function canBreach(attacker: Creature, target: Creature): boolean {
-  return attacker.r >= PREDATION_RADIUS_RATIO * target.r;
+  if (target.bonds.length === 0) {
+    return attacker.r >= PREDATION_RADIUS_RATIO * target.r;
+  }
+  // Same cbrt(3m/4pi) the rest of the engine uses for radius (see
+  // updateCreatureRadius). At minimum we use MIN_CREATURE_R so a
+  // colony lighter than that floor doesn't make targets MORE edible
+  // than an isolated MIN_CREATURE_R cell.
+  const colonyR = Math.max(
+    MIN_CREATURE_R,
+    Math.cbrt((3 * colonyMass(target)) / (4 * Math.PI)),
+  );
+  return attacker.r >= PREDATION_RADIUS_RATIO * colonyR;
 }
 // Growth gate: would absorbing `addedMass` push the cell past its
 // membrane tear ceiling? The new mass projects to a new sphere radius
