@@ -73,6 +73,12 @@ export const OP = {
   POKE_BYTE:     0x65,
   SPLICE_DUP:    0x66,
   SPLICE_DEL:    0x67,
+  // PEEK_BYTE: pop idx, push genome[idx mod L] as unsigned 0..255.
+  // The substrate counterpart to POKE_BYTE: a cell can now introspect
+  // its own DNA at runtime, e.g. check whether a target slot already
+  // holds an opcode worth keeping before SPLICE/POKE overwrites it.
+  // No operand byte (idx comes from stack), matching POKE.
+  PEEK_BYTE:     0x6a,
   // PARTITION <chemId>: pop a bias; skew this chem's mother/daughter
   // split at the next division away from the uniform reproduce share.
   // The substrate primitive for asymmetric determinant segregation --
@@ -437,6 +443,12 @@ export interface VMOutputs {
   spliceMode: number;
   spliceOffset: number;
   spliceLength: number;
+  // Set true by OP.POKE_BYTE so the sim's post-VM derived-trait
+  // recompute (senseRange / thrustAccel via SENSE_AMP byte counts)
+  // can skip the full genome walk when no in-place mutation fired.
+  // SPLICE_DUP / SPLICE_DEL are signalled via spliceMode above; this
+  // covers the single-byte poke path which writes the genome inline.
+  pokeFired: boolean;
   // Per-chem asymmetric-division bias requested this tick by PARTITION.
   // A capped (chemId, bias) list so the per-tick reset is O(1)
   // (partitionCount = 0) instead of a CHEMICAL_COUNT-wide memset on
@@ -471,6 +483,7 @@ export function newOutputs(): VMOutputs {
     inhSynthList: new Int32Array(CATALYST_COUNT),
     inhSynthCount: 0,
     spliceMode: 0, spliceOffset: 0, spliceLength: 0,
+    pokeFired: false,
     partitionChem: new Int16Array(PARTITION_CAP),
     partitionBias: new Float32Array(PARTITION_CAP),
     partitionCount: 0,
@@ -519,6 +532,7 @@ export function runTick(
   out.spliceMode = 0;
   out.spliceOffset = 0;
   out.spliceLength = 0;
+  out.pokeFired = false;
   out.partitionCount = 0;
   out.instructions = 0;
   const L = genome.length;
@@ -665,6 +679,15 @@ export function runTick(
         const valRaw = vmPop(stack);
         const idx = (((idxRaw | 0) % L) + L) % L;
         genome[idx] = (valRaw | 0) & 0xff;
+        out.pokeFired = true;
+        break;
+      }
+      // PEEK_BYTE: pop idx, push genome[idx mod L] as unsigned 0..255.
+      // The read counterpart to POKE_BYTE. Pure read, no mutation flag.
+      case OP.PEEK_BYTE: {
+        const idxRaw = vmPop(stack);
+        const idx = (((idxRaw | 0) % L) + L) % L;
+        vmPush(stack, genome[idx]);
         break;
       }
       // SPLICE_DUP / SPLICE_DEL: pop (length, offset). Length capped to

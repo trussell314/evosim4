@@ -5070,13 +5070,22 @@ function updateCreatures(world: World, dt: number): void {
     // Apply pending genome self-modifications after VM exits. SPLICE_*
     // changed length, which would invalidate PC mid-tick; we let the
     // rest of this tick's ops finish first, then resize here.
-    if (vmOut.spliceMode !== 0 && vmOut.spliceLength > 0) {
+    const spliced = vmOut.spliceMode !== 0 && vmOut.spliceLength > 0;
+    if (spliced) {
       applyGenomeSplice(c, vmOut.spliceMode, vmOut.spliceOffset, vmOut.spliceLength);
     }
-    // POKE_BYTE / SPLICE may have changed SENSE_AMP or THRUST_AMP
-    // byte counts; recompute both derived traits.
-    c.senseRange = computeSenseRange(c.genome);
-    c.thrustAccel = computeThrustAccel(c.genome);
+    // POKE_BYTE / SPLICE may have changed SENSE_AMP byte counts;
+    // recompute the derived sense range only when genome bytes
+    // actually moved this tick. Somatic mutation (handled above) has
+    // its own recompute already; this guards against the
+    // pop-25 * 565-byte = 14k-byte/tick churn the unconditional walk
+    // used to incur for every cell that did neither. THRUST_BASE is a
+    // constant (computeThrustAccel ignores genome since the post-K
+    // chemistry cleanup), so the cached store column stays valid
+    // without any recompute -- set once at birth.
+    if (spliced || vmOut.pokeFired) {
+      c.senseRange = computeSenseRange(c.genome);
+    }
 
     // TURN: rotate the cell's velocity by the accumulated angle delta.
     // Cheap; only does the trig when the genome actually issued a turn.
