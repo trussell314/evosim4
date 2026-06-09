@@ -2780,7 +2780,26 @@ function syncParticleCollBtn(on: boolean): void {
   setBtn(particleCollBtn, particleCollOn, T_GREEN);
 }
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn, particleCollBtn);
+// Reserve haze: cosmetic-only dots sampled from the per-region reserve
+// field (the food mass that overflows the visible particle cap and
+// sits invisible). Cells DO eat reserve mass via ingestFromReserve, so
+// it's real food -- this just makes it visible without adding any
+// collidable sim particles. Pure main-thread cosmetics: zero sim cost,
+// zero fidelity impact (the worker never sees these dots). Default off
+// to preserve the existing look; on, it lets a low particle cap (cheap
+// to simulate) still read as a dense ocean.
+let hazeOn = false;
+const hazeBtn = mkBtn(
+  "haze off",
+  "Reserve haze: dim cosmetic dots sampled from the invisible reserve-food field. Zero sim cost (main-thread only) -- a way to look dense at a low, cheap particle cap.",
+);
+hazeBtn.addEventListener("click", () => {
+  hazeOn = !hazeOn;
+  hazeBtn.textContent = hazeOn ? "haze on" : "haze off";
+  setBtn(hazeBtn, hazeOn, T_TEAL);
+});
+
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn, particleCollBtn, hazeBtn);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";
@@ -3338,6 +3357,51 @@ canvas.addEventListener("dblclick", () => { resetView(); });
 // `r` (which encodes mass via density*r^3); only the visual is
 // unified. Cells are unaffected (drawn separately).
 const PARTICLE_RENDER_R = 2;
+// Reserve-haze cosmetics. Drawn before the real particle batch so true
+// particles paint on top. See the hazeBtn comment for rationale.
+const HAZE_R = 1.5;
+const HAZE_MAX = 6000;          // global cap on cosmetic dots / frame
+const HAZE_PER_REGION_MAX = 70; // keep one rich region from dominating
+function drawReserveHaze(): void {
+  if (!hazeOn) return;
+  const pe = snapshot.reservePE;
+  if (!pe || pe.length === 0) return;
+  const width = snapshot.width;
+  const surfaceY = snapshot.surfaceY;
+  const rCols = Math.max(1, Math.ceil(width / REGION_PX));
+  // Slow wall-clock drift so the haze shimmers instead of sitting as a
+  // static lattice. Uses Math.random-free deterministic per-dot hashing
+  // for position; the drift term is the only time dependence (purely
+  // cosmetic, no determinism impact -- this is main-thread render).
+  const tphase = performance.now() * 0.00006;
+  ctx.globalAlpha = 0.20;
+  ctx.fillStyle = "rgb(120,168,188)";
+  ctx.beginPath();
+  let drawn = 0;
+  for (let ri = 0; ri < pe.length && drawn < HAZE_MAX; ri++) {
+    let n = Math.round(pe[ri]);
+    if (n <= 0) continue;
+    if (n > HAZE_PER_REGION_MAX) n = HAZE_PER_REGION_MAX;
+    const rgx = (ri % rCols) * REGION_PX;
+    const rgy = ((ri / rCols) | 0) * REGION_PX;
+    if (rgy + REGION_PX < surfaceY) continue; // skip pure-air regions
+    for (let d = 0; d < n && drawn < HAZE_MAX; d++) {
+      // Hash (region, dot) -> two fractional offsets in [0,1).
+      let h = (Math.imul(ri, 73856093) ^ Math.imul(d, 19349663)) >>> 0;
+      h = (h ^ (h >>> 13)) >>> 0;
+      const fx = (h & 0xffff) / 65536;
+      const fy = ((h >>> 16) & 0xffff) / 65536;
+      const px = rgx + fx * REGION_PX + Math.sin(tphase + d) * 2;
+      const py = rgy + fy * REGION_PX + Math.cos(tphase + d * 1.3) * 2;
+      if (py < surfaceY) continue;
+      ctx.moveTo(px + HAZE_R, py);
+      ctx.arc(px, py, HAZE_R, 0, Math.PI * 2);
+      drawn++;
+    }
+  }
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
 const N_BUCKETS = 8;
 // Render all N_RENDER_BUCKETS depth layers; the deepest bucket gets the
 // heaviest canvas blur (1.6px) and lowest alpha (0.82).
@@ -3698,6 +3762,8 @@ function render(): void {
     for (let gy = 0; gy <= height; gy += REGION_PX) { ctx.moveTo(0, gy); ctx.lineTo(width, gy); }
     ctx.stroke();
   }
+
+  drawReserveHaze();
 
   for (const b of SUB_BUCKETS) b.length = 0;
   for (const b of TOXIC_BUCKETS) b.length = 0;
