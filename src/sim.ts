@@ -2828,9 +2828,18 @@ function runActivation(
   // their synth slots (16/18) are rate 0, so they stay 0.
 }
 
-function diffuseAmbient(c: Creature, world: World, dt: number): void {
+function diffuseAmbient(c: Creature, world: World, dtT: number): void {
   const s = c.store; const i = c.idx;
-  const surface = s.r[i] / MIN_CREATURE_R;
+  // Surface scales with r^2 (membrane area = 4*pi*r^2 / Fick's law),
+  // matching the projected-area convention used by photosynthesis and
+  // transport elsewhere. The old r/MIN_CREATURE_R was linear, which
+  // under-rewarded surface area on bigger cells. A cell at the
+  // MIN_CREATURE_R baseline still gets surface = 1, so small-cell
+  // behaviour is preserved; growing into a bigger envelope now buys
+  // proportionally more exchange (and pays it back per-unit-mass via
+  // r^2/r^3 = 1/r, the usual surface-to-volume penalty).
+  const ratio = s.r[i] / MIN_CREATURE_R;
+  const surface = ratio * ratio;
   const ambient = world.ambient;
   const cols = s.chemCols;
   // Cell exchanges with the dissolved field of the region it's in.
@@ -2842,7 +2851,15 @@ function diffuseAmbient(c: Creature, world: World, dt: number): void {
     const ak = ab + k;
     const gap = ambient[ak] - cols[k][i];
     if (gap === 0) continue;
-    let flow = perm * surface * gap * AMBIENT_FLOW_RATE * dt;
+    // dtT is the temperature-scaled time step (dt * tempMult). Diffusion
+    // is a physical kinetic process -- collision-driven, faster in hot
+    // water (Stokes-Einstein D ~ T/eta), so it shares the Q10 scaling
+    // metabolism uses rather than running at bare dt. Real Q10 for water
+    // diffusion is closer to 1.3 than the codebase's 2.0, so this slightly
+    // over-couples diffusion to temperature; acceptable for now, since
+    // the previous "diffusion runs at bare dt while everything else
+    // doesn't" was the bigger consistency hole.
+    let flow = perm * surface * gap * AMBIENT_FLOW_RATE * dtT;
     // Strict mass conservation: a transfer can't move more than the
     // SOURCE side actually holds. Inflow (flow > 0) is capped by the
     // region's stock; outflow by the cell's pool. (The old code
@@ -4844,7 +4861,7 @@ function updateCreatures(world: World, dt: number): void {
       const cachedTempOff = localTemp - TEMP_BASELINE;
       const idleDrain = (BASE_METABOLIC_DRAIN + BASE_METABOLIC_PER_MASS * creatureTotalMass(c)) * dtT;
       spendATP(c, idleDrain, ATP_IDLE);
-      diffuseAmbient(c, world, dt);
+      diffuseAmbient(c, world, dtT);
       const ambientLight = solarLight(world) * Math.exp(-c.y / LIGHT_DECAY) * cachedOcc * c.store.shadeFactor[c.idx];
       _pcDtT![cIdx] = dtT;
       _pcAmb![cIdx] = ambientLight;
@@ -4904,8 +4921,10 @@ function updateCreatures(world: World, dt: number): void {
       spendATP(c, idleDrain, ATP_IDLE);
 
       // Passive gas exchange with the surrounding water. Diffusion is
-      // physical, not enzymatic -- left at the base dt.
-      diffuseAmbient(c, world, dt);
+      // a physical kinetic process; Stokes-Einstein D ~ T/eta means
+      // warmer water exchanges faster, so feed in the same temperature-
+      // scaled dtT metabolism uses rather than bare dt.
+      diffuseAmbient(c, world, dtT);
 
       // Inlined ambientLightAt using cached occ (the regular helper would
       // re-call lightOcclusion redundantly).

@@ -404,7 +404,12 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // daylight). The environment baseline reads dayPhase every tick,
     // so this shifts solar / aeration / chemistry trajectories from
     // the very first step. Intended.
-    const GOLDEN = "990a892e";
+    // Bumped again: diffuseAmbient now scales with surface r^2 (was
+    // linear r/MIN_CREATURE_R) and dtT (was bare dt). Stokes-Einstein
+    // diffusion is a physical kinetic process: faster in warm water,
+    // proportional to membrane area. Mass conservation invariant still
+    // holds (source-side clamp unchanged). Intended.
+    const GOLDEN = "bfa08be8";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
