@@ -423,6 +423,22 @@ const REPRODUCE_ATTEMPT_ATP_PER_MASS = 0.01;
 const BIRTH_OFFSET_MULT = 3.0;
 
 const DRAG_REF_R = 4;
+// Terminal buoyancy velocity for a freshly-spawned PRECIP particle of
+// the given density, matching the steady-state of the per-tick force
+// integrator: vy = a / dscaleDrag, where a = gravity*(1 - 1/density)
+// (clamped to ±gravity) and dscaleDrag = drag * (PRECIP_R / DRAG_REF_R).
+// Used at reserve->particle promotion so a newly-visible gas spawns
+// already moving at its rise rate instead of materialising at rest and
+// then acceleration-shocking upward on the next tick -- the source of
+// the "bubbles rushing up the moment I raise the cap" visual.
+function promotedTerminalVy(density: number, gravity: number, drag: number): number {
+  let a = gravity * (1 - 1 / Math.max(1e-3, density));
+  if (a < -gravity) a = -gravity; else if (a > gravity) a = gravity;
+  const dragScale = (PRECIP_R / DRAG_REF_R);
+  const dscaleDrag = drag * dragScale;
+  if (dscaleDrag <= 0) return 0;
+  return a / dscaleDrag;
+}
 // Cell density: how strongly reserve composition shifts the effective
 // density away from water (1.0). 1.0 = full literal weighting (the
 // rock-stuffed cell really does sit at ~1.3); 0 = density always 1.0.
@@ -2251,9 +2267,15 @@ function precipitateRegions(world: World): void {
         let py = y0 + simRng() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
         py = Math.min(world.height - PRECIP_R, py);
+        // Spawn at the chem's buoyancy terminal velocity (vy) so a
+        // freshly-precipitated gas doesn't materialise at rest and then
+        // rocket upward over the next handful of ticks; it joins the
+        // flow already moving at the rate the force kernel would push
+        // it to anyway.
+        const vyTerm = promotedTerminalVy(density, world.gravity, world.drag);
         pushParticle(world, {
           x: px, y: py, z: PRECIP_R + simRng() * (world.depth - 2 * PRECIP_R),
-          vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
+          vx: 0, vy: vyTerm, vz: 0, r: PRECIP_R, chemId: k, density,
         });
       }
       amb[base + k] = v - count * amountPer; // mass-conserving
@@ -2580,14 +2602,17 @@ function reservePass(world: World): void {
       let regionCap = Math.ceil(deficit * (avail / rmassK));
       const rx = ri % cols, ry = (ri / cols) | 0;
       const x0 = rx * REGION_PX, y0 = ry * REGION_PX;
+      const vyTerm = promotedTerminalVy(density, world.gravity, world.drag);
       while (avail >= amountPer && need > 0 && regionCap > 0) {
         const px = Math.min(world.width - 1, x0 + simRng() * REGION_PX);
         let py = y0 + simRng() * REGION_PX;
         if (py < surfaceY + PRECIP_R) py = surfaceY + PRECIP_R;
         py = Math.min(world.height - PRECIP_R, py);
+        // Same terminal-vy spawn as the precipitate path: avoids the
+        // "promoted gas materialises at rest, then rockets up" shock.
         pushParticle(world, {
           x: px, y: py, z: PRECIP_R + simRng() * (world.depth - 2 * PRECIP_R),
-          vx: 0, vy: 0, vz: 0, r: PRECIP_R, chemId: k, density,
+          vx: 0, vy: vyTerm, vz: 0, r: PRECIP_R, chemId: k, density,
         });
         avail -= amountPer;
         need--;

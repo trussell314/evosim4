@@ -370,6 +370,19 @@ export function diffuseRegions(world: World, dt: number): void {
 // so density 1.0 neither sinks nor rises; >1 sinks, <1 floats. Reserve
 // vertical transport keys off the same threshold.
 const RESERVE_WATER_DENSITY = 1.0;
+// Buoyancy-magnitude multiplier on top of the diffusion alpha for the
+// vertical step. The kernel multiplies alpha by (1 + RESERVE_DRIFT_K *
+// |1 - 1/density|), so:
+//   density 1.0  (water-equivalent) -> 1.0x alpha     (pure diffusion)
+//   density 1.5  (glucose)          -> ~3.7x alpha    (settles fast)
+//   density 0.14 (gas)              -> ~13x alpha     (rises very fast)
+// Picked so a gas at the surface saturates within a few seconds of sim
+// time (matching the rendered force kernel's "gas reaches surface in
+// under a second" behaviour after accounting for the per-region
+// quantisation), not the old 60s halflife the diffusion-only alpha
+// produced. The per-edge alpha is clamped below 0.5 in the kernel so
+// values above the stability ceiling are silently capped.
+const RESERVE_DRIFT_K = 4;
 let RESERVE_DIFF_SCRATCH = new Float32Array(0);
 // Reserve diffusion (Phase 4 revision -- reserve was previously inert):
 //  1. left <-> right: symmetric Jacobi exchange for every chem.
@@ -425,24 +438,45 @@ export function diffuseReserve(world: World, dt: number): void {
           if (oi !== oj) res[base + k] += a * (oj - oi);
         }
       }
-      // (2) Dense chems settle one region DOWN.
+      // Vertical drift scales with the chem's Newtonian buoyancy
+      // |1 - 1/density| (same factor the rendered force kernel uses)
+      // instead of a flat alpha for every chem. Without this a gas
+      // (density 0.14) drifted UP through reserve at the same rate a
+      // mineral (2.4) drifted DOWN, so mass the force kernel would
+      // have moved hundreds of pixels per second sat in reserve for
+      // tens of seconds and re-materialised as the "bubbles rushing
+      // up when I raise the particle cap" backlog. RESERVE_DRIFT_K
+      // scales the buoyancy term relative to the base diffusion alpha
+      // (alpha alone was tuned for diffusive mixing, not advection).
+      // Per-edge alpha is clamped below 0.5 so a single Jacobi step
+      // can never move more than half a region's mass either way.
+      const a0 = alpha;
+      // (2) Dense chems settle DOWN.
       if (down >= 0 && !solid[down]) {
-        const a = alpha * tempFactor(ri, down);
+        const aDown = a0 * tempFactor(ri, down);
         const db = down * AMBIENT_STRIDE;
         for (let k = 0; k < AMBIENT_STRIDE; k++) {
           const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
           if (d < RESERVE_WATER_DENSITY) continue;
+          let buoy = Math.abs(1 - 1 / d);
+          if (buoy > 1) buoy = 1;
+          let a = aDown * (1 + RESERVE_DRIFT_K * buoy);
+          if (a > 0.49) a = 0.49;
           const amt = a * old[base + k];
           if (amt > 0) { res[base + k] -= amt; res[db + k] += amt; }
         }
       }
-      // (3) Buoyant chems rise one region UP.
+      // (3) Buoyant chems rise UP.
       if (up >= 0 && !solid[up]) {
-        const a = alpha * tempFactor(ri, up);
+        const aUp = a0 * tempFactor(ri, up);
         const ub = up * AMBIENT_STRIDE;
         for (let k = 0; k < AMBIENT_STRIDE; k++) {
           const d = CHEM_BASE_DENSITY[k] > 0 ? CHEM_BASE_DENSITY[k] : 1;
           if (d > RESERVE_WATER_DENSITY) continue;
+          let buoy = Math.abs(1 - 1 / d);
+          if (buoy > 1) buoy = 1;
+          let a = aUp * (1 + RESERVE_DRIFT_K * buoy);
+          if (a > 0.49) a = 0.49;
           const amt = a * old[base + k];
           if (amt > 0) { res[base + k] -= amt; res[ub + k] += amt; }
         }

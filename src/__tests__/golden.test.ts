@@ -416,7 +416,15 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // initial population diverges from the very first founder. Intended;
     // measured establishment stays healthy (no extinction across seeds)
     // with far more emergent species diversity. See genome.ts.
-    const GOLDEN = "3e938b81";
+    // Bumped again: reserve vertical drift now scales with the chem's
+    // Newtonian buoyancy magnitude (|1 - 1/density| * RESERVE_DRIFT_K),
+    // matching the rendered force kernel instead of using a flat alpha
+    // for every chem -- and promoted PRECIP particles spawn at the
+    // chem's terminal buoyancy velocity instead of vy=0 so they don't
+    // acceleration-shock the moment they materialise. Intended;
+    // mass-conservation invariant unchanged (the source-side clamp +
+    // pair-conserving Jacobi step still hold).
+    const GOLDEN = "b79c276e";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
