@@ -2098,13 +2098,17 @@ function noteCreatureDeath(world: World, c: Creature): void {
 // whole map each frame; an hours-long run can pile up tens of thousands
 // of entries, all dead, and gradually slow the renderer. Drop any
 // species that has been extinct AND off the visible phylogeny window
-// for a generous grace period. Also drop their phylogeny edges.
-// 60s was 240s. The longer grace let world.species balloon to
-// 1000+ entries during high-mutation periods, and every render
-// iterates the snapshot's species list -- spiky cost at extinction
-// events. 60s still preserves recently-lost species in the
-// phylogeny strip long enough to read; older species fall off.
-const SPECIES_GRACE_SEC = 60;
+// for a small margin. Also drop their phylogeny edges.
+//
+// Must exceed the renderer's PHYLO_WINDOW_SEC (180) so an extinct
+// species stays in world.species -- and therefore keeps its lane on
+// the strip -- for its ENTIRE lifespan within the window, vanishing
+// only once it has scrolled off the left edge. The old 60s pruned
+// species 120s before they left the window, so they popped out of the
+// strip early. The cost is a larger species map during high-churn
+// periods, but each render only iterates in-window species and the
+// per-entry cost is small.
+const SPECIES_GRACE_SEC = 185;
 const SPECIES_PRUNE_INTERVAL_SEC = 5;
 let lastSpeciesPruneAt = -SPECIES_PRUNE_INTERVAL_SEC;
 function pruneSpecies(world: World): void {

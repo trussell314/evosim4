@@ -4416,8 +4416,60 @@ function drawGenomeStats(): void {
   }
 }
 
+// Reorder a list of species in-place into phylogenetic DFS order so
+// each offshoot renders directly below its parent and a whole subtree
+// is contiguous. The parent of a species is the source of the first
+// divergence (non-convergence) phylogeny event that created it; a
+// species whose parent isn't in the list is a root. Roots and the
+// children of any node are visited in lane order (founding / birth
+// order), so the layout is stable frame to frame.
+function orderPhyloTree(list: SpeciesSnapshot[]): void {
+  if (list.length < 2) return;
+  const inList = new Set<string>();
+  for (const sp of list) inList.add(sp.key);
+  const byKey = new Map<string, SpeciesSnapshot>();
+  for (const sp of list) byKey.set(sp.key, sp);
+  // First divergence parent per child key (ignore convergence edges).
+  const parentOf = new Map<string, string>();
+  for (const ev of snapshot.phylogenyEvents) {
+    if (ev.convergence) continue;
+    if (!parentOf.has(ev.to)) parentOf.set(ev.to, ev.from);
+  }
+  const children = new Map<string, SpeciesSnapshot[]>();
+  const roots: SpeciesSnapshot[] = [];
+  for (const sp of list) {
+    const p = parentOf.get(sp.key);
+    if (p !== undefined && inList.has(p) && p !== sp.key) {
+      const arr = children.get(p);
+      if (arr) arr.push(sp); else children.set(p, [sp]);
+    } else {
+      roots.push(sp);
+    }
+  }
+  const byLane = (a: SpeciesSnapshot, b: SpeciesSnapshot): number => a.lane - b.lane;
+  roots.sort(byLane);
+  for (const arr of children.values()) arr.sort(byLane);
+  const out: SpeciesSnapshot[] = [];
+  const seen = new Set<string>();
+  const visit = (sp: SpeciesSnapshot): void => {
+    if (seen.has(sp.key)) return; // cycle/convergence guard
+    seen.add(sp.key);
+    out.push(sp);
+    const kids = children.get(sp.key);
+    if (kids) for (const k of kids) visit(k);
+  };
+  for (const r of roots) visit(r);
+  // Any stragglers not reached (shouldn't happen, but be safe) appended
+  // in lane order so nothing is dropped from the render.
+  if (out.length < list.length) {
+    for (const sp of list) if (!seen.has(sp.key)) out.push(sp);
+  }
+  list.length = 0;
+  for (const sp of out) list.push(sp);
+}
+
 function drawPhylogeny(): void {
-  if (!PHYLO_VISIBLE) return; // hidden for now (strip + legend line)
+  if (!PHYLO_VISIBLE) return;
   const stripH = PHYLO_STRIP_H;
   // Strip sits at the bottom of the CANVAS (in CSS pixels). The render
   // path resets the transform to DPR-only before calling us so screen
@@ -4452,11 +4504,8 @@ function drawPhylogeny(): void {
   const tNow = snapshot.t;
   const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
   const span = Math.max(0.001, tNow - tMin);
-  // Reserve enough top padding that the thickest possible lane (live
-  // species at max biomass -> lineWidth ~6px) clears the legend text
-  // baseline at stripY + 11. Was 14, which left ~1.5px and visibly
-  // collided with descenders at high DPR.
-  const padTop = 22;
+  // No header text any more, so only a thin top margin.
+  const padTop = 4;
   const padBot = 6;
   const innerY = stripY + padTop;
   const innerH = stripH - padTop - padBot;
@@ -4468,7 +4517,12 @@ function drawPhylogeny(): void {
   for (const sp of snapshot.species) {
     if (sp.lastSeen >= tMin) visibleSpecies.push(sp);
   }
-  visibleSpecies.sort((a, b) => a.lane - b.lane);
+  // Lay species out in PHYLOGENETIC order (DFS): each offshoot sits
+  // directly below the species it diverged from, with the whole subtree
+  // contiguous, instead of the old monotonic lane order where a child
+  // landed at an arbitrary vertical position. Roots (species whose
+  // parent isn't in-window) come first by lane = founding order.
+  orderPhyloTree(visibleSpecies);
   const visible = visibleSpecies;
 
   // Per-species live biomass. Use c.speciesKey (frozen at birth) instead
@@ -4516,7 +4570,8 @@ function drawPhylogeny(): void {
     let aliveN = 0;
     for (const sp of visibleSpecies) if (sp.alive > 0) aliveN++;
     visibleSpecies.length = Math.min(5, aliveN);
-    visibleSpecies.sort((a, b) => a.lane - b.lane);
+    // Re-impose phylogenetic order on the surviving five.
+    orderPhyloTree(visibleSpecies);
   }
 
   let maxMass = 0;
@@ -4541,13 +4596,13 @@ function drawPhylogeny(): void {
   const scale = totalH > innerH ? innerH / totalH : 1;
   for (let i = 0; i < heights.length; i++) heights[i] *= scale;
 
-  // Y center of each species' slot. Lane lookup map mirrors the sim's
-  // stable lane index so convergence/divergence connectors stay attached
-  // to the same vertical position frame to frame.
-  const yOfLane = new Map<number, number>();
+  // Y center of each species' slot, keyed by species key (the render
+  // order is phylogenetic now, not lane order, so connectors look up by
+  // key). Stacked top-to-bottom in the DFS order computed above.
+  const yOfKey = new Map<string, number>();
   let acc = innerY;
   for (let i = 0; i < visible.length; i++) {
-    yOfLane.set(visible[i].lane, acc + heights[i] / 2);
+    yOfKey.set(visible[i].key, acc + heights[i] / 2);
     acc += heights[i];
   }
 
@@ -4560,7 +4615,7 @@ function drawPhylogeny(): void {
     const tEnd = sp.alive > 0 ? tNow : sp.lastSeen;
     const x1 = tx(sp.firstSeen);
     const x2 = tx(tEnd);
-    const ly = yOfLane.get(sp.lane)!;
+    const ly = yOfKey.get(sp.key)!;
     ctx.strokeStyle = sp.color;
     ctx.globalAlpha = sp.alive > 0 ? 1 : 0.5;
     ctx.lineWidth = Math.max(0.5, heights[i] * 0.85);
@@ -4573,11 +4628,8 @@ function drawPhylogeny(): void {
 
   // Divergence / convergence connectors on top so they're visible.
   for (const ev of snapshot.phylogenyEvents) {
-    const from = snapshotSpeciesByKey.get(ev.from);
-    const to = snapshotSpeciesByKey.get(ev.to);
-    if (!from || !to) continue;
-    const y1 = yOfLane.get(from.lane);
-    const y2 = yOfLane.get(to.lane);
+    const y1 = yOfKey.get(ev.from);
+    const y2 = yOfKey.get(ev.to);
     if (y1 === undefined || y2 === undefined) continue;
     const ex = tx(ev.t);
     ctx.strokeStyle = ev.convergence ? "#f0c050" : "#9fc3d4";
@@ -4589,15 +4641,6 @@ function drawPhylogeny(): void {
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
-
-  ctx.fillStyle = "#7fb8c8";
-  ctx.font = UI_CANVAS_FONT;
-  const filterTag = phyloFilterTop5 ? "  [TOP 5 alive, F toggles]" : "  (F: top 5 filter)";
-  ctx.fillText(
-    `phylogeny  t=${tMin.toFixed(0)}..${tNow.toFixed(0)}s  ${visible.length} species  (height ~ total mass, yellow = convergence)${filterTag}`,
-    8,
-    stripY + 11,
-  );
 }
 
 // Selection highlight color: a hue that sweeps the full wheel on a
