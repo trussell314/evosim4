@@ -4014,7 +4014,21 @@ export function step(world: World, dt: number): void {
   // in but not coming out has gone extinct this step). Coding key
   // ignores introns, so neutral drift doesn't churn the count.
   world.liveCodingKeys.clear();
-  for (const c of world.creatures) world.liveCodingKeys.add(genomeCodingKey(c.genome));
+  for (const c of world.creatures) {
+    world.liveCodingKeys.add(genomeCodingKey(c.genome));
+    // Refresh species.lastSeen every tick a cell of the species is
+    // alive. Previously lastSeen only advanced on a birth or death
+    // event (noteCreatureBirth/Death), so a species persisting as a
+    // stable, non-dividing cell went stale and fell out of the
+    // phylogeny strip's rolling window -- the strip showed e.g. "3
+    // species" while the HUD counted 50 live. lastSeen now means "last
+    // tick this species was actually present," so every live species
+    // stays in the window and the counts agree. (Dead species keep
+    // their death-time lastSeen, so the extinct-species pruner below
+    // is unaffected.)
+    const sp = world.species.get(c.speciesKey);
+    if (sp) sp.lastSeen = world.t;
+  }
   advanceDayCycle(world, dt);
   advanceWind(world, dt, simRng);
   const p = world.profile;
