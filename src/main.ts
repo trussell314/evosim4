@@ -2586,6 +2586,34 @@ for (const spec of SPEED_SPECS) {
   if (b) gSpeed.appendChild(b);
 }
 gSpeed.appendChild(stepOnceBtn);
+
+// Render-rate cap, independent of sim speed. Caps how often the WORLD
+// is drawn (the HUD / inspector keep updating): "max" = every animation
+// frame (display refresh -- 120Hz on ProMotion), 120/60/30 = throttle
+// to that rate, "off" = don't draw the world at all (frees the main
+// thread for the sim worker on core-limited mobile / lets the sim run
+// flat-out headless). Persisted across reloads.
+type RenderFps = "off" | "30" | "60" | "120" | "max";
+const RENDER_FPS_CYCLE: ReadonlyArray<RenderFps> = ["max", "120", "60", "30", "off"];
+const RENDER_FPS_KEY = "evosim4:renderFps";
+let renderFps: RenderFps = (() => {
+  try {
+    const s = localStorage.getItem(RENDER_FPS_KEY);
+    if (s && (RENDER_FPS_CYCLE as readonly string[]).includes(s)) return s as RenderFps;
+  } catch { /* ignore */ }
+  return "max";
+})();
+let lastWorldRenderT = 0;
+const fpsBtn = mkBtn(`fps: ${renderFps}`, "Render-rate cap (max / 120 / 60 / 30 / off). Lower frees the main thread for the sim; off draws nothing.");
+fpsBtn.style.cssText = fpsBtn.style.cssText + "padding:2px 6px;";
+fpsBtn.addEventListener("click", () => {
+  const i = RENDER_FPS_CYCLE.indexOf(renderFps);
+  renderFps = RENDER_FPS_CYCLE[(i + 1) % RENDER_FPS_CYCLE.length];
+  fpsBtn.textContent = `fps: ${renderFps}`;
+  try { localStorage.setItem(RENDER_FPS_KEY, renderFps); } catch { /* ignore */ }
+});
+gSpeed.appendChild(fpsBtn);
+
 gRun.append(resetBtn, profileBtn, exportBtn);
 gRun.parentElement?.insertBefore(gSpeed, gRun);
 syncSpeedBtnStyles();
@@ -5770,14 +5798,23 @@ function frame(): void {
   const advanced = workerAdvancedThisFrame;
   workerAdvancedThisFrame = 0;
   turboFrameCounter = (turboFrameCounter + 1) | 0;
-  // maxMinimal is the only speed mode that throttles render -- the
-  // sim worker runs flat-out and we paint one frame per ~500ms so
-  // the main thread stays responsive to taps and panel updates.
-  const renderThisFrame = simSpeed !== "maxMinimal"
-    || (turboFrameCounter % TURBO_RENDER_EVERY) === 0;
+  // Render gate combines three things: the render-rate cap (fps button),
+  // the maxMinimal sim-speed render throttle, and "off" (never draw the
+  // world). maxMinimal paints one frame per ~500ms so the sim runs
+  // flat-out; the fps cap throttles to a wall-clock rate.
+  let fpsAllows: boolean;
+  if (renderFps === "off") fpsAllows = false;
+  else if (renderFps === "max") fpsAllows = true;
+  else {
+    const target = renderFps === "120" ? 120 : renderFps === "60" ? 60 : 30;
+    fpsAllows = tFrameStart - lastWorldRenderT >= 1000 / target - 1;
+  }
+  const renderThisFrame = fpsAllows
+    && (simSpeed !== "maxMinimal" || (turboFrameCounter % TURBO_RENDER_EVERY) === 0);
   const tBeforeRender = performance.now();
   if (renderThisFrame) {
     render();
+    lastWorldRenderT = tFrameStart;
   }
   const tAfterRender = performance.now();
   mpRenderMs += tAfterRender - tBeforeRender;
