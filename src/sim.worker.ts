@@ -24,6 +24,7 @@ import {
   setCreatureChemBuffers,
   setCreatureChemistryDispatcher,
   setParticleForceDispatcher,
+  setGpuMin,
   step,
   takeSnapshot,
   setParticleTarget,
@@ -112,6 +113,7 @@ type WorkerInbound =
   | { type: "requestSave" }
   | { type: "setPinnedSpecies"; keys: string[] }
   | { type: "setParallelMin"; n: number }
+  | { type: "setGpuMin"; n: number }
   | { type: "setParticleCap"; cap: number }
   | { type: "setFoundersEnabled"; on: boolean }
   | { type: "setSeeding"; on: boolean }
@@ -277,6 +279,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setParallelMin":
       if (world) setParallelMin(world, m.n);
+      break;
+    case "setGpuMin":
+      if (world) setGpuMin(world, m.n);
       break;
     case "setFoundersEnabled":
       if (world) world.foundersEnabled = m.on;
@@ -675,7 +680,7 @@ function setupParticlePool(w: World): void {
   // handling forces -- the GPU worker (if available) takes precedence
   // for the per-particle force loop, and we don't want both kicking the
   // particle buffers in the same tick.
-  if (!gpuActive) setParticleForceDispatcher(dispatchParticleForces);
+  if (!gpuActive) setParticleForceDispatcher(dispatchParticleForces, "cpu", w.parallelMin);
   if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
   // Spawn workers on main and have main forward acks back to us.
   // Workers spawned this way are top-level workers from main's point
@@ -716,7 +721,7 @@ function setupGpuWorker(w: World): void {
   gpuPhase = 0;
   gpuActive = true;
   gpuInitError = null;
-  setParticleForceDispatcher(dispatchGpuParticleForces);
+  setParticleForceDispatcher(dispatchGpuParticleForces, "gpu", w.gpuMin);
   send({
     type: "spawn-gpu-worker",
     initPayload: {

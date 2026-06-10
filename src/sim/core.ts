@@ -1279,6 +1279,14 @@ export interface World {
   // Particle count at/above which collision + force passes dispatch to
   // the worker pool (runtime-tunable from the UI; see setParallelMin).
   parallelMin: number;
+  // Particle count at/above which the WebGPU force kernel engages.
+  // Independent of parallelMin: GPU dispatch overhead is much smaller
+  // than the SAB worker pool's barrier wait (no Atomics round-trip),
+  // so the GPU can win at lower particle counts -- ~1000 vs 4000 for
+  // the pool. When both are wired, the GPU's lower threshold takes
+  // precedence because it gets registered as the force dispatcher.
+  // Runtime-tunable via setGpuMin.
+  gpuMin: number;
   particleSpawnRate: number;
   // One-shot startup seeding. When useSeedRamp is true the world is
   // born empty and seedRamp() adds a fixed batch of particles once per

@@ -1201,6 +1201,7 @@ export function createWorld(
     creatureStore: new CreatureStore(512),
     particleTarget,
     parallelMin: PARALLEL_PARTICLE_MIN_DEFAULT,
+    gpuMin: GPU_PARTICLE_MIN_DEFAULT,
     particleSpawnRate: Math.min(MAX_SPAWN_PER_SEC, Math.max(5, particleTarget * PARTICLE_SPAWN_RATIO)),
     // Production (delayedSpawn) uses the one-shot ramp; tests / direct
     // callers keep the legacy "fully seeded up front + continuous
@@ -4697,6 +4698,28 @@ export function setParallelMin(world: World, n: number): void {
     PARALLEL_MIN_RANGE.min,
     Math.min(PARALLEL_MIN_RANGE.max, Math.round(n)),
   );
+  // Re-publish the threshold to the dispatcher slot. Only meaningful
+  // when the CPU pool is the active force dispatcher; the GPU path
+  // tracks its own gpuMin via setParticleForceDispatcher's second arg.
+  if (particleForceDispatcherSource === "cpu") {
+    particleForceDispatcherMin = world.parallelMin;
+  }
+}
+// GPU dispatch overhead is much smaller than the SAB pool's barrier
+// (no Atomics round-trip on every tick), so the WebGPU kernel can
+// win at lower particle counts -- around np=1000 in practice. Kept
+// separate from parallelMin so the CPU pool's threshold stays tuned
+// for its own dispatch cost.
+const GPU_PARTICLE_MIN_DEFAULT = 1000;
+export const GPU_MIN_RANGE = { min: 100, max: 10000, step: 100 } as const;
+export function setGpuMin(world: World, n: number): void {
+  world.gpuMin = Math.max(
+    GPU_MIN_RANGE.min,
+    Math.min(GPU_MIN_RANGE.max, Math.round(n)),
+  );
+  if (particleForceDispatcherSource === "gpu") {
+    particleForceDispatcherMin = world.gpuMin;
+  }
 }
 // Dispatcher is fire-only: it kicks the workers and returns a wait
 // function. Callers run concurrent CPU work (creature loop, creature
@@ -4704,8 +4727,19 @@ export function setParallelMin(world: World, n: number): void {
 // settled. Hides barrier latency behind useful work.
 export type ParticleForceDispatcher = (np: number, params: ParticleForceParams) => () => void;
 let particleForceDispatcher: ParticleForceDispatcher | null = null;
-export function setParticleForceDispatcher(d: ParticleForceDispatcher | null): void {
+// Tagged so setParallelMin / setGpuMin know which threshold to live-
+// update when the user moves their slider. The GPU path's threshold is
+// gpuMin (smaller -- ~1000); the CPU pool's is parallelMin (~4000).
+let particleForceDispatcherSource: "gpu" | "cpu" | null = null;
+let particleForceDispatcherMin: number | null = null;
+export function setParticleForceDispatcher(
+  d: ParticleForceDispatcher | null,
+  source: "gpu" | "cpu" | null = null,
+  threshold: number | null = null,
+): void {
   particleForceDispatcher = d;
+  particleForceDispatcherSource = d ? source : null;
+  particleForceDispatcherMin = d ? threshold : null;
 }
 
 function applyForces(world: World, dt: number): void {
@@ -4720,8 +4754,13 @@ function applyForces(world: World, dt: number): void {
   // of the SAB-backed store while we run the creature force loop
   // below on the sim worker. Wait for the barrier just before returning
   // so any code after applyForces observes settled particle state.
+  // The threshold is dispatcher-specific (gpuMin for the WebGPU path,
+  // parallelMin for the CPU pool) so each engages at its own
+  // cost-effective cutoff. Fall back to world.parallelMin if the
+  // dispatcher was registered before the source/threshold extension.
+  const dispatchMin = particleForceDispatcherMin ?? world.parallelMin;
   let forceWait: (() => void) | null = null;
-  if (particleForceDispatcher && np >= world.parallelMin) {
+  if (particleForceDispatcher && np >= dispatchMin) {
     forceWait = particleForceDispatcher(np, params);
   } else {
     applyParticleForcesRange(
@@ -6523,6 +6562,7 @@ interface SavedWorld {
   // without it keep the current/default target.
   particleTarget?: number;
   parallelMin?: number;
+  gpuMin?: number;
   // Founder generation toggle. Absent (old saves) = enabled.
   foundersEnabled?: boolean;
   // Founder cap mode. Absent (old saves) = capped (prior behavior).
@@ -6646,6 +6686,7 @@ export function serializeWorld(w: World): string {
     founderTarget: w.founderTarget,
     particleTarget: w.particleTarget,
     parallelMin: w.parallelMin,
+    gpuMin: w.gpuMin,
     foundersEnabled: w.foundersEnabled,
     founderCapEnabled: w.founderCapEnabled,
     ongoingSeeding: w.ongoingSeeding,
@@ -6800,6 +6841,9 @@ export function applySavedWorld(world: World, json: string): boolean {
   // Parallel-dispatch threshold: older saves omit it -> keep default.
   if (typeof saved.parallelMin === "number") {
     setParallelMin(world, saved.parallelMin);
+  }
+  if (typeof saved.gpuMin === "number") {
+    setGpuMin(world, saved.gpuMin);
   }
   // Absent in older saves -> founders enabled (prior behavior).
   world.foundersEnabled = saved.foundersEnabled !== false;
@@ -7057,6 +7101,7 @@ export interface RenderSnapshot extends WorldEnv {
   geologySeed: number;
   particleTarget: number;
   parallelMin: number;
+  gpuMin: number;
   extinctionCount: number;
   // Total founder lineages ever spawned (monotonic). The HUD subtracts
   // the count of currently-live distinct lineageRoots to show how many
@@ -7378,6 +7423,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     vent: world.vent ? { ...world.vent } : undefined,
     particleTarget: world.particleTarget,
     parallelMin: world.parallelMin,
+    gpuMin: world.gpuMin,
     extinctionCount: world.extinctionCount,
     nextLineageRoot: world.nextLineageRoot,
     engulfedCount,

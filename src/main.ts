@@ -92,6 +92,7 @@ import {
   PARTICLE_TARGET_STEP,
   PARTICLE_TARGET_MIN,
   PARALLEL_MIN_RANGE,
+  GPU_MIN_RANGE,
   type RenderSnapshot,
   type ParticleSnapshot,
   type CreatureSnapshot,
@@ -889,6 +890,10 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     if (snapshot.parallelMin !== parallelMinUI) {
       parallelMinUI = snapshot.parallelMin;
       renderParLabel();
+    }
+    if (snapshot.gpuMin !== gpuMinUI) {
+      gpuMinUI = snapshot.gpuMin;
+      renderGpuLabel();
     }
     if (snapshot.mutationRateMul !== mutRateUI) {
       mutRateUI = snapshot.mutationRateMul;
@@ -2826,6 +2831,35 @@ parPlus.addEventListener("click", () => nudgePar(PARALLEL_MIN_RANGE.step));
 renderParLabel();
 parWrap.append(parTitle, parMinus, parValue, parPlus);
 
+// WebGPU threshold. Independent of par (the CPU pool) because GPU
+// dispatch overhead is much smaller -- no Atomics round-trip -- so the
+// kernel can win at ~1000 particles instead of the pool's ~4000. Only
+// engages when a GPUDevice is actually wired up; otherwise this knob is
+// inert and the CPU pool's par threshold applies.
+let gpuMinUI = 1000;
+const gpuWrap = document.createElement("div");
+gpuWrap.style.cssText = capWrap.style.cssText;
+gpuWrap.title = "Particle count at/above which the WebGPU force kernel engages. " +
+  "Only matters when a GPUDevice is available; the CPU pool keeps using its own par threshold.";
+const gpuTitle = document.createElement("span");
+gpuTitle.textContent = "gpu≥"; gpuTitle.style.cssText = "opacity:0.7;";
+const gpuValue = document.createElement("span");
+gpuValue.style.cssText = "font-weight:bold;min-width:5ch;text-align:right;color:#cfe;";
+const gpuMinus = mkBtn("−", `Lower the GPU threshold by ${GPU_MIN_RANGE.step}`);
+const gpuPlus = mkBtn("+", `Raise the GPU threshold by ${GPU_MIN_RANGE.step}`);
+gpuMinus.style.cssText = CBTN + "padding:1px 9px;";
+gpuPlus.style.cssText = CBTN + "padding:1px 9px;";
+function renderGpuLabel(): void { gpuValue.textContent = String(gpuMinUI); }
+function nudgeGpu(delta: number): void {
+  gpuMinUI = Math.max(GPU_MIN_RANGE.min, Math.min(GPU_MIN_RANGE.max, gpuMinUI + delta));
+  renderGpuLabel();
+  simWorker.postMessage({ type: "setGpuMin", n: gpuMinUI });
+}
+gpuMinus.addEventListener("click", () => nudgeGpu(-GPU_MIN_RANGE.step));
+gpuPlus.addEventListener("click", () => nudgeGpu(GPU_MIN_RANGE.step));
+renderGpuLabel();
+gpuWrap.append(gpuTitle, gpuMinus, gpuValue, gpuPlus);
+
 // Germline mutation-rate multiplier (world.mutationRateMul). Live knob on
 // evolutionary mutation pressure: scales mutateGenome's per-byte rates.
 const MUT_RATE_STEP = 0.25;
@@ -2943,7 +2977,7 @@ hazeBtn.addEventListener("click", () => {
   setBtn(hazeBtn, hazeOn, T_TEAL);
 });
 
-gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn, particleCollBtn, hazeBtn);
+gWorld.append(foundersBtn, founderModeWrap, seedingBtn, capWrap, parWrap, gpuWrap, mutWrap, geologyBtn, cullBtn, autoCullBtn, particleCollBtn, hazeBtn);
 
 // ---- view: overlay / density sources / material / grid ----
 type HeatmapMode = "off" | "temp" | "density" | "light" | "health" | "reproduce" | "ph" | "electric" | "vibration" | "magnetic";
