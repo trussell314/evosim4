@@ -1103,17 +1103,55 @@ const PHYLO_STRIP_H = 70;
 // gates it to the top 5 by peak biomass when there's too much going
 // on. Reclaimable strip-bottom space accounted for via bottomReserveH.
 const PHYLO_VISIBLE = true;
-// Rolling phylogeny window. Older history scrolls off the left edge so
-// recent events don't compress into a sliver as the sim runs forever.
-const PHYLO_WINDOW_SEC = 180;
+// Rolling phylogeny window, selectable in DISPLAY time (the 13h ancient-
+// day clock). Cycled with the "w" key; a small label in the strip
+// corner shows the current setting. Converted to sim-seconds against
+// dayPeriod at draw time. Default 1d -- 180s (the old fixed value) was
+// under four display-hours.
+const PHYLO_WINDOWS: ReadonlyArray<{ label: string; displaySec: number }> = [
+  { label: "1h", displaySec: 3600 },
+  { label: "1d", displaySec: 13 * 3600 },
+  { label: "7d", displaySec: 7 * 13 * 3600 },
+  { label: "30d", displaySec: 30 * 13 * 3600 },
+];
+let phyloWindowIdx = 1;
+function phyloWindowSimSec(): number {
+  const dp = snapshot.dayPeriod > 0 ? snapshot.dayPeriod : 600;
+  return (PHYLO_WINDOWS[phyloWindowIdx].displaySec * dp) / SECONDS_PER_DISPLAY_DAY;
+}
 // Phylogeny filter: when true, the strip only renders the top 5
 // currently-alive species ranked by live biomass. Toggled via the F
 // key. Off by default so the full history view is the baseline.
 let phyloFilterTop5 = false;
-// Reused per-frame to avoid allocating fresh arrays/maps inside the
-// phylogeny render loop. With thousands of species after a long run,
-// per-frame Array.from() + Map() was costing meaningful GC pressure.
-const visibleSpecies: SpeciesSnapshot[] = [];
+
+// Render-side phylogeny history. The sim prunes species from
+// world.species quickly (perf), but the strip needs each species'
+// biomass OVER TIME to draw a variable-thickness ribbon -- thick where
+// the species was abundant, thin where it wasn't -- and to keep an
+// extinct species on screen until its whole lifespan scrolls off the
+// (now possibly multi-day) window. So the renderer accumulates its own
+// history: per species, a time series of biomass samples plus colour /
+// lane / first+last-seen, and a deduped list of phylogeny events. All
+// bounded by the current window (entries past the left edge are
+// dropped). This is the single structure behind the window control,
+// extinct-species persistence, and the time-varying lane thickness.
+interface PhyloTrack {
+  color: string;
+  lane: number;
+  firstSeen: number;
+  lastSeen: number;
+  alive: boolean;
+  ts: number[];   // sample sim-times (ascending)
+  mass: number[]; // biomass at each sample, parallel to ts
+  peak: number;   // max sampled biomass currently in the buffer
+}
+const phyloHist = new Map<string, PhyloTrack>();
+interface PhyloEvt { t: number; from: string; to: string; convergence: boolean }
+const phyloEventHist: PhyloEvt[] = [];
+const phyloEventSeen = new Set<string>();
+let phyloLastSampleT = -1e9;
+// Reused per-frame to avoid allocating a fresh map inside the
+// phylogeny render loop each frame.
 const bioByKey = new Map<string, number>();
 // All-time peak summed-biomass per species. The phylogeny render
 // samples per-frame, but the worker's species snapshot doesn't carry
@@ -3913,6 +3951,9 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "f" || e.key === "F") {
     // Toggle the phylogeny "top 5 alive" filter.
     phyloFilterTop5 = !phyloFilterTop5;
+  } else if (e.key === "w" || e.key === "W") {
+    // Cycle the phylogeny time window (1h / 1d / 7d / 30d).
+    phyloWindowIdx = (phyloWindowIdx + 1) % PHYLO_WINDOWS.length;
   }
 });
 
@@ -4418,27 +4459,28 @@ function drawGenomeStats(): void {
   }
 }
 
-// Reorder a list of species in-place into phylogenetic DFS order so
-// each offshoot renders directly below its parent and a whole subtree
-// is contiguous. The parent of a species is the source of the first
-// divergence (non-convergence) phylogeny event that created it; a
-// species whose parent isn't in the list is a root. Roots and the
-// children of any node are visited in lane order (founding / birth
-// order), so the layout is stable frame to frame.
-function orderPhyloTree(list: SpeciesSnapshot[]): void {
+// Reorder a list of {key, lane} items in-place into phylogenetic DFS
+// order so each offshoot renders directly below its parent and a whole
+// subtree is contiguous. The parent of an item is the source of the
+// first divergence (non-convergence) event that created it; an item
+// whose parent isn't in the list is a root. Roots and children are
+// visited in lane order (founding / birth order), so the layout is
+// stable frame to frame. Generic so it works on both SpeciesSnapshot
+// and the render-side history tracks.
+function orderPhyloTree<T extends { key: string; lane: number }>(
+  list: T[],
+  events: ReadonlyArray<{ from: string; to: string; convergence: boolean }>,
+): void {
   if (list.length < 2) return;
   const inList = new Set<string>();
   for (const sp of list) inList.add(sp.key);
-  const byKey = new Map<string, SpeciesSnapshot>();
-  for (const sp of list) byKey.set(sp.key, sp);
-  // First divergence parent per child key (ignore convergence edges).
   const parentOf = new Map<string, string>();
-  for (const ev of snapshot.phylogenyEvents) {
+  for (const ev of events) {
     if (ev.convergence) continue;
     if (!parentOf.has(ev.to)) parentOf.set(ev.to, ev.from);
   }
-  const children = new Map<string, SpeciesSnapshot[]>();
-  const roots: SpeciesSnapshot[] = [];
+  const children = new Map<string, T[]>();
+  const roots: T[] = [];
   for (const sp of list) {
     const p = parentOf.get(sp.key);
     if (p !== undefined && inList.has(p) && p !== sp.key) {
@@ -4448,12 +4490,12 @@ function orderPhyloTree(list: SpeciesSnapshot[]): void {
       roots.push(sp);
     }
   }
-  const byLane = (a: SpeciesSnapshot, b: SpeciesSnapshot): number => a.lane - b.lane;
+  const byLane = (a: T, b: T): number => a.lane - b.lane;
   roots.sort(byLane);
   for (const arr of children.values()) arr.sort(byLane);
-  const out: SpeciesSnapshot[] = [];
+  const out: T[] = [];
   const seen = new Set<string>();
-  const visit = (sp: SpeciesSnapshot): void => {
+  const visit = (sp: T): void => {
     if (seen.has(sp.key)) return; // cycle/convergence guard
     seen.add(sp.key);
     out.push(sp);
@@ -4461,13 +4503,80 @@ function orderPhyloTree(list: SpeciesSnapshot[]): void {
     if (kids) for (const k of kids) visit(k);
   };
   for (const r of roots) visit(r);
-  // Any stragglers not reached (shouldn't happen, but be safe) appended
-  // in lane order so nothing is dropped from the render.
   if (out.length < list.length) {
     for (const sp of list) if (!seen.has(sp.key)) out.push(sp);
   }
   list.length = 0;
   for (const sp of out) list.push(sp);
+}
+
+// Fold the current frame into the render-side phylogeny history: append
+// a biomass sample per live species (on a window-scaled cadence),
+// record deaths, merge new phylogeny events, and drop everything past
+// the left edge of the window.
+function updatePhyloHist(tNow: number, tMin: number, windowSimSec: number): void {
+  // ~500 samples across the window, but never coarser than the species
+  // prune grace (so a dying species is sampled before the sim forgets
+  // it) and never finer than 0.25s.
+  const sampleDt = Math.min(120, Math.max(0.25, windowSimSec / 500));
+  const doSample = tNow - phyloLastSampleT >= sampleDt;
+  if (doSample) phyloLastSampleT = tNow;
+  const liveSeen = new Set<string>();
+  for (const sp of snapshot.species) {
+    let tr = phyloHist.get(sp.key);
+    if (!tr) {
+      tr = { color: sp.color, lane: sp.lane, firstSeen: sp.firstSeen, lastSeen: sp.lastSeen, alive: sp.alive > 0, ts: [], mass: [], peak: 0 };
+      phyloHist.set(sp.key, tr);
+    }
+    tr.color = sp.color;
+    tr.lane = sp.lane;
+    if (sp.firstSeen < tr.firstSeen) tr.firstSeen = sp.firstSeen;
+    if (sp.lastSeen > tr.lastSeen) tr.lastSeen = sp.lastSeen;
+    tr.alive = sp.alive > 0;
+    if (sp.alive > 0) liveSeen.add(sp.key);
+    if (doSample) {
+      const m = bioByKey.get(sp.key) ?? 0;
+      tr.ts.push(tNow); tr.mass.push(m);
+      if (m > tr.peak) tr.peak = m;
+    }
+  }
+  // A species that was alive last sample but isn't present now drops to
+  // zero -- record the fall so the ribbon tapers to nothing at death.
+  if (doSample) {
+    for (const [key, tr] of phyloHist) {
+      if (!liveSeen.has(key) && tr.alive) {
+        tr.alive = false;
+        tr.ts.push(tNow); tr.mass.push(0);
+      }
+    }
+  }
+  // Merge new phylogeny events (deduped).
+  for (const ev of snapshot.phylogenyEvents) {
+    const id = `${ev.t}|${ev.from}|${ev.to}`;
+    if (!phyloEventSeen.has(id)) {
+      phyloEventSeen.add(id);
+      phyloEventHist.push({ t: ev.t, from: ev.from, to: ev.to, convergence: ev.convergence });
+    }
+  }
+  // Prune past-window tracks + samples + events.
+  for (const [key, tr] of phyloHist) {
+    if (tr.lastSeen < tMin) { phyloHist.delete(key); continue; }
+    let cut = 0;
+    while (cut < tr.ts.length - 1 && tr.ts[cut + 1] < tMin) cut++;
+    if (cut > 0) {
+      tr.ts.splice(0, cut); tr.mass.splice(0, cut);
+      let pk = 0;
+      for (const m of tr.mass) if (m > pk) pk = m;
+      tr.peak = pk;
+    }
+  }
+  for (let i = phyloEventHist.length - 1; i >= 0; i--) {
+    const ev = phyloEventHist[i];
+    if (ev.t < tMin) {
+      phyloEventSeen.delete(`${ev.t}|${ev.from}|${ev.to}`);
+      phyloEventHist.splice(i, 1);
+    }
+  }
 }
 
 function drawPhylogeny(): void {
@@ -4500,136 +4609,98 @@ function drawPhylogeny(): void {
   ctx.lineTo(w, stripY + 0.5);
   ctx.stroke();
 
-  // Rolling window: only the last PHYLO_WINDOW_SEC of history is shown
-  // so recent events stay legible. Species whose lifespan starts before
-  // the window clip at the left edge (handled naturally by tx()).
   const tNow = snapshot.t;
-  const tMin = Math.max(0, tNow - PHYLO_WINDOW_SEC);
-  const span = Math.max(0.001, tNow - tMin);
-  // No header text any more, so only a thin top margin.
-  const padTop = 4;
-  const padBot = 6;
+  const windowSimSec = phyloWindowSimSec();
+  const tMin = Math.max(0, tNow - windowSimSec);
+  const span = Math.max(0.001, windowSimSec);
+  const padTop = 4, padBot = 6;
   const innerY = stripY + padTop;
   const innerH = stripH - padTop - padBot;
-
-  // Only consider species whose lifespan overlaps the visible window.
-  // Keeps the per-frame work proportional to recent activity instead of
-  // every species ever seen.
-  visibleSpecies.length = 0;
-  for (const sp of snapshot.species) {
-    if (sp.lastSeen >= tMin) visibleSpecies.push(sp);
-  }
-  // Lay species out in PHYLOGENETIC order (DFS): each offshoot sits
-  // directly below the species it diverged from, with the whole subtree
-  // contiguous, instead of the old monotonic lane order where a child
-  // landed at an arbitrary vertical position. Roots (species whose
-  // parent isn't in-window) come first by lane = founding order.
-  orderPhyloTree(visibleSpecies);
-  const visible = visibleSpecies;
-
-  // Per-species live biomass. Use c.speciesKey (frozen at birth) instead
-  // of recomputing genomeKey each frame -- somatic drift doesn't move a
-  // cell to a different species, so the birth key is the right bucket.
-  bioByKey.clear();
-  // Per-species live total cell mass (energy + all molecular contents),
-  // used to scale the slot heights below.
-  const massByKey = new Map<string, number>();
-  for (const c of snapshot.creatures) {
-    // Membrane is the structural reserve in the chemistry-overhaul
-    // model (replaces the retired biomass chemical).
-    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
-    let tm = 0;
-    for (const k of MASS_MOLECULE_IDS) tm += c.molecules[k];
-    massByKey.set(c.speciesKey, (massByKey.get(c.speciesKey) ?? 0) + tm);
-  }
-  // Update the main-side peak map from this sample. The phylogeny
-  // render runs every frame, so the peak tracks tightly without
-  // needing per-tick work in the sim worker.
-  for (const [key, b] of bioByKey) {
-    const prev = peakBiomassByKey.get(key) ?? 0;
-    if (b > prev) peakBiomassByKey.set(key, b);
-  }
-  // Prune entries for species the sim no longer tracks. Without this,
-  // peakBiomassByKey grows monotonically (one float per ever-seen
-  // species) over a long session. The sim already drops a species
-  // from snapshot.species after SPECIES_GRACE_SEC of zero population.
-  if (peakBiomassByKey.size > snapshotSpeciesByKey.size * 2) {
-    for (const key of peakBiomassByKey.keys()) {
-      if (!snapshotSpeciesByKey.has(key)) peakBiomassByKey.delete(key);
-    }
-  }
-  // Top-5 filter: prune visibleSpecies down to the five currently-alive
-  // species with the highest live biomass. Applied after bioByKey is
-  // built so the ranking uses fresh per-frame numbers. visible is a
-  // const alias for visibleSpecies, so the in-place mutation here
-  // flows through.
-  if (phyloFilterTop5) {
-    visibleSpecies.sort((a, b) => {
-      if (a.alive > 0 && b.alive <= 0) return -1;
-      if (b.alive > 0 && a.alive <= 0) return 1;
-      return (bioByKey.get(b.key) ?? 0) - (bioByKey.get(a.key) ?? 0);
-    });
-    let aliveN = 0;
-    for (const sp of visibleSpecies) if (sp.alive > 0) aliveN++;
-    visibleSpecies.length = Math.min(5, aliveN);
-    // Re-impose phylogenetic order on the surviving five.
-    orderPhyloTree(visibleSpecies);
-  }
-
-  let maxMass = 0;
-  for (const sp of visible) {
-    const m = massByKey.get(sp.key) ?? 0;
-    if (m > maxMass) maxMass = m;
-  }
-
-  // Slot heights: living species scale up to LIVE_H_MAX by total cell
-  // mass relative to the largest extant species; extinct species occupy
-  // a thin baseline slot so their lifespan segment stays visible. If the
-  // total exceeds the available innerH, scale everything down to fit.
-  const LIVE_H_MAX = 7;
-  const LIVE_H_MIN = 1.2;
-  const EXTINCT_H = 0.6;
-  const heights = visible.map((sp) => {
-    if (sp.alive <= 0) return EXTINCT_H;
-    const frac = maxMass > 0 ? (massByKey.get(sp.key) ?? 0) / maxMass : 0;
-    return Math.max(LIVE_H_MIN, frac * LIVE_H_MAX);
-  });
-  const totalH = heights.reduce((a, b) => a + b, 0);
-  const scale = totalH > innerH ? innerH / totalH : 1;
-  for (let i = 0; i < heights.length; i++) heights[i] *= scale;
-
-  // Y center of each species' slot, keyed by species key (the render
-  // order is phylogenetic now, not lane order, so connectors look up by
-  // key). Stacked top-to-bottom in the DFS order computed above.
-  const yOfKey = new Map<string, number>();
-  let acc = innerY;
-  for (let i = 0; i < visible.length; i++) {
-    yOfKey.set(visible[i].key, acc + heights[i] / 2);
-    acc += heights[i];
-  }
-
   const tx = (t: number): number => ((t - tMin) / span) * w;
 
-  // Lifespan segments. Living species extend to tNow; extinct species end
-  // at lastSeen and stay put as a static segment.
-  for (let i = 0; i < visible.length; i++) {
-    const sp = visible[i];
-    const tEnd = sp.alive > 0 ? tNow : sp.lastSeen;
-    const x1 = tx(sp.firstSeen);
-    const x2 = tx(tEnd);
-    const ly = yOfKey.get(sp.key)!;
-    ctx.strokeStyle = sp.color;
-    ctx.globalAlpha = sp.alive > 0 ? 1 : 0.5;
-    ctx.lineWidth = Math.max(0.5, heights[i] * 0.85);
+  // Live biomass per species this frame (membrane = structural reserve),
+  // then fold into the render-side history.
+  bioByKey.clear();
+  for (const c of snapshot.creatures) {
+    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
+  }
+  updatePhyloHist(tNow, tMin, windowSimSec);
+
+  // Build the in-window track list straight from the history so extinct
+  // species persist their whole lifespan within the window.
+  type VisTrack = { key: string; lane: number; tr: PhyloTrack };
+  const vis: VisTrack[] = [];
+  for (const [key, tr] of phyloHist) {
+    if (tr.lastSeen >= tMin) vis.push({ key, lane: tr.lane, tr });
+  }
+  if (phyloFilterTop5) {
+    vis.sort((a, b) => {
+      if (a.tr.alive !== b.tr.alive) return a.tr.alive ? -1 : 1;
+      return b.tr.peak - a.tr.peak;
+    });
+    let aliveN = 0;
+    for (const v of vis) if (v.tr.alive) aliveN++;
+    vis.length = Math.min(5, Math.max(1, aliveN));
+  }
+  orderPhyloTree(vis, phyloEventHist);
+
+  // Vertical scale: a species' slot height is proportional to its peak
+  // in-window biomass (with a small floor so faint lineages stay
+  // visible), and within the slot the ribbon's thickness tracks biomass
+  // OVER TIME -- bulging where the species was abundant, tapering to
+  // nothing at extinction. Slots stack in phylogenetic order; if the
+  // total would overflow the strip, everything scales down to fit.
+  const MIN_SLOT = 1.0;
+  let sumPeak = 0;
+  for (const v of vis) sumPeak += v.tr.peak;
+  let vScale = sumPeak > 0 ? innerH / sumPeak : 0;
+  const slot = vis.map((v) => Math.max(MIN_SLOT, v.tr.peak * vScale));
+  let totalSlot = 0;
+  for (const s of slot) totalSlot += s;
+  if (totalSlot > innerH && totalSlot > 0) {
+    const k = innerH / totalSlot;
+    for (let i = 0; i < slot.length; i++) slot[i] *= k;
+    vScale *= k;
+  }
+  const yCenter: number[] = [];
+  let acc = innerY;
+  for (let i = 0; i < vis.length; i++) { yCenter.push(acc + slot[i] / 2); acc += slot[i]; }
+  const yOfKey = new Map<string, number>();
+  for (let i = 0; i < vis.length; i++) yOfKey.set(vis[i].key, yCenter[i]);
+
+  // Ribbons: one filled band per species, half-thickness at each sample
+  // = biomass * vScale / 2 (clamped to the slot), centred on the slot.
+  for (let i = 0; i < vis.length; i++) {
+    const { tr } = vis[i];
+    const yc = yCenter[i];
+    const halfMax = slot[i] / 2;
+    const half = (m: number): number => {
+      const h = (m * vScale) / 2;
+      return h > halfMax ? halfMax : h < 0.4 ? 0.4 : h; // 0.4px floor so a sliver shows
+    };
+    const n = tr.ts.length;
+    if (n === 0) continue;
+    ctx.fillStyle = tr.color;
+    ctx.globalAlpha = tr.alive ? 0.92 : 0.5;
     ctx.beginPath();
-    ctx.moveTo(x1, ly);
-    ctx.lineTo(x2, ly);
-    ctx.stroke();
+    // top edge, left -> right
+    for (let s = 0; s < n; s++) {
+      const x = tx(tr.ts[s]);
+      const y = yc - half(tr.mass[s]);
+      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    if (tr.alive) ctx.lineTo(tx(tNow), yc - half(tr.mass[n - 1]));
+    // bottom edge, right -> left
+    if (tr.alive) ctx.lineTo(tx(tNow), yc + half(tr.mass[n - 1]));
+    for (let s = n - 1; s >= 0; s--) ctx.lineTo(tx(tr.ts[s]), yc + half(tr.mass[s]));
+    ctx.closePath();
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  // Divergence / convergence connectors on top so they're visible.
-  for (const ev of snapshot.phylogenyEvents) {
+  // Divergence / convergence connectors on top.
+  for (const ev of phyloEventHist) {
+    if (ev.t < tMin) continue;
     const y1 = yOfKey.get(ev.from);
     const y2 = yOfKey.get(ev.to);
     if (y1 === undefined || y2 === undefined) continue;
@@ -4643,6 +4714,13 @@ function drawPhylogeny(): void {
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
+
+  // Small window indicator, bottom-right (cycle with the "w" key).
+  ctx.fillStyle = "rgba(150,190,205,0.75)";
+  ctx.font = UI_CANVAS_FONT;
+  ctx.textAlign = "right";
+  ctx.fillText(`${PHYLO_WINDOWS[phyloWindowIdx].label}  [w]`, w - 6, stripY + stripH - 5);
+  ctx.textAlign = "left";
 }
 
 // Selection highlight color: a hue that sweeps the full wheel on a
