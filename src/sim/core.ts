@@ -1315,6 +1315,13 @@ export interface World {
   // colour). Entry created when a founder spawns; never pruned (cheap:
   // one short byte array per founding lineage).
   lineageRootCoding: Map<number, Uint8Array>;
+  // Assigned display HUE (degrees) per lineageRoot. Chosen when a
+  // founder spawns to sit in the largest gap among the hues of
+  // currently-live lineages (pickLineageHue), so co-existing lineages
+  // stay perceptually far apart even when only a handful are alive.
+  // Inherited by all descendants. Transient (rebuilt on load like
+  // lineageRootCoding).
+  lineageHue: Map<number, number>;
   // Steady-state target for distinct founding lineages alive in the
   // world. Each step counts current lineages and spawns up to this
   // many to top up. Real worlds use 10; tests usually set to 0 to

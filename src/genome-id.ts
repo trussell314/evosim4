@@ -97,12 +97,21 @@ function oklchToHex(L: number, C: number, hueDeg: number): string {
   return `#${hex(ri)}${hex(gi)}${hex(bi)}`;
 }
 
-// Color for a cell from its founding lineage id + how far its coding
-// genome has diverged from the lineage root (a coding edit distance).
-export function lineageColor(lineageRoot: number, codingDivergence: number): string {
-  const hue = ((lineageRoot * GOLDEN_ANGLE_DEG) % 360 + 360) % 360;
+// Color for a cell from its lineage's assigned HUE (chosen by the sim
+// to sit far from other live lineages -- see pickLineageHue) and how
+// far its coding genome has diverged from the lineage root.
+export function lineageColor(hueDeg: number, codingDivergence: number): string {
+  const hue = ((hueDeg % 360) + 360) % 360;
   const d = Math.min(1, Math.max(0, codingDivergence / COLOR_DIVERGENCE_FULL));
   const L = OKLCH_L_ROOT + (OKLCH_L_FAR - OKLCH_L_ROOT) * d;
   const C = OKLCH_C_ROOT + (OKLCH_C_FAR - OKLCH_C_ROOT) * d;
   return oklchToHex(L, C, hue);
+}
+
+// Fallback hue spread for the first lineage / when no live hues exist
+// yet: golden-angle on the lineage id is fine when there's nothing to
+// avoid. Exported so the sim can seed pickLineageHue's empty case
+// without duplicating the constant.
+export function goldenAngleHue(lineageRoot: number): number {
+  return ((lineageRoot * GOLDEN_ANGLE_DEG) % 360 + 360) % 360;
 }

@@ -36,8 +36,36 @@ import {
   EMIT_CHANNEL_MAGNETIC,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
-import { genomeTag, genomeKey, genomeDistance, lineageColor } from "./genome-id";
+import { genomeTag, genomeKey, genomeDistance, lineageColor, goldenAngleHue } from "./genome-id";
 export { genomeTag, genomeKey, genomeDistance, lineageColor };
+
+// Pick a hue (degrees) for a NEW lineage that sits as far as possible
+// from the hues of all currently-live lineages: sort their hues around
+// the circle, find the largest angular gap, and place the new hue at
+// its midpoint. With only a handful of lineages this guarantees wide
+// separation (e.g. 5 live -> the new one is >=36 deg from its nearest
+// neighbour), fixing the "two of five look the same" clustering that
+// raw golden-angle-on-id produced for non-consecutive surviving roots.
+// Deterministic (no RNG): a pure function of the live hue set.
+function pickLineageHue(world: World): number {
+  const liveRoots = new Set<number>();
+  for (const c of world.creatures) liveRoots.add(c.lineageRoot);
+  const hues: number[] = [];
+  for (const r of liveRoots) {
+    const h = world.lineageHue.get(r);
+    if (h !== undefined) hues.push(h);
+  }
+  if (hues.length === 0) return goldenAngleHue(world.nextLineageRoot);
+  hues.sort((a, b) => a - b);
+  let bestGap = -1, bestMid = hues[0];
+  for (let i = 0; i < hues.length; i++) {
+    const a = hues[i];
+    const b = i + 1 < hues.length ? hues[i + 1] : hues[0] + 360;
+    const gap = b - a;
+    if (gap > bestGap) { bestGap = gap; bestMid = ((a + b) / 2) % 360; }
+  }
+  return bestMid;
+}
 
 // Neutral placeholder set at cell construction; every spawn path
 // overwrites it via assignLineageColor immediately after the cell's
@@ -54,12 +82,24 @@ const PLACEHOLDER_COLOR = "#888888";
 function assignLineageColor(world: World, c: Creature): void {
   const coding = genomeCodingBytes(c.genome);
   let root = world.lineageRootCoding.get(c.lineageRoot);
+  let hue = world.lineageHue.get(c.lineageRoot);
   if (root === undefined) {
+    // First cell of this lineage: register its coding reference and
+    // choose a hue maximally far from the other live lineages.
     root = coding;
     world.lineageRootCoding.set(c.lineageRoot, coding);
+    if (hue === undefined) {
+      hue = pickLineageHue(world);
+      world.lineageHue.set(c.lineageRoot, hue);
+    }
+  } else if (hue === undefined) {
+    // Lineage known (e.g. after a load rebuilt the coding ref) but no
+    // hue yet -- assign one now, spread from current live lineages.
+    hue = pickLineageHue(world);
+    world.lineageHue.set(c.lineageRoot, hue);
   }
   const div = root === coding ? 0 : genomeDistance(coding, root);
-  c.color = lineageColor(c.lineageRoot, div);
+  c.color = lineageColor(hue, div);
 }
 import {
   RX_MAINT_MEMBRANE, RX_MAINT_ENZ, RX_MAINT_CHL, RX_MAINT_MRNA,
@@ -1165,6 +1205,7 @@ export function createWorld(
     liveCodingKeys: new Set(),
     nextLineageRoot: 0,
     lineageRootCoding: new Map<number, Uint8Array>(),
+    lineageHue: new Map<number, number>(),
     founderTarget,
     lastFounderTrickleT: -1e9,
     // Transient set of currently-alive founder cell IDs. Used by the

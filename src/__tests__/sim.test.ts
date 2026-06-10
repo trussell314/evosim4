@@ -128,7 +128,7 @@ function quietWorld(): World {
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), fadingGhosts: [], eDnaCarriers: [], creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, parallelMin: 4000, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveCodingKeys: new Set<string>(), nextLineageRoot: 0, lineageRootCoding: new Map<number, Uint8Array>(), founderTarget: 0, lastFounderTrickleT: -1e9, founderIds: new Set<number>(), pinnedSpecies: new Set<string>(),
+    particleTarget: 550, parallelMin: 4000, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveCodingKeys: new Set<string>(), nextLineageRoot: 0, lineageRootCoding: new Map<number, Uint8Array>(), lineageHue: new Map<number, number>(), founderTarget: 0, lastFounderTrickleT: -1e9, founderIds: new Set<number>(), pinnedSpecies: new Set<string>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -2637,20 +2637,20 @@ describe("particle replenishment", () => {
 });
 
 describe("lineageColor", () => {
-  it("stable for same lineage + divergence", () => {
-    expect(lineageColor(3, 5)).toBe(lineageColor(3, 5));
+  it("stable for same hue + divergence", () => {
+    expect(lineageColor(120, 5)).toBe(lineageColor(120, 5));
   });
-  it("different lineages get different hues", () => {
-    expect(lineageColor(0, 0)).not.toBe(lineageColor(1, 0));
+  it("well-separated hues give different colours", () => {
+    expect(lineageColor(20, 10)).not.toBe(lineageColor(200, 10));
   });
-  it("divergence darkens within a lineage (different colour at the root vs far)", () => {
-    expect(lineageColor(7, 0)).not.toBe(lineageColor(7, 40));
+  it("divergence darkens within a hue (root vs far)", () => {
+    expect(lineageColor(200, 0)).not.toBe(lineageColor(200, 40));
   });
   it("valid sRGB hex format", () => {
-    expect(lineageColor(7, 11)).toMatch(/^#[0-9a-f]{6}$/);
+    expect(lineageColor(200, 11)).toMatch(/^#[0-9a-f]{6}$/);
   });
-  it("clamps in-gamut for extreme divergence", () => {
-    expect(lineageColor(123, 9999)).toMatch(/^#[0-9a-f]{6}$/);
+  it("clamps in-gamut for extreme divergence + wraps hue", () => {
+    expect(lineageColor(123 + 720, 9999)).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
 
