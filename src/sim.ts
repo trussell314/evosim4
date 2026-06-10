@@ -834,7 +834,17 @@ function initialAtmosphere(): Molecules {
 // is the contact distance (sum of radii). Bonds snap at BOND_BREAK_RATIO
 // times the rest length so a colony being yanked apart eventually
 // disintegrates.
-const MAX_BONDS = 4;
+//
+// MAX_BONDS is grounded in geometry, not an arbitrary ceiling: it's the
+// kissing number -- how many equal spheres can simultaneously touch a
+// central one. In full 3D that's 12 (the FCC/HCP packing limit); in a
+// 2D plane it's 6. Cells live and collide in 3D (the collision test
+// includes dz), so the 3D number applies: a cell in a dense cluster can
+// physically touch up to 12 neighbours. Was 4, which capped colonies
+// far below the physical packing limit and forced chain / small-cluster
+// shapes; at 12 the genome is free to evolve anything from a loose pair
+// up to a fully close-packed aggregate.
+const MAX_BONDS = 12;
 const BOND_SPRING_K = 8;
 const BOND_BREAK_RATIO = 3.5;
 
