@@ -1280,6 +1280,10 @@ function isListTab(t: AnalysisTab): boolean {
 }
 function applyTabVisibility(): void {
   const open = !analysisMinimized;
+  // Hide the tab subhead when collapsed -- otherwise its caption text
+  // wraps character-by-character inside the 26px minimized panel and
+  // leaks a vertical column of letters down the right edge.
+  tabSubhead.style.display = open ? "" : "none";
   analysisBody.style.display = open && isListTab(analysisTab) ? "" : "none";
   inspectorPane.style.display = open && analysisTab === "inspector" ? "" : "none";
   genomePane.style.display = open && analysisTab === "genome" ? "" : "none";
@@ -1287,8 +1291,14 @@ function applyTabVisibility(): void {
 // One-line subhead caption clarifying what the active tab carries.
 // Rendered under the tab row; updated whenever the active tab changes.
 const tabSubhead = document.createElement("div");
+// Starts hidden -- the analysis panel boots collapsed (analysisMinimized
+// = true) and applyTabVisibility() isn't called until the first
+// interaction, so without display:none here the caption renders into
+// the 26px collapsed panel on first paint and leaks a column of
+// clipped letters down the right edge. applyTabVisibility toggles it
+// from here on.
 tabSubhead.style.cssText =
-  "padding:3px 9px 5px;font-size:10.5px;color:#9ab;opacity:.85;" +
+  "display:none;padding:3px 9px 5px;font-size:10.5px;color:#9ab;opacity:.85;" +
   "border-bottom:1px solid #1a3340;" + HUD_FONT;
 function syncTabSubhead(): void {
   const def = TAB_DEFS.find((d) => d.id === analysisTab);
@@ -4415,8 +4425,15 @@ function drawPhylogeny(): void {
   const dpr = getDpr();
   const canvasCssH = canvas.height / dpr;
   const canvasCssW = canvas.width / dpr;
-  // Phylogeny sits directly above the bottom controls bar.
-  const stripY = canvasCssH - stripH - controlsBarH;
+  // The strip is the TOP-most element of the reserved bottom band.
+  // bottomReserveH() already sums PHYLO_STRIP_H + every bottom bar
+  // (toggle, controls, arch panel, overlay panel, HUD), so the strip's
+  // top edge is canvasCssH - bottomReserveH(); it then occupies the
+  // first PHYLO_STRIP_H px above those bars. The old math subtracted
+  // only controlsBarH, which dropped the strip down on top of the
+  // toggle / overlay / HUD bars (it was written before those bars
+  // existed) -- the cause of the legend leaking just above the HUD.
+  const stripY = canvasCssH - bottomReserveH();
   const w = canvasCssW;
 
   // Semi-opaque panel so the strip is legible over particles drawn underneath.
