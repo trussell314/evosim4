@@ -14,6 +14,7 @@ import {
   makeRandomViableGenome,
   genomeSynthMask,
   genomeCodingKey,
+  genomeCodingBytes,
   walkGenome,
   OP,
   mutateGenome,
@@ -34,8 +35,31 @@ import {
   EMIT_CHANNEL_MAGNETIC,
 } from "./genome";
 import { mulberry32, mixHash, hashUnit } from "./rng";
-import { genomeTag, genomeKey, genomeDistance, genomeColor } from "./genome-id";
-export { genomeTag, genomeKey, genomeDistance, genomeColor };
+import { genomeTag, genomeKey, genomeDistance, lineageColor } from "./genome-id";
+export { genomeTag, genomeKey, genomeDistance, lineageColor };
+
+// Neutral placeholder set at cell construction; every spawn path
+// overwrites it via assignLineageColor immediately after the cell's
+// lineageRoot is assigned. Never rendered.
+const PLACEHOLDER_COLOR = "#888888";
+
+// Colour a cell by its founding lineage (hue) + how far its coding
+// genome has diverged from the lineage's root (lightness/chroma).
+// Idempotent and cheap to call right after a cell's lineageRoot is
+// assigned. The first cell seen for a lineageRoot registers its coding
+// genome as that lineage's reference; later members measure their
+// coding edit-distance against it. (genomeDistance is Levenshtein, run
+// once per birth -- negligible at sim birth rates.)
+function assignLineageColor(world: World, c: Creature): void {
+  const coding = genomeCodingBytes(c.genome);
+  let root = world.lineageRootCoding.get(c.lineageRoot);
+  if (root === undefined) {
+    root = coding;
+    world.lineageRootCoding.set(c.lineageRoot, coding);
+  }
+  const div = root === coding ? 0 : genomeDistance(coding, root);
+  c.color = lineageColor(c.lineageRoot, div);
+}
 import {
   RX_MAINT_MEMBRANE, RX_MAINT_ENZ, RX_MAINT_CHL, RX_MAINT_MRNA,
   RX_MAINT_RECEPTOR, RX_MAINT_CATALYST, RX_TOXIFY, RX_DEATH_CATDENATURE,
@@ -1139,6 +1163,7 @@ export function createWorld(
     extinctionCount: 0,
     liveCodingKeys: new Set(),
     nextLineageRoot: 0,
+    lineageRootCoding: new Map<number, Uint8Array>(),
     founderTarget,
     lastFounderTrickleT: -1e9,
     // Transient set of currently-alive founder cell IDs. Used by the
@@ -1242,11 +1267,7 @@ export function createWorld(
     buildParticleGrid(world);
     const initialFounders = Math.round(FOUNDER_TARGET * (0.6 + simRng() * 0.4));
     for (let i = 0; i < initialFounders; i++) {
-      const f = spawnFounder(world);
-      if (f && i === 0) {
-        world.anchorGenome = new Uint8Array(f.genome);
-        f.color = genomeColor(f.genome, world.anchorGenome);
-      }
+      spawnFounder(world); // each founder colours itself by lineage
     }
   }
   return world;
@@ -1484,6 +1505,9 @@ function spawnFounder(world: World): Creature | null {
   updateCreatureRadius(c); // reflect the drawn mass in r / density
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
+  // Founder is the root of its own lineage -- registers its coding
+  // genome as the divergence reference and paints at divergence 0.
+  assignLineageColor(world, c);
   world.creatures.push(c);
   world.founderIds.add(c.id);
   noteCreatureBirth(world, c, undefined);
@@ -1791,7 +1815,7 @@ function makeCreature(
     thrustAccel: computeThrustAccel(genome),
     genome,
     vm: newVMState(),
-    color: genomeColor(genome),
+    color: PLACEHOLDER_COLOR, // overwritten by assignLineageColor once lineageRoot is set
     speciesKey: genomeKey(genome),
     molecules: {
       // Membrane: the structural reserve (just above
@@ -1988,6 +2012,7 @@ export function spawnSpeciesInstance(
   if (c === null) return null; // unreachable with an explicit genome
   c.bornAt = world.t;
   c.lineageRoot = world.nextLineageRoot++;
+  assignLineageColor(world, c);
   world.creatures.push(c);
   noteCreatureBirth(world, c, undefined);
   return c;
@@ -3328,7 +3353,7 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     thrustAccel: computeThrustAccel(childGenome),
     genome: childGenome,
     vm: newVMState(),
-    color: genomeColor(childGenome, world.anchorGenome),
+    color: PLACEHOLDER_COLOR, // set below via assignLineageColor
     bornAt: world.t,
     speciesKey: genomeKey(childGenome),
     molecules: childMolecules,
@@ -3370,6 +3395,7 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     }
   }
   child.lineageRoot = inner.lineageRoot;
+  assignLineageColor(world, child);
   child.parentId = inner.id;
   child.organelleSynthMask = genomeSynthMask(childGenome);
   // The child is itself an active endosymbiont in the same vacuole.
@@ -4183,13 +4209,6 @@ export function step(world: World, dt: number): void {
     }
     if (first) {
       world.lastFounderTrickleT = world.t;
-      // When the world had just gone fully empty, the first new founder
-      // re-anchors the color palette so descendant coloring restarts
-      // relative to this new root.
-      if (wasEmpty) {
-        world.anchorGenome = new Uint8Array(first.genome);
-        first.color = genomeColor(first.genome, world.anchorGenome);
-      }
     }
   }
 }
@@ -5952,7 +5971,7 @@ function tryReproduce(parent: Creature, world: World): void {
     thrustAccel: computeThrustAccel(childGenome),
     genome: childGenome,
     vm: newVMState(),
-    color: genomeColor(childGenome, world.anchorGenome),
+    color: PLACEHOLDER_COLOR, // set below via assignLineageColor
     ingestCooldown: INGEST_COOLDOWN_SEC,
     repairTicks: 0,
     bornAt: world.t,
@@ -5962,6 +5981,7 @@ function tryReproduce(parent: Creature, world: World): void {
   // Inherit the parent's founding lineage. Mutated descendants stay
   // part of the same lineageRoot for top-up counting purposes.
   child.lineageRoot = parent.lineageRoot;
+  assignLineageColor(world, child);
   child.parentId = parent.id;
   {
     const cols = child.store.catalystCols;

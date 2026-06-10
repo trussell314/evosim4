@@ -1147,6 +1147,28 @@ export function genomeCodingKey(genome: Uint8Array): string {
   return s;
 }
 
+// Coding bytes only: the contents of every GENE..END span concatenated
+// (introns dropped), as a flat Uint8Array. The byte-level counterpart
+// to genomeCodingKey -- used where a numeric edit distance over the
+// functional genome is needed (lineage-divergence colouring) rather
+// than a string key. Back-to-back genes are separated by a single
+// 0xFF sentinel so a byte can't bridge two genes in the distance.
+export function genomeCodingBytes(genome: Uint8Array): Uint8Array {
+  const out: number[] = [];
+  let inGene = false;
+  for (let i = 0; i < genome.length; i++) {
+    const b = genome[i];
+    if (!inGene) {
+      if (b === OP.GENE) { inGene = true; if (out.length > 0) out.push(0xff); }
+      continue;
+    }
+    if (b === OP.END) { inGene = false; continue; }
+    if (b === OP.GENE) { out.push(0xff); continue; }
+    out.push(b);
+  }
+  return new Uint8Array(out);
+}
+
 // Gene-aware disassembly. The VM only executes bytes inside a GENE..END
 // span, so the listing mirrors that: GENE/END are flush markers, gene-
 // body ops are indented and operand-decoded, and intron bytes (outside

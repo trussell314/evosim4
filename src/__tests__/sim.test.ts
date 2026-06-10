@@ -21,7 +21,7 @@ import {
   denatureWaste,
   seedParticles,
   step,
-  genomeColor,
+  lineageColor,
   emptyMolecules,
   advanceDivision,
   DIVISION_DURATION_SEC,
@@ -128,7 +128,7 @@ function quietWorld(): World {
     // respawn, water-column replenish, aeration).
     width: 800, height: 600, depth: 24, t: 100,
     particles: [], particleStore: new ParticleStore(256), fadingGhosts: [], eDnaCarriers: [], creatures: [], creatureStore: new CreatureStore(64),
-    particleTarget: 550, parallelMin: 4000, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveCodingKeys: new Set<string>(), nextLineageRoot: 0, founderTarget: 0, lastFounderTrickleT: -1e9, founderIds: new Set<number>(), pinnedSpecies: new Set<string>(),
+    particleTarget: 550, parallelMin: 4000, particleSpawnRate: 0, useSeedRamp: false, initialSeedDone: true, seedRampClock: 0, extinctionCount: 0, liveCodingKeys: new Set<string>(), nextLineageRoot: 0, lineageRootCoding: new Map<number, Uint8Array>(), founderTarget: 0, lastFounderTrickleT: -1e9, founderIds: new Set<number>(), pinnedSpecies: new Set<string>(),
     gravity: 0, drag: 0,
     surfaceAmp: 0, surfaceLength: 200, surfacePeriod: 1, surfaceDecay: 100,
     swellAmp: 0, swellLength: 800, swellPeriod: 1, swellDecay: 100,
@@ -2636,18 +2636,21 @@ describe("particle replenishment", () => {
   });
 });
 
-describe("genomeColor", () => {
-  it("stable for same bytes", () => {
-    expect(genomeColor(new Uint8Array([1, 2, 3, 4, 5]))).toBe(genomeColor(new Uint8Array([1, 2, 3, 4, 5])));
+describe("lineageColor", () => {
+  it("stable for same lineage + divergence", () => {
+    expect(lineageColor(3, 5)).toBe(lineageColor(3, 5));
   });
-  it("differs by one byte", () => {
-    expect(genomeColor(new Uint8Array([1, 2, 3, 4, 5]))).not.toBe(genomeColor(new Uint8Array([1, 2, 9, 4, 5])));
+  it("different lineages get different hues", () => {
+    expect(lineageColor(0, 0)).not.toBe(lineageColor(1, 0));
   });
-  it("valid hsl format", () => {
-    expect(genomeColor(new Uint8Array([7, 11]))).toMatch(/^hsl\(\d+, \d+%, \d+%\)$/);
+  it("divergence darkens within a lineage (different colour at the root vs far)", () => {
+    expect(lineageColor(7, 0)).not.toBe(lineageColor(7, 40));
   });
-  it("handles empty genome", () => {
-    expect(() => genomeColor(new Uint8Array([]))).not.toThrow();
+  it("valid sRGB hex format", () => {
+    expect(lineageColor(7, 11)).toMatch(/^#[0-9a-f]{6}$/);
+  });
+  it("clamps in-gamut for extreme divergence", () => {
+    expect(lineageColor(123, 9999)).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
 

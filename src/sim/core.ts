@@ -1306,6 +1306,15 @@ export interface World {
   // Monotonic counter used to assign a fresh lineageRoot ID each time
   // a founder is spawned (initial seeding + top-up after extinctions).
   nextLineageRoot: number;
+  // Per-lineage reference coding genome (the founding cell's coding
+  // bytes), keyed by lineageRoot. Read at each birth to colour the
+  // child by how far its coding genome has diverged from its lineage
+  // root (see lineageColor). Transient -- not serialized; rebuilds on
+  // load as new cells are born (a loaded lineage re-anchors to its
+  // first post-load member, and existing cells keep their saved
+  // colour). Entry created when a founder spawns; never pruned (cheap:
+  // one short byte array per founding lineage).
+  lineageRootCoding: Map<number, Uint8Array>;
   // Steady-state target for distinct founding lineages alive in the
   // world. Each step counts current lineages and spawns up to this
   // many to top up. Real worlds use 10; tests usually set to 0 to
