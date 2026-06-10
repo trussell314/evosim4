@@ -1147,6 +1147,38 @@ export function genomeCodingKey(genome: Uint8Array): string {
   return s;
 }
 
+// Species key: the order-independent, intron-independent SET of genes.
+// Two cells are the same species iff they carry the same set of gene
+// byte-sequences, regardless of gene order or any intron drift between
+// them. Built by collecting each GENE..END span's bytes as a hex
+// token, de-duplicating (a set, so gene dosage doesn't split a
+// species), sorting (order-independent), and joining. Coarser than
+// genomeCodingKey (which is order-dependent); the canonical "species"
+// grain. A gene-less genome yields "" (its own degenerate species).
+export function genomeSpeciesKey(genome: Uint8Array): string {
+  const cached = _speciesKeyCache.get(genome);
+  if (cached !== undefined) return cached;
+  const genes = new Set<string>();
+  let cur = "";
+  let inGene = false;
+  const flush = (): void => { if (inGene) { genes.add(cur); cur = ""; } };
+  for (let i = 0; i < genome.length; i++) {
+    const b = genome[i];
+    if (!inGene) {
+      if (b === OP.GENE) { inGene = true; cur = ""; }
+      continue;
+    }
+    if (b === OP.END) { genes.add(cur); cur = ""; inGene = false; continue; }
+    if (b === OP.GENE) { genes.add(cur); cur = ""; continue; } // back-to-back
+    cur += (b < 16 ? "0" : "") + b.toString(16);
+  }
+  flush();
+  const key = [...genes].sort().join("|");
+  _speciesKeyCache.set(genome, key);
+  return key;
+}
+const _speciesKeyCache = new WeakMap<Uint8Array, string>();
+
 // Coding bytes only: the contents of every GENE..END span concatenated
 // (introns dropped), as a flat Uint8Array. The byte-level counterpart
 // to genomeCodingKey -- used where a numeric edit distance over the

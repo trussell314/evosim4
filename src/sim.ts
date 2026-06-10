@@ -15,6 +15,7 @@ import {
   genomeSynthMask,
   genomeCodingKey,
   genomeCodingBytes,
+  genomeSpeciesKey,
   walkGenome,
   OP,
   mutateGenome,
@@ -1816,7 +1817,7 @@ function makeCreature(
     genome,
     vm: newVMState(),
     color: PLACEHOLDER_COLOR, // overwritten by assignLineageColor once lineageRoot is set
-    speciesKey: genomeKey(genome),
+    speciesKey: genomeSpeciesKey(genome),
     molecules: {
       // Membrane: the structural reserve (just above
       // MIN_VIABLE_MEMBRANE).
@@ -2052,7 +2053,8 @@ const PHYLO_EVENT_CAP = 2000;
 
 function noteCreatureBirth(world: World, c: Creature, parentKey: string | undefined): void {
   if (world.stats) world.stats.births++;
-  const key = genomeKey(c.genome);
+  // Species == the cell's gene-set key (already computed at spawn).
+  const key = c.speciesKey;
   let sp = world.species.get(key);
   const wasNew = !sp;
   if (!sp) {
@@ -3359,7 +3361,7 @@ function divideInner(inner: Creature, host: Creature, world: World): void {
     vm: newVMState(),
     color: PLACEHOLDER_COLOR, // set below via assignLineageColor
     bornAt: world.t,
-    speciesKey: genomeKey(childGenome),
+    speciesKey: genomeSpeciesKey(childGenome),
     molecules: childMolecules,
   });
   // Proportional split of the independent pools (catalysts + generic
@@ -5979,7 +5981,7 @@ function tryReproduce(parent: Creature, world: World): void {
     ingestCooldown: INGEST_COOLDOWN_SEC,
     repairTicks: 0,
     bornAt: world.t,
-    speciesKey: genomeKey(childGenome),
+    speciesKey: genomeSpeciesKey(childGenome),
     molecules: childMolecules,
   });
   // Inherit the parent's founding lineage. Mutated descendants stay
@@ -6990,6 +6992,10 @@ export interface RenderSnapshot extends WorldEnv {
   particleTarget: number;
   parallelMin: number;
   extinctionCount: number;
+  // Total founder lineages ever spawned (monotonic). The HUD subtracts
+  // the count of currently-live distinct lineageRoots to show how many
+  // founder lineages have gone fully extinct.
+  nextLineageRoot: number;
   // Lineage roots whose founder cell is still alive. Main thread uses
   // this to flag lineages whose original founder is gone (a lineage
   // with live cells whose root isn't in this set is being carried by
@@ -7307,6 +7313,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     particleTarget: world.particleTarget,
     parallelMin: world.parallelMin,
     extinctionCount: world.extinctionCount,
+    nextLineageRoot: world.nextLineageRoot,
     engulfedCount,
     engulfedOnlySpeciesCount,
     // Lineage roots that still have a founder cell alive. Computed by

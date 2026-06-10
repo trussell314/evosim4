@@ -100,8 +100,9 @@ import {
   MIN_VIABLE_MEMBRANE,
   MIN_VIABLE_RIBOSOME,
   MIN_VIABLE_AMINOACID,
+  genomeKey,
 } from "./sim";
-import { disassemble, walkGenome, genomeCodingKey, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT, emitChannelName } from "./genome";
+import { disassemble, walkGenome, OP, OPERANDS, CATALYST_COUNT, SYNTH_KIND, SYNTH_KIND_COUNT, emitChannelName } from "./genome";
 import { ARCHETYPES } from "./genome-archetypes";
 import {
   compileCreature,
@@ -145,7 +146,7 @@ hudBar.style.cssText =
 // Live stats shown on the strip. Updated by updateInspector() each frame.
 const hudStats = document.createElement("span");
 hudStats.style.cssText = HUD_FONT;
-hudStats.textContent = "pop/engulfed=--  species/engulfed=--  lineages/extinct=--  parts=--";
+hudStats.textContent = "pop: --  lineages/extinct: --  species/genomes: --  particles: --";
 hudBar.appendChild(hudStats);
 // Stall + error indicator. Hidden by default; shown only when
 // something useful is going on (sim paused / world empty / threw).
@@ -994,7 +995,8 @@ let activeDisasmRaw = "";
 // every frame.
 let lastHudCountT = -1e9;
 let cachedSpeciesCount = 0;
-let cachedCodingCount = 0;
+let cachedGenomeCount = 0;
+let cachedLiveLineages = 0;
 const HUD_COUNT_INTERVAL_MS = 333;
 let lastInspectedGenomeVer = "";
 let inspectorProseCache = "";
@@ -5416,23 +5418,32 @@ function updateInspector(): void {
   const nowHud = performance.now();
   if (nowHud - lastHudCountT > HUD_COUNT_INTERVAL_MS) {
     lastHudCountT = nowHud;
+    // species = distinct GENE-SET keys (c.speciesKey is the gene-set
+    // now); genomes = distinct EXACT byte genomes; lineages = distinct
+    // founding lineages with a living cell. All over the free-cell set.
     const liveSpecies = new Set<string>();
-    const liveCoding = new Set<string>();
+    const liveGenomes = new Set<string>();
+    const liveLineages = new Set<number>();
     for (const c of snapshot.creatures) {
       liveSpecies.add(c.speciesKey);
-      liveCoding.add(genomeCodingKey(c.genome));
+      liveGenomes.add(genomeKey(c.genome));
+      liveLineages.add(c.lineageRoot);
     }
     cachedSpeciesCount = liveSpecies.size;
-    cachedCodingCount = liveCoding.size;
+    cachedGenomeCount = liveGenomes.size;
+    cachedLiveLineages = liveLineages.size;
   }
-  // Top HUD: population-related counts only. "genomes" counts distinct
-  // CODING genomes (gene bytes only -- intron drift ignored); "extinct"
-  // is the lifetime count of coding genomes that have died out.
+  // Top HUD, four facets of the population:
+  //   pop          = independent cells + engulfed cells (any nesting)
+  //   lineages     = live founder lineages / lineages gone fully extinct
+  //   species      = distinct gene-sets / distinct exact byte genomes
+  //   particles    = visible particles / target
+  const extinctLineages = Math.max(0, snapshot.nextLineageRoot - cachedLiveLineages);
   hudStats.textContent =
-    `pop/engulfed=${snapshot.creatures.length}/${snapshot.engulfedCount}  ` +
-    `species/engulfed=${cachedSpeciesCount}/${snapshot.engulfedOnlySpeciesCount}  ` +
-    `genomes/extinct=${cachedCodingCount}/${snapshot.extinctionCount}  ` +
-    `parts=${snapshot.particles.length}/${snapshot.particleTarget}`;
+    `pop: ${snapshot.creatures.length}+${snapshot.engulfedCount}  ` +
+    `lineages/extinct: ${cachedLiveLineages}/${extinctLineages}  ` +
+    `species/genomes: ${cachedSpeciesCount}/${cachedGenomeCount}  ` +
+    `particles: ${snapshot.particles.length}/${snapshot.particleTarget}`;
   // Bottom HUD: clock / perf / build, fixed order.
   bottomHud.textContent =
     `t=${formatDayClock(snapshot.t, snapshot.dayPeriod)}  ` +
