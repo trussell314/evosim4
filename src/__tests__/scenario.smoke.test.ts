@@ -11,18 +11,11 @@ import {
   createWorld,
   step,
   type World,
-  MATERIAL_IDS_ORDERED,
+  MOLECULE_IDS,
+  newCreature,
 } from "../sim";
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { newVMState } from "../genome";
+import { mulberry32 } from "../rng";
 
 const SMOKE_SEED = 0xC0FFEE;
 
@@ -57,7 +50,7 @@ function snapshot(w: World): Snapshot {
   let hasNaN = false;
   for (const c of w.creatures) {
     energySum += c.energy;
-    organicSum += c.reserves.organic;
+    organicSum += c.molecules.biopolymer;
     lenSum += c.genome.length;
     if (c.genome.length < lenMin) lenMin = c.genome.length;
     if (c.genome.length > lenMax) lenMax = c.genome.length;
@@ -65,8 +58,8 @@ function snapshot(w: World): Snapshot {
     if (!Number.isFinite(c.x + c.y + c.z + c.vx + c.vy + c.vz + c.energy)) {
       hasNaN = true;
     }
-    for (const id of MATERIAL_IDS_ORDERED) {
-      if (!Number.isFinite(c.reserves[id])) hasNaN = true;
+    for (const k of MOLECULE_IDS) {
+      if (!Number.isFinite(c.molecules[k])) hasNaN = true;
     }
   }
   for (const p of w.particles) {
@@ -129,31 +122,36 @@ describe("smoke: default-creature ecosystem (long run)", () => {
     expect(a).not.toEqual(c);
   });
 
-  it("runs 1 default creature for 120 simulated seconds without crashing or NaN-ing", () => {
+  it("runs the default founder cohort for 120 simulated seconds without crashing or NaN-ing", () => {
     const w = createWorld(800, 600);
     runAndObserve(w, 120, 1 / 60, 10);
   });
 
-  it("runs 3 default creatures for 60 simulated seconds without crashing or NaN-ing", () => {
+  it("runs the founder cohort + 2 extra clones for 60 simulated seconds without crashing or NaN-ing", () => {
     const w = createWorld(800, 600);
     const proto = w.creatures[0];
-    w.creatures.push({
-      ...proto,
-      x: 200, y: 200,
-      genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
-    });
-    w.creatures.push({
-      ...proto,
-      x: 600, y: 400,
-      genome: new Uint8Array(proto.genome),
-      vm: { pc: 0, stack: [] },
-    });
-    for (const c of w.creatures) {
-      const fresh = {} as typeof proto.reserves;
-      for (const id of MATERIAL_IDS_ORDERED) fresh[id] = c.reserves[id];
-      c.reserves = fresh;
-    }
+    const cloneOf = (px: number, py: number) => {
+      const molecules: Record<string, number> = {};
+      for (const k of MOLECULE_IDS) molecules[k] = proto.molecules[k];
+      return newCreature(w.creatureStore, {
+        x: px, y: py, z: proto.z,
+        vx: proto.vx, vy: proto.vy, vz: proto.vz,
+        r: proto.r, density: proto.density,
+        energy: proto.energy,
+        senseRange: proto.senseRange,
+        thrustAccel: proto.thrustAccel,
+        ingestCooldown: proto.ingestCooldown,
+        repairTicks: proto.repairTicks,
+        bornAt: proto.bornAt,
+        genome: new Uint8Array(proto.genome),
+        vm: newVMState(),
+        color: proto.color,
+        speciesKey: proto.speciesKey,
+        molecules,
+      });
+    };
+    w.creatures.push(cloneOf(200, 200));
+    w.creatures.push(cloneOf(600, 400));
     runAndObserve(w, 60, 1 / 60, 5);
   });
 });
@@ -183,7 +181,16 @@ function runAndObserve(w: World, durationSec: number, dt: number, logEvery: numb
 
   expect(final.hasNaN).toBe(false);
   expect(final.particles).toBeGreaterThan(0);
-  expect(final.pop).toBeLessThanOrEqual(80);
+  // createWorld seeds a full founder cohort (~30-50, FOUNDER_TARGET=50)
+  // and the top-up loop sustains that many distinct lineages, so the
+  // old ceiling of 80 no longer reflects a healthy short run --
+  // especially after the viability buffs (ambient aa+min, fa spawn
+  // bump, founder lifespan bonus) let more founders reproduce inside
+  // the observation window. The assertion's real job is to catch an
+  // unbounded explosion toward the MAX_CREATURES=400 hard cap, not to
+  // pin an exact population, so bound it well below the cap with
+  // headroom for normal growth.
+  expect(final.pop).toBeLessThanOrEqual(250);
   for (const c of w.creatures) {
     expect(c.x).toBeGreaterThanOrEqual(0);
     expect(c.x).toBeLessThan(w.width);

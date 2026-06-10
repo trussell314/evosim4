@@ -1,0 +1,430 @@
+import { describe, it, expect } from "vitest";
+import { createWorld, step, type World } from "../sim";
+
+// Golden behavior fingerprint. The determinism test only proves two
+// runs in the SAME build agree; it cannot catch a refactor that
+// changes behavior consistently. This pins a hash of full world state
+// after a fixed seeded run, so ANY behavior drift from the modular
+// decomposition (CLAUDE.md: behavior-preserving) fails CI immediately.
+//
+// If a change is *intended* to alter simulation behavior, recompute and
+// update GOLDEN deliberately in the same commit -- never reflexively.
+
+const SEED = 0x1234abcd;
+const TICKS = 60 * 4;
+
+// Quantize to 1e-6 so a refactor that re-associates mathematically
+// equivalent float expressions doesn't trip it, while any real
+// behavior change (different path, count, ordering) still does.
+function q(v: number): number {
+  return Math.round(v * 1e6);
+}
+
+function fingerprint(w: World): string {
+  let h = 0x811c9dc5 >>> 0;
+  const mix = (n: number): void => {
+    h ^= n | 0;
+    h = Math.imul(h, 0x01000193);
+    h >>>= 0;
+  };
+  mix(q(w.t));
+  mix(w.creatures.length);
+  mix(w.particles.length);
+  for (const c of w.creatures) {
+    mix(q(c.energy));
+    mix(q(c.x));
+    mix(q(c.y));
+    mix(q(c.r));
+    mix(c.genome.length);
+    for (let i = 0; i < c.genome.length; i++) mix(c.genome[i]);
+    for (const k of Object.keys(c.molecules).sort()) {
+      mix(q((c.molecules as unknown as Record<string, number>)[k]));
+    }
+  }
+  const store = w.particleStore;
+  for (let i = 0; i < w.particles.length; i++) {
+    mix(store.chemId[i]);
+    mix(q(store.x[i]));
+    mix(q(store.y[i]));
+    mix(q(store.r[i]));
+  }
+  for (let i = 0; i < w.ambient.length; i++) mix(q(w.ambient[i]));
+  for (let i = 0; i < w.reserve.length; i++) mix(q(w.reserve[i]));
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+describe("golden: seeded run produces a pinned state fingerprint", () => {
+  it("matches the committed GOLDEN hash", () => {
+    const w = createWorld(800, 600, { seed: SEED });
+    for (let i = 0; i < TICKS; i++) step(w, 1 / 60);
+    const fp = fingerprint(w);
+    // Recompute & update only when a behavior change is intended.
+    // Bumped: PARTITION op (0x68) is now a reachable opcode, so random
+    // genomes that previously NOP'd on that byte now register an
+    // asymmetric-division bias -- an intended behavior change.
+    // Bumped again: SYNTH_KIND.COMPETENCE added (SYNTH_KIND_COUNT
+    // 14 -> 15 shifts the kindByte modulo) and competent cells now
+    // take up eDNA fragments -- both intended behavior changes.
+    // Bumped again: SYNTH_KIND.PACKAGE added (SYNTH_KIND_COUNT
+    // 15 -> 16) and cells expressing it now actively shed self
+    // fragments -- both intended behavior changes.
+    // Bumped again: synth_aa reaction vmax 0.4 -> 1.2 (reactions.ts
+    // out[4]) so a pure photoautotroph can close its own amino-acid
+    // budget from photosynthate + minerals (biological realism --
+    // de-novo aa synthesis is not a growth bottleneck in real
+    // primary producers). Global, intended behavior change;
+    // determinism + mass-conservation re-verified green.
+    // Bumped again: photosynth reaction vmax 1.2 -> 5.0 (reactions.ts
+    // out[3]), derived from the glu mass balance (sink sum ~2.69 /
+    // 0.5 glu-per-unit ~= 5.4) -- carbon fixation was the binding
+    // constraint once synth_aa was relieved (mGLU pinned ~0 in every
+    // autotroph run). Global, intended; determinism + mass green.
+    // Bumped again: Path 1 -- ATP is now a first-class chemical
+    // (CHEM_ATP, named id 45; `energy` aliases the m_atp column).
+    // NAMED_CHEMICAL_COUNT 45->46, GENERIC 51->50 so one fewer
+    // procedural generic chemical is rolled by the seeded chem-table
+    // build -> generic chem properties shift (intended). genome ABI
+    // unchanged (CHEMICAL_COUNT stays 96); determinism byte-identical
+    // + mass-conservation re-verified green; SAVE_SCHEMA bumped.
+    // Bumped (Phase 2b, op redesign): INGEST is now a zero-operand
+    // bond-energy-threshold engulf (pops a stack value) instead of a
+    // 6-bin material mask. Op arity + VM_OUT shape + every archetype's
+    // INGEST encoding changed -> seeded run diverges (intended). The
+    // sensor-bin gate + biopolymer generic-catch fallback are gone;
+    // selectivity is now an evolvable scalar. SAVE_SCHEMA 13->14.
+    // (prev) Bumped (Phase 2a-i, op redesign): added the TRANSPORT opcode
+    // (0x56). OP_BYTES auto-derives from Object.values(OP), so a new
+    // opcode shifts randMutByte's op/noop draw distribution -> every
+    // seeded lineage's mutated bytes change (intended, the whole
+    // point of the new op being reachable by mutation). genome ABI
+    // grows by one op + a VM_OUT.transport field; CHEMICAL_COUNT
+    // unchanged. Determinism (same-seed-identical) still green;
+    // mass-conservation green; SAVE_SCHEMA bumped 11->12.
+    // Bumped (Phase 5 cleanup): the 4 chemoreceptor-synth bootstrap
+    // reactions (slots 15-18) inertized (rate set to 0) -- the chems
+    // they produced were inputs to the retired chemo activation
+    // branch, so making them was pure waste of AA+MIN every tick.
+    // Slot indices kept stable; uncatRate now 0; named labels
+    // preserved for disasm/inspector clarity.
+    // (prev) Bumped (Phase 5, op redesign): chemo activation branch retired
+    // (CHEMO receptor + activated-chemo signal chems no longer
+    // written by runActivation; SYNTH CHEMO is a no-op kept for
+    // SYNTH_KIND_COUNT stability). Archetypes' SYNTH CHEMO +
+    // SENSE_CHEMICAL CHEM_ACT_CHEMO_*_X/Y patterns migrated to a
+    // direct SENSE_OUT <CHEM_BIOPOLYMER> particle-gradient read
+    // (via the new climbParticleGradient helper). SAVE_SCHEMA
+    // 17->18; mass-conservation green.
+    // (prev) Bumped (Phase 4a, op redesign): the synthMask enable-gate path
+    // is retired. Named bootstrap reactions ran only when the genome
+    // had set the corresponding SYNTH_BIT_* via a SYNTH op; now they
+    // run unconditionally on their existing uncatRate floor. Every
+    // cell metabolizes at baseline; named SYNTH biomass/receptor ops
+    // become no-ops (their synthMask bits are no longer consulted
+    // by the reaction loop). Intended behavior change; SAVE_SCHEMA
+    // 15->16; mass-conservation green.
+    // Bumped: hand-authored static terrain (4 rock polygons) + a
+    // hydrothermal vent now ship with every fresh world. The new
+    // obstacles change the seeded layout (founder spawn rejects rock
+    // overlap, particles bounce off rock) and the vent's eruption
+    // schedule consumes RNG draws -- both shift the fingerprint
+    // deterministically. Determinism + mass-conservation still green.
+    // Bumped: evacuator now requires a polygon-inside hit (not just
+    // a bitmap-flagged border cell) before dissolving a particle.
+    // The over-aggressive ~12 px death halo around rock is gone --
+    // particles settle ON rock surfaces instead of vanishing on
+    // approach. Mass-conservation + determinism still green.
+    // Bumped: dropped the redundant after-applyWalls evacuator call.
+    // One end-of-tick pass is enough now that the evacuator is
+    // polygon-gated and rare. The skipped intra-tick pass shifts a
+    // few particles' lifetime by 1 tick; deterministic, mass-conserving.
+    // Bumped: topSpawnPos no longer retries 32x against the heightmap;
+    // a single uniform-x roll either spawns or skips. The previous
+    // retry loop biased the long-run x distribution toward whichever
+    // clear columns won the retry race; the single-roll form is
+    // uniform across all clear columns (rocky columns just generate
+    // no spawn on that call -- the next call gets a fresh sample).
+    // Bumped: brownian decay constant 200 -> 400. Deep-water sediment
+    // now drifts visibly instead of looking glued to the rock; mid-
+    // water mixing also up a little. Determinism + mass-conservation
+    // still green.
+    // Bumped: regional temperature is now a state-bearing field
+    // (diffuse between neighbouring regions + slow relax toward the
+    // analytical baseline + vent source term) instead of a per-tick
+    // resample of the analytical function. Q10 + THERMO reads route
+    // through the regional cache, so they sample at region centres
+    // rather than the creature's exact x,y -- with the patch wave
+    // active that shifts rates by a small per-tick amount. Vent's
+    // contribution also moved out of temperatureAt and into the
+    // stepper as a source. Deterministic, mass-OK.
+    // Bumped: tempPatchAmp default 3 -> 0. The patch sine wave was a
+    // hangover from the pre-rework wave coupling -- the analytical
+    // term still showed up on the temperature overlay as wavy stripes
+    // unrelated to anything physical. Zeroed by default.
+    // Bumped: evacuateRocks was adding particle PHYSICAL MASS directly
+    // into the ambient MOLES field for non-molecule particles. For any
+    // chem with molarMass != 1 (every generic chem) this inflated the
+    // amount by a factor of molarMass per evacuation, and combined
+    // with precipitate's particle-spawning created an autocatalytic
+    // mass source. Generic chems were climbing into the hundreds of
+    // millions of moles over a long run. Divide by molar mass on the
+    // way in.
+    // Bumped: dead SYNTH kinds (BIO/AA/FA/ENZ/CHL/MRNA/PHOTO/MECH/
+    // THERMO/MAGNETO/REPAIR/CHEMO) removed from genome.ts;
+    // SYNTH_KIND_COUNT 17 -> 5. The modulo applied to genome kind
+    // bytes shifts -- every existing SYNTH op in every test/founder
+    // genome decodes to a different live kind (CAT/INH/BOND/
+    // COMPETENCE/PACKAGE). viableGenome relaxed to just require
+    // REPRODUCE + sense + (heterotroph -> THRUST). Founders now use
+    // SYNTH CAT for differentiation. makeRandomViableGenome rebuilt
+    // around CAT boosts instead of dead SYNTH biosynth ops. Every
+    // archetype migrated. Determinism + mass-conservation green.
+    // Bumped again: catSynthMask / inhSynthMask converted from packed
+    // JS bitmasks to Uint8Array(CATALYST_COUNT). The bitmask form
+    // silently aliased high slots into low ones (JS 1<<k uses low 5
+    // bits of k -- slot 37 collided with slot 5, and the consumer
+    // loop fired 8 phantom syntheses per expressed slot). Fixing it
+    // removes the phantom AA/MIN/ATP drain.
+    // Bumped again: founder spawn now seeds 0.5 of each receptor
+    // (photo/mech/thermo/magneto). The post-fix catalyst tax was
+    // bankrupting sense-dependent archetypes before they could grow
+    // receptors from substrate; the chicken-and-egg (need photoreceptor
+    // to sense light to migrate to light to photosynth) had no entry
+    // point with zero starting receptors.
+    // Bumped again: founder glucose 10 -> 50 and adp 5 -> 30. The
+    // smaller starter funded ~5-15 ATP of work, not enough for
+    // sense-archetypes to run the sense->thrust->migrate->photosynth
+    // loop before ATP exhaustion (thermophile-gradient cells reached
+    // the isotherm but died there; phototaxis-gradient survived
+    // only after a population bottleneck). Larger ADP pool means
+    // the founder can hold more ATP at a time; larger glucose pool
+    // means it can keep respiring for longer before relying on
+    // photosynthate or external sugar.
+    // Bumped again: founder reserves grown a second step (glucose
+    // 50 -> 100, adp 30 -> 60) to widen the migration bootstrap
+    // window further; sense-archetypes still lost most of their
+    // founders before reaching the lit zone at glu=50/adp=30.
+    // Bumped again: CHEM_GLUCOSE membrane permeability 0.6 -> 0.05.
+    // The old value let glucose passively diffuse symmetrically
+    // across both outer and vacuolar membranes, so an engulfed
+    // chloroplast's gift to its host immediately leaked to ambient
+    // and any free cell could free-ride -- the public-goods failure
+    // that broke chloro-symbiosis + chloro-engulfed. 0.05 makes
+    // glucose mostly internal (mirroring ATP's perm=0 + ANT
+    // translocase asymmetry) while still permitting slow equilibration.
+    // Bumped again: 0.05 -> 0. The "soft asymmetry" wasn't enough --
+    // even 12x slower diffusion still let hosts overshoot their
+    // food base and the resulting carrying-capacity crash flushed
+    // the engulfed chloros to the free pool. Biologically faithful:
+    // pure-lipid-bilayer glucose permeability is ~10^-7 cm/s vs
+    // O2/CO2 ~10^-1, so 0 (i.e. transport-only via EXCRETE/INGEST)
+    // matches the literature -- glucose doesn't passively cross
+    // membranes, it moves via dedicated transporters (which the
+    // substrate models as EXCRETE for active export and INGEST for
+    // particle uptake).
+    // Bumped for gene framing: founders are now laid out as
+    // intron-gene-intron-...-gene-intron (each functional token wrapped
+    // in a GENE..END span, separated by random 0-20b introns), the VM
+    // only executes inside genes and clears the stack at each gene
+    // boundary, the instr budget rose 8 -> 16, and the genome
+    // replication tax fell 0.02 -> 0.01/byte. All of that changes the
+    // seeded run's trajectory, so the fingerprint moves.
+    // Bumped again: founder immigration switched from "rare rescue
+    // below a floor, one at a time, every 15s" to "active top-up of
+    // 20% of the remaining deficit toward founderTarget every 7.5s,
+    // no particle cap". More founders spawn within the seeded window,
+    // moving the fingerprint.
+    // Bumped again: founder-foothold seed changes -- FOUNDER_SEED_ATP
+    // 40 -> 80, starter mrna 5 -> 8, chlorophyll/enzyme 0.5 -> 1.0, and
+    // a buoyant O2=8 seed -- shift the seeded run's trajectory.
+    // Bumped again: VM instr budget reverted 16 -> 8.
+    // Bumped again: founders no longer scoop / draw-reserve chems denser
+    // than FOUNDER_SCOOP_MAX_DENSITY (buoyancy), changing seed composition.
+    // Bumped again: founder seed glucose 100 -> 50 (buoyancy).
+    // Bumped again: INGEST + founder scoop now use the particle bucket
+    // grid (forParticlesNear); the bin/order scan eats a different
+    // particle when several are in range, shifting the trajectory.
+    // Bumped again: the vent is now an always-on heat source (persistent
+    // base intensity + eruption spikes) and runs hotter, so the regional
+    // temperature field is warm near the vent from t=0 instead of cold
+    // until the first eruption -- Q10 metabolism + dissolution capacity
+    // near the floor shift from tick 0. Intended behavior change;
+    // determinism + mass-conservation re-verified green.
+    // Bumped again: the vent now seeps a bounded standing pool of reduced
+    // generic fuel + a marker0 beacon near the mouth from t=0 (the
+    // chemolithoautotroph niche), adding particles the seeded run didn't
+    // have. Intended; determinism + mass-conservation green.
+    // Bumped again: founders now splice 2-5 archetype-derived genes and
+    // use a wider per-founder intron budget (larger, more varied founder
+    // genomes), so the seeded run's founder lineages differ. Intended.
+    // Bumped again: founders spawn at a per-founder scaled PHYSICAL size
+    // (whole seed * a right-skewed ~1.5..8 factor), so founder body
+    // sizes + the rng draw order differ from tick 0. Intended.
+    // Bumped again: edible reserve -- a cell running INGEST with no
+    // particle in reach now eats a bite of its region's reserve pool, so
+    // cells access cap-overflow mass that used to sit inaccessible.
+    // Intended; determinism + mass-conservation re-verified green.
+    // Bumped again: particle cap default 2500 -> 1000 (collision perf;
+    // overflow lives in now-edible reserve), and reservePass promotion
+    // spreads visible particles proportional to each region's reserve
+    // share instead of draining in region order. Intended.
+    // Bumped again: SENSE_OUT gradients now blend each region's reserve
+    // (as particle-equivalents) into the sensor bins, so cells sense
+    // total rendered+reserve food -- foraging trajectories shift.
+    // Intended; determinism re-verified green.
+    // Bumped again: founder top-up now fills the ENTIRE remaining deficit
+    // to FOUNDER_TARGET each trickle (was 20% of the deficit), so more
+    // founders spawn per interval -> different RNG draw sequence. Intended.
+    // Bumped again: energy-economy pass to relieve the anoxic-deep-zone
+    // die-off -- ambient diffusion halflife 600s->120s (O2 reaches depth),
+    // founders spawn in the photic zone (top 10-45% not 10-90%), and the
+    // anaerobic fermentation route buffed (+2->+4 ATP, rate 1.5->4).
+    // Intended; determinism + mass-conservation re-verified green.
+    // Bumped again: CHL_REF 5->2 so a fresh founder's seed chlorophyll
+    // drives 50% (not 20%) light-harvesting, broadening autotroph
+    // ignition ~8x. Intended; determinism + mass re-verified green.
+    // Bumped again: energy-economy tuning pass -- photophosphorylation
+    // rate 4->6, photosynthesis rate 5->6.5, reproduce threshold range
+    // 8..47 -> 4..16, membrane decay 0.005->0.003. Intended.
+    // Bumped again: photosynthesis made genuinely surplus-generating
+    // (photophosphorylation rate 6->16, matching respiration throughput)
+    // and fermentation re-tuned toward realism (+4@4 -> +2@1.5, aerobic
+    // advantage 2.5:1 -> 5:1). Intended; determinism + mass re-verified.
+    // Bumped again: FOUNDER_TARGET 50->10 (cap distinct founder lineages
+    // at 10) and ongoingSeeding now defaults true (resources keep
+    // replenishing). Intended.
+    // Bumped again: default reproduce gate is now a SELF_MEMBRANE size
+    // checkpoint (threshold 8..23, no energy variant) so offspring are
+    // born with viable membrane, and the aa/mRNA viability floors were
+    // lowered (0.001->0.0001, 0.01->0.001) so freshly-split daughters
+    // survive long enough to bootstrap. This is the change that makes
+    // the world self-sustaining without immigration. Intended;
+    // determinism + mass-conservation re-verified green.
+    // Bumped again: founder spawn Y is now a triangular distribution
+    // (peaked near the surface, tapering over 10%..90% of height)
+    // instead of uniform over 10%..45%. Intended.
+    // Bumped again: sunlight is now occluded by rock -- a cell whose
+    // column has terrain above it (terrainHeightmap[x] < y) gets zero
+    // light, so photosynthesis + photoreceptors go dark under overhangs
+    // and surface outcrops (caves become dark refugia). Intended.
+    // Bumped again: ambient diffusion halflife 120->60, and dissolved
+    // fields (ambient gases + reserve) no longer diffuse through rock
+    // (solid regions are no-flux barriers), so caves are chemically
+    // isolated. Intended; mass-conservation re-verified green.
+    // Bumped again: chem deposits are redirected out of solid regions
+    // (depositRegionBase) at every particle/evacuation deposit site, and
+    // aeration skips solid surface regions, so the diffusion barrier no
+    // longer traps mass in inert rock. Intended; mass re-verified green.
+    // Bumped again: per-mass idle metabolic drain 0.0003 -> 0.002 so a
+    // cell must earn its mass -- heavy hoarders that sink to the dark
+    // floor go net-negative and starve instead of coasting indefinitely.
+    // Intended; mass-conservation re-verified green.
+    // Bumped again: rock light occlusion is now a soft penumbra (vertical
+    // smoothstep + depth-widening horizontal samples + a faint scattered-
+    // light floor) instead of a hard per-column 0/1, so shadow EDGES feed
+    // photosynthesis/photoreceptors gradually. Intended.
+    // Bumped again: more light diffusion -- wider penumbra (20px), wider
+    // depth-scaled horizontal scatter (9 taps, up to 60px), and a higher
+    // scattered-light floor (0.10), so shadows are softer and bleed more
+    // light. Intended.
+    // Bumped again: every procedural founder now gets 1..3 distinct
+    // sense+behavior genes (chemo/thermo/magneto/mechano/photo taxis or
+    // life-history) wired sensor->action, so founder genomes (and thus the
+    // seeded run) changed. Intended.
+    // Bumped again: pH/acidity sense added (repurposed the retired Fa
+    // chemoreceptor chems -> phreceptor + activatedPh; synth slot 17 live).
+    // Founders can now build the phreceptor (new pH life-history gene) and
+    // runActivation writes activatedPh, shifting the seeded run. Intended.
+    // Bumped again: electric (electroreception) sense added (repurposed the
+    // retired biopolymer chemoreceptor chems -> electroreceptor + activated
+    // electro x/y; synth slot 15 live). Cells emit a bioelectric field from
+    // metabolic ATP spend; electroreceptors read neighbours' field as a
+    // bearing. New electrotaxis founder gene shifts the seeded run. Intended.
+    // Bumped again: reflected-light vision added (repurposed the retired
+    // marker0 chemoreceptor activated chems -> activatedLight x/y; reuses
+    // the visible photoreceptor). Cells reflect ambient sky-light
+    // (albedo*ambientLightAt) and photoreceptor-bearing cells read it as a
+    // bearing toward lit neighbours. New light-vision founder gene shifts
+    // the seeded run. (Cells optically transparent -- no occlusion yet.)
+    // Bumped again: vibration / hydroacoustic sense added (repurposed the
+    // retired minerals chemoreceptor chems -> vibroreceptor + activatedVib
+    // x/y; synth slot 16 live). Moving cells radiate a speed-proportional
+    // wake; vibroreceptors read it (1/r, long range) as a bearing. New
+    // vibration-startle founder gene shifts the seeded run. Intended.
+    // Bumped again: magnetism upgraded from a fixed global compass to a
+    // positional MAP (field tilts across x = declination, strengthens with
+    // depth = intensity), so magnetotaxis cells in the seeded run follow a
+    // position-varying field. Intended.
+    // Bumped again: light occlusion (shade). Cells above a cell now dim its
+    // sky-light (photosynthesis + photoreception + reflection) -- cells are
+    // no longer optically transparent -- so the seeded run's autotroph
+    // light economy shifts. Mild + floored. Intended.
+    // Bumped again: the sun now travels a daytime arc (rise 5% -> overhead
+    // -> set 95%), so rock + cell shadows are DIRECTIONAL and sweep across
+    // the floor over the day instead of always pointing straight down. The
+    // seeded run's photosynthesis/photoreception light now varies with the
+    // sun's azimuth. Intended.
+    // Bumped again: minerals are magnetic (magnetite) -- a magnetoreceptor's
+    // act_mag now also tracks the mineral gradient, so magnetotaxis cells in
+    // the seeded run drift toward deposits. Intended.
+    // Bumped again: a dividing cell's daughter now marches out from the
+    // parent and stops before rock (instead of being flung a radius-scaled
+    // offset that could tunnel a big cell's daughter through a wall), so
+    // near-rock division placement changed. Intended.
+    // Bumped again: dayPeriod default 90 -> 600 (Earth-like day). The
+    // seeded run advances dayPhase ~6.7x slower, so the solar-light curve
+    // (photosynthesis/photoreception) differs every tick. Intended.
+    // Bumped again: FOUNDER_TARGET 10 -> 20 (default cap doubled), so the
+    // seeded pool maintains 2x the founders. Intended.
+    // Wave 1: REPRODUCE attempt cost now scales with childShare * parentMass
+    // (material moved) rather than parentMass alone, and INGEST cooldown
+    // scales with surface area (1/r^2) rather than 1/r. Intended.
+    // Wave 2: membrane is now a per-area structural budget. Stretched
+    // envelope (required/actual > 1) accelerates maintenance decay;
+    // INGEST/PREDATE/ENGULF refuse a bite that would push the envelope
+    // past MEMBRANE_TEAR_STRETCH=3x. Membrane decay re-formulated as
+    // per-r^2 (was first-order on pool). Surface-flux reactions
+    // (photosynth + transmembrane transport) now scale with r^2 instead
+    // of r (Fick's law / projected area). Predation membrane armor is
+    // now per-area thickness, not pool size (thin envelope on a huge
+    // cell is no harder to crack than thin on a small cell). Intended.
+    // Mass = physical chems only: sensor-activation slots (signed
+    // amplitudes) are excluded from creatureTotalMass, SELF_MASS, and
+    // density weighting. Pre-existing nonsense (a strong negative-x
+    // electric/mag signal made the cell's "mass" go negative); now the
+    // signal pool is treated as state, not material, in every mass-or-
+    // density sum. Intended.
+    // Bumped again: replenishParticles decoupled from the visible-
+    // particle cap -- the ongoing-seeding pump now deposits to the
+    // regional reserve when at cap instead of early-returning. Mass-
+    // conserving (same flux enters either way), but RNG draw order and
+    // reserve totals diverge slightly from the old "spawn or no-op"
+    // path. Intended: cap=0 must not disable seeding as a side effect.
+    // Bumped again: initial dayPhase moved 0.2 -> 0.75 so the first
+    // ancient day starts at midnight (middle 6.5h of the 13h cycle is
+    // daylight). The environment baseline reads dayPhase every tick,
+    // so this shifts solar / aeration / chemistry trajectories from
+    // the very first step. Intended.
+    // Bumped again: diffuseAmbient now scales with surface r^2 (was
+    // linear r/MIN_CREATURE_R) and dtT (was bare dt). Stokes-Einstein
+    // diffusion is a physical kinetic process: faster in warm water,
+    // proportional to membrane area. Mass conservation invariant still
+    // holds (source-side clamp unchanged). Intended.
+    // Bumped again: founder competence is now tiered (most founders
+    // lean -- no archetype genes, usually no pre-wired taxis -- with a
+    // rich minority retaining the old full kit). makeRandomViableGenome
+    // draws a different RNG sequence per founder, so the seeded world's
+    // initial population diverges from the very first founder. Intended;
+    // measured establishment stays healthy (no extinction across seeds)
+    // with far more emergent species diversity. See genome.ts.
+    // Bumped again: reserve vertical drift now scales with the chem's
+    // Newtonian buoyancy magnitude (|1 - 1/density| * RESERVE_DRIFT_K),
+    // matching the rendered force kernel instead of using a flat alpha
+    // for every chem -- and promoted PRECIP particles spawn at the
+    // chem's terminal buoyancy velocity instead of vy=0 so they don't
+    // acceleration-shock the moment they materialise. Intended;
+    // mass-conservation invariant unchanged (the source-side clamp +
+    // pair-conserving Jacobi step still hold).
+    const GOLDEN = "b79c276e";
+    expect(fp).toBe(GOLDEN);
+  }, 20_000);
+});
