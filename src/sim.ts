@@ -4732,6 +4732,14 @@ let particleForceDispatcher: ParticleForceDispatcher | null = null;
 // gpuMin (smaller -- ~1000); the CPU pool's is parallelMin (~4000).
 let particleForceDispatcherSource: "gpu" | "cpu" | null = null;
 let particleForceDispatcherMin: number | null = null;
+// Which path actually ran the most recent force tick. Surfaced via
+// getLastForceSource() into the render snapshot so the HUD can show
+// what's engaged ("gpu" / "cpu" / "serial" -- the latter when no
+// dispatcher is wired OR np was below the dispatcher's threshold).
+let lastForceSource: "gpu" | "cpu" | "serial" = "serial";
+export function getLastForceSource(): "gpu" | "cpu" | "serial" { return lastForceSource; }
+export function getRegisteredForceDispatcherSource(): "gpu" | "cpu" | null { return particleForceDispatcherSource; }
+export function getRegisteredForceDispatcherMin(): number | null { return particleForceDispatcherMin; }
 export function setParticleForceDispatcher(
   d: ParticleForceDispatcher | null,
   source: "gpu" | "cpu" | null = null,
@@ -4761,8 +4769,10 @@ function applyForces(world: World, dt: number): void {
   const dispatchMin = particleForceDispatcherMin ?? world.parallelMin;
   let forceWait: (() => void) | null = null;
   if (particleForceDispatcher && np >= dispatchMin) {
+    lastForceSource = particleForceDispatcherSource ?? "cpu";
     forceWait = particleForceDispatcher(np, params);
   } else {
+    lastForceSource = "serial";
     applyParticleForcesRange(
       ps.x, ps.y, ps.z, ps.vx, ps.vy, ps.vz,
       ps.r, ps.density, ps.chemId,
@@ -7102,6 +7112,15 @@ export interface RenderSnapshot extends WorldEnv {
   particleTarget: number;
   parallelMin: number;
   gpuMin: number;
+  // Dispatch status. forceSource = which path actually ran the last
+  // force tick ("serial" if no dispatcher engaged, e.g. np below the
+  // active threshold). registeredForceSource = which dispatcher is
+  // currently wired ("gpu" or "cpu" pool); null if none. cpuPoolWorkers
+  // is the live CPU pool size (0 if no pool). The HUD surfaces these
+  // so the user can see what's actually doing the work.
+  forceSource: "gpu" | "cpu" | "serial";
+  registeredForceSource: "gpu" | "cpu" | null;
+  cpuPoolWorkers: number;
   extinctionCount: number;
   // Total founder lineages ever spawned (monotonic). The HUD subtracts
   // the count of currently-live distinct lineageRoots to show how many
@@ -7424,6 +7443,12 @@ export function takeSnapshot(world: World): RenderSnapshot {
     particleTarget: world.particleTarget,
     parallelMin: world.parallelMin,
     gpuMin: world.gpuMin,
+    forceSource: lastForceSource,
+    registeredForceSource: particleForceDispatcherSource,
+    // Filled in by the sim worker after the fact (it owns the pool);
+    // takeSnapshot can't see the pool count from here. Set to 0 here
+    // and overwrite at the worker level before posting.
+    cpuPoolWorkers: 0,
     extinctionCount: world.extinctionCount,
     nextLineageRoot: world.nextLineageRoot,
     engulfedCount,

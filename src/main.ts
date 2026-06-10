@@ -5688,13 +5688,36 @@ function updateInspector(): void {
     `lineages/extinct: ${cachedLiveLineages}/${extinctLineages}  ` +
     `species/genomes: ${cachedSpeciesCount}/${cachedGenomeCount}  ` +
     `particles: ${snapshot.particles.length}/${snapshot.particleTarget}`;
-  // Bottom HUD: clock / perf / build, fixed order.
+  // Bottom HUD: clock / perf / dispatch / build.
+  // Dispatch indicator -- compact two-token form:
+  //   force=<what ran this tick>   (gpu / cpu×N / serial)
+  //   pool=<what's wired>          (gpu / cpu×N / off)
+  // forceSource is the live signal (changes tick-to-tick as np crosses
+  // its threshold); pool is the static "what would dispatch if np got
+  // high enough." Shown together so you can tell e.g. "the GPU IS
+  // wired but np is below gpuMin so we're running serial right now"
+  // vs "the GPU never came up at all."
+  const np = snapshot.particles.length;
+  const reg = snapshot.registeredForceSource;
+  const cpuN = snapshot.cpuPoolWorkers;
+  const poolDesc = reg === "gpu" ? "gpu"
+    : reg === "cpu" ? `cpu×${cpuN}`
+    : "off";
+  const forceDesc = snapshot.forceSource === "gpu" ? "gpu"
+    : snapshot.forceSource === "cpu" ? `cpu×${cpuN}`
+    : "serial";
+  const dispatchTag = reg === null
+    ? `force=${forceDesc}  pool=off`
+    : forceDesc === "serial"
+      ? `force=serial(np=${np}<${reg === "gpu" ? snapshot.gpuMin : snapshot.parallelMin})  pool=${poolDesc}`
+      : `force=${forceDesc}  pool=${poolDesc}`;
   bottomHud.textContent =
     `t=${formatDayClock(snapshot.t, snapshot.dayPeriod)}  ` +
     `fps=${perfFps.toFixed(0)}  ` +
     `sim=${perfSimRate.toFixed(1)}x  ` +
     `r=${perfRenderMs.toFixed(1)}ms  ` +
     `s=${perfSimMs.toFixed(1)}ms  ` +
+    `${dispatchTag}  ` +
     `build=${__BUILD_TIME__}`;
   // No auto-fallback: if nothing is selected the inspector shows the
   // population summary and the pin control hides. Selection only

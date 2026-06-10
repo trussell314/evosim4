@@ -541,6 +541,12 @@ function maybePostSnapshot(): void {
   if (now - lastSnapshotPostAt < SNAPSHOT_INTERVAL_MS) return;
   lastSnapshotPostAt = now;
   const snap = takeSnapshot(world);
+  // The sim core can't see the worker pool / GPU worker state, so the
+  // worker patches the live counts onto the snapshot here. cpuPoolWorkers
+  // = the CPU pool's worker count (0 if no pool spun up). When the GPU
+  // path is wired, registeredForceSource is "gpu" so the HUD knows the
+  // CPU pool count isn't what's doing the force work.
+  snap.cpuPoolWorkers = pool ? pool.nWorkers : 0;
   send({
     type: "snapshot",
     snapshot: snap,
