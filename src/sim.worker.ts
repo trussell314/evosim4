@@ -58,10 +58,10 @@ let running = false;
 // Sim-speed control. Six modes, exposed by main as a row of buttons.
 //   paused: don't step at all (snapshots still post so the UI stays
 //     interactive); the stepOnce message advances exactly one tick.
-//   0.25x / 0.5x: pace sub-real-time by only doing work on every Nth
-//     scheduling slot (subOneSkip counter below).
-//   1x: current normal -- step up to ~4ms per slot, snapshots every
-//     16ms, fits real-time on healthy hardware.
+//   0.25x / 0.5x / 1x: wall-clock PACED -- advance sim-time at
+//     speedMul * real-time via the paceDebt accumulator in tick(), so
+//     0.25x really is quarter speed regardless of how fast the
+//     reschedule fires.
 //   max: run the worker as fast as it can while STILL posting a
 //     snapshot every 16ms (full-rate rendering on main).
 //   maxMinimal: replaces the old "turbo on" -- same per-slot budget
@@ -69,8 +69,13 @@ let running = false;
 //     reduced render workload buys headroom for even more sim ticks.
 type SimSpeed = "paused" | "0.25x" | "0.5x" | "1x" | "max" | "maxMinimal";
 let simSpeed: SimSpeed = "1x";
-let subOneSkip = 0;
 let pendingStepOnce = false;
+// Real-time pacing state. paceLastWall is the wall clock at the last
+// tick; paceDebt is sim-seconds owed (accumulated at wallDelta * speed,
+// paid down one FIXED_DT step at a time). Only used by the finite
+// speeds -- max / maxMinimal run uncapped.
+let paceLastWall = -1;
+let paceDebt = 0;
 let pendingSimError: { message: string; at: number } | null = null;
 
 // Pool / step profiling. Tick-level accumulators flushed every
@@ -218,9 +223,9 @@ self.addEventListener("message", (e: MessageEvent) => {
       break;
     case "setSimSpeed":
       simSpeed = m.speed;
-      // Reset the sub-1x throttle counter so a fresh slow mode starts
-      // with a step rather than spending the next 1-3 slots skipped.
-      subOneSkip = 0;
+      // Drop any accumulated pacing debt so switching speed doesn't
+      // unleash a burst of catch-up steps.
+      paceDebt = 0;
       break;
     case "stepOnce":
       // Only honored when paused; single-tick advance for frame-by-
@@ -349,9 +354,15 @@ self.addEventListener("message", (e: MessageEvent) => {
 // already near the 16.7ms frame budget.
 const scheduleChannel = new MessageChannel();
 scheduleChannel.port1.onmessage = () => tick();
-function schedule(): void {
+// delayMs === 0 -> reschedule via the MessagePort (fires far faster
+// than setTimeout's 4ms clamp; used when running flat-out so throughput
+// isn't capped). delayMs > 0 -> setTimeout, used when paced or paused
+// so the worker yields the core instead of busy-spinning between the
+// sparse steps real-time pacing actually needs.
+function schedule(delayMs = 0): void {
   if (!running) return;
-  scheduleChannel.port2.postMessage(null);
+  if (delayMs > 0) setTimeout(tick, delayMs);
+  else scheduleChannel.port2.postMessage(null);
 }
 
 function tick(): void {
@@ -360,54 +371,32 @@ function tick(): void {
     return;
   }
   const tickEntry = performance.now();
-  // simSpeed gates the per-slot step budget. paused steps zero ticks
-  // (unless pendingStepOnce); sub-1x modes skip whole scheduling slots
-  // to pace below real-time; 1x runs the historical ~4ms slice;
-  // max / maxMinimal use a longer 12ms slice -- the difference is on
-  // the main side, which throttles render down only when maxMinimal
-  // is active.
-  let sliceBudgetMs = 0;
-  switch (simSpeed) {
-    case "paused":
-      if (pendingStepOnce) {
-        pendingStepOnce = false;
-        sliceBudgetMs = -1; // sentinel: do exactly one step regardless of clock
-      } else {
-        sliceBudgetMs = 0;
-      }
-      break;
-    case "0.25x":
-      // Skip three slots out of four; do one step on the fourth.
-      if (subOneSkip < 3) { subOneSkip++; sliceBudgetMs = 0; }
-      else { subOneSkip = 0; sliceBudgetMs = -1; }
-      break;
-    case "0.5x":
-      if (subOneSkip < 1) { subOneSkip++; sliceBudgetMs = 0; }
-      else { subOneSkip = 0; sliceBudgetMs = -1; }
-      break;
-    case "1x":
-      sliceBudgetMs = 4;
-      break;
-    case "max":
-    case "maxMinimal":
-      sliceBudgetMs = 12;
-      break;
-  }
-  const sliceStart = tickEntry;
-  let stepsThisSlot = 0;
-  while (sliceBudgetMs !== 0
-      && (sliceBudgetMs === -1 ? stepsThisSlot < 1 : performance.now() - sliceStart < sliceBudgetMs)) {
+  // Real-time pacing. The MessagePort reschedule fires far faster than
+  // 60Hz, so any fixed per-slot step budget runs the sim flat-out
+  // regardless of the chosen speed (the old code did, which is why
+  // 0.25x still ran ~7x). Instead: accumulate a sim-time debt of
+  // wallDelta * speedMul each slot and step only enough to pay it down,
+  // capped so a hitch can't spiral. paused = 0 steps (+ stepOnce);
+  // max / maxMinimal = uncapped (step for a 12ms slice).
+  const wallDt = paceLastWall < 0 ? 0 : Math.min(0.25, (tickEntry - paceLastWall) / 1000);
+  paceLastWall = tickEntry;
+  const speedMul = simSpeed === "paused" ? 0
+    : simSpeed === "0.25x" ? 0.25
+    : simSpeed === "0.5x" ? 0.5
+    : simSpeed === "1x" ? 1
+    : Infinity; // max / maxMinimal
+  const doStep = (): boolean => {
     const t0 = performance.now();
     try {
-      step(world, FIXED_DT);
+      step(world!, FIXED_DT);
     } catch (err) {
       pendingSimError = {
         message: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-        at: world.t,
+        at: world!.t,
       };
       // eslint-disable-next-line no-console
       console.error("[sim worker] step threw, continuing:", err);
-      break;
+      return false;
     }
     const elapsed = performance.now() - t0;
     advancedSinceSnapshot += FIXED_DT;
@@ -415,7 +404,23 @@ function tick(): void {
     profStepMs += elapsed;
     profTicks += 1;
     if (pool) profPoolTicks += 1;
-    stepsThisSlot++;
+    return true;
+  };
+  let didStep = false;
+  if (speedMul === 0) {
+    paceDebt = 0;
+    if (pendingStepOnce) { pendingStepOnce = false; doStep(); didStep = true; }
+  } else if (speedMul === Infinity) {
+    paceDebt = 0;
+    while (performance.now() - tickEntry < 12) { if (!doStep()) break; didStep = true; }
+  } else {
+    paceDebt += wallDt * speedMul;
+    while (paceDebt >= FIXED_DT && performance.now() - tickEntry < 12) {
+      if (!doStep()) break;
+      didStep = true;
+      paceDebt -= FIXED_DT;
+    }
+    if (paceDebt > 0.5) paceDebt = 0.5; // cap backlog after a stall
   }
   const tBeforeSnap = performance.now();
   maybePostSnapshot();
@@ -423,7 +428,12 @@ function tick(): void {
   maybePostSave();
   profTickMs += performance.now() - tickEntry;
   maybeLogProfile();
-  schedule();
+  // Reschedule cadence: flat-out modes spin via the fast MessagePort;
+  // paused polls slowly (just watching for unpause / stepOnce); paced
+  // modes poll at ~4ms, frequent enough to accumulate debt smoothly
+  // without burning a core between the sparse steps they need.
+  void didStep;
+  schedule(speedMul === Infinity ? 0 : speedMul === 0 ? 32 : 4);
 }
 
 function maybeLogProfile(): void {

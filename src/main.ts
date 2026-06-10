@@ -806,6 +806,15 @@ void (async () => {
   // from the init above before this applies. speciesKey is a
   // deterministic genome hash, so restored species re-match by key.
   syncPinnedToWorker();
+  // Re-apply the persisted sim speed (the worker boots at 1x). Read
+  // straight from storage here -- the simSpeed binding is declared
+  // further down, after this bootstrap IIFE.
+  try {
+    const saved = localStorage.getItem("evosim4:simSpeed");
+    if (saved && saved !== "1x") {
+      simWorker.postMessage({ type: "setSimSpeed", speed: saved });
+    }
+  } catch { /* ignore */ }
 })();
 // If we passed a saved JSON in and the worker silently fell back to
 // fresh (schema mismatch / malformed), the worker's "save" stream
@@ -2492,7 +2501,18 @@ resetBtn.addEventListener("click", () => {
 // Step-once is enabled only when paused; useful for frame-by-frame
 // observation during inspector debugging.
 type SimSpeed = "paused" | "0.25x" | "0.5x" | "1x" | "max" | "maxMinimal";
-let simSpeed: SimSpeed = "1x";
+// Restore the last-used sim speed across reloads (the worker always
+// boots at 1x; we re-send the saved choice once it's initialised).
+const SPEED_KEY = "evosim4:simSpeed";
+const SPEED_IDS: ReadonlyArray<SimSpeed> = ["paused", "0.25x", "0.5x", "1x", "max", "maxMinimal"];
+function loadSavedSpeed(): SimSpeed {
+  try {
+    const s = localStorage.getItem(SPEED_KEY);
+    if (s && (SPEED_IDS as readonly string[]).includes(s)) return s as SimSpeed;
+  } catch { /* ignore */ }
+  return "1x";
+}
+let simSpeed: SimSpeed = loadSavedSpeed();
 let turboFrameCounter = 0;
 const TURBO_RENDER_EVERY = 30;
 const speedBtns = new Map<SimSpeed, HTMLButtonElement>();
@@ -2516,6 +2536,7 @@ function setSpeed(s: SimSpeed): void {
   simSpeed = s;
   turboFrameCounter = 0;
   syncSpeedBtnStyles();
+  try { localStorage.setItem(SPEED_KEY, s); } catch { /* ignore */ }
   simWorker.postMessage({ type: "setSimSpeed", speed: s });
 }
 for (const spec of SPEED_SPECS) {
