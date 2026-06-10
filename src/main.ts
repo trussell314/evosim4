@@ -4696,11 +4696,16 @@ function drawPhylogeny(): void {
   const innerH = stripH - padTop - padBot;
   const tx = (t: number): number => ((t - tMin) / span) * w;
 
-  // Live biomass per species this frame (membrane = structural reserve),
-  // then fold into the render-side history (retained out to tRetain).
+  // Total live CELL MASS per species this frame -- the sum of every
+  // molecule pool (MASS_MOLECULE_IDS, same set the inspector's mass
+  // readout uses), not just the membrane reserve -- folded into the
+  // render-side history (retained out to tRetain). Ribbon thickness
+  // tracks this.
   bioByKey.clear();
   for (const c of snapshot.creatures) {
-    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
+    let m = 0;
+    for (const k of MASS_MOLECULE_IDS) m += c.molecules[k];
+    bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + m);
   }
   updatePhyloHist(tNow, tRetain, phyloRetentionSimSec);
 
