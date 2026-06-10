@@ -2003,10 +2003,15 @@ root.appendChild(ctrlBar);
 // canvas. white-space:nowrap keeps it a single line; it sits above
 // ctrlBar at bottom = controlsBarH.
 const bottomHud = document.createElement("div");
+// Allow wrapping (white-space:normal) + line-height so on narrow phone
+// viewports the strip can flow to a second line instead of ellipsizing
+// the dispatch tokens off the right edge. resizeObserver on the strip
+// then re-measures its height into bottomHudH so the world-fit
+// reserves the right amount of space.
 bottomHud.style.cssText =
-  "position:fixed;z-index:10;display:flex;align-items:center;gap:16px;" +
-  "padding:4px 8px;box-sizing:border-box;white-space:nowrap;overflow:hidden;" +
-  "text-overflow:ellipsis;color:#9ee;background:rgba(2,12,18,0.96);" +
+  "position:fixed;z-index:10;display:flex;align-items:center;gap:8px 14px;" +
+  "padding:4px 8px;box-sizing:border-box;flex-wrap:wrap;line-height:1.4;" +
+  "color:#9ee;background:rgba(2,12,18,0.96);" +
   "border-top:1px solid #1a3340;" + HUD_FONT;
 bottomHud.textContent = "t=0s  fps=--  sim=--x  r=--ms  s=--ms  build=--";
 root.appendChild(bottomHud);
@@ -3138,6 +3143,15 @@ new ResizeObserver(() => {
   hudBarH = Math.ceil(hud.getBoundingClientRect().height) || 0;
   if (hudBarH !== prev) resize();
 }).observe(hud);
+// Same dance for the bottom strip: it wraps onto two lines on narrow
+// phone viewports when the dispatch tokens won't fit, and the world
+// fit needs to know about the new height so the strip isn't drawn on
+// top of the canvas.
+new ResizeObserver(() => {
+  const prev = bottomHudH;
+  bottomHudH = Math.ceil(bottomHud.getBoundingClientRect().height) || 0;
+  if (bottomHudH !== prev) resize();
+}).observe(bottomHud);
 function bottomReserveH(): number {
   return (PHYLO_VISIBLE ? PHYLO_STRIP_H : 0)
     + toggleBarH + controlsBarH + archPanelH + overlayPanelH + bottomHudH;
@@ -5700,24 +5714,51 @@ function updateInspector(): void {
   const np = snapshot.particles.length;
   const reg = snapshot.registeredForceSource;
   const cpuN = snapshot.cpuPoolWorkers;
-  const poolDesc = reg === "gpu" ? "gpu"
-    : reg === "cpu" ? `cpu×${cpuN}`
-    : "off";
-  const forceDesc = snapshot.forceSource === "gpu" ? "gpu"
+  // Color the active source bright (green=gpu, cyan=cpu pool, amber=serial
+  // fallback) and the "pool" wiring dim so the live signal pops at-a-glance
+  // on mobile. Short tokens (no "force=" / "pool=" labels, just values
+  // joined by an arrow) keep the strip on a single line on phones too.
+  const COL_GPU = "#7cf07c";
+  const COL_CPU = "#7cd7f0";
+  const COL_SERIAL = "#f0c060";
+  const COL_OFF = "#6c8088";
+  const wrap = (s: string, c: string) =>
+    `<span style="color:${c}">${s}</span>`;
+  const forceLabel = snapshot.forceSource === "gpu" ? "gpu"
     : snapshot.forceSource === "cpu" ? `cpu×${cpuN}`
     : "serial";
-  const dispatchTag = reg === null
-    ? `force=${forceDesc}  pool=off`
-    : forceDesc === "serial"
-      ? `force=serial(np=${np}<${reg === "gpu" ? snapshot.gpuMin : snapshot.parallelMin})  pool=${poolDesc}`
-      : `force=${forceDesc}  pool=${poolDesc}`;
-  bottomHud.textContent =
+  const forceCol = snapshot.forceSource === "gpu" ? COL_GPU
+    : snapshot.forceSource === "cpu" ? COL_CPU
+    : COL_SERIAL;
+  const poolLabel = reg === "gpu" ? "gpu"
+    : reg === "cpu" ? `cpu×${cpuN}`
+    : "off";
+  const poolCol = reg === null ? COL_OFF
+    : reg === "gpu" ? COL_GPU
+    : COL_CPU;
+  // "force/pool" pair, colored. If the active source matches the wiring,
+  // collapse to a single token; otherwise show both with an arrow noting
+  // the serial-fallback threshold (e.g. "serial→cpu×4" when np is below
+  // the pool threshold).
+  let dispatchHtml: string;
+  if (reg === null) {
+    dispatchHtml = wrap(forceLabel, forceCol);
+  } else if (snapshot.forceSource === "serial") {
+    const thr = reg === "gpu" ? snapshot.gpuMin : snapshot.parallelMin;
+    dispatchHtml =
+      wrap(`serial(np=${np}<${thr})`, COL_SERIAL)
+      + `<span style="color:${COL_OFF}">→</span>`
+      + wrap(poolLabel, poolCol);
+  } else {
+    dispatchHtml = wrap(forceLabel, forceCol);
+  }
+  bottomHud.innerHTML =
     `t=${formatDayClock(snapshot.t, snapshot.dayPeriod)}  ` +
     `fps=${perfFps.toFixed(0)}  ` +
     `sim=${perfSimRate.toFixed(1)}x  ` +
     `r=${perfRenderMs.toFixed(1)}ms  ` +
     `s=${perfSimMs.toFixed(1)}ms  ` +
-    `${dispatchTag}  ` +
+    `${dispatchHtml}  ` +
     `build=${__BUILD_TIME__}`;
   // No auto-fallback: if nothing is selected the inspector shows the
   // population summary and the pin control hides. Selection only
