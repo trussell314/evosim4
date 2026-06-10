@@ -77,6 +77,10 @@ let pendingStepOnce = false;
 let paceLastWall = -1;
 let paceDebt = 0;
 let pendingSimError: { message: string; at: number } | null = null;
+// Set by main once it has probed navigator.gpu. We can't safely probe
+// it from the sim worker on every browser, so main reports availability
+// and we gate setupGpuWorker on it.
+let gpuAvailable = false;
 
 // Pool / step profiling. Tick-level accumulators flushed every
 // PROFILE_LOG_MS as an averaged line so we can see where the per-tick
@@ -137,6 +141,9 @@ type WorkerInbound =
   | { type: "particle-pool-error"; index: number; message: string }
   | { type: "creature-pool-message"; index: number; data: unknown }
   | { type: "creature-pool-error"; index: number; message: string }
+  | { type: "gpu-worker-message"; data: unknown }
+  | { type: "gpu-worker-error"; message: string }
+  | { type: "gpu-availability"; available: boolean }
   | { type: "requestDiag" };
 
 type WorkerOutbound =
@@ -152,6 +159,8 @@ type WorkerOutbound =
   | { type: "teardown-particle-pool" }
   | { type: "spawn-creature-pool"; initPayloads: unknown[] }
   | { type: "teardown-creature-pool" }
+  | { type: "spawn-gpu-worker"; initPayload: unknown }
+  | { type: "teardown-gpu-worker" }
   | { type: "diag"; running: boolean; hasWorld: boolean; t: number; pool: string };
 
 function send(msg: WorkerOutbound): void {
@@ -170,6 +179,30 @@ self.addEventListener("message", (e: MessageEvent) => {
       else if (data.type === "ack-init") pool.initAcked[data.workerIndex! | 0] = true;
       else if (data.type === "ack-wake") pool.wakeAcked[data.workerIndex! | 0] = true;
       else if (data.type === "ack-init-error") pool.initErrors[data.workerIndex! | 0] = String(data.error || "unknown");
+      return;
+    }
+    case "gpu-availability": {
+      gpuAvailable = !!m.available;
+      // Init is async on main (it awaits navigator.gpu.requestAdapter)
+      // and may arrive AFTER the sim worker has already initialised
+      // its world. If so, set the GPU worker up now -- the dispatcher
+      // takes precedence over the CPU pool's force path from the next
+      // tick onward.
+      if (gpuAvailable && world && !gpuActive) setupGpuWorker(world);
+      return;
+    }
+    case "gpu-worker-message": {
+      const data = m.data as { type?: string; error?: unknown };
+      if (!data || typeof data !== "object") return;
+      if (data.type === "ack-init-error") {
+        gpuInitError = String(data.error || "unknown");
+        teardownGpuWorker(`init failed: ${gpuInitError}`);
+      }
+      // ack-load / ack-init currently informational only.
+      return;
+    }
+    case "gpu-worker-error": {
+      teardownGpuWorker(`worker error: ${m.message}`);
       return;
     }
     case "particle-pool-error": {
@@ -208,6 +241,10 @@ self.addEventListener("message", (e: MessageEvent) => {
         }
       }
       lastSaveSimT = world.t;
+      // GPU first if the host advertised availability; the CPU pool's
+      // particle-force dispatcher then defers when GPU is active. Both
+      // can coexist for the collision phase (CPU pool only).
+      if (gpuAvailable) setupGpuWorker(world);
       setupParticlePool(world);
       setupCreaturePool(world);
       running = true;
@@ -634,13 +671,110 @@ function setupParticlePool(w: World): void {
     });
   }
   pool = { ctrl, params, nWorkers, phase: 0, loadAcked, initAcked, wakeAcked, initErrors };
-  setParticleForceDispatcher(dispatchParticleForces);
+  // Only wire the CPU force dispatcher when the GPU isn't already
+  // handling forces -- the GPU worker (if available) takes precedence
+  // for the per-particle force loop, and we don't want both kicking the
+  // particle buffers in the same tick.
+  if (!gpuActive) setParticleForceDispatcher(dispatchParticleForces);
   if (collisionShared) setCollisionPhaseDispatcher(dispatchCollisionPhase);
   // Spawn workers on main and have main forward acks back to us.
   // Workers spawned this way are top-level workers from main's point
   // of view, which works around the silent-load failure observed when
   // spawning module workers from inside another worker.
   send({ type: "spawn-particle-pool", initPayloads });
+}
+
+// =====================================================================
+// WebGPU host worker. A single dedicated worker (spawned by main on
+// request) owns a GPUDevice + compute pipeline for the force kernel.
+// We talk to it via SAB + Atomics, same shape as the CPU pool: write
+// params + np + tickSeed, bump phase, Atomics.notify; the GPU worker
+// runs the kernel + reads the result back into the SAB-backed particle
+// store, then writes 1 to DONE and notifies. The wait fn blocks on
+// Atomics.wait(DONE, 0).
+// =====================================================================
+const GPU_CTRL_SLOT_COUNT = 8;
+let gpuCtrl: Int32Array | null = null;
+let gpuCtrlBuf: SharedArrayBuffer | null = null;
+let gpuParamsBuf: SharedArrayBuffer | null = null;
+let gpuParams: Float64Array | null = null;
+let gpuPhase = 0;
+let gpuActive = false;
+let gpuInitError: string | null = null;
+// Per-tick seed for the GPU's PCG brownian noise. Bumped each dispatch.
+let gpuTickSeed = 0;
+
+function setupGpuWorker(w: World): void {
+  if (typeof SharedArrayBuffer === "undefined" ||
+      !(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated) return;
+  const storeLayout = w.particleStore.sharedLayout();
+  if (!(storeLayout.buffer instanceof SharedArrayBuffer)) return;
+  gpuCtrlBuf = new SharedArrayBuffer(GPU_CTRL_SLOT_COUNT * 4);
+  gpuParamsBuf = new SharedArrayBuffer(PARAM_COUNT * 8);
+  gpuCtrl = new Int32Array(gpuCtrlBuf);
+  gpuParams = new Float64Array(gpuParamsBuf);
+  gpuPhase = 0;
+  gpuActive = true;
+  gpuInitError = null;
+  setParticleForceDispatcher(dispatchGpuParticleForces);
+  send({
+    type: "spawn-gpu-worker",
+    initPayload: {
+      type: "init",
+      particleLayout: storeLayout,
+      controlBuffer: gpuCtrlBuf,
+      paramsBuffer: gpuParamsBuf,
+      matBase: CHEM_BASE_DENSITY,
+    },
+  });
+}
+
+function teardownGpuWorker(reason: string): void {
+  if (!gpuActive) return;
+  gpuActive = false;
+  setParticleForceDispatcher(null);
+  // eslint-disable-next-line no-console
+  console.error("[sim worker] gpu worker torn down:", reason);
+  send({ type: "teardown-gpu-worker" });
+}
+
+// Per-tick dispatch. Pack params (same Float64 block layout as the CPU
+// pool uses), write np + tickSeed, bump phase, notify the gpu worker,
+// return a wait fn that blocks on DONE.
+function dispatchGpuParticleForces(np: number, p: ParticleForceParams): () => void {
+  if (!gpuActive || !gpuCtrl || !gpuParams) return () => {};
+  // Pack params (mirrors CPU pool's layout in dispatchParticleForces).
+  const params = gpuParams;
+  params[0] = p.dt; params[1] = p.t; params[2] = p.drag; params[3] = p.gravity;
+  params[4] = p.surfaceY; params[5] = p.surfaceDecay; params[6] = p.swellDecay; params[7] = p.updraftAmp;
+  params[8] = p.currentAmp; params[9] = p.kS; params[10] = p.wS; params[11] = p.kL;
+  params[12] = p.wL; params[13] = p.kU; params[14] = p.wU; params[15] = p.surfAmp;
+  params[16] = p.swellAmp; params[17] = p.zAmp; params[18] = p.bAmp; params[19] = p.updraftEnv;
+  params[20] = p.colDepth; params[21] = p.currentDrift; params[22] = p.worldFloorY; params[23] = p.worldWidth;
+  const ctrl = gpuCtrl;
+  Atomics.store(ctrl, 1 /* GPU_CTRL_NP */, np);
+  Atomics.store(ctrl, 3 /* GPU_CTRL_CMD */, 1 /* GPU_CMD_FORCES */);
+  Atomics.store(ctrl, 4 /* GPU_CTRL_TICK_SEED */, gpuTickSeed | 0);
+  Atomics.store(ctrl, 2 /* GPU_CTRL_DONE */, 0);
+  gpuTickSeed = (gpuTickSeed + 0x9E3779B9) | 0; // golden-ratio increment
+  gpuPhase++;
+  Atomics.store(ctrl, 0 /* GPU_CTRL_PHASE */, gpuPhase);
+  Atomics.notify(ctrl, 0, 1);
+  return () => {
+    // Block until the gpu worker writes 1 into DONE.
+    // 5s timeout so a stuck GPU doesn't freeze the sim indefinitely.
+    let waited = 0;
+    while (Atomics.load(ctrl, 2 /* GPU_CTRL_DONE */) === 0) {
+      const r = Atomics.wait(ctrl, 2, 0, 1000);
+      if (r === "timed-out") {
+        waited += 1000;
+        if (waited >= 5000) {
+          teardownGpuWorker("force dispatch timed out");
+          return;
+        }
+      }
+    }
+  };
 }
 
 // =====================================================================

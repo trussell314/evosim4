@@ -842,6 +842,31 @@ function teardownCreatureWorkers(): void {
   }
   creatureWorkers = [];
 }
+let gpuWorker: Worker | null = null;
+function teardownGpuWorker(): void {
+  if (gpuWorker) {
+    try { gpuWorker.terminate(); } catch { /* ignore */ }
+    gpuWorker = null;
+  }
+}
+// Probe navigator.gpu availability on main and notify sim worker. Done
+// from main because not every browser exposes navigator.gpu inside
+// workers, and we want a single source of truth for "is GPU available."
+// Always fires (sim worker defaults available=false), so the message
+// is required to enable the GPU path.
+{
+  const gpu = (navigator as Navigator & { gpu?: GPU }).gpu;
+  if (gpu && typeof gpu.requestAdapter === "function") {
+    gpu.requestAdapter().then((adapter) => {
+      const available = adapter !== null;
+      simWorker.postMessage({ type: "gpu-availability", available });
+    }).catch(() => {
+      simWorker.postMessage({ type: "gpu-availability", available: false });
+    });
+  } else {
+    simWorker.postMessage({ type: "gpu-availability", available: false });
+  }
+}
 
 simWorker.addEventListener("message", (e: MessageEvent) => {
   const msg = e.data;
@@ -943,6 +968,22 @@ simWorker.addEventListener("message", (e: MessageEvent) => {
     }
   } else if (msg.type === "teardown-creature-pool") {
     teardownCreatureWorkers();
+  } else if (msg.type === "spawn-gpu-worker") {
+    teardownGpuWorker();
+    const gw = new Worker(new URL("./gpu.worker.ts", import.meta.url), { type: "module" });
+    gw.addEventListener("message", (ev: MessageEvent) => {
+      simWorker.postMessage({ type: "gpu-worker-message", data: ev.data });
+    });
+    gw.addEventListener("error", (ev) => {
+      simWorker.postMessage({ type: "gpu-worker-error", message: ev.message || "unknown" });
+    });
+    gw.addEventListener("messageerror", () => {
+      simWorker.postMessage({ type: "gpu-worker-error", message: "messageerror" });
+    });
+    gw.postMessage(msg.initPayload);
+    gpuWorker = gw;
+  } else if (msg.type === "teardown-gpu-worker") {
+    teardownGpuWorker();
   } else if (msg.type === "diag") {
     // Response to a stall-triggered requestDiag: surface worker liveness +
     // pool state in the diag bar so an intermittent SIM STALLED can be
