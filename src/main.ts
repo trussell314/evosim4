@@ -861,6 +861,25 @@ function teardownGpuWorker(): void {
     gpu.requestAdapter().then((adapter) => {
       const available = adapter !== null;
       simWorker.postMessage({ type: "gpu-availability", available });
+      // Adapter info is best-effort: `adapter.info` is sync on recent
+      // Chromium, `requestAdapterInfo()` is the older async form. Either
+      // can return empty strings (privacy-sensitive). Whatever we get
+      // shows up as a compact HUD token like "gpu:apple m2".
+      if (adapter) {
+        const a = adapter as GPUAdapter & {
+          info?: { vendor?: string; architecture?: string; device?: string };
+          requestAdapterInfo?: () => Promise<{ vendor?: string; architecture?: string; device?: string }>;
+        };
+        const setInfo = (info?: { vendor?: string; architecture?: string; device?: string }) => {
+          if (!info) return;
+          const parts = [info.vendor, info.architecture, info.device]
+            .map((s) => (s || "").trim())
+            .filter(Boolean);
+          gpuInfoStr = parts.join(" ").toLowerCase().slice(0, 28);
+        };
+        if (a.info) setInfo(a.info);
+        else if (a.requestAdapterInfo) a.requestAdapterInfo().then(setInfo).catch(() => {});
+      }
     }).catch(() => {
       simWorker.postMessage({ type: "gpu-availability", available: false });
     });
@@ -1957,6 +1976,14 @@ leftHeader.addEventListener("click", () => {
 // ---------------------------------------------------------------------
 let controlsBarH = 0;         // measured each layout (0 when hidden)
 let bottomHudH = 0;           // measured each layout (bottom status strip)
+// Hardware capabilities probed once at boot, shown in the bottom HUD so
+// you can tell at a glance what the dispatch tokens are running on.
+// hwCores: logical-CPU count from the UA (undefined on a few locked-down
+// browsers; we fall back to "?"). gpuInfoStr: vendor+arch+device, filled
+// in by the adapter.info probe below (empty until resolved or never if
+// the UA blanks it for privacy).
+const hwCores = (navigator as Navigator & { hardwareConcurrency?: number }).hardwareConcurrency;
+let gpuInfoStr = "";
 let overlayPanelH = 0;        // measured each layout (overlay panel)
 let archPanelH = 0;           // measured each layout (archetypes panel)
 let toggleBarH = 36;          // measured each layout (always-visible row)
@@ -5724,14 +5751,17 @@ function updateInspector(): void {
   const COL_OFF = "#6c8088";
   const wrap = (s: string, c: string) =>
     `<span style="color:${c}">${s}</span>`;
+  // cpuN now shown as N/M (used/available logical cores) so it's
+  // obvious whether the pool is exercising the whole CPU.
+  const coresSuffix = hwCores ? `/${hwCores}` : "/?";
   const forceLabel = snapshot.forceSource === "gpu" ? "gpu"
-    : snapshot.forceSource === "cpu" ? `cpu×${cpuN}`
+    : snapshot.forceSource === "cpu" ? `cpu×${cpuN}${coresSuffix}`
     : "serial";
   const forceCol = snapshot.forceSource === "gpu" ? COL_GPU
     : snapshot.forceSource === "cpu" ? COL_CPU
     : COL_SERIAL;
   const poolLabel = reg === "gpu" ? "gpu"
-    : reg === "cpu" ? `cpu×${cpuN}`
+    : reg === "cpu" ? `cpu×${cpuN}${coresSuffix}`
     : "off";
   const poolCol = reg === null ? COL_OFF
     : reg === "gpu" ? COL_GPU
@@ -5752,13 +5782,24 @@ function updateInspector(): void {
   } else {
     dispatchHtml = wrap(forceLabel, forceCol);
   }
+  // GPU dispatch round-trip (writeBuffer + kernel + readback + wait),
+  // EMA-smoothed in the sim worker. Only shown when GPU is the live
+  // source -- a stale "gpu=2.1ms" while running serial would be
+  // misleading. The vendor/arch string is shown alongside the dispatch
+  // token as a dim aside so the strip stays scannable.
+  const gpuInfoHtml = (reg === "gpu" && gpuInfoStr)
+    ? `  <span style="color:${COL_OFF}">[${gpuInfoStr}]</span>`
+    : "";
+  const gpuMsHtml = (snapshot.forceSource === "gpu" && snapshot.gpuLastMs > 0)
+    ? `  ${wrap(`gpu=${snapshot.gpuLastMs.toFixed(1)}ms`, COL_GPU)}`
+    : "";
   bottomHud.innerHTML =
     `t=${formatDayClock(snapshot.t, snapshot.dayPeriod)}  ` +
     `fps=${perfFps.toFixed(0)}  ` +
     `sim=${perfSimRate.toFixed(1)}x  ` +
     `r=${perfRenderMs.toFixed(1)}ms  ` +
-    `s=${perfSimMs.toFixed(1)}ms  ` +
-    `${dispatchHtml}  ` +
+    `s=${perfSimMs.toFixed(1)}ms${gpuMsHtml}  ` +
+    `${dispatchHtml}${gpuInfoHtml}  ` +
     `build=${__BUILD_TIME__}`;
   // No auto-fallback: if nothing is selected the inspector shows the
   // population summary and the pin control hides. Selection only

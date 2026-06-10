@@ -547,6 +547,7 @@ function maybePostSnapshot(): void {
   // path is wired, registeredForceSource is "gpu" so the HUD knows the
   // CPU pool count isn't what's doing the force work.
   snap.cpuPoolWorkers = pool ? pool.nWorkers : 0;
+  snap.gpuLastMs = gpuLastMsEMA;
   send({
     type: "snapshot",
     snapshot: snap,
@@ -714,6 +715,10 @@ let gpuActive = false;
 let gpuInitError: string | null = null;
 // Per-tick seed for the GPU's PCG brownian noise. Bumped each dispatch.
 let gpuTickSeed = 0;
+// EMA of the GPU round-trip in ms (writeBuffer + dispatch + readback +
+// wait). 0 until the first dispatch lands. The HUD reads this off the
+// snapshot to show e.g. "gpu=2.1ms" alongside fps/sim-ms.
+let gpuLastMsEMA = 0;
 
 function setupGpuWorker(w: World): void {
   if (typeof SharedArrayBuffer === "undefined" ||
@@ -743,6 +748,7 @@ function setupGpuWorker(w: World): void {
 function teardownGpuWorker(reason: string): void {
   if (!gpuActive) return;
   gpuActive = false;
+  gpuLastMsEMA = 0;
   setParticleForceDispatcher(null);
   // eslint-disable-next-line no-console
   console.error("[sim worker] gpu worker torn down:", reason);
@@ -771,6 +777,7 @@ function dispatchGpuParticleForces(np: number, p: ParticleForceParams): () => vo
   gpuPhase++;
   Atomics.store(ctrl, 0 /* GPU_CTRL_PHASE */, gpuPhase);
   Atomics.notify(ctrl, 0, 1);
+  const tDispatch = performance.now();
   return () => {
     // Block until the gpu worker writes 1 into DONE.
     // 5s timeout so a stuck GPU doesn't freeze the sim indefinitely.
@@ -785,6 +792,10 @@ function dispatchGpuParticleForces(np: number, p: ParticleForceParams): () => vo
         }
       }
     }
+    // EMA-smooth so the HUD readout doesn't flicker tick-to-tick. Same
+    // 0.1 alpha as the render/sim ms tickers in main.ts.
+    const dt = performance.now() - tDispatch;
+    gpuLastMsEMA = gpuLastMsEMA === 0 ? dt : gpuLastMsEMA * 0.9 + dt * 0.1;
   };
 }
 

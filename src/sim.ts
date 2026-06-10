@@ -7121,6 +7121,12 @@ export interface RenderSnapshot extends WorldEnv {
   forceSource: "gpu" | "cpu" | "serial";
   registeredForceSource: "gpu" | "cpu" | null;
   cpuPoolWorkers: number;
+  // EMA of the GPU dispatch round-trip (writeBuffer + dispatch + readback)
+  // in ms, measured by the sim worker around its Atomics.wait on the GPU
+  // worker's done flag. 0 if no GPU dispatch has happened yet (e.g. wiring
+  // is CPU or np < gpuMin). The HUD shows it next to fps/sim-ms so it's
+  // obvious where the per-tick budget is going.
+  gpuLastMs: number;
   extinctionCount: number;
   // Total founder lineages ever spawned (monotonic). The HUD subtracts
   // the count of currently-live distinct lineageRoots to show how many
@@ -7449,6 +7455,7 @@ export function takeSnapshot(world: World): RenderSnapshot {
     // takeSnapshot can't see the pool count from here. Set to 0 here
     // and overwrite at the worker level before posting.
     cpuPoolWorkers: 0,
+    gpuLastMs: 0,
     extinctionCount: world.extinctionCount,
     nextLineageRoot: world.nextLineageRoot,
     engulfedCount,
