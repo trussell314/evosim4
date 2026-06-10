@@ -4745,37 +4745,45 @@ function drawPhylogeny(): void {
     for (let i = 0; i < slot.length; i++) slot[i] *= k;
     vScale *= k;
   }
-  const yCenter: number[] = [];
+  // Each species' slot top -- ribbons are anchored at this y and grow
+  // DOWNWARD as biomass rises (flat top edge, varying bottom), so the
+  // band can only expand downward / contract upward, never bulge above
+  // its slot's top. Connectors use the top too, which is where a child
+  // species first appears.
+  const yTop: number[] = [];
   let acc = innerY;
-  for (let i = 0; i < vis.length; i++) { yCenter.push(acc + slot[i] / 2); acc += slot[i]; }
+  for (let i = 0; i < vis.length; i++) { yTop.push(acc); acc += slot[i]; }
   const yOfKey = new Map<string, number>();
-  for (let i = 0; i < vis.length; i++) yOfKey.set(vis[i].key, yCenter[i]);
+  for (let i = 0; i < vis.length; i++) yOfKey.set(vis[i].key, yTop[i]);
 
-  // Ribbons: one filled band per species, half-thickness at each sample
-  // = biomass * vScale / 2 (clamped to the slot), centred on the slot.
+  // Ribbons: one filled band per species, flat top at the slot's top
+  // edge and a bottom edge that drops by (biomass * vScale) at each
+  // sample (clamped to the slot height). Top edge stays put; only the
+  // bottom moves -- so a species can only grow downward / shrink upward
+  // toward its top, never bulge above it.
   for (let i = 0; i < vis.length; i++) {
     const { tr } = vis[i];
-    const yc = yCenter[i];
-    const halfMax = slot[i] / 2;
-    const half = (m: number): number => {
-      const h = (m * vScale) / 2;
-      return h > halfMax ? halfMax : h < 0.4 ? 0.4 : h; // 0.4px floor so a sliver shows
+    const yt = yTop[i];
+    const thickMax = slot[i];
+    const thick = (m: number): number => {
+      const h = m * vScale;
+      return h > thickMax ? thickMax : h < 0.5 ? 0.5 : h; // 0.5px floor so a sliver shows
     };
     const n = tr.ts.length;
     if (n === 0) continue;
+    const xFirst = tx(tr.ts[0]);
+    const xLast = tr.alive ? tx(tNow) : tx(tr.ts[n - 1]);
     ctx.fillStyle = tr.color;
     ctx.globalAlpha = tr.alive ? 0.92 : 0.5;
     ctx.beginPath();
-    // top edge, left -> right
-    for (let s = 0; s < n; s++) {
-      const x = tx(tr.ts[s]);
-      const y = yc - half(tr.mass[s]);
-      if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    if (tr.alive) ctx.lineTo(tx(tNow), yc - half(tr.mass[n - 1]));
-    // bottom edge, right -> left
-    if (tr.alive) ctx.lineTo(tx(tNow), yc + half(tr.mass[n - 1]));
-    for (let s = n - 1; s >= 0; s--) ctx.lineTo(tx(tr.ts[s]), yc + half(tr.mass[s]));
+    // top edge: flat at yt, left -> right
+    ctx.moveTo(xFirst, yt);
+    ctx.lineTo(xLast, yt);
+    // right edge: drop to the bottom at the most recent biomass
+    ctx.lineTo(xLast, yt + thick(tr.mass[n - 1]));
+    // bottom edge: right -> left, following biomass at each sample
+    for (let s = n - 1; s >= 0; s--) ctx.lineTo(tx(tr.ts[s]), yt + thick(tr.mass[s]));
+    // left edge implicit close back to (xFirst, yt)
     ctx.closePath();
     ctx.fill();
   }
