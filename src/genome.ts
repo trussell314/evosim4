@@ -1577,11 +1577,50 @@ export function makeRandomViableGenome(
     [OP.THRUST],
     [OP.SENSE_CHEMICAL, Math.floor(rng() * CHEMICAL_COUNT)],
   ];
-  // 2..4 random catalyst boosts -- the cell's metabolic identity. Each
-  // boost picks one slot from FOUNDER_CAT_SLOTS uniformly with
-  // replacement (overlap is fine; doubling up on a slot just means
-  // more catalyst protein for that reaction).
-  const nCat = 2 + Math.floor(rng() * 3);
+  // Founder competence tier. Previously EVERY founder got the full kit
+  // -- 2..4 catalysts + 2..5 hand-designed archetype behaviour genes +
+  // 1..3 distinct fully-wired sensorimotor taxis genes -- i.e. a
+  // competent multi-modal generalist out of the box. Measured founder
+  // establishment under that scheme ran >50% (most founders reproduce),
+  // which is exactly the "excessively skilled founder" failure mode:
+  // foraging / sensing competence is HANDED OUT rather than left to
+  // emerge from selection (substrate-not-script, see CLAUDE.md).
+  //
+  // Tier the population instead. The viability core above (gated
+  // REPRODUCE + contact INGEST + THRUST + a dangling sensor) is always
+  // present so a founder can metabolise the seed pools and divide if it
+  // lands in food; on top of that:
+  //   lean (majority): a little metabolic identity, no archetype genes,
+  //     usually no pre-wired taxis -- it forages by drift and must
+  //     evolve directed behaviour. Most of these fail; that's the point.
+  //   moderate: a couple of catalysts + 1..2 archetype genes + maybe
+  //     one taxis gene.
+  //   rich (minority): the old full kit, preserved verbatim, so a
+  //     competent tail still seeds established lineages and the world
+  //     bootstraps instead of spiralling extinct.
+  // This drops the AVERAGE founder skill sharply while keeping the
+  // distribution's competent tail intact.
+  const tier = rng();
+  let nCat: number, nGenes: number, nSenses: number;
+  if (tier < 0.5) {
+    // lean
+    nCat = 1 + Math.floor(rng() * 2);     // 1..2
+    nGenes = 0;
+    nSenses = rng() < 0.3 ? 1 : 0;        // mostly blind
+  } else if (tier < 0.85) {
+    // moderate
+    nCat = 2 + Math.floor(rng() * 2);     // 2..3
+    nGenes = 1 + Math.floor(rng() * 2);   // 1..2
+    nSenses = rng() < 0.55 ? 1 : 0;       // 0..1
+  } else {
+    // rich -- the historical full kit
+    nCat = 2 + Math.floor(rng() * 3);     // 2..4
+    nGenes = 2 + Math.floor(rng() * 4);   // 2..5
+    nSenses = 1 + Math.floor(rng() * 3);  // 1..3
+  }
+  // Catalyst boosts -- the cell's metabolic identity. Each boost picks
+  // one slot from FOUNDER_CAT_SLOTS uniformly with replacement (overlap
+  // is fine; doubling up just means more catalyst protein).
   for (let i = 0; i < nCat; i++) {
     const slot = FOUNDER_CAT_SLOTS[Math.floor(rng() * FOUNDER_CAT_SLOTS.length)];
     tokens.push([OP.SYNTH, SYNTH_KIND.CAT, slot]);
@@ -1601,21 +1640,21 @@ export function makeRandomViableGenome(
   // (shed) so eDNA flow is a present-but-rare baseline strategy.
   if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.COMPETENCE, 0]);
   if (rng() < 0.05) tokens.push([OP.SYNTH, SYNTH_KIND.PACKAGE, 0]);
-  // Cross-archetype variation: splice 2..5 genes from the archetype pool
-  // (with replacement, so a founder may repeat a gene or mix several
-  // archetypes). They join the viability tokens before the shuffle, so
-  // they land in random order and get intron-framed like everything else.
-  const nGenes = 2 + Math.floor(rng() * 4); // 2..5
+  // Cross-archetype variation: splice nGenes (tier-dependent, 0 for lean
+  // founders) from the archetype pool with replacement, so a founder may
+  // repeat a gene or mix several archetypes. They join the viability
+  // tokens before the shuffle, so they land in random order and get
+  // intron-framed like everything else.
   for (let i = 0; i < nGenes; i++) {
     tokens.push(FOUNDER_GENES[Math.floor(rng() * FOUNDER_GENES.length)].slice());
   }
-  // Guarantee every founder is multi-sensory: 1..3 DISTINCT sense+behavior
-  // genes (each wires a sensor straight into THRUST/REPRODUCE). Distinct
-  // picks (sample without replacement) => up to three different modalities,
-  // so a fresh founder perceives and acts rather than drifting.
-  {
+  // Pre-wired sensorimotor taxis: nSenses (tier-dependent, often 0 for
+  // lean founders) DISTINCT sense+behavior genes (each wires a sensor
+  // straight into THRUST/REPRODUCE). Distinct picks (sample without
+  // replacement) span different modalities. Lean founders usually get
+  // none and must evolve the sensor->actuator coupling themselves.
+  if (nSenses > 0) {
     const pool = SENSE_BEHAVIOR_GENES.map((g) => g);
-    const nSenses = 1 + Math.floor(rng() * 3); // 1..3
     for (let s = 0; s < nSenses && pool.length > 0; s++) {
       const pick = Math.floor(rng() * pool.length);
       tokens.push(pool[pick].slice());

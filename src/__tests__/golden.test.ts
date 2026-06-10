@@ -409,7 +409,14 @@ describe("golden: seeded run produces a pinned state fingerprint", () => {
     // diffusion is a physical kinetic process: faster in warm water,
     // proportional to membrane area. Mass conservation invariant still
     // holds (source-side clamp unchanged). Intended.
-    const GOLDEN = "bfa08be8";
+    // Bumped again: founder competence is now tiered (most founders
+    // lean -- no archetype genes, usually no pre-wired taxis -- with a
+    // rich minority retaining the old full kit). makeRandomViableGenome
+    // draws a different RNG sequence per founder, so the seeded world's
+    // initial population diverges from the very first founder. Intended;
+    // measured establishment stays healthy (no extinction across seeds)
+    // with far more emergent species diversity. See genome.ts.
+    const GOLDEN = "3e938b81";
     expect(fp).toBe(GOLDEN);
   }, 20_000);
 });
