@@ -64,10 +64,17 @@ export function genomeDistance(a: Uint8Array, b: Uint8Array): number {
 const GOLDEN_ANGLE_DEG = 137.50776405003785;
 // Coding edit-distance that maps to "fully diverged" (max darkening).
 const COLOR_DIVERGENCE_FULL = 40;
-const OKLCH_L_ROOT = 0.86;   // lightness at the lineage root
-const OKLCH_L_FAR = 0.50;    // lightness when fully diverged
-const OKLCH_C_ROOT = 0.05;   // chroma at the root (near-grey, pale)
-const OKLCH_C_FAR = 0.20;    // chroma when fully diverged (vivid)
+// Chroma stays HIGH at every divergence level so the hue is always
+// vivid and lineages read as distinct colours -- the old near-grey
+// root chroma (0.05) washed every young lineage out to pale pastels
+// that all looked the same. Divergence is carried by LIGHTNESS instead:
+// pale at the root, dark when highly evolved. 0.15 chroma sits inside
+// the sRGB gamut for ~all hues at these lightnesses (oklchToHex clamps
+// the rare overshoot).
+const OKLCH_L_ROOT = 0.78;   // lightness at the lineage root (light, vivid)
+const OKLCH_L_FAR = 0.42;    // lightness when fully diverged (dark, vivid)
+const OKLCH_C_ROOT = 0.15;   // chroma at the root -- already saturated
+const OKLCH_C_FAR = 0.15;    // chroma when diverged -- stays saturated
 
 // OKLCH -> sRGB hex. OKLCH = OKLab in polar form; convert to OKLab,
 // then OKLab -> linear sRGB (Bjorn Ottosson's matrices), then gamma-
