@@ -1159,6 +1159,10 @@ interface PhyloEvt { t: number; from: string; to: string; convergence: boolean }
 const phyloEventHist: PhyloEvt[] = [];
 const phyloEventSeen = new Set<string>();
 let phyloLastSampleT = -1e9;
+// Largest window viewed this session (sim-seconds). History is retained
+// (and sampled) out to here, so cycling DOWN to a narrower window never
+// discards accumulated history -- only the displayed span changes.
+let phyloRetentionSimSec = 0;
 // Reused per-frame to avoid allocating a fresh map inside the
 // phylogeny render loop each frame.
 const bioByKey = new Map<string, number>();
@@ -2934,7 +2938,25 @@ gridBtn.addEventListener("click", () => {
   gridBtn.textContent = gridLinesOn ? "grid on" : "grid";
   setBtn(gridBtn, gridLinesOn, T_TEAL);
 });
-overlayWrap.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn);
+// Phylogeny controls (mobile-friendly buttons; mirror the w / f keys).
+// The window button cycles 1h / 1d / 7d / 30d. Cycling never discards
+// accumulated history -- the renderer retains up to the LARGEST window
+// viewed and only changes what's displayed (see phyloRetentionSimSec).
+const phyloWindowBtn = mkBtn(
+  `phylo: ${PHYLO_WINDOWS[phyloWindowIdx].label}`,
+  "Phylogeny time window -- cycles 1h / 1d / 7d / 30d (keeps history).",
+);
+phyloWindowBtn.addEventListener("click", () => {
+  phyloWindowIdx = (phyloWindowIdx + 1) % PHYLO_WINDOWS.length;
+  phyloWindowBtn.textContent = `phylo: ${PHYLO_WINDOWS[phyloWindowIdx].label}`;
+});
+const phyloTop5Btn = mkBtn("phylo all", "Phylogeny: show all species vs only the top 5 by biomass.");
+phyloTop5Btn.addEventListener("click", () => {
+  phyloFilterTop5 = !phyloFilterTop5;
+  phyloTop5Btn.textContent = phyloFilterTop5 ? "phylo top5" : "phylo all";
+  setBtn(phyloTop5Btn, phyloFilterTop5, T_TEAL);
+});
+overlayWrap.append(overlaySelectEl, densChemSel, densSrcWrap, gridBtn, phyloWindowBtn, phyloTop5Btn);
 
 renderCtrlCollapsed();
 renderOverlayCollapsed();
@@ -3975,6 +3997,7 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "w" || e.key === "W") {
     // Cycle the phylogeny time window (1h / 1d / 7d / 30d).
     phyloWindowIdx = (phyloWindowIdx + 1) % PHYLO_WINDOWS.length;
+    phyloWindowBtn.textContent = `phylo: ${PHYLO_WINDOWS[phyloWindowIdx].label}`;
   }
 });
 
@@ -4632,7 +4655,13 @@ function drawPhylogeny(): void {
 
   const tNow = snapshot.t;
   const windowSimSec = phyloWindowSimSec();
-  const tMin = Math.max(0, tNow - windowSimSec);
+  // Retention is the widest window viewed this session, so cycling down
+  // never deletes accumulated history -- only the displayed span (tMin)
+  // narrows. History sampling + pruning run on the retention span;
+  // rendering on the display span.
+  if (windowSimSec > phyloRetentionSimSec) phyloRetentionSimSec = windowSimSec;
+  const tMin = Math.max(0, tNow - windowSimSec);          // display edge
+  const tRetain = Math.max(0, tNow - phyloRetentionSimSec); // history edge
   const span = Math.max(0.001, windowSimSec);
   const padTop = 4, padBot = 6;
   const innerY = stripY + padTop;
@@ -4640,12 +4669,12 @@ function drawPhylogeny(): void {
   const tx = (t: number): number => ((t - tMin) / span) * w;
 
   // Live biomass per species this frame (membrane = structural reserve),
-  // then fold into the render-side history.
+  // then fold into the render-side history (retained out to tRetain).
   bioByKey.clear();
   for (const c of snapshot.creatures) {
     bioByKey.set(c.speciesKey, (bioByKey.get(c.speciesKey) ?? 0) + c.molecules.membrane);
   }
-  updatePhyloHist(tNow, tMin, windowSimSec);
+  updatePhyloHist(tNow, tRetain, phyloRetentionSimSec);
 
   // Build the in-window track list straight from the history so extinct
   // species persist their whole lifespan within the window.
