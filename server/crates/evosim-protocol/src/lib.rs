@@ -101,6 +101,25 @@ pub struct Snapshot {
     /// the day/night cycle.
     #[serde(default)]
     pub ambient_light: f32,
+    /// Top species summary -- up to N entries -- with their
+    /// population, coding key fingerprint, and a small color the
+    /// client can paint cells with. Sorted by population descending.
+    /// Empty before the species pass populates it.
+    #[serde(default)]
+    pub top_species: Vec<SpeciesSummary>,
+}
+
+/// One row of the per-snapshot species summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeciesSummary {
+    /// Stable coding-key fingerprint (intron-stripped genome string).
+    pub coding_key: String,
+    /// Live cell count of this species at snapshot time.
+    pub count: u32,
+    /// Hex color the client can use to paint cells of this species.
+    /// Deterministic from the coding_key so the same genome looks
+    /// the same across reconnects.
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

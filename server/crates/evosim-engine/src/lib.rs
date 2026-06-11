@@ -221,16 +221,44 @@ impl Engine {
     /// SoA blobs carry the live store columns as packed bytes; the
     /// client decodes them as TypedArrays of the declared stride.
     pub fn snapshot(&mut self) -> Snapshot {
+        use std::collections::HashMap;
+        // Build the per-cell coding-key index in one pass; reuse it
+        // for both species_count and per-cell species coloring.
+        let n = self.world.creature_store.len();
+        let mut keys: Vec<String> = Vec::with_capacity(n);
+        let mut counts: HashMap<String, u32> = HashMap::new();
+        for g in &self.world.creature_store.genome {
+            let k = genome::coding_key(g);
+            *counts.entry(k.clone()).or_insert(0) += 1;
+            keys.push(k);
+        }
+        // Top species rows, sorted by population descending. Cap at
+        // TOP_SPECIES_MAX so a stable wire size on a runaway lineage.
+        const TOP_SPECIES_MAX: usize = 16;
+        let mut ranked: Vec<(String, u32)> = counts.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let top_species: Vec<evosim_protocol::SpeciesSummary> = ranked
+            .iter()
+            .take(TOP_SPECIES_MAX)
+            .map(|(key, count)| evosim_protocol::SpeciesSummary {
+                coding_key: key.clone(),
+                count: *count,
+                color: species_color_from_key(key),
+            })
+            .collect();
+        // Build a key -> index map so per-cell coloring is O(1).
+        let key_to_idx: HashMap<String, u32> = top_species
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.coding_key.clone(), i as u32))
+            .collect();
         let particles = pack_particle_soa(&self.world.particle_store);
-        let creatures = pack_creature_soa(&self.world.creature_store);
-        let species_count = {
-            use std::collections::HashSet;
-            let mut keys: HashSet<String> = HashSet::new();
-            for g in &self.world.creature_store.genome {
-                keys.insert(genome::coding_key(g));
-            }
-            keys.len() as u32
-        };
+        let creatures = pack_creature_soa_with_species(
+            &self.world.creature_store,
+            &keys,
+            &key_to_idx,
+        );
+        let species_count = ranked.len() as u32;
         let deaths_this_window = std::mem::take(&mut self.pending_deaths);
         let ambient_light = day_cycle::ambient_light_at(self.world.t, self.world.day_period_s);
         Snapshot {
@@ -247,6 +275,7 @@ impl Engine {
             deaths_this_window,
             day_period_s: self.world.day_period_s,
             ambient_light,
+            top_species,
         }
     }
 }
@@ -298,6 +327,47 @@ fn bytemuck_f32(data: &[f32]) -> Vec<u8> {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
+}
+
+/// Deterministic species color from a coding-key fingerprint. FNV-1a
+/// 32-bit hash -> hue degrees, OKLCH-ish saturation/lightness picked
+/// so any two species are visually distinguishable on the client.
+/// Stable across server restarts because the input is the key itself.
+fn species_color_from_key(key: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in key.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    let hue = (h % 360) as f32;
+    // hsl works in browsers without any extra dance and is good enough
+    // for visual distinction. 65% sat, 55% lum so we get vivid but not
+    // eye-searing colors.
+    format!("hsl({hue:.0} 65% 55%)")
+}
+
+fn pack_creature_soa_with_species(
+    store: &CreatureStore,
+    keys: &[String],
+    key_to_idx: &std::collections::HashMap<String, u32>,
+) -> Soa {
+    let mut soa = pack_creature_soa(store);
+    // Append a species_idx column. -1 (= 255 in u8 land) when the
+    // cell's species is outside the top-N rows the snapshot
+    // carried; the client falls back to a synthetic color in that
+    // case.
+    let n = store.len();
+    let mut species_idx = Vec::with_capacity(n);
+    for k in keys.iter().take(n) {
+        let idx = key_to_idx.get(k).copied().unwrap_or(0xFF);
+        species_idx.push(idx as u8);
+    }
+    soa.blobs.push(NamedBlob {
+        name: "speciesIdx".into(),
+        stride: 1,
+        data: species_idx,
+    });
+    soa
 }
 
 fn pack_creature_soa(store: &CreatureStore) -> Soa {

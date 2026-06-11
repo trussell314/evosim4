@@ -10,12 +10,18 @@ interface BuildInfo { version: string; commit: string; built_at: number; }
 interface ServerCaps { gpu_compute: boolean; cpu_threads: number; admin: boolean; }
 interface NamedBlob { name: string; stride: number; data: Uint8Array; }
 interface Soa { count: number; blobs: NamedBlob[]; }
+interface SpeciesSummary { coding_key: string; count: number; color: string; }
 interface Snapshot {
   tick: number; t: number; width: number; height: number;
   particles: Soa; creatures: Soa;
   force_source: "gpu" | "cpu" | "serial";
   cpu_pool_workers: number;
   gpu_last_ms: number;
+  species_count?: number;
+  deaths_this_window?: number;
+  day_period_s?: number;
+  ambient_light?: number;
+  top_species?: SpeciesSummary[];
 }
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
@@ -215,10 +221,10 @@ function frame(): void {
       ctx.fill();
     }
 
-    // Creatures: render after particles so cells sit visually on top
-    // of the particle field. Color by energy (ATP) on a dim->bright
-    // green ramp; stroke so they're distinguishable from particles
-    // even when small. Heading shown as a short whisker.
+    // Creatures: rendered after particles so cells sit visually on top
+    // of the particle field. Color by species (from top_species[])
+    // when available; fall back to a synthetic per-id hue for cells
+    // outside the top-N. Heading shown as a short whisker.
     const cBlobs: Record<string, NamedBlob> = {};
     for (const b of snapshot.creatures.blobs) cBlobs[b.name] = b;
     const cN = snapshot.creatures.count;
@@ -227,16 +233,22 @@ function frame(): void {
       const cy = f32(cBlobs.y.data, cN);
       const cr = f32(cBlobs.r.data, cN);
       const heading = cBlobs.heading ? f32(cBlobs.heading.data, cN) : null;
-      const energy = cBlobs.energy ? f32(cBlobs.energy.data, cN) : null;
+      const speciesIdx = cBlobs.speciesIdx ? cBlobs.speciesIdx.data : null;
+      const topSpecies = snapshot.top_species ?? [];
       for (let i = 0; i < cN; i++) {
         const px = offX + cx[i] * scale;
         const py = offY + cy[i] * scale;
         const pr = Math.max(2, cr[i] * scale);
-        const e = energy ? energy[i] : 0;
-        // 0..100 -> dim..bright green; clamps either side.
-        const t = Math.max(0, Math.min(1, e / 100));
-        const lum = 25 + (60 - 25) * t;
-        ctx.fillStyle = `hsl(140 70% ${lum}%)`;
+        let color = "hsl(140 65% 55%)";
+        if (speciesIdx) {
+          const sid = speciesIdx[i];
+          if (sid !== 0xFF && topSpecies[sid]) {
+            color = topSpecies[sid].color;
+          } else {
+            color = `hsl(${(sid * 47) % 360} 50% 45%)`;
+          }
+        }
+        ctx.fillStyle = color;
         ctx.strokeStyle = "#cfe";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
