@@ -120,6 +120,13 @@ pub struct SpeciesSummary {
     /// Deterministic from the coding_key so the same genome looks
     /// the same across reconnects.
     pub color: String,
+    /// Representative genome bytes -- the genome of the first live
+    /// cell encountered for this coding key. Lets the client show a
+    /// disassembly without an extra round trip; trivially small (< 2 KB
+    /// across all top species).
+    #[serde(default)]
+    #[serde(with = "serde_bytes")]
+    pub genome: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

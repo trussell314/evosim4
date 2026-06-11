@@ -227,9 +227,14 @@ impl Engine {
         let n = self.world.creature_store.len();
         let mut keys: Vec<String> = Vec::with_capacity(n);
         let mut counts: HashMap<String, u32> = HashMap::new();
+        // First live genome for each coding key -- the representative
+        // we ship in SpeciesSummary.genome so the client can disasm
+        // without an extra round trip.
+        let mut representative_genome: HashMap<String, Vec<u8>> = HashMap::new();
         for g in &self.world.creature_store.genome {
             let k = genome::coding_key(g);
             *counts.entry(k.clone()).or_insert(0) += 1;
+            representative_genome.entry(k.clone()).or_insert_with(|| g.clone());
             keys.push(k);
         }
         // Top species rows, sorted by population descending. Cap at
@@ -244,6 +249,7 @@ impl Engine {
                 coding_key: key.clone(),
                 count: *count,
                 color: species_color_from_key(key),
+                genome: representative_genome.get(key).cloned().unwrap_or_default(),
             })
             .collect();
         // Build a key -> index map so per-cell coloring is O(1).
