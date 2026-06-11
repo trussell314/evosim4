@@ -40,6 +40,14 @@ const ACTIVATION_DECAY_PER_S: f32 = 4.0;
 const ELECTRO_RANGE: f32 = 100.0;
 /// Per-unit gain on the electro signal.
 const ELECTRO_GAIN: f32 = 0.001;
+/// Gain on the active EMIT[ELECTRIC] component. Far higher than the
+/// passive ATP-based gain so an actively-emitting cell shouts louder
+/// than a quietly-metabolising one. Active emission is the
+/// cell-to-cell communication mechanism.
+const ELECTRO_EMIT_GAIN: f32 = 0.5;
+/// Gain on the active EMIT[VIBRATION] component (also a directional
+/// signal a vibroreceptor cell can read).
+const VIB_EMIT_GAIN: f32 = 5.0;
 /// Range over which a vibroreceptor "feels" particle motion.
 const VIB_RANGE: f32 = 120.0;
 /// Per-unit gain on the vibration signal.
@@ -143,17 +151,16 @@ pub fn run_activation(
                     continue;
                 }
                 let atp = creatures.chems[CHEM_ATP][j];
-                if atp <= 0.0 {
+                // Active emit contribution (channel 0 = electric).
+                let active = creatures.vm_out[j].emit.first().copied().unwrap_or(0.0) as f32;
+                let source = atp + active * (ELECTRO_EMIT_GAIN / ELECTRO_GAIN);
+                if source <= 0.0 {
                     continue;
                 }
-                // 1/dsq weighting times the direction unit vector
-                // multiplied by ATP gives a per-axis signed signal
-                // that points TOWARD the nearby cell with strength
-                // proportional to its metabolism.
                 let d = dsq.sqrt();
                 let nx = dx / d;
                 let ny = dy / d;
-                let w = atp / dsq;
+                let w = source / dsq;
                 sx += nx * w;
                 sy += ny * w;
             }
@@ -204,6 +211,47 @@ pub fn run_activation(
                 sy += ny * w;
             }
             let gain = receptor * VIB_GAIN;
+            creatures.chems[CHEM_ACT_VIB_X][i] += sx * gain * decay;
+            creatures.chems[CHEM_ACT_VIB_Y][i] += sy * gain * decay;
+        }
+    }
+
+    // Cell-to-cell vibration via active EMIT[VIBRATION]. Mirrors
+    // the electric pass above but uses the dedicated vibration
+    // channel rather than ATP.
+    if n >= 2 {
+        let vib_range_sq = VIB_RANGE * VIB_RANGE;
+        for i in 0..n {
+            let receptor = creatures.chems[CHEM_VIBRORECEPTOR][i];
+            if receptor <= 0.0 {
+                continue;
+            }
+            let cx = creatures.x[i];
+            let cy = creatures.y[i];
+            let mut sx = 0.0_f32;
+            let mut sy = 0.0_f32;
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let dx = creatures.x[j] - cx;
+                let dy = creatures.y[j] - cy;
+                let dsq = dx * dx + dy * dy;
+                if dsq < 1.0 || dsq >= vib_range_sq {
+                    continue;
+                }
+                let active = creatures.vm_out[j].emit.get(2).copied().unwrap_or(0.0) as f32;
+                if active <= 0.0 {
+                    continue;
+                }
+                let d = dsq.sqrt();
+                let nx = dx / d;
+                let ny = dy / d;
+                let w = active / dsq;
+                sx += nx * w;
+                sy += ny * w;
+            }
+            let gain = receptor * VIB_EMIT_GAIN;
             creatures.chems[CHEM_ACT_VIB_X][i] += sx * gain * decay;
             creatures.chems[CHEM_ACT_VIB_Y][i] += sy * gain * decay;
         }
@@ -335,6 +383,45 @@ mod tests {
         let mut s = CreatureStore::new();
         run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn active_electric_emit_shouts_louder_than_atp_passive() {
+        // Two emitter cells with identical ATP. One actively emits
+        // on channel 0; the other doesn't. A nearby electroreceptor
+        // cell should feel a stronger signal from the active one.
+        let mut emitter_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        emitter_chems[CHEM_ATP] = 50.0;
+        let mut receiver_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        receiver_chems[CHEM_ELECTRORECEPTOR] = 1.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { x: 0.0, y: 0.0, r: 8.0, chems: Some(receiver_chems), ..CreatureInit::default() });
+        s.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(emitter_chems), ..CreatureInit::default() });
+        // Active EMIT on channel 0.
+        s.vm_out[1].emit[0] = 5.0;
+        for _ in 0..30 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
+        }
+        let active_signal = s.chems[CHEM_ACT_ELECTRO_X][0];
+        // Repeat without active emit.
+        let mut emitter_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        emitter_chems[CHEM_ATP] = 50.0;
+        let mut receiver_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        receiver_chems[CHEM_ELECTRORECEPTOR] = 1.0;
+        let mut s2 = CreatureStore::new();
+        s2.push(CreatureInit { x: 0.0, y: 0.0, r: 8.0, chems: Some(receiver_chems), ..CreatureInit::default() });
+        s2.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(emitter_chems), ..CreatureInit::default() });
+        // No emit on channel 0.
+        for _ in 0..30 {
+            run_activation(&mut s2, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
+        }
+        let passive_signal = s2.chems[CHEM_ACT_ELECTRO_X][0];
+        assert!(
+            active_signal > passive_signal * 5.0,
+            "active emit should dominate: active={} passive={}",
+            active_signal,
+            passive_signal,
+        );
     }
 
     #[test]
