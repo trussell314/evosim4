@@ -4,6 +4,7 @@ members = [
     "crates/evosim-protocol",
     "crates/evosim-engine",
     "crates/evosim-server",
+    "crates/evosim-tui",
 ]
 
 [workspace.package]

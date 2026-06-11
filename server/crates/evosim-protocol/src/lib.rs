@@ -314,6 +314,17 @@ pub fn decode_client(bytes: &[u8]) -> Result<ClientMessage, rmp_serde::decode::E
     rmp_serde::from_slice(bytes)
 }
 
+/// Client-side mirror: encode a `ClientMessage` for sending up the
+/// wire, and decode a `ServerMessage` received from it. Used by the
+/// terminal client (and any other Rust-side consumer).
+pub fn encode_client(msg: &ClientMessage) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    rmp_serde::to_vec_named(msg)
+}
+
+pub fn decode_server(bytes: &[u8]) -> Result<ServerMessage, rmp_serde::decode::Error> {
+    rmp_serde::from_slice(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
