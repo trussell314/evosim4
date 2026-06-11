@@ -9,6 +9,7 @@
 
 pub mod chem_ids;
 pub mod chemistry;
+pub mod genome_consts;
 pub mod rng;
 
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
