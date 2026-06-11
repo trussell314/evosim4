@@ -11,6 +11,7 @@ pub mod chemistry;
 pub mod collision;
 pub mod creature_update;
 pub mod creatures;
+pub mod death;
 pub mod forces;
 pub mod genome;
 pub mod genome_consts;
@@ -90,12 +91,20 @@ impl Engine {
     /// cell runs a different short genome (swimmer / turner / synth),
     /// two of each, spread across the world.
     fn seed_demo_creatures(&mut self) {
-        use crate::chem_ids::{CHEM_GLU, CHEM_O2, CHEM_ADP, CHEM_CHL, CHEM_CO2, CHEM_MRNA};
+        use crate::chem_ids::{
+            CHEM_ADP, CHEM_CHL, CHEM_CO2, CHEM_GLU, CHEM_MEMBRANE, CHEM_MRNA, CHEM_O2,
+        };
         let w = self.world.width;
         let h = self.world.height;
+        // Every seed needs a starter membrane > MIN_VIABLE_MEMBRANE
+        // so the death pass doesn't autolyse them on tick 1. Real
+        // founders carry more (TS uses ~5x); we use exactly enough
+        // for the demo to live.
+        const STARTER_MEMBRANE: f32 = 5.0;
         let starter_chems = || {
             let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
             chems[CHEM_ATP] = 50.0;
+            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
             chems
         };
         // A "respirator": comes equipped with glucose + O2 + ADP so
@@ -108,6 +117,7 @@ impl Engine {
             chems[CHEM_GLU] = 80.0;
             chems[CHEM_O2] = 80.0;
             chems[CHEM_ADP] = 40.0;
+            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
             chems
         };
         // A "photoautotroph": carries chlorophyll + mRNA + CO2 + ADP
@@ -118,8 +128,9 @@ impl Engine {
             chems[CHEM_ATP] = 20.0;
             chems[CHEM_CO2] = 80.0;
             chems[CHEM_ADP] = 40.0;
-            chems[CHEM_CHL] = 4.0;  // 2x CHL_REF: full chl machinery
-            chems[CHEM_MRNA] = 5.0; // full MRNA_REF
+            chems[CHEM_CHL] = 4.0;
+            chems[CHEM_MRNA] = 5.0;
+            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
             chems
         };
 
@@ -202,6 +213,16 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.sim_rng,
             self.world.t,
+        );
+        // Death pass: cull every cell below viability; release its
+        // chem mass back to the particle field. Mass-conserving (the
+        // dying cell's pools become particles instead of vanishing),
+        // so a fission + death pair leaves the world's total mass
+        // unchanged.
+        death::run_death(
+            &mut self.world.creature_store,
+            &mut self.world.particle_store,
+            &mut self.world.sim_rng,
         );
     }
 
@@ -393,6 +414,33 @@ mod tests {
                 "creature SoA missing column {col}"
             );
         }
+    }
+
+    #[test]
+    fn unviable_cells_autolyse_and_release_mass() {
+        // Spawn a single sub-viable cell (membrane 0). Death pass
+        // should kill it next tick; particle count should rise.
+        let mut e = Engine::new();
+        // Reset to a fresh world without the demo cells/particles.
+        e.world.creature_store.clear();
+        e.world.particle_store.clear();
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_ATP] = 5.0;
+        chems[chem_ids::CHEM_GLU] = 5.0;
+        e.world.creature_store.push(creatures::CreatureInit {
+            r: 8.0,
+            chems: Some(chems),
+            genome: vec![OP_NOP],
+            ..creatures::CreatureInit::default()
+        });
+        let creatures_before = e.world.creature_store.len();
+        let particles_before = e.world.particle_store.len();
+        e.step(1.0 / 60.0);
+        assert_eq!(e.world.creature_store.len(), creatures_before - 1);
+        assert!(
+            e.world.particle_store.len() > particles_before,
+            "autolysis should have emitted particles"
+        );
     }
 
     #[test]
