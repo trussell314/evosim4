@@ -16,11 +16,11 @@
 
 use crate::ambient::AmbientField;
 use crate::chem_ids::{
-    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_PH, CHEM_ACT_PHOTO_LONG,
-    CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y,
-    CHEM_ATP, CHEM_CO2, CHEM_ELECTRORECEPTOR, CHEM_PHOTORECEPTOR_LONG,
-    CHEM_PHOTORECEPTOR_SURFACE, CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR,
-    CHEM_VIBRORECEPTOR,
+    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, CHEM_ACT_PH,
+    CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE,
+    CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y, CHEM_ATP, CHEM_CO2, CHEM_ELECTRORECEPTOR,
+    CHEM_MAGNETORECEPTOR, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
+    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR, CHEM_VIBRORECEPTOR,
 };
 use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
@@ -47,6 +47,14 @@ const VIB_GAIN: f32 = 0.05;
 /// like a magnitude, not a direction), driven by both the cell's
 /// own CO2 pool and the ambient CO2 stock.
 const PH_GAIN: f32 = 0.05;
+/// World magnetic-field direction (unit vector). +y is "north" by
+/// convention. A magnetoreceptor cell reads this scaled by its
+/// receptor pool size. The field is uniform world-wide (no
+/// gradient yet) but a cell can evolve to thrust along the
+/// returned direction -- a compass.
+const MAG_FIELD_X: f32 = 0.0;
+const MAG_FIELD_Y: f32 = 1.0;
+const MAG_GAIN: f32 = 1.0;
 
 /// Run sensor activation for every cell. `ambient_light` is the
 /// world's current light level (0..1). `particles` is the world's
@@ -207,6 +215,24 @@ pub fn run_activation(
         let stimulus = (local_co2 + ambient_co2 * 0.1) * receptor * PH_GAIN;
         creatures.chems[CHEM_ACT_PH][i] = prev + stimulus * decay;
     }
+
+    // Magnetic: directional, uniform world-wide. A
+    // magnetoreceptor-carrying cell reads the magnetic field unit
+    // vector scaled by receptor_pool * MAG_GAIN. SENSE_CHEMICAL on
+    // CHEM_ACT_MAG_X / CHEM_ACT_MAG_Y returns the projection.
+    // Lets cells evolve a compass: e.g. seek_north genome reads
+    // CHEM_ACT_MAG_Y and thrusts +y in proportion.
+    for i in 0..n {
+        let receptor = creatures.chems[CHEM_MAGNETORECEPTOR][i];
+        creatures.chems[CHEM_ACT_MAG_X][i] *= keep;
+        creatures.chems[CHEM_ACT_MAG_Y][i] *= keep;
+        if receptor <= 0.0 {
+            continue;
+        }
+        let gain = receptor * MAG_GAIN;
+        creatures.chems[CHEM_ACT_MAG_X][i] += MAG_FIELD_X * gain * decay;
+        creatures.chems[CHEM_ACT_MAG_Y][i] += MAG_FIELD_Y * gain * decay;
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +283,21 @@ mod tests {
         let mut s = CreatureStore::new();
         run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn magnetoreceptor_reads_compass() {
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_MAGNETORECEPTOR] = 1.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
+        for _ in 0..30 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+        }
+        let my = s.chems[CHEM_ACT_MAG_Y][0];
+        let mx = s.chems[CHEM_ACT_MAG_X][0];
+        assert!(my > 0.0, "expected +y compass, got {my}");
+        assert!(mx.abs() < 1e-3, "expected ~0 x component, got {mx}");
     }
 
     #[test]
