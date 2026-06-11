@@ -59,7 +59,29 @@ tracking.
   field drains as decay ages existing particles out. To opt out of
   the cap entirely, set the var to `none` / `off` / `unbounded`.
   Default in code is 3000.
+- `EVOSIM_GPU_FORCES=1` opts in to the wgpu compute force kernel.
+  Auto-falls back to CPU when no compute-capable adapter is present.
+  Activates only above `GPU_FORCES_THRESHOLD` (4096 particles); below
+  that, the CPU paths win even on a powerful GPU due to upload /
+  download latency.
 - `EVOSIM_BIND`, `EVOSIM_ADMIN_TOKEN` -- see `server/README.md`.
+
+## Auto-engaged parallelism
+
+The force kernel and obstacle-collision pass each pick a dispatch
+path based on particle count:
+
+| Pass                  | Serial   | Parallel (rayon)        | GPU (wgpu)         |
+|-----------------------|----------|-------------------------|--------------------|
+| forces                | N <  2048 | N >= 2048 (par_chunks) | N >= 4096 (opt-in) |
+| obstacle_collision    | N <  2048 | N >= 2048 (par_chunks) | --                 |
+| diffuse, precipitate  | always   | always (zero-chem skip)| --                 |
+
+Brownian noise uses a counter-based PCG hash on both the wgpu shader
+(`rand01(seed, i, axis)`) and the rayon CPU kernel (per-chunk
+`pcg32_next`) -- the two parallel paths land in matching probability
+distributions per slot. The strictly-serial CPU path keeps the
+engine's documented "deterministic only here" invariant.
 
 ## Baseline (default scene, sim_rate=1, 60 sim seconds, release)
 
@@ -77,23 +99,28 @@ per-pass top:
   activation           0.193    7.9%
 ```
 
-### cap=500 (60-second run)
+### cap=500 (post-optimisation, 25-second run)
 
 ```
-tick_ms          mean 1.38  p50 1.32  p95 1.60  p99 1.69  max 1.77
+tick_ms          mean 1.05  p50 1.04  p95 1.13  p99 1.27  max 1.34
 particles        mean 500   max 500
-creatures        mean 55    max 81
+creatures        mean 81    max 81
 per-pass top:
-  obstacle_collision   0.285   20.6%
-  diffuse              0.239   17.3%
-  vm                   0.236   17.1%
-  collision            0.210   15.2%
+  obstacle_collision   0.250   23.7%
+  vm                   0.221   21.0%
+  collision            0.188   17.8%
+  activation           0.109   10.3%
+  diffuse              0.084    8.0%
+  forces               0.049    4.6%
 ```
 
-Net: **-43% tick_ms**, particles bound at the cap, per-particle
-passes (obstacle_collision / collision / forces) scale linearly with
-the cap. Per-cell passes (vm) and per-region passes (diffuse,
-region_temp) are unaffected.
+Net: **-57% tick_ms vs uncapped baseline (2.43 ms)**. Diffuse is
+down 65% from its pre-zero-skip cost (0.239 → 0.084 ms) because the
+hot loop now walks only the ~15 active chems, not all 96.
+
+The force kernel and obstacle-collision stay on the serial path at
+this scale (cutover thresholds at N=2048); rayon parallel + wgpu
+GPU paths fire automatically when particle counts climb.
 
 ## Methodology notes for future regression tracking
 
