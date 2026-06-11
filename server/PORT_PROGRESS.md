@@ -243,6 +243,29 @@ Founders: photoautotroph, metabolizer, seeker, reproducer,
 osmotroph, ingester, predator, bonder. 4 each = 32 founders.
 Bonder spawns as a tight cluster so the cohort actually meets.
 
+### eDNA / horizontal gene transfer
+edna.rs: dying cells release their genome into a world-wide eDNA
+pool with position and age. COMPETENCE-expressing cells absorb the
+nearest in-range carrier, splicing one byte into their own genome.
+Third evolutionary mechanism alongside fission inheritance and
+somatic mutation. SaveSchema bumped to v3.
+
+## Three independent evolutionary mechanisms now active
+
+1. **Fission inheritance + point mutation**: reproduction::run_reproduction
+   halves the parent's chems for the daughter, then optionally flips
+   one bit in the genome at FISSION_MUTATION_RATE = 0.4
+2. **Age-driven somatic mutation, repair-suppressed**: somatic.rs --
+   cells drift at age^2 * SOMATIC_MUTATION_AGE_COEF unless they
+   invest in CHEM_REPAIR
+3. **Horizontal gene transfer**: edna.rs -- dying cells leak genome
+   fragments; COMPETENCE cells in range pick up + splice one byte
+
+Combined these produce real evolutionary dynamics: lineages split
+through fission, drift through age, and exchange code laterally.
+The native engine has parity (in mechanism, if not in calibration)
+with the TS implementation's evolvability.
+
 ## Up next, in suggested order
 
 ### 1. Region / atmosphere passes (~ 1 week)
