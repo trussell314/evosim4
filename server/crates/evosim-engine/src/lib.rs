@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ambient;
+pub mod bonding;
 pub mod cell_reactions;
 pub mod chem_ids;
 pub mod chemistry;
@@ -63,6 +64,10 @@ pub struct Engine {
     /// reads + zeroes this so the client sees a per-window mortality
     /// count, not a monotonic cumulative.
     pending_deaths: u32,
+    /// Per-cell bond list. Tracked outside CreatureStore so the SoA
+    /// stays a pure numeric column layout (bonds are variable-length
+    /// neighbour lists, which don't fit the SoA model).
+    bonds: bonding::BondList,
 }
 
 impl Engine {
@@ -73,6 +78,7 @@ impl Engine {
             collision_scratch: collision::CollisionScratch::new(),
             sensor_bins: sensor_bins::SensorBins::new(),
             pending_deaths: 0,
+            bonds: bonding::make_bonds(0),
         };
         engine.seed_demo_particles();
         engine.seed_founders();
@@ -145,12 +151,23 @@ impl Engine {
         // tick. This closes the selection loop: a cell with no fuel
         // path can't outpace the drain and eventually autolyses.
         maintenance::run_maintenance(&mut self.world.creature_store, dt as f32);
+        // Bond springs before update_creatures so the velocity
+        // contribution shows up in the same tick's position advect.
+        bonding::apply_bond_springs(
+            &mut self.world.creature_store,
+            &self.bonds,
+            dt as f32,
+        );
         creature_update::update_creatures(
             ctx,
             &mut self.world.creature_store,
             &self.sensor_bins,
             dt as f32,
         );
+        // Bond list update: prune broken bonds, form new ones based
+        // on the freshly-written vm_out.bond_marker. Runs after the
+        // VM so SYNTH BOND fires we just observed get acted on.
+        bonding::run_bonding(&mut self.world.creature_store, &mut self.bonds);
         // Excrete + transport: read the VM's just-written per-chem
         // output vectors and move chems between cells and the
         // ambient field. Closes the EXCRETE / TRANSPORT op loop and
@@ -252,6 +269,7 @@ impl Engine {
     pub fn reset(&mut self) {
         self.tick = 0;
         self.world = World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED);
+        self.bonds = bonding::make_bonds(0);
         self.seed_demo_particles();
         self.seed_founders();
     }
@@ -503,8 +521,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // 4 founders per strategy * 7 strategies = 28.
-        assert_eq!(snap.creatures.count, 28);
+        // 4 founders per strategy * 8 strategies = 32.
+        assert_eq!(snap.creatures.count, 32);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),

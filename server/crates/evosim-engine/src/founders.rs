@@ -73,6 +73,17 @@ fn founder_genomes() -> Vec<Vec<u8>> {
         // smaller neighbours when one is in body contact.
         //   GENE PREDATE END
         vec![OP_GENE, OP_PREDATE, OP_END],
+        // Bonder: expresses SYNTH BOND with marker 42, plus a CAT 22
+        // synth so its CHEM_BOND pool grows naturally. Cells with
+        // similar markers bond together; mutation drift produces
+        // tribes.
+        //   GENE SYNTH BOND 42 SYNTH CAT 22 END
+        vec![
+            OP_GENE,
+            OP_SYNTH, SYNTH_KIND_BOND, 42,
+            OP_SYNTH, SYNTH_KIND_CAT, 22,
+            OP_END,
+        ],
     ]
 }
 
@@ -127,15 +138,28 @@ fn founder_chems() -> Vec<Vec<f32>> {
     predator[CHEM_O2] = 80.0;
     predator[CHEM_ADP] = 50.0;
 
+    // Bonder: needs CHEM_BOND above threshold to actually form
+    // bonds; carry a starter pool and the biosynth substrates so the
+    // CAT 22 catalyst they grow can make more.
+    let mut bonder = vec![0.0; NAMED_CHEMICAL_COUNT];
+    bonder[CHEM_ATP] = FOUNDER_ATP;
+    bonder[CHEM_MEMBRANE] = FOUNDER_MEMBRANE;
+    bonder[CHEM_O2] = 50.0;
+    bonder[CHEM_ADP] = 50.0;
+    bonder[crate::chem_ids::CHEM_AA] = 30.0;
+    bonder[crate::chem_ids::CHEM_MRNA] = 5.0;
+    bonder[crate::chem_ids::CHEM_FA] = 30.0;
+    bonder[crate::chem_ids::CHEM_BOND] = 5.0; // > BOND_FORMATION_THRESH from the start
+
     // Also give every line some enzyme + biopolymer for the digest
     // path: a metabolizer can switch to that route if its glucose
     // ever runs out.
-    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester, &mut predator].iter_mut() {
+    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester, &mut predator, &mut bonder].iter_mut() {
         chems[CHEM_ENZ] = 5.0;
         chems[CHEM_BIOPOLYMER] = 20.0;
     }
 
-    vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator]
+    vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator, bonder]
 }
 
 /// Place `n_per_strategy` cells of each founder genome at random
@@ -190,8 +214,8 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
-        assert_eq!(n, 35); // 7 strategies x 5 each
-        assert_eq!(store.len(), 35);
+        assert_eq!(n, 40); // 8 strategies x 5 each
+        assert_eq!(store.len(), 40);
     }
 
     #[test]
