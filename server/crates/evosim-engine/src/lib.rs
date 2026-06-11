@@ -15,6 +15,7 @@ pub mod death;
 pub mod forces;
 pub mod genome;
 pub mod genome_consts;
+pub mod maintenance;
 pub mod particles;
 pub mod reactions;
 pub mod reproduction;
@@ -199,6 +200,11 @@ impl Engine {
             // a chl-bearing cell run photosynth at ~half rate.
             ambient_light: 0.5,
         };
+        // Baseline metabolic drain BEFORE update_creatures so a cell
+        // that scrapes by on reaction output gets credited the same
+        // tick. This closes the selection loop: a cell with no fuel
+        // path can't outpace the drain and eventually autolyses.
+        maintenance::run_maintenance(&mut self.world.creature_store, dt as f32);
         creature_update::update_creatures(
             ctx,
             &mut self.world.creature_store,
