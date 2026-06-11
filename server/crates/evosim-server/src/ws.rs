@@ -167,17 +167,25 @@ async fn handle_client_message(
                 })
                 .await;
         }
-        ClientMessage::SetRunning { .. }
-        | ClientMessage::SetSimRate { .. }
-        | ClientMessage::Save { .. } => {
-            // Controller commands. Today the engine task doesn't yet
-            // honor them; this is a TODO that lands with the engine
-            // port. Nack so the client knows it didn't take effect
-            // rather than silently dropping.
+        ClientMessage::SetRunning { running } => {
+            if let Some(engine_cmd) = engine_cmd {
+                let _ = engine_cmd.send(EngineCmd::SetRunning(running)).await;
+            }
+        }
+        ClientMessage::SetSimRate { rate } => {
+            if let Some(engine_cmd) = engine_cmd {
+                let _ = engine_cmd.send(EngineCmd::SetSimRate(rate)).await;
+            }
+        }
+        ClientMessage::Save { .. } => {
+            // Save lands with the save/load port (PORT_PROGRESS step 9).
+            // The save format is the same JSON the TS world uses; the
+            // serde shape is what's pending. Until then surface an
+            // honest error rather than a silent drop.
             let _ = reply_tx
                 .send(ServerMessage::Error {
                     code: "unimplemented".into(),
-                    message: "controller commands land with the engine port".into(),
+                    message: "save lands with the save/load port".into(),
                 })
                 .await;
         }

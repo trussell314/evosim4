@@ -33,6 +33,14 @@ pub enum EngineCmd {
     /// Take a snapshot right now (out-of-cadence), encode, broadcast,
     /// and reply with `()` so the caller knows it landed.
     SnapshotNow(oneshot::Sender<()>),
+    /// Pause or resume the engine. When paused, the tick timer keeps
+    /// firing but step() is skipped so the world stops advancing;
+    /// snapshots continue so a paused world is still observable.
+    SetRunning(bool),
+    /// Multiplier on the wall-clock tick cadence. 1.0 = real time,
+    /// 0.5 = half speed, 2.0 = double speed. Clamped to a sane band
+    /// server-side.
+    SetSimRate(f32),
 }
 
 pub struct EngineHandle {
@@ -51,14 +59,23 @@ pub fn spawn(
     EngineHandle { cmd_tx, _join: join }
 }
 
+/// Min/max sim-rate the server honours. A rate of 0 effectively
+/// pauses; the server-side pause path uses `SetRunning(false)` for
+/// the same effect. We don't accept negative rates (time would run
+/// backwards) and we cap at 8x so a rogue controller can't melt the
+/// engine task.
+const SIM_RATE_MIN: f32 = 0.05;
+const SIM_RATE_MAX: f32 = 8.0;
+
 async fn run(
     _state: Arc<AppState>,
     snap_tx: broadcast::Sender<Arc<Vec<u8>>>,
     mut cmd_rx: mpsc::Receiver<EngineCmd>,
 ) {
     let mut engine = Engine::new();
-    let mut tick_timer = tokio::time::interval(Duration::from_secs_f64(TICK_DT));
-    tick_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut running = true;
+    let mut sim_rate: f32 = 1.0;
+    let mut tick_timer = make_tick_timer(sim_rate);
 
     let mut snap_timer = tokio::time::interval(SNAPSHOT_INTERVAL);
     snap_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -71,7 +88,9 @@ async fn run(
             biased;
 
             _ = tick_timer.tick() => {
-                engine.step(TICK_DT);
+                if running {
+                    engine.step(TICK_DT);
+                }
             }
 
             _ = snap_timer.tick() => {
@@ -85,6 +104,18 @@ async fn run(
                     Some(EngineCmd::Reset) => {
                         info!("engine reset");
                         engine.reset();
+                    }
+                    Some(EngineCmd::SetRunning(r)) => {
+                        info!(running = r, "engine running flag changed");
+                        running = r;
+                    }
+                    Some(EngineCmd::SetSimRate(rate)) => {
+                        let clamped = rate.clamp(SIM_RATE_MIN, SIM_RATE_MAX);
+                        if (clamped - sim_rate).abs() > f32::EPSILON {
+                            info!(rate = clamped, "sim rate changed");
+                            sim_rate = clamped;
+                            tick_timer = make_tick_timer(sim_rate);
+                        }
                     }
                     Some(EngineCmd::SnapshotNow(reply)) => {
                         if let Err(e) = broadcast_snapshot(&engine, &snap_tx) {
@@ -101,6 +132,16 @@ async fn run(
             }
         }
     }
+}
+
+/// Build a fresh tick `Interval` for the given rate. We can't change
+/// `Interval::period` after construction (tokio API), so a rate
+/// change drops and rebuilds.
+fn make_tick_timer(rate: f32) -> tokio::time::Interval {
+    let dt = TICK_DT / rate as f64;
+    let mut timer = tokio::time::interval(Duration::from_secs_f64(dt));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    timer
 }
 
 fn broadcast_snapshot(
