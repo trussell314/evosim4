@@ -16,11 +16,12 @@
 
 use crate::ambient::AmbientField;
 use crate::chem_ids::{
-    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, CHEM_ACT_PH,
-    CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_THERMO,
-    CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y, CHEM_ATP, CHEM_CO2, CHEM_ELECTRORECEPTOR,
-    CHEM_MAGNETORECEPTOR, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
-    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR, CHEM_THERMORECEPTOR, CHEM_VIBRORECEPTOR,
+    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, CHEM_ACT_MECH_X,
+    CHEM_ACT_MECH_Y, CHEM_ACT_PH, CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE,
+    CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_THERMO, CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y, CHEM_ATP,
+    CHEM_CO2, CHEM_ELECTRORECEPTOR, CHEM_MAGNETORECEPTOR, CHEM_MECHANORECEPTOR,
+    CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE, CHEM_PHOTORECEPTOR_VISIBLE,
+    CHEM_PHRECEPTOR, CHEM_THERMORECEPTOR, CHEM_VIBRORECEPTOR,
 };
 use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
@@ -64,6 +65,10 @@ const MAG_GAIN: f32 = 1.0;
 const TEMP_TOP: f32 = 1.0;
 const TEMP_BOTTOM: f32 = -1.0;
 const THERMO_GAIN: f32 = 1.0;
+/// Mechanical sensing: receptor reads the cell's own velocity as
+/// a proxy for collision force. A cell being pushed around (high
+/// vx/vy) sees a strong mech signal; a still cell sees nothing.
+const MECH_GAIN: f32 = 0.05;
 
 /// Run sensor activation for every cell. `ambient_light` is the
 /// world's current light level (0..1). `particles` is the world's
@@ -247,6 +252,22 @@ pub fn run_activation(
         }
     }
 
+    // Mechanical: receptor reads the cell's own velocity vector as
+    // a proxy for collision force. Lets cells evolve a "pushed
+    // around" awareness -- e.g. a cell being shoved by a predator
+    // can sense the impact direction and turn away.
+    for i in 0..n {
+        let receptor = creatures.chems[CHEM_MECHANORECEPTOR][i];
+        creatures.chems[CHEM_ACT_MECH_X][i] *= keep;
+        creatures.chems[CHEM_ACT_MECH_Y][i] *= keep;
+        if receptor <= 0.0 {
+            continue;
+        }
+        let gain = receptor * MECH_GAIN;
+        creatures.chems[CHEM_ACT_MECH_X][i] += creatures.vx[i] * gain * decay;
+        creatures.chems[CHEM_ACT_MECH_Y][i] += creatures.vy[i] * gain * decay;
+    }
+
     // Magnetic: directional, uniform world-wide. A
     // magnetoreceptor-carrying cell reads the magnetic field unit
     // vector scaled by receptor_pool * MAG_GAIN. SENSE_CHEMICAL on
@@ -314,6 +335,19 @@ mod tests {
         let mut s = CreatureStore::new();
         run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn mechanoreceptor_reads_velocity() {
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_MECHANORECEPTOR] = 1.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { r: 8.0, vx: 10.0, vy: -5.0, chems: Some(chems), ..CreatureInit::default() });
+        for _ in 0..30 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
+        }
+        assert!(s.chems[CHEM_ACT_MECH_X][0] > 0.0);
+        assert!(s.chems[CHEM_ACT_MECH_Y][0] < 0.0);
     }
 
     #[test]
