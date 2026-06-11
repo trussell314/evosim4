@@ -74,6 +74,10 @@ pub struct CreatureStore {
     pub genome: Vec<Vec<u8>>,
     pub vm_state: Vec<VmState>,
     pub vm_out: Vec<VmOutputs>,
+    /// Derived per-cell sense range (genome::compute_sense_range
+    /// applied at push and refreshed on genome mutations). Read by
+    /// the Sensors trait at VM dispatch.
+    pub sense_range: Vec<f32>,
 }
 
 /// Initial state for `push`. Named fields mirror the ergonomic shape
@@ -162,9 +166,11 @@ impl CreatureStore {
             self.inhibitor[slot].push(0.0);
         }
 
+        let sense_range = crate::genome::compute_sense_range(&init.genome);
         self.genome.push(init.genome);
         self.vm_state.push(VmState::new());
         self.vm_out.push(VmOutputs::new());
+        self.sense_range.push(sense_range);
 
         self.n += 1;
         i
@@ -198,7 +204,7 @@ impl CreatureStore {
             }
             self.genome.pop();
             self.vm_state.pop();
-            self.vm_out.pop();
+            self.vm_out.pop(); self.sense_range.pop();
             self.n -= 1;
             return None;
         }
@@ -224,7 +230,7 @@ impl CreatureStore {
         }
         self.genome.swap_remove(idx);
         self.vm_state.swap_remove(idx);
-        self.vm_out.swap_remove(idx);
+        self.vm_out.swap_remove(idx); self.sense_range.swap_remove(idx);
         self.n -= 1;
         Some(idx)
     }
@@ -252,7 +258,7 @@ impl CreatureStore {
         }
         self.genome.clear();
         self.vm_state.clear();
-        self.vm_out.clear();
+        self.vm_out.clear(); self.sense_range.clear();
         self.n = 0;
     }
 }

@@ -203,6 +203,28 @@ where
 
 /// Coding key: the gene-bodies-only flat string used as the
 /// per-genome identity hash. `|` separates back-to-back genes.
+/// Base sense radius in world pixels for a genome with zero
+/// SENSE_AMP bytes. Matches TS `SENSE_BASE`.
+pub const SENSE_BASE: f32 = 80.0;
+/// Pixels of sense range per sqrt(SENSE_AMP count). Matches TS
+/// `SENSE_PER_AMP`. Sub-linear scaling so a genome can't trivially
+/// max out its sense by stuffing SENSE_AMP bytes -- diminishing
+/// returns means a cell pays for breadth, not stacking.
+pub const SENSE_PER_AMP: f32 = 30.0;
+
+/// Compute the per-cell sense range from a genome. Counts SENSE_AMP
+/// bytes anywhere in the genome (not just expressed code) and uses
+/// sqrt scaling. Matches TS `computeSenseRange`.
+pub fn compute_sense_range(genome: &[u8]) -> f32 {
+    let mut amps: u32 = 0;
+    for &b in genome {
+        if b == OP_SENSE_AMP {
+            amps += 1;
+        }
+    }
+    SENSE_BASE + SENSE_PER_AMP * (amps as f32).sqrt()
+}
+
 /// Lower-case hex; back-to-back-`GENE` produces a `||`. A gene-less
 /// genome yields the empty string.
 pub fn coding_key(genome: &[u8]) -> String {
@@ -352,6 +374,32 @@ mod tests {
             if count == 2 { Action::Break } else { Action::Continue }
         });
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn compute_sense_range_base_no_amp() {
+        // No SENSE_AMP bytes -> SENSE_BASE.
+        let g = vec![OP_GENE, OP_PUSH8, 0, OP_THRUST, OP_END];
+        assert_eq!(compute_sense_range(&g), SENSE_BASE);
+    }
+
+    #[test]
+    fn compute_sense_range_grows_with_amps() {
+        // 1 SENSE_AMP -> SENSE_BASE + SENSE_PER_AMP * sqrt(1) = 80 + 30
+        let g = vec![OP_GENE, OP_SENSE_AMP, OP_PUSH8, 0, OP_THRUST, OP_END];
+        assert!((compute_sense_range(&g) - (SENSE_BASE + SENSE_PER_AMP)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn compute_sense_range_sublinear() {
+        // 4 SENSE_AMP -> SENSE_BASE + SENSE_PER_AMP * 2 = 80 + 60 = 140.
+        let g = vec![
+            OP_GENE,
+            OP_SENSE_AMP, OP_SENSE_AMP, OP_SENSE_AMP, OP_SENSE_AMP,
+            OP_END,
+        ];
+        let r = compute_sense_range(&g);
+        assert!((r - (SENSE_BASE + SENSE_PER_AMP * 2.0)).abs() < 1e-3);
     }
 
     #[test]

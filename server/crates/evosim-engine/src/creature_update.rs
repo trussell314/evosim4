@@ -81,9 +81,9 @@ pub struct UpdateCtx {
     pub ambient_light: f32,
 }
 
-/// Default per-cell sense range (world pixels) until a per-cell
-/// derived-trait pass lands. Matches the TS founder default.
-const DEFAULT_SENSE_RANGE: f32 = 120.0;
+// (Per-cell sense range now lives on CreatureStore.sense_range,
+// computed from SENSE_AMP count at push and refreshed when the
+// genome mutates. Old DEFAULT_SENSE_RANGE retired.)
 
 /// Run the per-tick VM pass over every creature in `store`. `bins`
 /// is the spatial sensor grid the SENSE_OUT op queries.
@@ -118,7 +118,7 @@ pub fn update_creatures(
             bins,
             cx,
             cy,
-            sense_range: DEFAULT_SENSE_RANGE,
+            sense_range: store.sense_range[i],
         };
 
         // SAFETY-free: we split the &mut store into the disjoint
@@ -162,6 +162,13 @@ pub fn update_creatures(
         let inh_slots: Vec<usize> = (0..out.inh_synth_count)
             .map(|k| out.inh_synth_list[k] as usize)
             .collect();
+
+        // If the VM just mutated the genome (POKE / SPLICE) the
+        // SENSE_AMP byte count may have changed; recompute. Cheap
+        // (linear scan over the genome) and only fires when needed.
+        if out.poke_fired || out.splice_mode != 0 {
+            store.sense_range[i] = crate::genome::compute_sense_range(&genome);
+        }
 
         // Restore the swapped-out fields.
         store.vm_state[i] = state;
@@ -326,12 +333,13 @@ mod tests {
             chems: Some(chems),
             ..CreatureInit::default()
         });
-        // Bait pile 80px to the right -- inside the default sense
-        // range (120) so the gradient is non-zero.
+        // Bait pile 50px to the right -- inside the SENSE_BASE
+        // (80) range so a genome with zero SENSE_AMP can still
+        // detect the gradient.
         let mut particles = ParticleStore::new();
         for _ in 0..20 {
             particles.push(ParticleInit {
-                x: 180.0,
+                x: 150.0,
                 y: 100.0,
                 chem_id: 3,
                 r: 1.0,
