@@ -32,6 +32,7 @@ pub mod reproduction;
 pub mod rng;
 pub mod save;
 pub mod sensor_bins;
+pub mod transport_reactions;
 pub mod vm;
 pub mod world;
 
@@ -206,6 +207,16 @@ impl Engine {
         // ambient pool and pull a little out. Mass-conserving per
         // chem so the food web has a slow background mixer.
         ambient::run_ambient_exchange(
+            &mut self.world.creature_store,
+            &mut self.world.ambient,
+            dt as f32,
+        );
+        // Catalyst-gated transporter reactions: cells with a
+        // catalyst pool for a specific transport slot move that
+        // chem cell <-> ambient down its concentration gradient.
+        // Scales with catalyst pool size, so growing a transporter
+        // is what specialises a cell for a particular nutrient.
+        transport_reactions::run_transport_reactions(
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
