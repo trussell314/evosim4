@@ -50,6 +50,10 @@ pub struct Engine {
     world: World,
     collision_scratch: collision::CollisionScratch,
     sensor_bins: sensor_bins::SensorBins,
+    /// Cells that died since the last snapshot. The next snapshot
+    /// reads + zeroes this so the client sees a per-window mortality
+    /// count, not a monotonic cumulative.
+    pending_deaths: u32,
 }
 
 impl Engine {
@@ -59,6 +63,7 @@ impl Engine {
             world: World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED),
             collision_scratch: collision::CollisionScratch::new(),
             sensor_bins: sensor_bins::SensorBins::new(),
+            pending_deaths: 0,
         };
         engine.seed_demo_particles();
         engine.seed_demo_creatures();
@@ -225,11 +230,12 @@ impl Engine {
         // dying cell's pools become particles instead of vanishing),
         // so a fission + death pair leaves the world's total mass
         // unchanged.
-        death::run_death(
+        let n_deaths = death::run_death(
             &mut self.world.creature_store,
             &mut self.world.particle_store,
             &mut self.world.sim_rng,
         );
+        self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
     }
 
     /// Serialise the current world to a JSON string. Schema string
@@ -262,9 +268,18 @@ impl Engine {
     /// Pack the current state into a snapshot for broadcast. Particle
     /// SoA blobs carry the live store columns as packed bytes; the
     /// client decodes them as TypedArrays of the declared stride.
-    pub fn snapshot(&self) -> Snapshot {
+    pub fn snapshot(&mut self) -> Snapshot {
         let particles = pack_particle_soa(&self.world.particle_store);
         let creatures = pack_creature_soa(&self.world.creature_store);
+        let species_count = {
+            use std::collections::HashSet;
+            let mut keys: HashSet<String> = HashSet::new();
+            for g in &self.world.creature_store.genome {
+                keys.insert(genome::coding_key(g));
+            }
+            keys.len() as u32
+        };
+        let deaths_this_window = std::mem::take(&mut self.pending_deaths);
         Snapshot {
             tick: self.tick,
             t: self.world.t,
@@ -275,6 +290,8 @@ impl Engine {
             force_source: ForceSource::Serial,
             cpu_pool_workers: 0,
             gpu_last_ms: 0.0,
+            species_count,
+            deaths_this_window,
         }
     }
 }
@@ -364,7 +381,7 @@ mod tests {
 
     #[test]
     fn fresh_engine_has_demo_particles() {
-        let e = Engine::new();
+        let mut e = Engine::new();
         let snap = e.snapshot();
         assert_eq!(snap.particles.count, 200);
         let x_blob = snap.particles.blobs.iter().find(|b| b.name == "x").unwrap();
@@ -409,7 +426,7 @@ mod tests {
 
     #[test]
     fn snapshot_carries_demo_creatures() {
-        let e = Engine::new();
+        let mut e = Engine::new();
         let snap = e.snapshot();
         // Initial population: 2 each of 5 seed types -> 10. Grows as
         // the reproducer cells fission.

@@ -101,7 +101,7 @@ async fn run(
             }
 
             _ = snap_timer.tick() => {
-                if let Err(e) = broadcast_snapshot(&engine, &snap_tx) {
+                if let Err(e) = broadcast_snapshot(&mut engine, &snap_tx) {
                     warn!(error = %e, "snapshot encode failed");
                 }
             }
@@ -125,7 +125,7 @@ async fn run(
                         }
                     }
                     Some(EngineCmd::SnapshotNow(reply)) => {
-                        if let Err(e) = broadcast_snapshot(&engine, &snap_tx) {
+                        if let Err(e) = broadcast_snapshot(&mut engine, &snap_tx) {
                             warn!(error = %e, "snapshot encode failed");
                         }
                         let _ = reply.send(());
@@ -160,7 +160,7 @@ fn make_tick_timer(rate: f32) -> tokio::time::Interval {
 }
 
 fn broadcast_snapshot(
-    engine: &Engine,
+    engine: &mut Engine,
     snap_tx: &broadcast::Sender<Arc<Vec<u8>>>,
 ) -> Result<(), rmp_serde::encode::Error> {
     if snap_tx.receiver_count() == 0 {

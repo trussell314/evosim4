@@ -264,9 +264,11 @@ function frame(): void {
 
     // FPS / tick / lag readouts.
     const sps = snapsPerSec.toFixed(1);
-    const lag = ((performance.now() - lastSnapshotAt) | 0).toString();
     const el = document.getElementById("sps");
-    if (el) el.textContent = `${sps} (last ${lag}ms ago, tick ${snapshot.tick}, particles=${n}, creatures=${cN})`;
+    void lastSnapshotAt;
+    const species = (snapshot as { species_count?: number }).species_count ?? 0;
+    const deaths = (snapshot as { deaths_this_window?: number }).deaths_this_window ?? 0;
+    if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths})`;
   }
 
   requestAnimationFrame(frame);

@@ -82,6 +82,16 @@ pub struct Snapshot {
     /// EMA of the GPU dispatch round-trip in ms; 0 if no GPU dispatch
     /// has happened yet.
     pub gpu_last_ms: f32,
+    /// Distinct coding-key count across live creatures (intron-stripped
+    /// species fingerprint). The TS HUD shows this as
+    /// `species/genomes`. Defaults to 0 on builds that haven't ported
+    /// the species pass yet.
+    #[serde(default)]
+    pub species_count: u32,
+    /// Cells dead since the last snapshot. Lets the client surface a
+    /// per-window mortality rate without keeping its own history.
+    #[serde(default)]
+    pub deaths_this_window: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
