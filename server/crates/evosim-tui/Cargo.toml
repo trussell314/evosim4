@@ -10,6 +10,10 @@ publish.workspace = true
 name = "evosim-tui"
 path = "src/main.rs"
 
+[[bin]]
+name = "evosim-bench"
+path = "src/bench.rs"
+
 [dependencies]
 evosim-protocol.workspace = true
 tokio = { workspace = true }
