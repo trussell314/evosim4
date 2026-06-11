@@ -62,6 +62,10 @@ pub struct World {
     /// world-config port (or a test) installs one. When set,
     /// `step_vent` runs each tick and may emit particles.
     pub vent: Option<crate::vent::VentState>,
+    /// Per-region temperature field. Diffuses, relaxes toward
+    /// `TEMP_BASELINE`, and absorbs vent heat. Consumed by the
+    /// solubility / capacity formula and the precipitation pass.
+    pub region_temp: crate::region_temp::RegionTempField,
 
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
@@ -126,6 +130,7 @@ impl World {
             terrain_heightmap: Vec::new(),
             obstacle_index: ObstacleIndex::new(),
             vent: None,
+            region_temp: crate::region_temp::RegionTempField::new(),
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 
@@ -168,6 +173,7 @@ impl World {
         self.terrain_heightmap.clear();
         self.obstacle_index = ObstacleIndex::new();
         self.vent = None;
+        self.region_temp = crate::region_temp::RegionTempField::new();
     }
 
     /// Rebuild the heightmap + obstacle index + ambient solid mask

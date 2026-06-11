@@ -35,6 +35,7 @@ pub mod particles;
 pub mod precipitation;
 pub mod predate;
 pub mod reactions;
+pub mod region_temp;
 pub mod regions;
 pub mod reproduction;
 pub mod terrain;
@@ -256,6 +257,16 @@ impl Engine {
                 &mut self.world.sim_rng,
             );
         }
+        // Regional temperature field: diffuse + relax + absorb vent
+        // heat. Wires the vent's always-on hot zone (and eruption
+        // spikes) into the solubility formula via region_dissolved_capacity.
+        region_temp::step_region_temps(
+            &mut self.world.region_temp,
+            self.world.width,
+            self.world.height,
+            self.world.vent.as_ref(),
+            dt as f32,
+        );
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
         // update_creatures so the per-tick vm_out.reproduce flag has
@@ -308,6 +319,7 @@ impl Engine {
         precipitation::run_precipitation(
             &mut self.world.ambient,
             &mut self.world.particle_store,
+            &self.world.region_temp,
             precip_geom,
             &mut self.world.sim_rng,
         );

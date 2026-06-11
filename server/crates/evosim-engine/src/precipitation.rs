@@ -16,16 +16,12 @@
 //! What's NOT here yet:
 //!   - global particle cap (TS bounds spawn count by `effectiveParticleCap`)
 //!     -- we have no cap yet, so excess always becomes particles
-//!   - regional temperature scaling (depends on `regionTemp` field --
-//!     vent port). For now every region uses `TEMP_BASELINE` for the
-//!     capacity formula
-//!   - rock-aware spawn (TS skips regions whose center sits in solid
-//!     terrain). Depends on the terrain port.
 
 use crate::ambient::{AmbientField, AMBIENT_STRIDE};
 use crate::chemistry::table as chem_table;
 use crate::particles::{ParticleInit, ParticleStore};
-use crate::regions::{region_dissolved_capacity, PRECIP_R, REGION_PX, TEMP_BASELINE};
+use crate::region_temp::RegionTempField;
+use crate::regions::{region_dissolved_capacity, PRECIP_R, REGION_PX};
 use crate::rng::Mulberry32;
 
 /// World geometry the precipitation pass needs. Lifted out so the
@@ -44,6 +40,7 @@ pub struct PrecipGeom {
 pub fn run_precipitation(
     ambient: &mut AmbientField,
     particles: &mut ParticleStore,
+    region_temp: &RegionTempField,
     geom: PrecipGeom,
     rng: &mut Mulberry32,
 ) -> usize {
@@ -66,12 +63,17 @@ pub fn run_precipitation(
                 continue;
             }
             let base = ri * AMBIENT_STRIDE;
+            // Per-region temperature drives the capacity formula --
+            // warmer regions hold less gas (Henry) and slightly more
+            // condensed phase. Falls back to baseline if the field
+            // hasn't been seeded yet.
+            let t_reg = region_temp.by_index(ri);
             for k in 0..AMBIENT_STRIDE {
                 let v = ambient.dissolved[base + k];
                 if v <= 0.0 {
                     continue;
                 }
-                let cap = region_dissolved_capacity(k, geom.height, geom.depth, TEMP_BASELINE);
+                let cap = region_dissolved_capacity(k, geom.height, geom.depth, t_reg);
                 let excess = v - cap;
                 if excess <= 0.0 {
                     continue;
@@ -136,7 +138,7 @@ mod tests {
         let mut amb = AmbientField::new_for_world(200.0, 200.0);
         let mut ps = ParticleStore::new();
         let mut rng = Mulberry32::new(1);
-        let spawned = run_precipitation(&mut amb, &mut ps, geom(200.0, 200.0, 0.0), &mut rng);
+        let spawned = run_precipitation(&mut amb, &mut ps, &RegionTempField::new(), geom(200.0, 200.0, 0.0), &mut rng);
         assert_eq!(spawned, 0);
     }
 
@@ -148,7 +150,7 @@ mod tests {
         assert!(mass_before > 0.0);
         let mut ps = ParticleStore::new();
         let mut rng = Mulberry32::new(1);
-        let spawned = run_precipitation(&mut amb, &mut ps, geom(200.0, 200.0, 0.0), &mut rng);
+        let spawned = run_precipitation(&mut amb, &mut ps, &RegionTempField::new(), geom(200.0, 200.0, 0.0), &mut rng);
         assert!(spawned > 0, "expected MEMBRANE to precipitate");
         let mut mem_particles = 0;
         for i in 0..ps.len() {
@@ -167,7 +169,7 @@ mod tests {
 
         let mut ps = ParticleStore::new();
         let mut rng = Mulberry32::new(1);
-        run_precipitation(&mut amb, &mut ps, geom(200.0, 200.0, 0.0), &mut rng);
+        run_precipitation(&mut amb, &mut ps, &RegionTempField::new(), geom(200.0, 200.0, 0.0), &mut rng);
 
         let dissolved_after = amb.totals_per_chem()[CHEM_MEMBRANE];
         let table = chem_table();
@@ -197,7 +199,7 @@ mod tests {
         let mut ps = ParticleStore::new();
         let mut rng = Mulberry32::new(1);
         let surface = 80.0;
-        run_precipitation(&mut amb, &mut ps, geom(200.0, 200.0, surface), &mut rng);
+        run_precipitation(&mut amb, &mut ps, &RegionTempField::new(), geom(200.0, 200.0, surface), &mut rng);
         for i in 0..ps.len() {
             assert!(
                 ps.y[i] >= surface + PRECIP_R - 1e-3,
