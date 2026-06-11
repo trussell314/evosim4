@@ -73,6 +73,8 @@ struct UiState {
     history_cells: std::collections::VecDeque<u64>,
     history_species: std::collections::VecDeque<u64>,
     history_mass: std::collections::VecDeque<u64>,
+    /// Per-chem labels from the Hello frame. Index = chem id.
+    chem_names: Vec<String>,
 }
 
 impl UiState {
@@ -137,9 +139,11 @@ async fn main() -> Result<()> {
                     capabilities,
                     build,
                     protocol,
+                    chem_names,
                     ..
                 } => {
                     u.admin = capabilities.admin;
+                    u.chem_names = chem_names;
                     u.status_line = format!(
                         "evosim-tui connected: protocol={} build={} admin={}",
                         protocol, build.commit, capabilities.admin
@@ -299,6 +303,7 @@ struct UiView {
     history_cells: Vec<u64>,
     history_species: Vec<u64>,
     history_mass: Vec<u64>,
+    chem_names: Vec<String>,
 }
 
 impl UiState {
@@ -315,6 +320,7 @@ impl UiState {
             history_cells: self.history_cells.iter().copied().collect(),
             history_species: self.history_species.iter().copied().collect(),
             history_mass: self.history_mass.iter().copied().collect(),
+            chem_names: self.chem_names.clone(),
         }
     }
 }
@@ -332,14 +338,19 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
     render_status(f, chunks[0], u);
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(48)])
+        .constraints([
+            Constraint::Length(28),
+            Constraint::Min(0),
+            Constraint::Length(48),
+        ])
         .split(chunks[1]);
-    render_map(f, body[0], u);
+    render_ambient(f, body[0], u);
+    render_map(f, body[1], u);
     // Right column: species roster on top, history sparklines below.
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(11)])
-        .split(body[1]);
+        .split(body[2]);
     render_species(f, right[0], u);
     render_history(f, right[1], u);
     render_help(f, chunks[2], u);
@@ -498,6 +509,63 @@ fn species_glyph(species_idx: u8) -> char {
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
     ];
     GLYPHS[(species_idx as usize) % GLYPHS.len()]
+}
+
+fn render_ambient(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
+    let block = Block::default().borders(Borders::ALL).title("ambient");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(s) = &u.last_snapshot else { return };
+    if s.ambient_chems.is_empty() {
+        return;
+    }
+
+    // Rank chems by current ambient mass; show top-N that fits.
+    let mut indexed: Vec<(usize, f32)> = s
+        .ambient_chems
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, m)| *m > 0.0)
+        .collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let max_mass = indexed.first().map(|(_, m)| *m).unwrap_or(1.0).max(1.0);
+    let rows = inner.height.saturating_sub(1) as usize;
+    let label_w = (inner.width.saturating_sub(2) as usize).min(10);
+    let bar_w = (inner.width as usize).saturating_sub(label_w + 8);
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows + 1);
+    lines.push(Line::from(vec![Span::styled(
+        "chem      mass",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    for (i, mass) in indexed.iter().take(rows) {
+        let name = u
+            .chem_names
+            .get(*i)
+            .cloned()
+            .unwrap_or_else(|| format!("c{i}"));
+        let mut label: String = name.chars().take(label_w).collect();
+        while label.chars().count() < label_w {
+            label.push(' ');
+        }
+        let fill = if bar_w > 0 {
+            ((*mass / max_mass) * bar_w as f32).round() as usize
+        } else {
+            0
+        };
+        let bar = "█".repeat(fill.min(bar_w));
+        let line = format!("{label} {mass:>6.0} {bar}");
+        let color = colour_for_glyph(*i as u8);
+        lines.push(Line::from(vec![Span::styled(
+            line,
+            Style::default().fg(color),
+        )]));
+    }
+    let p = Paragraph::new(lines);
+    f.render_widget(p, inner);
 }
 
 fn render_species(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
