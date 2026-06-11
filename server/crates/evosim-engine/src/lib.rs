@@ -14,6 +14,7 @@ pub mod genome_consts;
 pub mod particles;
 pub mod reactions;
 pub mod rng;
+pub mod vm;
 pub mod world;
 
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
