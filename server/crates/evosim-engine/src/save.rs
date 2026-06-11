@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 use crate::chem_ids::{CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT};
 use crate::ambient::AmbientField;
 use crate::creatures::CreatureInit;
+use crate::edna::EdnaField;
 use crate::genome_consts::CATALYST_COUNT;
 use crate::particles::ParticleInit;
 use crate::rng::Mulberry32;
@@ -33,9 +34,10 @@ use crate::world::World;
 /// History:
 ///   1 -- foundational SavedWorld (world dims, RNG, particles, creatures)
 ///   2 -- adds ambient field + day_period_s
+///   3 -- adds eDNA field
 pub fn save_schema() -> String {
     format!(
-        "evosim-native:2:{}:{}:{}",
+        "evosim-native:3:{}:{}:{}",
         CATALYST_COUNT, CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT
     )
 }
@@ -61,6 +63,9 @@ pub struct SavedWorld {
     /// the schema check refuses).
     #[serde(default)]
     pub ambient: AmbientField,
+    /// eDNA carriers. Default empty for older saves.
+    #[serde(default)]
+    pub edna: EdnaField,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -186,6 +191,7 @@ pub fn save_world(world: &World) -> SavedWorld {
         particles,
         creatures,
         ambient: world.ambient.clone(),
+        edna: world.edna.clone(),
     }
 }
 
@@ -232,6 +238,7 @@ pub fn load_world(world: &mut World, saved: SavedWorld) -> Result<(), LoadError>
     world.sim_rng = Mulberry32::new(saved.rng_state);
     world.day_period_s = saved.day_period_s;
     world.ambient = saved.ambient;
+    world.edna = saved.edna;
 
     world.particle_store.clear();
     for p in saved.particles {

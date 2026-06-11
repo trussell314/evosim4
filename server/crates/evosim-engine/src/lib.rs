@@ -17,6 +17,7 @@ pub mod creatures;
 pub mod day_cycle;
 pub mod death;
 pub mod describe;
+pub mod edna;
 pub mod excrete_transport;
 pub mod forces;
 pub mod founders;
@@ -217,6 +218,7 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.particle_store,
             &mut self.world.ambient,
+            &mut self.world.edna,
             &mut self.world.sim_rng,
         );
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
@@ -257,6 +259,15 @@ impl Engine {
             &mut self.world.sim_rng,
             self.world.t,
             dt as f32,
+        );
+        // eDNA: age carriers (drop expired) and process competence
+        // uptake for cells in the COMPETENCE state. Horizontal gene
+        // transfer happens here.
+        edna::age_carriers(&mut self.world.edna, dt as f32);
+        edna::run_competence_uptake(
+            &mut self.world.creature_store,
+            &mut self.world.edna,
+            &mut self.world.sim_rng,
         );
     }
 

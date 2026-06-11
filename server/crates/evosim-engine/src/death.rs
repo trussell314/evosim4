@@ -20,6 +20,7 @@ use crate::chem_ids::{
     CHEMICAL_COUNT, CHEM_BIOPOLYMER, CHEM_FA, CHEM_MEMBRANE, NAMED_CHEMICAL_COUNT,
 };
 use crate::creatures::CreatureStore;
+use crate::edna::EdnaField;
 use crate::particles::{ParticleInit, ParticleStore};
 use crate::rng::Mulberry32;
 
@@ -51,6 +52,7 @@ pub fn run_death(
     creatures: &mut CreatureStore,
     particles: &mut ParticleStore,
     ambient: &mut AmbientField,
+    edna: &mut EdnaField,
     rng: &mut Mulberry32,
 ) -> usize {
     let mut deaths = 0;
@@ -93,6 +95,13 @@ pub fn run_death(
                 });
             }
         }
+        // eDNA: release the dying cell's genome into the field so
+        // COMPETENCE-expressing cells can pick it up later. Skip
+        // tiny-mass evaporations (they're treated as having no
+        // structural genome left).
+        if total_mass >= MIN_TOTAL_MASS && !creatures.genome[i].is_empty() {
+            crate::edna::release_at_death(edna, cx, cy, &creatures.genome[i]);
+        }
         creatures.remove_swap_pop(i);
         deaths += 1;
     }
@@ -126,7 +135,7 @@ mod tests {
             chems: Some(make_cell_chems(2.0, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
         assert_eq!(killed, 0);
         assert_eq!(cs.len(), 1);
         assert_eq!(ps.len(), 0);
@@ -142,7 +151,7 @@ mod tests {
             chems: Some(make_cell_chems(0.3, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Particles emitted for the three populated chems
@@ -160,7 +169,7 @@ mod tests {
             chems: Some(make_cell_chems(0.0, 0.01, 0.01)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Total mass < MIN_TOTAL_MASS so no particles emitted.
@@ -182,7 +191,7 @@ mod tests {
                 ..CreatureInit::default()
             });
         }
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
         assert_eq!(killed, 3);
         assert_eq!(cs.len(), 0);
         // 3 dead cells * 2 emitted chems each (ATP, GLU; membrane
