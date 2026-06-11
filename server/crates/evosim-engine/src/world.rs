@@ -63,6 +63,12 @@ pub struct World {
     /// world field; the default of 1.0 reproduces the TS "calm
     /// weather" baseline.
     pub surface_activity: f32,
+
+    // ----- Collision params (mirror TS World fields). -----
+    /// Number of Jacobi sweeps per collision pass. TS default is 2.
+    pub collision_iters: u32,
+    /// Coefficient of restitution. TS default is 0.8.
+    pub restitution: f32,
 }
 
 impl World {
@@ -99,6 +105,8 @@ impl World {
             z_stir_amp: 6.0,
             brownian_amp: 12.0,
             surface_activity: 1.0,
+            collision_iters: 2,
+            restitution: 0.8,
         }
     }
 

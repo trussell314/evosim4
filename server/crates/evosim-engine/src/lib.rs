@@ -7,6 +7,7 @@
 
 pub mod chem_ids;
 pub mod chemistry;
+pub mod collision;
 pub mod forces;
 pub mod genome_consts;
 pub mod particles;
@@ -34,6 +35,7 @@ const DEFAULT_SEED: u32 = 0x1B57E5;
 pub struct Engine {
     tick: u64,
     world: World,
+    collision_scratch: collision::CollisionScratch,
 }
 
 impl Engine {
@@ -41,6 +43,7 @@ impl Engine {
         let mut engine = Self {
             tick: 0,
             world: World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED),
+            collision_scratch: collision::CollisionScratch::new(),
         };
         engine.seed_demo_particles();
         engine
@@ -75,6 +78,7 @@ impl Engine {
         self.tick += 1;
         self.world.t += dt;
         forces::apply_forces(&mut self.world, dt as f32);
+        collision::resolve_collisions(&mut self.world, &mut self.collision_scratch);
     }
 
     /// Reset to defaults. Called by `AdminCommand::Reset`.
