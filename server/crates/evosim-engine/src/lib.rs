@@ -171,6 +171,7 @@ impl Engine {
             &self.world.particle_store,
             &self.world.ambient,
             ctx.ambient_light,
+            self.world.height,
             dt as f32,
         );
         // Bond springs before update_creatures so the velocity

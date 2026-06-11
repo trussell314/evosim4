@@ -17,10 +17,10 @@
 use crate::ambient::AmbientField;
 use crate::chem_ids::{
     CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_MAG_X, CHEM_ACT_MAG_Y, CHEM_ACT_PH,
-    CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE,
+    CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_THERMO,
     CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y, CHEM_ATP, CHEM_CO2, CHEM_ELECTRORECEPTOR,
     CHEM_MAGNETORECEPTOR, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
-    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR, CHEM_VIBRORECEPTOR,
+    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR, CHEM_THERMORECEPTOR, CHEM_VIBRORECEPTOR,
 };
 use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
@@ -55,6 +55,15 @@ const PH_GAIN: f32 = 0.05;
 const MAG_FIELD_X: f32 = 0.0;
 const MAG_FIELD_Y: f32 = 1.0;
 const MAG_GAIN: f32 = 1.0;
+/// Thermal model: temperature linearly varies between TEMP_TOP (at
+/// y=0, the surface) and TEMP_BOTTOM (at y=world_height). Cells with
+/// thermoreceptors read the local temperature OFFSET FROM A NEUTRAL
+/// BASELINE so a deep cold cell sees a negative activation and a
+/// surface warm cell sees positive. Lets cells evolve depth
+/// preferences via thermotaxis.
+const TEMP_TOP: f32 = 1.0;
+const TEMP_BOTTOM: f32 = -1.0;
+const THERMO_GAIN: f32 = 1.0;
 
 /// Run sensor activation for every cell. `ambient_light` is the
 /// world's current light level (0..1). `particles` is the world's
@@ -66,6 +75,7 @@ pub fn run_activation(
     particles: &ParticleStore,
     ambient: &AmbientField,
     ambient_light: f32,
+    world_height: f32,
     dt: f32,
 ) {
     let n = creatures.n;
@@ -216,6 +226,27 @@ pub fn run_activation(
         creatures.chems[CHEM_ACT_PH][i] = prev + stimulus * decay;
     }
 
+    // Thermal: depth-driven temperature. y=0 is the surface
+    // (TEMP_TOP), y=world_height is the bottom (TEMP_BOTTOM); cells
+    // sense the offset. A thermoreceptor cell at the surface sees
+    // a positive activation, deep cells see negative -- cells
+    // evolve depth preferences by reading this signal.
+    if world_height > 0.0 {
+        for i in 0..n {
+            let receptor = creatures.chems[CHEM_THERMORECEPTOR][i];
+            let prev = creatures.chems[CHEM_ACT_THERMO][i] * keep;
+            if receptor <= 0.0 {
+                creatures.chems[CHEM_ACT_THERMO][i] = prev;
+                continue;
+            }
+            let y = creatures.y[i].max(0.0).min(world_height);
+            let frac = y / world_height; // 0 at surface, 1 at bottom
+            let temp = TEMP_TOP + (TEMP_BOTTOM - TEMP_TOP) * frac;
+            let stimulus = temp * receptor * THERMO_GAIN;
+            creatures.chems[CHEM_ACT_THERMO][i] = prev + stimulus * decay;
+        }
+    }
+
     // Magnetic: directional, uniform world-wide. A
     // magnetoreceptor-carrying cell reads the magnetic field unit
     // vector scaled by receptor_pool * MAG_GAIN. SENSE_CHEMICAL on
@@ -252,14 +283,14 @@ mod tests {
     #[test]
     fn no_receptor_no_activation() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 0.0);
-        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         assert_eq!(s.chems[CHEM_ACT_PHOTO_VISIBLE][0], 0.0);
     }
 
     #[test]
     fn receptor_with_light_produces_activation() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 2.0);
-        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.5, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.5, 600.0, 1.0);
         assert!(s.chems[CHEM_ACT_PHOTO_VISIBLE][0] > 0.0);
     }
 
@@ -267,12 +298,12 @@ mod tests {
     fn activation_decays_in_dark() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 2.0);
         // Charge it up.
-        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         let charged = s.chems[CHEM_ACT_PHOTO_VISIBLE][0];
         assert!(charged > 0.0);
         // Run several ticks in the dark.
         for _ in 0..30 {
-            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
         }
         let after = s.chems[CHEM_ACT_PHOTO_VISIBLE][0];
         assert!(after < charged * 0.5, "activation should decay; got {after} vs {charged}");
@@ -281,8 +312,28 @@ mod tests {
     #[test]
     fn no_cells_is_safe() {
         let mut s = CreatureStore::new();
-        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn thermoreceptor_reads_depth_temperature() {
+        // Surface cell at y=0 should see positive temperature; deep
+        // cell at y=world_height should see negative.
+        let mut sup_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        sup_chems[CHEM_THERMORECEPTOR] = 1.0;
+        let mut deep_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        deep_chems[CHEM_THERMORECEPTOR] = 1.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { x: 0.0, y: 0.0, r: 8.0, chems: Some(sup_chems), ..CreatureInit::default() });
+        s.push(CreatureInit { x: 0.0, y: 600.0, r: 8.0, chems: Some(deep_chems), ..CreatureInit::default() });
+        for _ in 0..30 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
+        }
+        let sup_t = s.chems[CHEM_ACT_THERMO][0];
+        let deep_t = s.chems[CHEM_ACT_THERMO][1];
+        assert!(sup_t > 0.0, "surface cell should feel warm, got {sup_t}");
+        assert!(deep_t < 0.0, "deep cell should feel cold, got {deep_t}");
     }
 
     #[test]
@@ -292,7 +343,7 @@ mod tests {
         let mut s = CreatureStore::new();
         s.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
         for _ in 0..30 {
-            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
         }
         let my = s.chems[CHEM_ACT_MAG_Y][0];
         let mx = s.chems[CHEM_ACT_MAG_X][0];
@@ -308,7 +359,7 @@ mod tests {
         let mut s = CreatureStore::new();
         s.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
         for _ in 0..20 {
-            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
         }
         let ph = s.chems[CHEM_ACT_PH][0];
         assert!(ph > 0.0, "expected ph activation, got {ph}");
@@ -327,7 +378,7 @@ mod tests {
         s.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(b_chems), ..CreatureInit::default() });
         // Charge the signal.
         for _ in 0..20 {
-            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
         }
         let sx = s.chems[CHEM_ACT_ELECTRO_X][0];
         assert!(sx > 0.0, "expected +x electro signal, got {sx}");
