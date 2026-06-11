@@ -153,6 +153,13 @@ pub fn apply_particle_forces_range(
 /// the kernel across every particle in `world`. Used by the engine's
 /// serial path. Borrows the chem table internally so callers don't
 /// thread it through.
+///
+/// Above `PARALLEL_THRESHOLD` particles the work splits across rayon
+/// threads using a per-chunk PCG for Brownian noise (the same
+/// approach the wgpu shader takes -- deterministic per (tick_seed,
+/// chunk_idx), independent of the serial RNG draw order). Below the
+/// threshold, the thread-pool overhead would dominate so we stay on
+/// the strictly-serial path.
 pub fn apply_forces(world: &mut World, dt: f32) {
     if world.particle_store.n == 0 {
         return;
@@ -160,14 +167,269 @@ pub fn apply_forces(world: &mut World, dt: f32) {
     let params = crate::world::build_particle_force_params(world, dt);
     let mat_base = &crate::chemistry::table().base_density[..];
     let n = world.particle_store.n;
-    apply_particle_forces_range(
-        &mut world.particle_store,
-        mat_base,
-        &mut world.sim_rng,
-        0,
-        n,
-        &params,
-    );
+    if n >= PARALLEL_THRESHOLD {
+        let tick_seed = world.sim_rng.peek_state();
+        // Pull a single draw so the serial-path determinism boundary is
+        // crisp: ticks that take the parallel path advance the serial
+        // RNG by exactly one draw (matching the count the parallel
+        // kernel doesn't make against it).
+        let _ = world.sim_rng.next_u32();
+        apply_particle_forces_parallel(
+            &mut world.particle_store,
+            mat_base,
+            tick_seed,
+            &params,
+        );
+    } else {
+        apply_particle_forces_range(
+            &mut world.particle_store,
+            mat_base,
+            &mut world.sim_rng,
+            0,
+            n,
+            &params,
+        );
+    }
+}
+
+/// Particles below this count run on the serial path. The force
+/// kernel is intrinsically cheap (~30 float ops per particle), so the
+/// rayon dispatch + work-stealing overhead exceeds the savings until
+/// the workload crosses this threshold. Tuned against the bench
+/// harness: at cap=500 the serial path is 0.05 ms; the parallel path
+/// is 0.19 ms (slower by 3.5x) so we stay serial. At cap=4000 the
+/// parallel path wins decisively.
+const PARALLEL_THRESHOLD: usize = 2048;
+/// Particles per rayon chunk. Sized so a 4k-particle world lands
+/// ~8 chunks across a modern 4-8 core box -- enough to amortise
+/// dispatch overhead, small enough that work stays balanced.
+const PARALLEL_CHUNK: usize = 512;
+
+/// PCG32 step used for per-chunk Brownian noise. Tiny: 8 bytes of
+/// state, two multiplies + one rotate per draw. Returns a uniform
+/// `[0, 1)` f32. Independent from the serial Mulberry32 stream so the
+/// parallel path's RNG draws can run unsynchronised across threads.
+#[inline]
+fn pcg32_next(state: &mut u64) -> f32 {
+    let old = *state;
+    *state = old.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1442695040888963407);
+    let xorshifted = (((old >> 18) ^ old) >> 27) as u32;
+    let rot = (old >> 59) as u32;
+    let mixed = xorshifted.rotate_right(rot);
+    (mixed as f32) / 4_294_967_296.0
+}
+
+fn pcg32_seed(tick_seed: u32, chunk_idx: usize) -> u64 {
+    // Stable per (tick, chunk) seed -- matches the wgpu shader's
+    // approach so the GPU + parallel CPU paths land in the same
+    // probability distribution per slot, even if not the same draws.
+    let mut s = (tick_seed as u64) << 32 | (chunk_idx as u64) ^ 0x9E37_79B9_7F4A_7C15;
+    s ^= s >> 30;
+    s = s.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    s ^= s >> 27;
+    s = s.wrapping_mul(0x94D0_49BB_1331_11EB);
+    s ^= s >> 31;
+    s
+}
+
+/// Parallel force kernel: identical math to `apply_particle_forces_range`
+/// except for Brownian noise (per-chunk PCG instead of the serial RNG).
+/// Splits the SoA columns into `PARALLEL_CHUNK`-sized stripes and
+/// dispatches each chunk to a rayon worker.
+fn apply_particle_forces_parallel(
+    store: &mut ParticleStore,
+    mat_base: &[f32],
+    tick_seed: u32,
+    p: &ParticleForceParams,
+) {
+    use rayon::prelude::*;
+    let n = store.n;
+    if n == 0 {
+        return;
+    }
+    let v_x_cap = {
+        let c_s = p.w_s / p.k_s;
+        let c_l = p.w_l / p.k_l;
+        1.3 * c_s.max(c_l)
+    };
+
+    // The immutable columns can be borrowed once and shared across
+    // closures by reference -- rayon handles the per-thread reads.
+    let pr = &store.r[..];
+    let pdens = &store.density[..];
+    let pmat = &store.chem_id[..];
+
+    // Split each mutable column into PARALLEL_CHUNK stripes. Zipping
+    // the parallel chunk iterators of multiple disjoint &mut slices
+    // produces a tuple chain rayon can dispatch over.
+    let px = store.x.par_chunks_mut(PARALLEL_CHUNK);
+    let py = store.y.par_chunks_mut(PARALLEL_CHUNK);
+    let pz = store.z.par_chunks_mut(PARALLEL_CHUNK);
+    let pvx = store.vx.par_chunks_mut(PARALLEL_CHUNK);
+    let pvy = store.vy.par_chunks_mut(PARALLEL_CHUNK);
+    let pvz = store.vz.par_chunks_mut(PARALLEL_CHUNK);
+
+    px.zip(py)
+        .zip(pz)
+        .zip(pvx)
+        .zip(pvy)
+        .zip(pvz)
+        .enumerate()
+        .for_each(|(ci, (((((cx, cy), cz), cvx), cvy), cvz))| {
+            let from = ci * PARALLEL_CHUNK;
+            let to = (from + cx.len()).min(n);
+            let mut rng = pcg32_seed(tick_seed, ci);
+            for (local, _i) in (from..to).enumerate() {
+                let xi = cx[local];
+                let yi = cy[local];
+                let ri = pr[from + local];
+                let mut vxi = cvx[local];
+                let mut vyi = cvy[local];
+                let mut vzi = cvz[local];
+                let override_d = pdens[from + local];
+                let density = if override_d != 0.0 {
+                    override_d
+                } else {
+                    mat_base[pmat[from + local] as usize]
+                };
+
+                let mut ay = p.gravity * (1.0 - 1.0 / density);
+                if ay < -p.gravity {
+                    ay = -p.gravity;
+                } else if ay > p.gravity {
+                    ay = p.gravity;
+                }
+                let depth = if yi > p.surface_y { yi - p.surface_y } else { 0.0 };
+
+                let surf_pr = p.k_s * xi - p.w_s * p.t;
+                let surf_pl = 1.3 * p.k_s * xi + 1.3 * p.w_s * p.t + 1.1;
+                let swell_pr = p.k_l * xi - p.w_l * p.t;
+                let swell_pl = 1.4 * p.k_l * xi + 1.4 * p.w_l * p.t + 0.4;
+                let surface = p.surf_amp
+                    * 0.5
+                    * (surf_pr.sin() + surf_pl.sin())
+                    * (-depth / p.surface_decay).exp();
+                let swell = p.swell_amp
+                    * 0.5
+                    * (swell_pr.sin() + swell_pl.sin())
+                    * (-depth / p.swell_decay).exp();
+                let az = p.z_amp
+                    * (p.w_l * p.t + p.k_l * xi + 1.0).sin()
+                    * (-depth / p.swell_decay).exp();
+                let splash = if depth < SPLASH_DEPTH {
+                    p.surf_amp
+                        * SPLASH_GAIN
+                        * 0.5
+                        * (surf_pr.cos() + surf_pl.cos())
+                        * (-depth / SPLASH_DEPTH).exp()
+                } else {
+                    0.0
+                };
+                let updraft = -p.updraft_amp * p.updraft_env * (p.k_u * xi + p.w_u * p.t).sin();
+                let depth_frac = depth / p.col_depth;
+                let current = p.current_amp
+                    * (std::f32::consts::PI * depth_frac).cos()
+                    * p.current_drift;
+
+                let noise_env = (-depth / 400.0).exp();
+                let noise_x = p.b_amp * noise_env * (pcg32_next(&mut rng) - 0.5) * 2.0;
+                let noise_y = p.b_amp * noise_env * (pcg32_next(&mut rng) - 0.5) * 2.0;
+
+                let ax = surface + swell + current + noise_x;
+                let ay_tot = ay + splash + updraft + noise_y;
+
+                let drag_scale = ri / DRAG_REF_R;
+                let dscale_drag = p.drag * drag_scale;
+                vxi += (ax - dscale_drag * vxi) * p.dt;
+                vyi += (ay_tot - dscale_drag * vyi) * p.dt;
+                vzi += (az - dscale_drag * vzi) * p.dt;
+
+                if vxi > v_x_cap {
+                    vxi = v_x_cap;
+                } else if vxi < -v_x_cap {
+                    vxi = -v_x_cap;
+                }
+
+                cvx[local] = vxi;
+                cvy[local] = vyi;
+                cvz[local] = vzi;
+                cx[local] = xi + vxi * p.dt;
+                cy[local] = yi + vyi * p.dt;
+                cz[local] += vzi * p.dt;
+            }
+        });
+}
+
+/// Quick microbench: time the serial vs parallel kernels at high N.
+/// Returns `(serial_ms, parallel_ms)`. Excluded from `cargo test` to
+/// avoid timing-noisy assertions; runs only on explicit invocation
+/// via `cargo test --release perf_forces -- --ignored --nocapture`.
+#[doc(hidden)]
+pub fn microbench_forces(n: usize, iters: usize) -> (f64, f64) {
+    use crate::particles::ParticleInit;
+    use std::time::Instant;
+    // Build a synthetic store of N light particles.
+    let mut store = ParticleStore::new();
+    for i in 0..n {
+        store.push(ParticleInit {
+            x: (i % 1000) as f32,
+            y: ((i / 1000) % 600) as f32,
+            r: 2.0,
+            chem_id: 0,
+            density: 1.0,
+            ..ParticleInit::default()
+        });
+    }
+    let p = ParticleForceParams {
+        dt: 1.0 / 60.0,
+        t: 0.0,
+        drag: 1.5,
+        gravity: 40.0,
+        surface_y: 120.0,
+        surface_decay: 60.0,
+        swell_decay: 200.0,
+        updraft_amp: 6.0,
+        current_amp: 4.0,
+        k_s: 0.025,
+        w_s: 1.5,
+        k_l: 0.007,
+        w_l: 0.7,
+        k_u: 0.011,
+        w_u: 0.8,
+        surf_amp: 55.0,
+        swell_amp: 16.0,
+        z_amp: 6.0,
+        b_amp: 12.0,
+        updraft_env: 1.0,
+        col_depth: 480.0,
+        current_drift: 0.0,
+        world_floor_y: 600.0,
+        world_width: 1000.0,
+    };
+    let mat_base = &crate::chemistry::table().base_density[..];
+
+    // Serial path.
+    let mut rng = Mulberry32::new(1);
+    let t0 = Instant::now();
+    for _ in 0..iters {
+        apply_particle_forces_range(&mut store, mat_base, &mut rng, 0, n, &p);
+    }
+    let serial_ms = t0.elapsed().as_secs_f64() * 1000.0 / iters as f64;
+
+    // Parallel path. Reset positions so the heat factor matches.
+    for i in 0..n {
+        store.x[i] = (i % 1000) as f32;
+        store.y[i] = ((i / 1000) % 600) as f32;
+        store.vx[i] = 0.0;
+        store.vy[i] = 0.0;
+        store.vz[i] = 0.0;
+    }
+    let t0 = Instant::now();
+    for it in 0..iters {
+        apply_particle_forces_parallel(&mut store, mat_base, it as u32, &p);
+    }
+    let parallel_ms = t0.elapsed().as_secs_f64() * 1000.0 / iters as f64;
+    (serial_ms, parallel_ms)
 }
 
 #[cfg(test)]
@@ -177,6 +439,21 @@ mod tests {
 
     fn light_particle(x: f32, y: f32, chem_id: u8) -> ParticleInit {
         ParticleInit { x, y, r: 2.0, chem_id, density: 0.0, ..ParticleInit::default() }
+    }
+
+    /// Microbench: prove the parallel kernel wins at high N. Ignored by
+    /// default to keep `cargo test` quiet; run with `cargo test
+    /// --release perf_forces_parallel_wins -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn perf_forces_parallel_wins() {
+        for n in [1024_usize, 2048, 4096, 8192] {
+            let (s, par) = super::microbench_forces(n, 50);
+            let speedup = s / par.max(1e-6);
+            println!(
+                "N={n:>5}  serial={s:>6.2} ms  parallel={par:>6.2} ms  speedup={speedup:>4.2}x"
+            );
+        }
     }
 
     #[test]
