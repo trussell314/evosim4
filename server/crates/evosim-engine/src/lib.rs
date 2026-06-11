@@ -37,6 +37,7 @@ pub mod reactions;
 pub mod regions;
 pub mod reproduction;
 pub mod terrain;
+pub mod vent;
 pub mod rng;
 pub mod save;
 pub mod sensor_bins;
@@ -241,6 +242,19 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.ambient,
         );
+        // Hydrothermal vent: advance the dormant -> warmup -> main ->
+        // cooldown phase machine, emit particles into the column when
+        // active. No-op when no vent is installed.
+        if let Some(vent) = self.world.vent.as_mut() {
+            vent::step_vent(
+                vent,
+                &mut self.world.particle_store,
+                self.world.t,
+                dt,
+                self.world.day_period_s,
+                &mut self.world.sim_rng,
+            );
+        }
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
         // update_creatures so the per-tick vm_out.reproduce flag has

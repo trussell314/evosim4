@@ -58,6 +58,10 @@ pub struct World {
     /// Spatial index over `obstacles` used by the per-tick
     /// collision pass. Rebuilt whenever `obstacles` changes.
     pub obstacle_index: ObstacleIndex,
+    /// Hydrothermal vent feature. `None` by default; a future scene /
+    /// world-config port (or a test) installs one. When set,
+    /// `step_vent` runs each tick and may emit particles.
+    pub vent: Option<crate::vent::VentState>,
 
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
@@ -121,6 +125,7 @@ impl World {
             obstacles: Vec::new(),
             terrain_heightmap: Vec::new(),
             obstacle_index: ObstacleIndex::new(),
+            vent: None,
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 
@@ -162,6 +167,7 @@ impl World {
         self.obstacles.clear();
         self.terrain_heightmap.clear();
         self.obstacle_index = ObstacleIndex::new();
+        self.vent = None;
     }
 
     /// Rebuild the heightmap + obstacle index + ambient solid mask
