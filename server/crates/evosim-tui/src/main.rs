@@ -75,6 +75,10 @@ struct UiState {
     history_mass: std::collections::VecDeque<u64>,
     /// Per-chem labels from the Hello frame. Index = chem id.
     chem_names: Vec<String>,
+    /// Cursor into the top_species roster. j/k moves it; cells of the
+    /// selected species get an arrow marker and the bottom-right panel
+    /// shows the species' textual description.
+    selected_species: usize,
 }
 
 impl UiState {
@@ -253,6 +257,29 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         )
                         .await?;
                     }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let mut u = ui.lock().await;
+                        let n = u
+                            .last_snapshot
+                            .as_ref()
+                            .map(|s| s.top_species.len())
+                            .unwrap_or(0);
+                        if n > 0 {
+                            u.selected_species = (u.selected_species + 1) % n;
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        let mut u = ui.lock().await;
+                        let n = u
+                            .last_snapshot
+                            .as_ref()
+                            .map(|s| s.top_species.len())
+                            .unwrap_or(0);
+                        if n > 0 {
+                            u.selected_species =
+                                if u.selected_species == 0 { n - 1 } else { u.selected_species - 1 };
+                        }
+                    }
                     KeyCode::Char('x') => {
                         send_msg(
                             &writer,
@@ -304,6 +331,7 @@ struct UiView {
     history_species: Vec<u64>,
     history_mass: Vec<u64>,
     chem_names: Vec<String>,
+    selected_species: usize,
 }
 
 impl UiState {
@@ -321,6 +349,7 @@ impl UiState {
             history_species: self.history_species.iter().copied().collect(),
             history_mass: self.history_mass.iter().copied().collect(),
             chem_names: self.chem_names.clone(),
+            selected_species: self.selected_species,
         }
     }
 }
@@ -346,13 +375,19 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
         .split(chunks[1]);
     render_ambient(f, body[0], u);
     render_map(f, body[1], u);
-    // Right column: species roster on top, history sparklines below.
+    // Right column: species roster (top), selected species description
+    // (middle), history sparklines (bottom).
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(11)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(8),
+            Constraint::Length(11),
+        ])
         .split(body[2]);
     render_species(f, right[0], u);
-    render_history(f, right[1], u);
+    render_description(f, right[1], u);
+    render_history(f, right[2], u);
     render_help(f, chunks[2], u);
 }
 
@@ -585,28 +620,75 @@ fn render_species(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ]));
+    let sel = u.selected_species.min(s.top_species.len().saturating_sub(1));
     for (i, sp) in s
         .top_species
         .iter()
         .enumerate()
         .take(inner.height.saturating_sub(1) as usize)
     {
-        lines.push(format_species_line(i, sp));
+        lines.push(format_species_line(i, sp, i == sel));
     }
     let p = Paragraph::new(lines);
     f.render_widget(p, inner);
 }
 
-fn format_species_line(i: usize, sp: &SpeciesSummary) -> Line<'static> {
+fn format_species_line(i: usize, sp: &SpeciesSummary, selected: bool) -> Line<'static> {
     let g = species_glyph(i as u8);
+    let cursor = if selected { '>' } else { ' ' };
     let line = format!(
-        "  {g}    {count:>4}  {mass:>7.0}  {atp:>6.0}",
+        "{cursor} {g}    {count:>4}  {mass:>7.0}  {atp:>6.0}",
         count = sp.count,
         mass = sp.biomass,
         atp = sp.atp,
     );
     let color = colour_for_glyph(i as u8);
-    Line::from(vec![Span::styled(line, Style::default().fg(color))])
+    let mut style = Style::default().fg(color);
+    if selected {
+        style = style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+    }
+    Line::from(vec![Span::styled(line, style)])
+}
+
+fn render_description(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
+    let title = match u.last_snapshot.as_ref().and_then(|s| {
+        s.top_species
+            .get(u.selected_species.min(s.top_species.len().saturating_sub(1)))
+    }) {
+        Some(sp) => format!(
+            "species {} ({})",
+            species_glyph(
+                u.selected_species
+                    .min(u.last_snapshot.as_ref().map(|s| s.top_species.len()).unwrap_or(1) - 1)
+                    as u8
+            ),
+            &sp.coding_key.chars().take(8).collect::<String>(),
+        ),
+        None => "species (none)".into(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(s) = &u.last_snapshot else { return };
+    if s.top_species.is_empty() {
+        return;
+    }
+    let idx = u.selected_species.min(s.top_species.len() - 1);
+    let sp = &s.top_species[idx];
+
+    // Description is multi-line plain text. Clip to panel width / height.
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let w = inner.width as usize;
+    for raw in sp.description.lines().take(inner.height as usize) {
+        let truncated: String = raw.chars().take(w).collect();
+        lines.push(Line::raw(truncated));
+    }
+    if lines.is_empty() {
+        lines.push(Line::raw("(no description)"));
+    }
+    let p = Paragraph::new(lines);
+    f.render_widget(p, inner);
 }
 
 fn colour_for_glyph(i: u8) -> Color {
@@ -624,7 +706,8 @@ fn colour_for_glyph(i: u8) -> Color {
 
 fn render_help(f: &mut ratatui::Frame<'_>, area: Rect, _u: &UiView) {
     let block = Block::default().borders(Borders::ALL).title("keys");
-    let text = "q quit  p pause  r resume  ]/[ rate +/-  s save  x reset(admin)";
+    let text =
+        "q quit  p pause  r resume  ]/[ rate +/-  j/k species  s save  x reset(admin)";
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
 }
