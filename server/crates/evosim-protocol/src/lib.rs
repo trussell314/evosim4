@@ -107,6 +107,13 @@ pub struct Snapshot {
     /// Empty before the species pass populates it.
     #[serde(default)]
     pub top_species: Vec<SpeciesSummary>,
+    /// Flat list of (cell_i, cell_j) bonded pairs, i < j. Lets the
+    /// client render bonds as line segments without per-cell
+    /// variable-length blobs. Each u32 pair is 8 bytes; a typical
+    /// bonded population of ~20 cells with ~3 bonds each ships ~240
+    /// bytes total.
+    #[serde(default)]
+    pub bonds: Vec<u32>,
 }
 
 /// One row of the per-snapshot species summary.

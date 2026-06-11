@@ -29,7 +29,10 @@ pub const BOND_MARKER_TOL: i32 = 4;
 /// Max bonds per cell.
 const MAX_BONDS: usize = 6;
 /// Search radius (added to cell radius) for new bond partners.
-const BOND_SEEK_RADIUS: f32 = 24.0;
+/// Larger than the TS default (24) because our sparse demo
+/// population would never form clusters at that range; tuned down
+/// once a region-grid spawn pass lands.
+const BOND_SEEK_RADIUS: f32 = 80.0;
 /// Spring stiffness per second.
 const BOND_SPRING_K: f32 = 4.0;
 /// Bond breaks if cell centers exceed this multiple of their summed

@@ -102,6 +102,7 @@ interface Snapshot {
   day_period_s?: number;
   ambient_light?: number;
   top_species?: SpeciesSummary[];
+  bonds?: number[];
 }
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
@@ -358,6 +359,23 @@ function frame(): void {
     const cBlobs: Record<string, NamedBlob> = {};
     for (const b of snapshot.creatures.blobs) cBlobs[b.name] = b;
     const cN = snapshot.creatures.count;
+
+    // Draw bonds first so cells overlay the line endpoints.
+    if (snapshot.bonds && snapshot.bonds.length > 0 && cBlobs.x && cBlobs.y) {
+      const cx = f32(cBlobs.x.data, cN);
+      const cy = f32(cBlobs.y.data, cN);
+      ctx.strokeStyle = "#79f";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let k = 0; k < snapshot.bonds.length; k += 2) {
+        const i = snapshot.bonds[k];
+        const j = snapshot.bonds[k + 1];
+        if (i >= cN || j >= cN) continue;
+        ctx.moveTo(offX + cx[i] * scale, offY + cy[i] * scale);
+        ctx.lineTo(offX + cx[j] * scale, offY + cy[j] * scale);
+      }
+      ctx.stroke();
+    }
     if (cN > 0 && cBlobs.x && cBlobs.y && cBlobs.r) {
       const cx = f32(cBlobs.x.data, cN);
       const cy = f32(cBlobs.y.data, cN);

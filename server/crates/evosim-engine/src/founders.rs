@@ -162,11 +162,11 @@ fn founder_chems() -> Vec<Vec<f32>> {
     vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator, bonder]
 }
 
-/// Place `n_per_strategy` cells of each founder genome at random
-/// positions across the world. Uses the supplied RNG for both
-/// placement and genome mutation. Mutation is per-byte: each byte
-/// flips one random bit with probability FOUNDER_MUTATION_RATE so
-/// the founder cohort isn't a clone army.
+/// Place `n_per_strategy` cells of each founder genome. Random
+/// scatter for most strategies; the LAST strategy ("bonder") is
+/// spawned as a tight cluster so its cells actually meet and form
+/// bonds in the demo's small world. Real spawn passes will use a
+/// region grid; this is the founder-cohort moment.
 pub fn seed_founders(
     store: &mut CreatureStore,
     rng: &mut Mulberry32,
@@ -176,11 +176,17 @@ pub fn seed_founders(
 ) -> usize {
     let genomes = founder_genomes();
     let chems = founder_chems();
+    let n_strategies = genomes.len();
     let mut spawned = 0;
     for (i, base_genome) in genomes.iter().enumerate() {
+        // Last strategy (bonder) -> cluster spawn around a fixed
+        // center so cells meet and bond.
+        let cluster = i == n_strategies - 1;
+        let cluster_cx = width * 0.5;
+        let cluster_cy = height * 0.5;
+        let cluster_r = 40.0;
         for _ in 0..n_per_strategy {
             let mut g = base_genome.clone();
-            // Per-byte point-mutation. Skip empty genomes.
             if !g.is_empty() {
                 for byte in g.iter_mut() {
                     if rng.next_f64() < FOUNDER_MUTATION_RATE {
@@ -189,8 +195,13 @@ pub fn seed_founders(
                     }
                 }
             }
-            let x = rng.next_f64() as f32 * width;
-            let y = rng.next_f64() as f32 * height;
+            let (x, y) = if cluster {
+                let theta = rng.next_f64() as f32 * std::f32::consts::TAU;
+                let r = (rng.next_f64() as f32).sqrt() * cluster_r;
+                (cluster_cx + theta.cos() * r, cluster_cy + theta.sin() * r)
+            } else {
+                (rng.next_f64() as f32 * width, rng.next_f64() as f32 * height)
+            };
             store.push(CreatureInit {
                 x,
                 y,

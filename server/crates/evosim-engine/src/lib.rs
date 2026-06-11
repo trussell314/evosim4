@@ -329,6 +329,19 @@ impl Engine {
         let species_count = ranked.len() as u32;
         let deaths_this_window = std::mem::take(&mut self.pending_deaths);
         let ambient_light = day_cycle::ambient_light_at(self.world.t, self.world.day_period_s);
+        // Flatten bonds into pairs (i, j) with i < j so each bond
+        // appears exactly once.
+        let mut bond_pairs: Vec<u32> = Vec::new();
+        let bonds_len = self.bonds.len().min(n);
+        for i in 0..bonds_len {
+            for &j_u32 in &self.bonds[i] {
+                let j = j_u32 as usize;
+                if j > i {
+                    bond_pairs.push(i as u32);
+                    bond_pairs.push(j_u32);
+                }
+            }
+        }
         Snapshot {
             tick: self.tick,
             t: self.world.t,
@@ -344,6 +357,7 @@ impl Engine {
             day_period_s: self.world.day_period_s,
             ambient_light,
             top_species,
+            bonds: bond_pairs,
         }
     }
 }
