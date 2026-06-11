@@ -139,15 +139,16 @@ Snapshot grows species_count (distinct coding-key) + deaths_this_window
 fields. Live smoke confirms emergent evolutionary dynamics:
 extinctions, mass conservation, equilibria.
 
+### Viable founder seeding (`f5efc75`)
+16 founders across 4 trophic strategies (photoautotroph, aerobic
+metabolizer, glucose seeker, reproducer). Starter pools tuned to
+outlive baseline drain; per-byte point mutation seeds genetic
+diversity. Sim self-sustains for at least 4+ sim-minutes; selection
+visibly culls unfit reproducer lines from 12 species down to 3.
+
 ## Up next, in suggested order
 
-### 1. Founder seeding (~ 2 days)
-The current demo cells are hand-built and die out. Port the TS
-seedRamp / founder pass: spawn N viable founder cells with realistic
-starter pools so the world has a self-sustaining population. Without
-this no long-running session survives past ~ 100 sim-seconds.
-
-### 2. Region / atmosphere passes (~ 1 week)
+### 1. Region / atmosphere passes (~ 1 week)
 Port `src/sim/regions.ts`, `environment.ts`, `chemolith.ts`,
 `vent.ts`. Region grid + ambient + reserve fields. Once landed,
 ambient_light becomes a real per-position scalar (not a flat 0.5)
