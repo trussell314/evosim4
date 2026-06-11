@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod chem_ids;
+pub mod chemistry;
 pub mod rng;
 
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
