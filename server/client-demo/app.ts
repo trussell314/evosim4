@@ -168,14 +168,49 @@ let chemNames: string[] = [];
   if (savedTok) tokenInput.value = savedTok;
 }
 
-connectBtn.onclick = () => {
+function startConnect(): void {
   localStorage.setItem("evosim:url", urlInput.value);
   localStorage.setItem("evosim:token", tokenInput.value);
+  userIntendsConnection = true;
   connect(urlInput.value, tokenInput.value || null);
-};
+}
+connectBtn.onclick = startConnect;
+// Enter from the URL or token input fires Connect, matching the form
+// affordance the bare <input>s don't provide on their own.
+for (const el of [urlInput, tokenInput]) {
+  el.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !connectBtn.disabled) startConnect();
+  });
+}
 disconnectBtn.onclick = () => {
+  userIntendsConnection = false;
   ws?.close();
 };
+
+// Auto-reconnect: if the user has connected at least once this
+// session and the socket dies (mobile background, network hiccup,
+// laptop sleep), reattach using the same URL + token whenever the
+// document becomes visible again. The manual Disconnect button clears
+// the intent flag so users who explicitly went idle stay idle.
+let userIntendsConnection = false;
+let reconnectTimer: number | null = null;
+function scheduleReconnect(delayMs: number): void {
+  if (reconnectTimer !== null) return;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    if (!userIntendsConnection) return;
+    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    connect(urlInput.value, tokenInput.value || null);
+  }, delayMs);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && userIntendsConnection) {
+    if (!ws || ws.readyState >= WebSocket.CLOSING) scheduleReconnect(200);
+  }
+});
+window.addEventListener("online", () => {
+  if (userIntendsConnection) scheduleReconnect(200);
+});
 pauseBtn.onclick = () => send({ type: "set-running", running: false });
 resumeBtn.onclick = () => send({ type: "set-running", running: true });
 speedSlider.oninput = () => {
@@ -218,6 +253,12 @@ function connect(url: string, token: string | null): void {
     resetBtn.disabled = true;
     snapshot = null;
     ws = null;
+    // If the user didn't click Disconnect (e.g. mobile backgrounded,
+    // wifi dropped, laptop slept), keep trying. Backoff resets each
+    // time visibility returns / network comes back.
+    if (userIntendsConnection && document.visibilityState === "visible") {
+      scheduleReconnect(1000);
+    }
   };
   ws.onerror = () => {
     setStatus(`<span class="err">connection error</span>`);
@@ -293,14 +334,30 @@ function f32(bytes: Uint8Array, n: number): Float32Array {
   return new Float32Array(aligned);
 }
 
-// --- Render loop
+// --- Render loop.
+// Canvas pixel size has to track clientWidth/Height * devicePixelRatio
+// every time the layout shifts. The single `window.addEventListener
+// ("resize", ...)` we used to have wasn't enough on mobile -- the
+// canvas-wrap container can resize without firing window resize (header
+// rows wrapping after orientation change, on-screen keyboard appearing,
+// iOS Safari address-bar shrink/expand, etc.) leaving the canvas at 0x0
+// pixels and the world rendered into nothing. ResizeObserver + a
+// per-frame size check fix both cases.
 function resize(): void {
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = Math.floor(w * dpr);
-  canvas.height = Math.floor(h * dpr);
+  if (w === 0 || h === 0) return;
+  const targetW = Math.floor(w * dpr);
+  const targetH = Math.floor(h * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
 }
 window.addEventListener("resize", resize);
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(resize).observe(canvas);
+}
 resize();
 
 function renderAmbientPanel(stocks: number[]): void {
@@ -360,6 +417,13 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
 
 function frame(): void {
   if (!ctx) return;
+  // Defensive: catch any size change the observer missed (e.g. iOS
+  // Safari's first frame after the address-bar height changes).
+  resize();
+  if (canvas.width === 0 || canvas.height === 0) {
+    requestAnimationFrame(frame);
+    return;
+  }
   ctx.fillStyle = "#050b14";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 

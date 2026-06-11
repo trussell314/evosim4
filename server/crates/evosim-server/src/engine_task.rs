@@ -23,8 +23,19 @@ use crate::app::AppState;
 /// Tick cadence target. Stays fixed for now; later this is driven by
 /// `ClientMessage::SetSimRate` from a controller connection.
 const TICK_DT: f64 = 1.0 / 60.0;
-/// Snapshot broadcast cadence. ~10 Hz matches the TS sim worker.
-const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(100);
+/// Snapshot broadcast cadence. 30 Hz keeps mobile rendering smooth
+/// without doubling the per-tick serialization cost; override via
+/// `EVOSIM_SNAPSHOT_HZ` (1..240). 60 matches the engine tick rate
+/// and gives the smoothest playback at the cost of ~2x bandwidth.
+const DEFAULT_SNAPSHOT_HZ: u32 = 30;
+fn snapshot_interval() -> Duration {
+    let hz = std::env::var("EVOSIM_SNAPSHOT_HZ")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|h| (1..=240).contains(h))
+        .unwrap_or(DEFAULT_SNAPSHOT_HZ);
+    Duration::from_micros((1_000_000 / hz as u64).max(1))
+}
 
 /// Out-of-band commands the engine task handles between ticks.
 #[derive(Debug)]
@@ -120,7 +131,12 @@ async fn run(
     let mut sim_rate: f32 = 1.0;
     let mut tick_timer = make_tick_timer(sim_rate);
 
-    let mut snap_timer = tokio::time::interval(SNAPSHOT_INTERVAL);
+    let snap_interval = snapshot_interval();
+    tracing::info!(
+        "snapshot cadence: {:.1} Hz",
+        1_000_000.0 / snap_interval.as_micros() as f64
+    );
+    let mut snap_timer = tokio::time::interval(snap_interval);
     snap_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     info!("engine task running");
