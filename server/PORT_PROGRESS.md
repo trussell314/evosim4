@@ -71,19 +71,39 @@ admin flag, Snapshot at tick 73 with 200 particles, AdminAck for
 the status command. 25 KB JS bundle, 7.7 KB gzip. Independent
 from `src/` so it ships before the main-app adapter.
 
+### Protocol v2: chem colors (`ecd5a0c`)
+Hello frame carries chem_colors + chem_names (96 each) so the
+client renders particles with the real chemistry palette.
+
+### Genome VM scaffold (`9e06c81`)
+Opcode constants, the const [u8; 256] OPERANDS table, walk_genome
+(full + expressed-only), coding_key / species_key / coding_bytes.
+
+### Genome VM interpreter (`a4f857d`)
+run_tick ported in full: all 256 opcodes, gene framing, per-gene
+stack isolation, f64 stack (bounded-32, drops oldest), f32
+registers, in-place POKE, ECMAScript ToInt32 semantics, floored
+MOD. Sensors trait for world coupling. VmOutputs carries the full
+per-tick output surface (thrust/turn/excrete/transport/reproduce/
+predate/engulf/ingest/synth masks/bond/splice/poke/partition/emit).
+11 unit tests + a TS golden captured from the identical genome.
+
 ## Up next, in suggested order
 
-### 1. Genome VM scaffold + interpreter (~ 2-3 weeks)
-Port `src/genome.ts` (1918 lines). Largest single piece. Shape:
-  - Op enum + operand layout + walkGenome (deterministic decode
-    so disasm + viable-genome checks port too)
-  - Per-op handler signatures
-  - Interpreter loop with the stack/program-counter semantics the
-    TS uses
-  - Mutation + fission + splicing
-  - Per-op profiling (count + last-exec time)
-Test by replaying a captured TS execution trace against the Rust
-interpreter for a fixed seed.
+### 1. Creature store + update (~ 2 weeks)
+Now unblocked -- the VM interpreter it depends on has landed.
+  - Port CreatureStore (SoA) from `src/sim/core.ts`: per-cell
+    chem pools, position/velocity, genome, VmState, energy/mass
+  - Port updateCreatures from `src/sim.ts`: the per-cell pass that
+    runs run_tick, applies VmOutputs (thrust/excrete/transport/
+    reproduce/predate/engulf/synth), runs the reaction network
+    against each cell's catalyst pools, handles fission + death
+  - Implement the Sensors trait against the live cell + particle
+    field (chem_conc from the cell pool, gradient from the
+    particle grid)
+  - Wire into Engine::step after the force/collision passes
+This is the messiest single function in the codebase; budget
+accordingly. Test against captured TS per-cell state traces.
 
 ### 2. Region / atmosphere passes (~ 1 week)
 Port `src/sim/regions.ts`, `environment.ts`, `chemolith.ts`,
