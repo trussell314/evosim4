@@ -125,6 +125,10 @@ impl Engine {
         let swimmer = vec![OP_GENE, OP_PUSH8, 0, OP_PUSH8, 6, OP_THRUST, OP_END];
         let metabolizer = vec![OP_GENE, OP_NOP, OP_END];
         let photo = vec![OP_GENE, OP_NOP, OP_END];
+        // A real seeker: pushes the spatial gradient of glucose
+        // (CHEM_GLU = 2) onto the stack, then THRUST swims up it.
+        // Genome: GENE SENSE_OUT 2 THRUST END
+        let seeker = vec![OP_GENE, OP_SENSE_OUT, 2, OP_THRUST, OP_END];
 
         struct Seed {
             genome: Vec<u8>,
@@ -134,6 +138,7 @@ impl Engine {
             Seed { genome: swimmer, chems: starter_chems() },
             Seed { genome: metabolizer, chems: metabolizer_chems() },
             Seed { genome: photo, chems: photo_chems() },
+            Seed { genome: seeker, chems: starter_chems() },
         ];
         let mut idx = 0u32;
         for seed in &seeds {
@@ -363,7 +368,7 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let e = Engine::new();
         let snap = e.snapshot();
-        assert_eq!(snap.creatures.count, 6);
+        assert_eq!(snap.creatures.count, 8);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),
