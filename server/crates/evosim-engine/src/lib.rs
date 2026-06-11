@@ -580,8 +580,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // 4 founders per strategy * 8 strategies = 32.
-        assert_eq!(snap.creatures.count, 32);
+        // 4 founders per strategy * 9 strategies = 36.
+        assert_eq!(snap.creatures.count, 36);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),

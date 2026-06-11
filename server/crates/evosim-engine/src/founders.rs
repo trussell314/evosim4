@@ -84,6 +84,27 @@ fn founder_genomes() -> Vec<Vec<u8>> {
             OP_SYNTH, SYNTH_KIND_CAT, 22,
             OP_END,
         ],
+        // Phototactic: synthesizes visible photoreceptors via CAT 12
+        // (boosts the photoreceptor synth reaction); reads the
+        // activated_photo_visible signal (chem id 16) and thrusts
+        // proportional to it on the +x axis. Demonstrates that the
+        // sensor activation pass closes the receptor -> behaviour
+        // loop end-to-end.
+        //   GENE SYNTH CAT 12 SENSE_CHEMICAL 16 PUSH8 0 SWAP THRUST END
+        // Stack after SENSE_CHEMICAL: [signal]
+        // After PUSH8 0:               [signal, 0]
+        // After SWAP:                  [0, signal]
+        // After THRUST (pops ay,ax):   ay=signal, ax=0 -> swims +y
+        // when its photoreceptors detect light.
+        vec![
+            OP_GENE,
+            OP_SYNTH, SYNTH_KIND_CAT, 12,
+            OP_SENSE_CHEMICAL, 16,
+            OP_PUSH8, 0,
+            OP_SWAP,
+            OP_THRUST,
+            OP_END,
+        ],
     ]
 }
 
@@ -151,15 +172,29 @@ fn founder_chems() -> Vec<Vec<f32>> {
     bonder[crate::chem_ids::CHEM_FA] = 30.0;
     bonder[crate::chem_ids::CHEM_BOND] = 5.0; // > BOND_FORMATION_THRESH from the start
 
+    // Phototactic: needs photoreceptor biosynth substrates (aa + min
+    // + mrna), enough ATP to bootstrap, and a starter photoreceptor
+    // pool so the sensor activation pass has something to read on
+    // tick 1 (before biosynth ramps the pool).
+    let mut phototactic = vec![0.0; NAMED_CHEMICAL_COUNT];
+    phototactic[CHEM_ATP] = FOUNDER_ATP;
+    phototactic[CHEM_MEMBRANE] = FOUNDER_MEMBRANE;
+    phototactic[CHEM_O2] = 50.0;
+    phototactic[CHEM_ADP] = 50.0;
+    phototactic[crate::chem_ids::CHEM_AA] = 30.0;
+    phototactic[crate::chem_ids::CHEM_MRNA] = 5.0;
+    phototactic[crate::chem_ids::CHEM_MIN] = 30.0;
+    phototactic[crate::chem_ids::CHEM_PHOTORECEPTOR_VISIBLE] = 1.5;
+
     // Also give every line some enzyme + biopolymer for the digest
     // path: a metabolizer can switch to that route if its glucose
     // ever runs out.
-    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester, &mut predator, &mut bonder].iter_mut() {
+    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester, &mut predator, &mut bonder, &mut phototactic].iter_mut() {
         chems[CHEM_ENZ] = 5.0;
         chems[CHEM_BIOPOLYMER] = 20.0;
     }
 
-    vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator, bonder]
+    vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator, bonder, phototactic]
 }
 
 /// Place `n_per_strategy` cells of each founder genome. Random
@@ -225,8 +260,8 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
-        assert_eq!(n, 40); // 8 strategies x 5 each
-        assert_eq!(store.len(), 40);
+        assert_eq!(n, 45); // 9 strategies x 5 each
+        assert_eq!(store.len(), 45);
     }
 
     #[test]
