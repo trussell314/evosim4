@@ -196,7 +196,7 @@ fn broadcast_snapshot(
         return Ok(());
     }
     let snap = engine.snapshot();
-    let bytes = encode_server(&ServerMessage::Snapshot(snap))?;
+    let bytes = encode_server(&ServerMessage::Snapshot(Box::new(snap)))?;
     // `send` errors only when there are no receivers; we just checked
     // above. Treat any other failure as fatal.
     if let Err(e) = snap_tx.send(Arc::new(bytes)) {

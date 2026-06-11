@@ -73,12 +73,23 @@ struct UiState {
     history_cells: std::collections::VecDeque<u64>,
     history_species: std::collections::VecDeque<u64>,
     history_mass: std::collections::VecDeque<u64>,
+    /// Rolling history of tick wall-time (ms * 1000 so we can use the
+    /// u64-only Sparkline widget at sub-ms resolution).
+    history_tick_us: std::collections::VecDeque<u64>,
+    /// Rolling history of particle count -- the variable that drives
+    /// per-tick cost the most. Sparkline alongside tick_us makes it
+    /// obvious when a perf jump is from sheer particle inflation.
+    history_particles: std::collections::VecDeque<u64>,
     /// Per-chem labels from the Hello frame. Index = chem id.
     chem_names: Vec<String>,
     /// Cursor into the top_species roster. j/k moves it; cells of the
     /// selected species get an arrow marker and the bottom-right panel
     /// shows the species' textual description.
     selected_species: usize,
+    /// Bottom-right view toggle. False = history sparklines
+    /// (cells / species / mass); true = perf breakdown (tick wall-
+    /// time + particles + top-N pass cost). Toggled by `m`.
+    perf_view: bool,
 }
 
 impl UiState {
@@ -87,11 +98,19 @@ impl UiState {
             self.history_cells.pop_front();
             self.history_species.pop_front();
             self.history_mass.pop_front();
+            self.history_tick_us.pop_front();
+            self.history_particles.pop_front();
         }
         self.history_cells.push_back(snap.creatures.count as u64);
         self.history_species.push_back(snap.species_count as u64);
         // Mass to u64 (sparkline wants u64). Total fits comfortably.
         self.history_mass.push_back(snap.mass.total.max(0.0) as u64);
+        // tick_ms is stored in microseconds so the sparkline shows
+        // sub-millisecond detail; integer-only widget can't take f32.
+        self.history_tick_us
+            .push_back((snap.perf.tick_ms * 1000.0).max(0.0) as u64);
+        self.history_particles
+            .push_back(snap.particles.count as u64);
     }
 }
 
@@ -155,7 +174,7 @@ async fn main() -> Result<()> {
                 }
                 ServerMessage::Snapshot(s) => {
                     u.push_history(&s);
-                    u.last_snapshot = Some(s);
+                    u.last_snapshot = Some(*s);
                     u.last_snapshot_at = Some(Instant::now());
                 }
                 ServerMessage::AdminAck { command, message } => {
@@ -280,6 +299,10 @@ async fn run_loop<B: ratatui::backend::Backend>(
                                 if u.selected_species == 0 { n - 1 } else { u.selected_species - 1 };
                         }
                     }
+                    KeyCode::Char('m') => {
+                        let mut u = ui.lock().await;
+                        u.perf_view = !u.perf_view;
+                    }
                     KeyCode::Char('x') => {
                         send_msg(
                             &writer,
@@ -330,8 +353,15 @@ struct UiView {
     history_cells: Vec<u64>,
     history_species: Vec<u64>,
     history_mass: Vec<u64>,
+    history_tick_us: Vec<u64>,
+    history_particles: Vec<u64>,
     chem_names: Vec<String>,
     selected_species: usize,
+    /// "Perf" view toggle. False = the legacy cells/species/mass
+    /// sparklines in the bottom-right; true = the perf breakdown
+    /// (tick_us + particles sparklines on top, top-5 most expensive
+    /// passes as a text list below). Toggled by the 'P' key.
+    perf_view: bool,
 }
 
 impl UiState {
@@ -348,8 +378,11 @@ impl UiState {
             history_cells: self.history_cells.iter().copied().collect(),
             history_species: self.history_species.iter().copied().collect(),
             history_mass: self.history_mass.iter().copied().collect(),
+            history_tick_us: self.history_tick_us.iter().copied().collect(),
+            history_particles: self.history_particles.iter().copied().collect(),
             chem_names: self.chem_names.clone(),
             selected_species: self.selected_species,
+            perf_view: self.perf_view,
         }
     }
 }
@@ -387,7 +420,11 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
         .split(body[2]);
     render_species(f, right[0], u);
     render_description(f, right[1], u);
-    render_history(f, right[2], u);
+    if u.perf_view {
+        render_perf(f, right[2], u);
+    } else {
+        render_history(f, right[2], u);
+    }
     render_help(f, chunks[2], u);
 }
 
@@ -430,6 +467,105 @@ fn render_history(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
     f.render_widget(cells, layout[0]);
     f.render_widget(species, layout[1]);
     f.render_widget(mass, layout[2]);
+}
+
+/// Perf view: two sparklines (tick wall-time, particle count) over the
+/// last ~60s plus the top-5 most expensive engine passes by EMA. Hit
+/// `m` to toggle back to the cells/species/mass history.
+fn render_perf(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("perf (~60s) -- 'm' toggles");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height < 3 {
+        return;
+    }
+    let Some(s) = &u.last_snapshot else {
+        return;
+    };
+
+    // Layout: tick sparkline (top), particles sparkline (mid),
+    // top-N passes text list (bottom).
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+
+    let tick_max = *u.history_tick_us.iter().max().unwrap_or(&1);
+    let part_max = *u.history_particles.iter().max().unwrap_or(&1);
+    let tick_ms = s.perf.tick_ms;
+    let tick_sp = Sparkline::default()
+        .block(Block::default().title(format!(
+            "tick ({:.2} ms, peak {:.2})",
+            tick_ms,
+            tick_max as f32 / 1000.0
+        )))
+        .data(&u.history_tick_us)
+        .style(Style::default().fg(Color::LightYellow))
+        .max(tick_max.max(1));
+    let part_sp = Sparkline::default()
+        .block(Block::default().title(format!(
+            "particles ({}, peak {})",
+            s.particles.count, part_max
+        )))
+        .data(&u.history_particles)
+        .style(Style::default().fg(Color::LightCyan))
+        .max(part_max.max(1));
+    f.render_widget(tick_sp, layout[0]);
+    f.render_widget(part_sp, layout[1]);
+
+    // Top-N pass breakdown: label, ms, share of tick.
+    let perf = &s.perf;
+    let pairs: [(&str, f32); 21] = [
+        ("forces", perf.forces_ms),
+        ("collision", perf.collision_ms),
+        ("particle_decay", perf.particle_decay_ms),
+        ("vm", perf.vm_ms),
+        ("creature_col", perf.creature_collision_ms),
+        ("obstacle_col", perf.obstacle_collision_ms),
+        ("cell_reactions", perf.cell_reactions_ms),
+        ("transport", perf.transport_ms),
+        ("ambient", perf.ambient_ms),
+        ("diffuse", perf.diffuse_ms),
+        ("precipitation", perf.precipitation_ms),
+        ("region_temp", perf.region_temp_ms),
+        ("vent", perf.vent_ms),
+        ("predate", perf.predate_ms),
+        ("ingest", perf.ingest_ms),
+        ("reproduction", perf.reproduction_ms),
+        ("death", perf.death_ms),
+        ("maintenance", perf.maintenance_ms),
+        ("bonding", perf.bonding_ms),
+        ("activation", perf.activation_ms),
+        ("snapshot", perf.snapshot_ms),
+    ];
+    let mut sorted: Vec<(&str, f32)> = pairs.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let rows = layout[2].height.saturating_sub(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows + 1);
+    lines.push(Line::from(vec![Span::styled(
+        "pass              ms    %",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]));
+    let total = tick_ms.max(1e-3);
+    for (label, ms) in sorted.iter().take(rows) {
+        let share = (ms / total) * 100.0;
+        let line = format!("{label:<14} {ms:>6.2} {share:>4.0}");
+        lines.push(Line::from(vec![Span::styled(
+            line,
+            Style::default().fg(Color::White),
+        )]));
+    }
+    let p = Paragraph::new(lines);
+    f.render_widget(p, layout[2]);
 }
 
 fn render_status(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
@@ -707,7 +843,7 @@ fn colour_for_glyph(i: u8) -> Color {
 fn render_help(f: &mut ratatui::Frame<'_>, area: Rect, _u: &UiView) {
     let block = Block::default().borders(Borders::ALL).title("keys");
     let text =
-        "q quit  p pause  r resume  ]/[ rate +/-  j/k species  s save  x reset(admin)";
+        "q quit  p pause  r resume  ]/[ rate  j/k species  m perf  s save  x reset(admin)";
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
 }

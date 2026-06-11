@@ -33,6 +33,7 @@ pub mod mass;
 pub mod obstacle_collision;
 pub mod particle_decay;
 pub mod particles;
+pub mod perf;
 pub mod precipitation;
 pub mod predate;
 pub mod reactions;
@@ -87,6 +88,9 @@ pub struct Engine {
     /// Founder-cohort spawn count per trophic strategy. Configurable
     /// via AdminCommand::Configure; default is 4.
     founders_per_strategy: usize,
+    /// Per-tick wall-clock metrics. Folded into the snapshot each
+    /// frame so clients can chart per-pass cost over time.
+    perf: perf::PerfCollector,
 }
 
 impl Engine {
@@ -100,6 +104,7 @@ impl Engine {
             bonds: bonding::make_bonds(0),
             repair_ticks: somatic::make_repair_ticks(0),
             founders_per_strategy: 4,
+            perf: perf::PerfCollector::new(),
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -151,10 +156,17 @@ impl Engine {
     /// Advance the simulation by one tick. Force / collision pass on
     /// particles, then the VM / movement pass on creatures.
     pub fn step(&mut self, dt: f64) {
+        use perf::Pass;
+        use std::time::Instant;
+        self.perf.tick_start();
         self.tick += 1;
         self.world.t += dt;
+        let t = Instant::now();
         forces::apply_forces(&mut self.world, dt as f32);
+        self.perf.add_since(Pass::Forces, t);
+        let t = Instant::now();
         collision::resolve_collisions(&mut self.world, &mut self.collision_scratch);
+        self.perf.add_since(Pass::Collision, t);
         // Rebuild spatial bins from the post-physics particle field;
         // creatures see the current frame's particle layout when
         // their VM runs.
@@ -176,12 +188,15 @@ impl Engine {
         // that scrapes by on reaction output gets credited the same
         // tick. This closes the selection loop: a cell with no fuel
         // path can't outpace the drain and eventually autolyses.
+        let t = Instant::now();
         maintenance::run_maintenance(&mut self.world.creature_store, &mut self.world.ambient, dt as f32);
+        self.perf.add_since(Pass::Maintenance, t);
         // Sensor activation pass: cells holding receptor chems
         // translate the ambient stimuli (currently just light) into
         // signal chems their VM can read via SENSE_CHEMICAL on the
         // CHEM_ACT_* slots. Runs BEFORE update_creatures so the
         // VM reads fresh activations the same tick.
+        let t = Instant::now();
         activation::run_activation(
             &mut self.world.creature_store,
             &self.world.particle_store,
@@ -190,8 +205,10 @@ impl Engine {
             self.world.height,
             dt as f32,
         );
+        self.perf.add_since(Pass::Activation, t);
         // Bond springs before update_creatures so the velocity
         // contribution shows up in the same tick's position advect.
+        let t = Instant::now();
         bonding::apply_bond_springs(
             &mut self.world.creature_store,
             &self.bonds,
@@ -207,38 +224,32 @@ impl Engine {
         // on the freshly-written vm_out.bond_marker. Runs after the
         // VM so SYNTH BOND fires we just observed get acted on.
         bonding::run_bonding(&mut self.world.creature_store, &mut self.bonds);
+        self.perf.add_since(Pass::Vm, t);
         // Excrete + transport: read the VM's just-written per-chem
         // output vectors and move chems between cells and the
         // ambient field. Closes the EXCRETE / TRANSPORT op loop and
         // lets the photoautotroph -> heterotroph carbon cycle work
         // through dissolved chemistry as well as particles.
+        let t = Instant::now();
         excrete_transport::run_excrete_transport(
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
         );
-        // INGEST pass: cells that ran INGEST with a finite threshold
-        // try to absorb at most one nearby particle whose
-        // bond-potential clears the threshold. Mass-conserving: the
-        // particle's mass moves into the cell's chem pool.
+        self.perf.add_since(Pass::Transport, t);
+        let t = Instant::now();
         ingest::run_ingest(
             &mut self.world.creature_store,
             &mut self.world.particle_store,
         );
-        // PREDATE pass: cells that ran PREDATE eat at most one
-        // smaller, in-range cell. Prey's entire chem + catalyst pool
-        // transfers to the predator; prey's membrane is zeroed so
-        // the death pass culls it.
+        self.perf.add_since(Pass::Ingest, t);
+        let t = Instant::now();
         predate::run_predate(&mut self.world.creature_store, &self.bonds);
-        // Cell-vs-cell collision: resolve position overlap so cells
-        // can't phase through each other. Predators can now corner
-        // prey; swarms can't compress to a point.
+        self.perf.add_since(Pass::Predate, t);
+        let t = Instant::now();
         creature_collision::run_creature_collisions(&mut self.world.creature_store);
-        // Obstacle (static terrain) collision: push any particle /
-        // cell that's penetrating rock back along the polygon normal,
-        // and run the polygon-evacuation safety net for bodies whose
-        // centers ended up inside a rock (between-tick teleport or
-        // wave-clamp tunnel). No-op when obstacles is empty.
+        self.perf.add_since(Pass::CreatureCollision, t);
+        let t = Instant::now();
         obstacle_collision::resolve_obstacle_collisions(
             &self.world.obstacles,
             &self.world.obstacle_index,
@@ -253,9 +264,8 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.ambient,
         );
-        // Hydrothermal vent: advance the dormant -> warmup -> main ->
-        // cooldown phase machine, emit particles into the column when
-        // active. No-op when no vent is installed.
+        self.perf.add_since(Pass::ObstacleCollision, t);
+        let t = Instant::now();
         if let Some(vent) = self.world.vent.as_mut() {
             vent::step_vent(
                 vent,
@@ -266,9 +276,8 @@ impl Engine {
                 &mut self.world.sim_rng,
             );
         }
-        // Regional temperature field: diffuse + relax + absorb vent
-        // heat. Wires the vent's always-on hot zone (and eruption
-        // spikes) into the solubility formula via region_dissolved_capacity.
+        self.perf.add_since(Pass::Vent, t);
+        let t = Instant::now();
         region_temp::step_region_temps(
             &mut self.world.region_temp,
             self.world.width,
@@ -276,20 +285,15 @@ impl Engine {
             self.world.vent.as_ref(),
             dt as f32,
         );
-        // Reproduction pass: a daughter for every cell that fired
-        // REPRODUCE and met the viability gates. Runs after
-        // update_creatures so the per-tick vm_out.reproduce flag has
-        // been set; the pass clears it as it consumes each.
+        self.perf.add_since(Pass::RegionTemp, t);
+        let t = Instant::now();
         reproduction::run_reproduction(
             &mut self.world.creature_store,
             &mut self.world.sim_rng,
             self.world.t,
         );
-        // Death pass: cull every cell below viability; release its
-        // chem mass back to the particle field. Mass-conserving (the
-        // dying cell's pools become particles instead of vanishing),
-        // so a fission + death pair leaves the world's total mass
-        // unchanged.
+        self.perf.add_since(Pass::Reproduction, t);
+        let t = Instant::now();
         let n_deaths = death::run_death(
             &mut self.world.creature_store,
             &mut self.world.particle_store,
@@ -297,34 +301,28 @@ impl Engine {
             &mut self.world.edna,
             &mut self.world.sim_rng,
         );
+        self.perf.add_since(Pass::Death, t);
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
-        // Particle aging + decay: keeps the autolysis-emitted particle
-        // field bounded so a long-running session doesn't grow the
-        // particle store without limit.
+        let t = Instant::now();
         particle_decay::run_particle_decay(&mut self.world.particle_store, &mut self.world.ambient, dt as f32);
-        // Ambient exchange: cells leak chems into their local region's
-        // dissolved field and pull a little out. Mass-conserving per
-        // chem so the food web has a slow background mixer.
+        self.perf.add_since(Pass::ParticleDecay, t);
+        let t = Instant::now();
         ambient::run_ambient_exchange(
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
         );
-        // Regional dissolved diffusion: smear out per-region gradients
-        // with a ~60s domain-spanning half-life. Mass-conserving Jacobi
-        // pass; no temperature scaling or rock barriers yet (depend on
-        // the vent / terrain ports).
+        self.perf.add_since(Pass::Ambient, t);
+        let t = Instant::now();
         ambient::diffuse_dissolved(&mut self.world.ambient, dt as f32);
-        // Phase 3: precipitate supersaturated regions. Excess
-        // dissolved mass over per-region capacity sheds back into 2px
-        // particles, closing the dissolve <-> precipitate loop so the
-        // dissolved field can't accumulate without bound.
+        self.perf.add_since(Pass::Diffuse, t);
         let precip_geom = precipitation::PrecipGeom {
             width: self.world.width,
             height: self.world.height,
             depth: self.world.depth,
             surface_y: self.world.surface_y,
         };
+        let t = Instant::now();
         precipitation::run_precipitation(
             &mut self.world.ambient,
             &mut self.world.particle_store,
@@ -332,25 +330,20 @@ impl Engine {
             precip_geom,
             &mut self.world.sim_rng,
         );
-        // Catalyst-gated transporter reactions: cells with a
-        // catalyst pool for a specific transport slot move that
-        // chem cell <-> ambient down its concentration gradient.
-        // Scales with catalyst pool size, so growing a transporter
-        // is what specialises a cell for a particular nutrient.
+        self.perf.add_since(Pass::Precipitation, t);
+        let t = Instant::now();
         transport_reactions::run_transport_reactions(
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
         );
+        self.perf.add_since(Pass::Transport, t);
         // Growth: recompute every cell's radius from its membrane
         // chem pool. r ~ sqrt(membrane) so a cell that successfully
         // builds membrane physically grows -- larger ingest target,
         // larger sense range eventually, larger surface area for
         // photosynth (the r^2 term in the surface_scale slot).
         growth::run_growth(&mut self.world.creature_store);
-        // Somatic mutation: probability scales with cell age^2 *
-        // mutation_rate_mul; CHEM_REPAIR pool suppresses by
-        // refreshing a per-cell mutation-block window.
         somatic::run_somatic_mutation(
             &mut self.world.creature_store,
             &mut self.repair_ticks,
@@ -358,15 +351,18 @@ impl Engine {
             self.world.t,
             dt as f32,
         );
-        // eDNA: age carriers (drop expired) and process competence
-        // uptake for cells in the COMPETENCE state. Horizontal gene
-        // transfer happens here.
         edna::age_carriers(&mut self.world.edna, dt as f32);
         edna::run_competence_uptake(
             &mut self.world.creature_store,
             &mut self.world.edna,
             &mut self.world.sim_rng,
         );
+        // Update live counts for the perf report.
+        self.perf.set_counts(
+            self.world.particle_store.len() as u32,
+            self.world.creature_store.n as u32,
+        );
+        self.perf.tick_end();
     }
 
     /// Serialise the current world to a JSON string. Schema string
@@ -531,6 +527,7 @@ impl Engine {
                 &self.world.particle_store,
                 &self.world.ambient,
             ),
+            perf: self.perf.report(),
         }
     }
 }

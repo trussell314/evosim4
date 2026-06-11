@@ -125,6 +125,12 @@ pub struct Snapshot {
     /// f64s; cheap to ship every snapshot.
     #[serde(default)]
     pub mass: MassReport,
+    /// Per-tick performance breakdown. EMA-smoothed wall-clock
+    /// timings for every major engine pass + the live counts that
+    /// drive load. Ships every snapshot; lets the TUI / web client
+    /// chart per-pass cost over time and spot regressions.
+    #[serde(default)]
+    pub perf: PerfReport,
 }
 
 /// Per-reservoir mass totals + grand total. All in chem-mass units;
@@ -137,6 +143,68 @@ pub struct MassReport {
     pub particles: f64,
     pub ambient: f64,
     pub total: f64,
+}
+
+/// Per-tick performance report. EMA-smoothed wall-clock millisecond
+/// timings for every major engine pass, plus the total tick time.
+/// All values are smoothed (EMA, alpha=0.1) so the client sees a
+/// stable reading even when individual ticks spike. Ships every
+/// snapshot; cheap (~120 bytes).
+///
+/// Pass names match the engine module they wrap, so a TUI / web
+/// client can show them as labels without an extra translation
+/// table. Unmeasured passes report 0.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PerfReport {
+    /// Total wall-clock time for `Engine::step`, ms.
+    pub tick_ms: f32,
+    /// Particle force kernel.
+    pub forces_ms: f32,
+    /// Particle-particle collision sweeps.
+    pub collision_ms: f32,
+    /// Particle decay (age, shrink, cull).
+    pub particle_decay_ms: f32,
+    /// VM run + per-cell update (kinematics + thrust + cat_synth).
+    pub vm_ms: f32,
+    /// Cell-cell collision.
+    pub creature_collision_ms: f32,
+    /// Cell-vs-obstacle collision + rock evacuation.
+    pub obstacle_collision_ms: f32,
+    /// Cell metabolism (genetic reactions).
+    pub cell_reactions_ms: f32,
+    /// Transport reactions.
+    pub transport_ms: f32,
+    /// Ambient leak/uptake exchange.
+    pub ambient_ms: f32,
+    /// Regional dissolved Jacobi diffusion.
+    pub diffuse_ms: f32,
+    /// Supersaturated -> particle precipitation.
+    pub precipitation_ms: f32,
+    /// Regional temperature field stepper.
+    pub region_temp_ms: f32,
+    /// Vent emissions + phase machine.
+    pub vent_ms: f32,
+    /// PREDATE pass.
+    pub predate_ms: f32,
+    /// Ingest pass (particle absorption).
+    pub ingest_ms: f32,
+    /// Reproduction (fission).
+    pub reproduction_ms: f32,
+    /// Death + autolysis.
+    pub death_ms: f32,
+    /// Maintenance drain.
+    pub maintenance_ms: f32,
+    /// Bonding + bond physics.
+    pub bonding_ms: f32,
+    /// Sensor activation (light, electric, vibration, etc.).
+    pub activation_ms: f32,
+    /// Snapshot building (the per-snapshot cost, not the tick).
+    pub snapshot_ms: f32,
+    /// Live counts that drive performance: particles + creatures.
+    /// EMA-smoothed against the snapshot cadence so a single spike
+    /// doesn't read as the typical load.
+    pub particle_count: u32,
+    pub creature_count: u32,
 }
 
 /// One row of the per-snapshot species summary.
@@ -223,7 +291,7 @@ pub enum ServerMessage {
         chem_names: Vec<String>,
     },
     /// Recurring snapshot. Push cadence ~10 Hz, matches TS sim worker.
-    Snapshot(Snapshot),
+    Snapshot(Box<Snapshot>),
     /// Server-side error surfaced for client display. Non-fatal: the
     /// connection stays open. Fatal errors close the socket.
     Error { code: String, message: String },
