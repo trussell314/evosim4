@@ -18,6 +18,7 @@ pub mod particles;
 pub mod reactions;
 pub mod rng;
 pub mod save;
+pub mod sensor_bins;
 pub mod vm;
 pub mod world;
 
@@ -45,6 +46,7 @@ pub struct Engine {
     tick: u64,
     world: World,
     collision_scratch: collision::CollisionScratch,
+    sensor_bins: sensor_bins::SensorBins,
 }
 
 impl Engine {
@@ -53,6 +55,7 @@ impl Engine {
             tick: 0,
             world: World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED),
             collision_scratch: collision::CollisionScratch::new(),
+            sensor_bins: sensor_bins::SensorBins::new(),
         };
         engine.seed_demo_particles();
         engine.seed_demo_creatures();
@@ -157,6 +160,14 @@ impl Engine {
         self.world.t += dt;
         forces::apply_forces(&mut self.world, dt as f32);
         collision::resolve_collisions(&mut self.world, &mut self.collision_scratch);
+        // Rebuild spatial bins from the post-physics particle field;
+        // creatures see the current frame's particle layout when
+        // their VM runs.
+        self.sensor_bins.rebuild(
+            &self.world.particle_store,
+            self.world.width,
+            self.world.height,
+        );
         let ctx = creature_update::UpdateCtx {
             t: self.world.t,
             width: self.world.width,
@@ -165,7 +176,12 @@ impl Engine {
             // a chl-bearing cell run photosynth at ~half rate.
             ambient_light: 0.5,
         };
-        creature_update::update_creatures(ctx, &mut self.world.creature_store, dt as f32);
+        creature_update::update_creatures(
+            ctx,
+            &mut self.world.creature_store,
+            &self.sensor_bins,
+            dt as f32,
+        );
     }
 
     /// Serialise the current world to a JSON string. Schema string

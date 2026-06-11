@@ -24,6 +24,7 @@
 
 use crate::cell_reactions::run_cell_reactions;
 use crate::creatures::CreatureStore;
+use crate::sensor_bins::SensorBins;
 use crate::vm::{run_tick, Sensors, VmSelf};
 
 /// Per-tick instruction budget per cell. Matches the TS default.
@@ -36,30 +37,30 @@ pub const VM_INSTRUCTION_BUDGET: u32 = 64;
 /// of continuous expression at 60 Hz.
 const CAT_SYNTH_GAIN_PER_TICK: f32 = 1.0 / 60.0;
 
-/// Sensors implementation that closes over a single cell's chem pool.
-/// Built lazily inside `update_creatures` so we don't drag the
-/// borrow checker through trait-object indirection.
+/// Sensors implementation that closes over a single cell's chem pool
+/// plus the world-level spatial sensor bins. SENSE_CHEMICAL reads the
+/// cell's pool; SENSE_OUT queries the bins for a particle-field
+/// gradient at the cell's position over `sense_range`.
 struct CellSensors<'a> {
     chems: &'a [&'a Vec<f32>],
     cell: usize,
+    bins: &'a SensorBins,
+    cx: f32,
+    cy: f32,
+    sense_range: f32,
 }
 
 impl Sensors for CellSensors<'_> {
     fn chem_conc(&self, chem_id: usize) -> f64 {
-        // Activated signal chems and material chems share the named
-        // pool; the VM reads them all through this primitive. Slots
-        // past the named region (generic chems 46..96) report 0 for
-        // now -- generic-chem state lands in a later commit.
         self.chems
             .get(chem_id)
             .map(|col| col[self.cell] as f64)
             .unwrap_or(0.0)
     }
 
-    fn gradient(&self, _chem_id: usize) -> [f64; 2] {
-        // Particle-field gradient lands with the spatial-bins port.
-        // Until then SENSE_OUT pushes (0, 0).
-        [0.0, 0.0]
+    fn gradient(&self, chem_id: usize) -> [f64; 2] {
+        let g = self.bins.gradient(self.cx, self.cy, self.sense_range, chem_id);
+        [g[0] as f64, g[1] as f64]
     }
 }
 
@@ -83,8 +84,18 @@ pub struct UpdateCtx {
     pub ambient_light: f32,
 }
 
-/// Run the per-tick VM pass over every creature in `store`.
-pub fn update_creatures(ctx: UpdateCtx, store: &mut CreatureStore, dt: f32) {
+/// Default per-cell sense range (world pixels) until a per-cell
+/// derived-trait pass lands. Matches the TS founder default.
+const DEFAULT_SENSE_RANGE: f32 = 120.0;
+
+/// Run the per-tick VM pass over every creature in `store`. `bins`
+/// is the spatial sensor grid the SENSE_OUT op queries.
+pub fn update_creatures(
+    ctx: UpdateCtx,
+    store: &mut CreatureStore,
+    bins: &SensorBins,
+    dt: f32,
+) {
     let n = store.n;
     if n == 0 {
         return;
@@ -102,7 +113,16 @@ pub fn update_creatures(ctx: UpdateCtx, store: &mut CreatureStore, dt: f32) {
         // kernel below needs &mut store and the two borrows would
         // otherwise collide.
         let chem_refs: Vec<&Vec<f32>> = store.chems.iter().collect();
-        let sensors = CellSensors { chems: &chem_refs, cell: i };
+        let cx = store.x[i];
+        let cy = store.y[i];
+        let sensors = CellSensors {
+            chems: &chem_refs,
+            cell: i,
+            bins,
+            cx,
+            cy,
+            sense_range: DEFAULT_SENSE_RANGE,
+        };
 
         // SAFETY-free: we split the &mut store into the disjoint
         // pieces the interpreter needs (genome bytes, vm state, vm
@@ -203,7 +223,7 @@ mod tests {
     #[test]
     fn empty_store_is_noop() {
         let (ctx, mut store) = one_cell_world();
-        update_creatures(ctx, &mut store, 1.0 / 60.0);
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         assert_eq!(store.len(), 0);
     }
 
@@ -224,7 +244,7 @@ mod tests {
         });
         let y0 = store.y[0];
         for _ in 0..30 {
-            update_creatures(ctx, &mut store, 1.0 / 60.0);
+            update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         }
         assert!(
             store.y[0] - y0 > 0.05,
@@ -247,7 +267,7 @@ mod tests {
         });
         assert_eq!(store.catalyst[3][0], 0.0);
         for _ in 0..120 {
-            update_creatures(ctx, &mut store, 1.0 / 60.0);
+            update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         }
         assert!(
             store.catalyst[3][0] > 0.1,
@@ -271,10 +291,54 @@ mod tests {
             ..CreatureInit::default()
         });
         for _ in 0..30 {
-            update_creatures(ctx, &mut store, 1.0 / 60.0);
+            update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         }
         assert_eq!(store.x[0], 800.0);
         assert_eq!(store.y[0], 600.0);
+    }
+
+    #[test]
+    fn sense_out_drives_seeker_toward_particle() {
+        use crate::particles::{ParticleInit, ParticleStore};
+        let (ctx, mut store) = one_cell_world();
+        let chems = vec![0.0; crate::chem_ids::NAMED_CHEMICAL_COUNT];
+        // GENE SENSE_OUT 3 THRUST END
+        //   SENSE_OUT 3 pushes (gx, gy)
+        //   THRUST pops ay (gy), ax (gx)
+        // -> swims up the chem-3 gradient.
+        let genome = vec![OP_GENE, OP_SENSE_OUT, 3, OP_THRUST, OP_END];
+        store.push(CreatureInit {
+            x: 100.0,
+            y: 100.0,
+            r: 8.0,
+            genome,
+            chems: Some(chems),
+            ..CreatureInit::default()
+        });
+        // Bait pile 80px to the right -- inside the default sense
+        // range (120) so the gradient is non-zero.
+        let mut particles = ParticleStore::new();
+        for _ in 0..20 {
+            particles.push(ParticleInit {
+                x: 180.0,
+                y: 100.0,
+                chem_id: 3,
+                r: 1.0,
+                ..ParticleInit::default()
+            });
+        }
+        let mut bins = SensorBins::new();
+        bins.rebuild(&particles, ctx.width, ctx.height);
+        let x0 = store.x[0];
+        for _ in 0..30 {
+            update_creatures(ctx, &mut store, &bins, 1.0 / 60.0);
+        }
+        assert!(
+            store.x[0] > x0 + 0.2,
+            "cell should swim +x toward the bait, got {} -> {}",
+            x0,
+            store.x[0]
+        );
     }
 
     #[test]
@@ -290,7 +354,7 @@ mod tests {
             ..CreatureInit::default()
         });
         ctx.t = 7.5;
-        update_creatures(ctx, &mut store, 1.0 / 60.0);
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         assert_eq!(store.last_reproduce_fire_t[0], 7.5);
     }
 }
