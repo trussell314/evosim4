@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activation;
 pub mod ambient;
 pub mod bonding;
 pub mod cell_reactions;
@@ -157,6 +158,16 @@ impl Engine {
         // tick. This closes the selection loop: a cell with no fuel
         // path can't outpace the drain and eventually autolyses.
         maintenance::run_maintenance(&mut self.world.creature_store, &mut self.world.ambient, dt as f32);
+        // Sensor activation pass: cells holding receptor chems
+        // translate the ambient stimuli (currently just light) into
+        // signal chems their VM can read via SENSE_CHEMICAL on the
+        // CHEM_ACT_* slots. Runs BEFORE update_creatures so the
+        // VM reads fresh activations the same tick.
+        activation::run_activation(
+            &mut self.world.creature_store,
+            ctx.ambient_light,
+            dt as f32,
+        );
         // Bond springs before update_creatures so the velocity
         // contribution shows up in the same tick's position advect.
         bonding::apply_bond_springs(

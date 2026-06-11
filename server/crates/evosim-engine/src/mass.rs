@@ -33,6 +33,7 @@ pub fn report(
     // Cell chem pools (count -> mass via per-chem molar mass).
     let molar = &chem_table().molar_mass;
     if !creatures.chems.is_empty() {
+        #[allow(clippy::needless_range_loop)]
         for k in 0..NAMED_CHEMICAL_COUNT {
             if is_signal(k) {
                 continue;
