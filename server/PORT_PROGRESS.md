@@ -146,6 +146,39 @@ outlive baseline drain; per-byte point mutation seeds genetic
 diversity. Sim self-sustains for at least 4+ sim-minutes; selection
 visibly culls unfit reproducer lines from 12 species down to 3.
 
+### Day / night cycle + particle decay (`a5b... e0c2789`)
+The world breathes. Multiple substantial passes landed in a single
+session:
+  - day_cycle: ambient_light_at(t, period) -- sin curve over the
+    daylight half, flat zero through night. Photoautotrophs gain
+    glucose only during daylight
+  - particle_decay: per-tick aging + radius shrink; particles past
+    MAX_AGE_S (120) or below MIN_RADIUS (0.3) get culled. Without
+    this autolysis grows the particle field monotonically forever
+  - ambient: AmbientField (per-chem world-wide stock) with passive
+    cell <-> ambient leak/uptake. Death pass dissolves 40% of each
+    cell's emitted chems into ambient
+  - excrete_transport: wires the VM's EXCRETE / TRANSPORT ops to
+    actually move chems between cells and ambient
+  - cell biosynth: catalyst growth is now real biosynth (consumes
+    AA+MIN+ATP, gated by mRNA), not a placeholder linear bump
+  - top_species + per-cell speciesIdx: the snapshot tells the
+    client which species each cell belongs to, with deterministic
+    HSL colors from a FNV-1a hash of the coding key
+  - client species inspector: clickable species list with a tiny
+    in-browser disassembler
+  - ingest: cells absorb particles whose bond-potential clears
+    their VM-set ingest threshold. Mass-conserving deposit into
+    chem pool. New ingester founder line
+  - growth: cell radius now tracks membrane chem (r ~ sqrt(mem)),
+    so cells visibly grow when they synthesise membrane and shrink
+    when they fission and halve it
+
+Live smoke at the end of this session shows a stable food web at
+48 cells / 13 species across 4 sim-minutes, with mass moving
+through 6 trophic strategies (photo / metab / seeker / reproducer
+/ osmotroph / ingester).
+
 ## Up next, in suggested order
 
 ### 1. Region / atmosphere passes (~ 1 week)
