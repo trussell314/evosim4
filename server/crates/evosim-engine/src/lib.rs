@@ -165,6 +165,7 @@ impl Engine {
         // VM reads fresh activations the same tick.
         activation::run_activation(
             &mut self.world.creature_store,
+            &self.world.particle_store,
             ctx.ambient_light,
             dt as f32,
         );
