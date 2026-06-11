@@ -7,6 +7,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chem_ids;
+pub mod rng;
+
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
 
 /// Owns the simulation state. Single-threaded today, will host the
