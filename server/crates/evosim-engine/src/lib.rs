@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ambient;
 pub mod cell_reactions;
 pub mod chem_ids;
 pub mod chemistry;
@@ -160,6 +161,7 @@ impl Engine {
         let n_deaths = death::run_death(
             &mut self.world.creature_store,
             &mut self.world.particle_store,
+            &mut self.world.ambient,
             &mut self.world.sim_rng,
         );
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
@@ -167,6 +169,14 @@ impl Engine {
         // field bounded so a long-running session doesn't grow the
         // particle store without limit.
         particle_decay::run_particle_decay(&mut self.world.particle_store, dt as f32);
+        // Ambient exchange: cells leak chems into the world-wide
+        // ambient pool and pull a little out. Mass-conserving per
+        // chem so the food web has a slow background mixer.
+        ambient::run_ambient_exchange(
+            &mut self.world.creature_store,
+            &mut self.world.ambient,
+            dt as f32,
+        );
     }
 
     /// Serialise the current world to a JSON string. Schema string

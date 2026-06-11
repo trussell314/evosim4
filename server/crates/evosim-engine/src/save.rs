@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 use crate::chem_ids::{CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT};
+use crate::ambient::AmbientField;
 use crate::creatures::CreatureInit;
 use crate::genome_consts::CATALYST_COUNT;
 use crate::particles::ParticleInit;
@@ -28,9 +29,13 @@ use crate::world::World;
 
 /// Compact schema fingerprint. Older binaries refuse a newer save by
 /// string comparison. Format: `evosim-native:<rev>:<catalyst_count>:<chemical_count>:<named_chemical_count>`.
+///
+/// History:
+///   1 -- foundational SavedWorld (world dims, RNG, particles, creatures)
+///   2 -- adds ambient field + day_period_s
 pub fn save_schema() -> String {
     format!(
-        "evosim-native:1:{}:{}:{}",
+        "evosim-native:2:{}:{}:{}",
         CATALYST_COUNT, CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT
     )
 }
@@ -42,12 +47,20 @@ pub struct SavedWorld {
     pub width: f32,
     pub height: f32,
     pub rng_state: u32,
+    #[serde(default)]
+    pub day_period_s: f64,
 
     // Particles
     pub particles: Vec<SavedParticle>,
 
     // Creatures
     pub creatures: Vec<SavedCreature>,
+
+    /// World-wide ambient stock per chem. Default empty for older
+    /// saves (we won't reach that branch unless we accept v1, which
+    /// the schema check refuses).
+    #[serde(default)]
+    pub ambient: AmbientField,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,8 +182,10 @@ pub fn save_world(world: &World) -> SavedWorld {
         width: world.width,
         height: world.height,
         rng_state: rng_state(&world.sim_rng),
+        day_period_s: world.day_period_s,
         particles,
         creatures,
+        ambient: world.ambient.clone(),
     }
 }
 
@@ -215,6 +230,8 @@ pub fn load_world(world: &mut World, saved: SavedWorld) -> Result<(), LoadError>
     world.width = saved.width;
     world.height = saved.height;
     world.sim_rng = Mulberry32::new(saved.rng_state);
+    world.day_period_s = saved.day_period_s;
+    world.ambient = saved.ambient;
 
     world.particle_store.clear();
     for p in saved.particles {

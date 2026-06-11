@@ -15,6 +15,7 @@
 //!   - bonded cell stranding cleanup
 //!   - the particle decay pass that recycles aging emitted particles
 
+use crate::ambient::AmbientField;
 use crate::chem_ids::{
     CHEMICAL_COUNT, CHEM_BIOPOLYMER, CHEM_FA, CHEM_MEMBRANE, NAMED_CHEMICAL_COUNT,
 };
@@ -40,9 +41,16 @@ const AUTOLYSED_PARTICLE_R: f32 = 2.0;
 /// and emitting its remaining named-chem mass as particles. Returns
 /// the number of cells removed. We iterate in REVERSE so the swap-pop
 /// removal at index `i` doesn't shift unvisited cells around.
+/// Fraction of every dying cell's chem mass that dissolves into the
+/// ambient field rather than going out as a particle. ~ 0.4 puts a
+/// real chunk of mass into the field on a cull wave -- a useful
+/// signal for downstream cells -- without erasing the particle path.
+const AMBIENT_DISSOLVE_FRACTION: f32 = 0.4;
+
 pub fn run_death(
     creatures: &mut CreatureStore,
     particles: &mut ParticleStore,
+    ambient: &mut AmbientField,
     rng: &mut Mulberry32,
 ) -> usize {
     let mut deaths = 0;
@@ -69,6 +77,11 @@ pub fn run_death(
                 if amount < PARTICLE_EMIT_THRESHOLD {
                     continue;
                 }
+                // Split the chem between the ambient field and a
+                // particle, so the food web has both a long-range
+                // signal and a local nutrient pile.
+                let dissolved = amount * AMBIENT_DISSOLVE_FRACTION;
+                ambient.deposit(k, dissolved);
                 let jitter_x = (rng.next_f64() as f32 - 0.5) * 8.0;
                 let jitter_y = (rng.next_f64() as f32 - 0.5) * 8.0;
                 particles.push(ParticleInit {
@@ -78,7 +91,6 @@ pub fn run_death(
                     chem_id: k as u8,
                     ..ParticleInit::default()
                 });
-                let _ = amount; // future: encode amount via density
             }
         }
         creatures.remove_swap_pop(i);
@@ -114,7 +126,7 @@ mod tests {
             chems: Some(make_cell_chems(2.0, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
         assert_eq!(killed, 0);
         assert_eq!(cs.len(), 1);
         assert_eq!(ps.len(), 0);
@@ -130,7 +142,7 @@ mod tests {
             chems: Some(make_cell_chems(0.3, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Particles emitted for the three populated chems
@@ -148,7 +160,7 @@ mod tests {
             chems: Some(make_cell_chems(0.0, 0.01, 0.01)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Total mass < MIN_TOTAL_MASS so no particles emitted.
@@ -170,7 +182,7 @@ mod tests {
                 ..CreatureInit::default()
             });
         }
-        let killed = run_death(&mut cs, &mut ps, &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut rng);
         assert_eq!(killed, 3);
         assert_eq!(cs.len(), 0);
         // 3 dead cells * 2 emitted chems each (ATP, GLU; membrane

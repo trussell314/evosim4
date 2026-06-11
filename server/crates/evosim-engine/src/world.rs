@@ -6,6 +6,7 @@
 //! force kernel reads) so the engine task can drive a real tick. The
 //! rest accretes here as more port commits land.
 
+use crate::ambient::AmbientField;
 use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
 use crate::rng::Mulberry32;
@@ -35,6 +36,7 @@ pub struct World {
 
     pub particle_store: ParticleStore,
     pub creature_store: CreatureStore,
+    pub ambient: AmbientField,
 
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
@@ -89,6 +91,7 @@ impl World {
             height,
             particle_store: ParticleStore::new(),
             creature_store: CreatureStore::new(),
+            ambient: AmbientField::new(),
             sim_rng: Mulberry32::new(seed),
 
             // Defaults pulled from the TS scene baseline. Specific
@@ -124,6 +127,7 @@ impl World {
         self.t = 0.0;
         self.particle_store.clear();
         self.creature_store.clear();
+        self.ambient = AmbientField::new();
     }
 }
 
