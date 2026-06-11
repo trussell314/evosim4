@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cell_reactions;
 pub mod chem_ids;
 pub mod chemistry;
 pub mod collision;
@@ -84,6 +85,7 @@ impl Engine {
     /// cell runs a different short genome (swimmer / turner / synth),
     /// two of each, spread across the world.
     fn seed_demo_creatures(&mut self) {
+        use crate::chem_ids::{CHEM_GLU, CHEM_O2, CHEM_ADP, CHEM_CHL, CHEM_CO2, CHEM_MRNA};
         let w = self.world.width;
         let h = self.world.height;
         let starter_chems = || {
@@ -91,23 +93,55 @@ impl Engine {
             chems[CHEM_ATP] = 50.0;
             chems
         };
+        // A "respirator": comes equipped with glucose + O2 + ADP so
+        // the aerobic respiration slot (RX_SLOT_RESPIRATION) actually
+        // fires once cell_reactions ticks. Without ADP no exergonic
+        // slot can phosphorylate, so include some.
+        let metabolizer_chems = || {
+            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+            chems[CHEM_ATP] = 20.0;
+            chems[CHEM_GLU] = 80.0;
+            chems[CHEM_O2] = 80.0;
+            chems[CHEM_ADP] = 40.0;
+            chems
+        };
+        // A "photoautotroph": carries chlorophyll + mRNA + CO2 + ADP
+        // so photosynth (slot 3) + photophosphorylation (slot 25)
+        // fire once cell_reactions ticks under ambient light.
+        let photo_chems = || {
+            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+            chems[CHEM_ATP] = 20.0;
+            chems[CHEM_CO2] = 80.0;
+            chems[CHEM_ADP] = 40.0;
+            chems[CHEM_CHL] = 4.0;  // 2x CHL_REF: full chl machinery
+            chems[CHEM_MRNA] = 5.0; // full MRNA_REF
+            chems
+        };
 
         let swimmer = vec![OP_GENE, OP_PUSH8, 0, OP_PUSH8, 6, OP_THRUST, OP_END];
-        let turner = vec![OP_GENE, OP_PUSH8, 4, OP_TURN, OP_PUSH8, 6, OP_PUSH8, 0, OP_THRUST, OP_END];
-        let synth = vec![OP_GENE, OP_SYNTH, SYNTH_KIND_CAT, 7, OP_END];
+        let metabolizer = vec![OP_GENE, OP_NOP, OP_END];
+        let photo = vec![OP_GENE, OP_NOP, OP_END];
 
-        let genomes = [swimmer, turner, synth];
+        struct Seed {
+            genome: Vec<u8>,
+            chems: Vec<f32>,
+        }
+        let seeds = [
+            Seed { genome: swimmer, chems: starter_chems() },
+            Seed { genome: metabolizer, chems: metabolizer_chems() },
+            Seed { genome: photo, chems: photo_chems() },
+        ];
         let mut idx = 0u32;
-        for g in &genomes {
+        for seed in &seeds {
             for j in 0..2 {
                 let x = (0.25 + 0.5 * (j as f32)) * w;
-                let y = ((idx as f32 + 1.0) / (genomes.len() as f32 + 2.0)) * h;
+                let y = ((idx as f32 + 1.0) / (seeds.len() as f32 + 2.0)) * h;
                 self.world.creature_store.push(CreatureInit {
                     x,
                     y,
                     r: 8.0,
-                    genome: g.clone(),
-                    chems: Some(starter_chems()),
+                    genome: seed.genome.clone(),
+                    chems: Some(seed.chems.clone()),
                     ..CreatureInit::default()
                 });
                 idx += 1;
@@ -126,6 +160,9 @@ impl Engine {
             t: self.world.t,
             width: self.world.width,
             height: self.world.height,
+            // Flat ambient until the region/atmosphere port. 0.5 lets
+            // a chl-bearing cell run photosynth at ~half rate.
+            ambient_light: 0.5,
         };
         creature_update::update_creatures(ctx, &mut self.world.creature_store, dt as f32);
     }
@@ -300,22 +337,36 @@ mod tests {
     }
 
     #[test]
-    fn creatures_synthesise_catalyst_over_time() {
+    fn metabolizer_cells_burn_glucose_for_atp() {
+        // The "metabolizer" pair (indices 2,3) carries GLU + O2 + ADP
+        // so the aerobic respiration named reaction fires every
+        // tick. After ~ a second of sim time glucose should drop and
+        // ATP should rise above its starting 20.
         let mut e = Engine::new();
-        // The third pair of demo cells expresses SYNTH CAT 7 every
-        // tick. After ~ a second of sim time their catalyst slot 7
-        // pool should be non-zero.
-        for _ in 0..120 {
+        let store0 = &e.world.creature_store;
+        let glu0 = store0.chems[chem_ids::CHEM_GLU][2];
+        let atp0 = store0.chems[CHEM_ATP][2];
+        for _ in 0..60 {
             e.step(1.0 / 60.0);
         }
         let store = &e.world.creature_store;
-        let synth_indices = [4, 5];
-        for &i in &synth_indices {
-            assert!(
-                store.catalyst[7][i] > 0.1,
-                "demo synth cell {i} should have grown catalyst 7 (got {})",
-                store.catalyst[7][i]
-            );
+        let glu1 = store.chems[chem_ids::CHEM_GLU][2];
+        let atp1 = store.chems[CHEM_ATP][2];
+        assert!(glu1 < glu0, "glucose should drop, {glu0} -> {glu1}");
+        assert!(atp1 > atp0, "ATP should rise, {atp0} -> {atp1}");
+    }
+
+    #[test]
+    fn photoautotroph_cells_fix_carbon_under_light() {
+        // The "photo" pair (indices 4,5) carries chl + mRNA + CO2 +
+        // ADP. Under flat ambient light = 0.5 the photosynth slot
+        // fires and glucose accumulates.
+        let mut e = Engine::new();
+        let glu0 = e.world.creature_store.chems[chem_ids::CHEM_GLU][4];
+        for _ in 0..60 {
+            e.step(1.0 / 60.0);
         }
+        let glu1 = e.world.creature_store.chems[chem_ids::CHEM_GLU][4];
+        assert!(glu1 > glu0, "photo cell should fix C into GLU, {glu0} -> {glu1}");
     }
 }

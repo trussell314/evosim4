@@ -22,6 +22,7 @@
 //! `[0, 0]` until the particle grid is consulted -- a real local
 //! gradient over the particle field lands with the spatial-bins port.
 
+use crate::cell_reactions::run_cell_reactions;
 use crate::creatures::CreatureStore;
 use crate::vm::{run_tick, Sensors, VmSelf};
 
@@ -76,6 +77,10 @@ pub struct UpdateCtx {
     pub t: f64,
     pub width: f32,
     pub height: f32,
+    /// Local ambient light, 0..1. The TS engine reads this off the
+    /// region/atmosphere field; until those land we pass a flat
+    /// scalar. Photosynth gates on it being > 0.
+    pub ambient_light: f32,
 }
 
 /// Run the per-tick VM pass over every creature in `store`.
@@ -87,17 +92,16 @@ pub fn update_creatures(ctx: UpdateCtx, store: &mut CreatureStore, dt: f32) {
     let t = ctx.t;
     let dt64 = dt as f64;
 
-    // Borrow each chem column once; we only need read access for the
-    // Sensors trait and write access stays separate (`store.catalyst`,
-    // `store.vx/vy`).
-    let chem_refs: Vec<&Vec<f32>> = store.chems.iter().collect();
-
     for i in 0..n {
         let me = VmSelf {
             energy: store.energy(i) as f64,
             mass: store.total_mass(i) as f64,
             membrane: store.chems[crate::chem_ids::CHEM_MEMBRANE][i] as f64,
         };
+        // Sensor borrow is scoped to the VM call; the reaction
+        // kernel below needs &mut store and the two borrows would
+        // otherwise collide.
+        let chem_refs: Vec<&Vec<f32>> = store.chems.iter().collect();
         let sensors = CellSensors { chems: &chem_refs, cell: i };
 
         // SAFETY-free: we split the &mut store into the disjoint
@@ -149,6 +153,12 @@ pub fn update_creatures(ctx: UpdateCtx, store: &mut CreatureStore, dt: f32) {
         store.vm_out[i] = out;
         store.genome[i] = genome;
 
+        // Reaction kinetics: walk every catalyst-bearing reaction
+        // slot and fire substrates -> products under MM saturation.
+        // Runs AFTER the VM so any catalyst the cell just expressed
+        // gets its growth-tick the next frame, matching TS order.
+        run_cell_reactions(store, i, dt, ctx.ambient_light);
+
         // ----- Movement integrator. Damp then advect.
         let damp = 1.0 - (CREATURE_DRAG_PER_S * dt).min(1.0);
         store.vx[i] *= damp;
@@ -185,7 +195,7 @@ mod tests {
     use crate::genome::*;
 
     fn one_cell_world() -> (UpdateCtx, CreatureStore) {
-        let ctx = UpdateCtx { t: 0.0, width: 1600.0, height: 1200.0 };
+        let ctx = UpdateCtx { t: 0.0, width: 1600.0, height: 1200.0, ambient_light: 0.5 };
         let store = CreatureStore::new();
         (ctx, store)
     }
