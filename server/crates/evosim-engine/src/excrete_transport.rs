@@ -34,28 +34,30 @@ pub fn run_excrete_transport(creatures: &mut CreatureStore, ambient: &mut Ambien
     let transport_step = TRANSPORT_GAIN * dt;
     let n = creatures.n;
     for i in 0..n {
+        let x = creatures.x[i];
+        let y = creatures.y[i];
         let out = &mut creatures.vm_out[i];
         for k in 0..NAMED_CHEMICAL_COUNT {
             if is_signal(k) {
                 continue;
             }
-            // EXCRETE: positive only, one-way cell -> ambient.
+            // EXCRETE: positive only, one-way cell -> ambient (local region).
             let want_excrete = out.excrete[k] as f32 * excrete_step;
             if want_excrete > 0.0 {
                 let take = want_excrete.min(creatures.chems[k][i]);
                 creatures.chems[k][i] -= take;
-                ambient.deposit(k, take);
+                ambient.deposit_at(k, take, x, y);
             }
-            // TRANSPORT: signed. Positive imports, negative exports.
+            // TRANSPORT: signed. Positive imports from local region,
+            // negative exports to local region.
             let want = out.transport[k] as f32 * transport_step;
             if want > 0.0 {
-                let take = want.min(ambient.stock[k]);
-                ambient.stock[k] -= take;
+                let take = ambient.take_at(k, want, x, y);
                 creatures.chems[k][i] += take;
             } else if want < 0.0 {
                 let export = (-want).min(creatures.chems[k][i]);
                 creatures.chems[k][i] -= export;
-                ambient.deposit(k, export);
+                ambient.deposit_at(k, export, x, y);
             }
         }
     }
@@ -99,7 +101,7 @@ mod tests {
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // 100 requested * 0.02 = 2.0 actually moved.
         assert!((cs.chems[CHEM_GLU][0] - 48.0).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU] - 2.0).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0) - 2.0).abs() < 1e-3);
     }
 
     #[test]
@@ -110,19 +112,19 @@ mod tests {
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // Can't excrete more than the pool holds: takes min(2.0, 0.5).
         assert!((cs.chems[CHEM_GLU][0]).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU] - 0.5).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0) - 0.5).abs() < 1e-3);
     }
 
     #[test]
     fn transport_positive_imports() {
         let mut cs = make_cell(0.0, 0.0);
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 50.0;
+        amb.deposit_at(CHEM_GLU, 50.0, 0.0, 0.0);
         set_transport(&mut cs, 0, CHEM_GLU, 100.0);
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // 100 * 0.05 = 5.0 moved ambient -> cell.
         assert!((cs.chems[CHEM_GLU][0] - 5.0).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU] - 45.0).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0) - 45.0).abs() < 1e-3);
     }
 
     #[test]
@@ -133,30 +135,33 @@ mod tests {
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // -100 * 0.05 = -5.0, so 5.0 cell -> ambient.
         assert!((cs.chems[CHEM_GLU][0] - 45.0).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU] - 5.0).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0) - 5.0).abs() < 1e-3);
     }
 
     #[test]
     fn transport_import_bounded_by_ambient() {
         let mut cs = make_cell(0.0, 0.0);
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 1.0;
+        amb.deposit_at(CHEM_GLU, 1.0, 0.0, 0.0);
         set_transport(&mut cs, 0, CHEM_GLU, 1000.0);
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // Want 50; ambient only has 1.0.
         assert!((cs.chems[CHEM_GLU][0] - 1.0).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU]).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0)).abs() < 1e-3);
     }
 
     #[test]
     fn signal_chems_are_skipped() {
         let mut cs = make_cell(0.0, 0.0);
         let mut amb = AmbientField::new();
-        amb.stock[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE] = 50.0;
+        amb.deposit_at(crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE, 50.0, 0.0, 0.0);
         set_transport(&mut cs, 0, crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE, 100.0);
         run_excrete_transport(&mut cs, &mut amb, 1.0);
         // Signal chem can't be transported.
         assert_eq!(cs.chems[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE][0], 0.0);
-        assert_eq!(amb.stock[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE], 50.0);
+        assert_eq!(
+            amb.at(crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE, 0.0, 0.0),
+            50.0
+        );
     }
 }

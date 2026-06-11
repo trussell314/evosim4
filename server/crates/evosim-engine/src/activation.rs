@@ -289,18 +289,14 @@ pub fn run_activation(
         }
     }
 
-    // pH: scalar acidity. Driven by the cell's own CO2 pool plus
-    // the world-wide ambient CO2 stock; a cell sitting in dissolved
-    // CO2 from autolysis or its own respiration feels the rising
-    // acidity. Useful as a "crowding" signal -- a metabolically
-    // active region emits CO2.
-    let ambient_co2 = ambient
-        .stock
-        .get(CHEM_CO2)
-        .copied()
-        .unwrap_or(0.0);
+    // pH: scalar acidity. Driven by the cell's own CO2 pool plus the
+    // LOCAL region's dissolved CO2; a cell sitting in a region that's
+    // accumulated CO2 from autolysis or nearby respiration feels the
+    // rising acidity. Per-cell ambient sample (not world-total) so the
+    // signal is genuinely a local crowding measure.
     for i in 0..n {
         let receptor = creatures.chems[CHEM_PHRECEPTOR][i];
+        let ambient_co2 = ambient.at(CHEM_CO2, creatures.x[i], creatures.y[i]);
         let prev = creatures.chems[CHEM_ACT_PH][i] * keep;
         if receptor <= 0.0 {
             creatures.chems[CHEM_ACT_PH][i] = prev;

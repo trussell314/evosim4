@@ -1,57 +1,166 @@
-//! World-wide ambient reserve field. A single scalar per chem,
-//! representing the dissolved bulk stock of that chem in the
-//! environment. Cells exchange with the field through three
-//! channels:
+//! Regional dissolved field. Phase 1 of the regions port: replaces the
+//! flat single-stock `Vec<f32>[chem]` with a per-region grid sized off
+//! `regions::REGION_PX`, so dissolution / leakage / aeration / transport
+//! all act on the LOCAL region instead of a single global stock.
 //!
-//!   - **autolysis dump**: when a cell dies, a small fraction of
-//!     each emitted chem goes into the ambient pool instead of out
-//!     as a particle. Models dissolution of small molecules at
-//!     death rather than every chem turning into a solid grain
-//!   - **passive leak**: each tick every cell loses a tiny
-//!     fraction of each chem to the ambient pool. The TS engine
-//!     gates this on per-chem permeability; until that lands we use
-//!     a flat low rate so cells slowly equilibrate
-//!   - **passive uptake**: each tick every cell pulls a tiny
-//!     fraction of the ambient pool inward. Balanced against the
-//!     leak so a cell at parity with ambient doesn't drift
+//! Layout: `dissolved[region * CHEMICAL_COUNT + chem]` flat array. Read /
+//! write through `at`, `deposit_at`, `take_at` -- they look up the cell's
+//! / particle's region from the (x, y) the caller hands them.
+//!
+//! Cells exchange with the field through three channels:
+//!   - **autolysis dump**: when a cell dies, a fraction of each emitted
+//!     chem dissolves into the local region instead of being released
+//!     as a particle. Models dissolution of small molecules at death.
+//!   - **passive leak**: each tick every cell loses a tiny fraction of
+//!     each chem to its region's dissolved field
+//!   - **passive uptake**: each tick every cell pulls a tiny fraction
+//!     of its region's dissolved field inward
 //!
 //! What's NOT here yet (kept honest):
-//!   - region grid: TS partitions the world into ~50px boxes and
-//!     each region has its own ambient. We use one bulk stock for
-//!     the whole world so distance doesn't matter -- a cell can't
-//!     exhaust its local pool without affecting the global
-//!   - per-chem permeability: TS reads permeability from the chem
-//!     table; we use flat rates
-//!   - mass-balance against an atmosphere reservoir for O2/CO2
+//!   - per-chem permeability gating (TS reads from the chem table; we
+//!     use a flat low rate until the permeability pass lands)
+//!   - solubility-capped dissolved capacity + dissolve/precipitate
+//!     hysteresis (Phase 3)
+//!   - reserve bucket (Phase 4) -- depends on terrain solid mask
+//!   - vent/atmosphere relaxation toward `AMBIENT_TARGET` -- depends on
+//!     vent/terrain landing
+//!   - regional temperature scaling on the Jacobi diffusion coefficient
+//!     (depends on `regionTemp` field which needs the vent port)
+//!   - rock barrier on diffusion (depends on terrain)
 
 use crate::chem_ids::{CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT};
 use crate::creatures::CreatureStore;
+use crate::regions::{
+    ambient_target, region_cols, region_index_at, region_rows, REGION_PX,
+};
 use serde::{Deserialize, Serialize};
 
-/// Per-chem ambient mass. Length matches CHEMICAL_COUNT so any chem
-/// can in principle dissolve; the per-chem permeability constants
-/// here are crude until the TS pass lands.
+/// Per-region dissolved field. Flat layout: dissolved[region * CHEMICAL_COUNT + chem].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmbientField {
-    pub stock: Vec<f32>,
+    pub width: f32,
+    pub height: f32,
+    pub cols: usize,
+    pub rows: usize,
+    /// Length = `cols * rows * CHEMICAL_COUNT`. Indexed
+    /// `[region * CHEMICAL_COUNT + chem]`.
+    pub dissolved: Vec<f32>,
 }
 
-impl AmbientField {
-    pub fn new() -> Self {
-        Self { stock: vec![0.0; CHEMICAL_COUNT] }
-    }
+/// Stride between successive regions' chem blocks. Always equals
+/// `CHEMICAL_COUNT`. Exposed so the diffusion pass can iterate per-chem
+/// without recomputing.
+pub const AMBIENT_STRIDE: usize = CHEMICAL_COUNT;
 
-    /// Pour `mass` of chem `id` into the ambient field. Called by the
-    /// death pass when a cell autolyses.
-    pub fn deposit(&mut self, chem_id: usize, mass: f32) {
-        if let Some(slot) = self.stock.get_mut(chem_id) {
-            *slot += mass;
+impl AmbientField {
+    /// Empty single-region grid (no AMBIENT_TARGET seed). Suitable
+    /// for tests that compare against absolute mass totals.
+    /// Production code calls `new_for_world` which seeds the
+    /// per-region O2/CO2 equilibrium floors.
+    pub fn new() -> Self {
+        Self {
+            width: REGION_PX,
+            height: REGION_PX,
+            cols: 1,
+            rows: 1,
+            dissolved: vec![0.0; AMBIENT_STRIDE],
         }
     }
 
-    /// Total ambient mass across all chems. Snapshot stat.
+    /// Per-region grid sized for the world, seeded with `AMBIENT_TARGET`
+    /// per region (O2 + CO2 floors; everything else 0). This is the
+    /// "every region starts at the equilibrium target" seed that keeps
+    /// the first ticks from being dominated by ambient transients.
+    pub fn new_for_world(width: f32, height: f32) -> Self {
+        let cols = region_cols(width);
+        let rows = region_rows(height);
+        let n = cols * rows;
+        let target = ambient_target();
+        let mut dissolved = vec![0.0; n * AMBIENT_STRIDE];
+        for r in 0..n {
+            let base = r * AMBIENT_STRIDE;
+            for (k, &v) in target.iter().enumerate().take(AMBIENT_STRIDE) {
+                dissolved[base + k] = v;
+            }
+        }
+        Self {
+            width,
+            height,
+            cols,
+            rows,
+            dissolved,
+        }
+    }
+
+    /// Region index for (x, y), clamped to bounds.
+    #[inline]
+    fn region_idx(&self, x: f32, y: f32) -> usize {
+        region_index_at(self.width, self.height, x, y)
+    }
+
+    /// Base offset into `dissolved` for the region containing (x, y).
+    #[inline]
+    fn base_at(&self, x: f32, y: f32) -> usize {
+        self.region_idx(x, y) * AMBIENT_STRIDE
+    }
+
+    /// Read dissolved mass of `chem` at (x, y).
+    pub fn at(&self, chem: usize, x: f32, y: f32) -> f32 {
+        self.dissolved[self.base_at(x, y) + chem]
+    }
+
+    /// Deposit `mass` of `chem` into the region containing (x, y).
+    pub fn deposit_at(&mut self, chem: usize, mass: f32, x: f32, y: f32) {
+        if mass <= 0.0 {
+            return;
+        }
+        let base = self.base_at(x, y);
+        self.dissolved[base + chem] += mass;
+    }
+
+    /// Withdraw at most `want` of `chem` from the region containing
+    /// (x, y); returns the actual amount taken (bounded by what the
+    /// region holds). Mass-conserving with the caller adding the
+    /// return value somewhere else.
+    pub fn take_at(&mut self, chem: usize, want: f32, x: f32, y: f32) -> f32 {
+        if want <= 0.0 {
+            return 0.0;
+        }
+        let base = self.base_at(x, y);
+        let slot = &mut self.dissolved[base + chem];
+        let taken = want.min(*slot);
+        *slot -= taken;
+        taken
+    }
+
+    /// Sum across all regions of all chems. Snapshot stat.
     pub fn total(&self) -> f32 {
-        self.stock.iter().sum()
+        self.dissolved.iter().sum()
+    }
+
+    /// Sum across all regions of a single chem.
+    pub fn total_per_chem(&self, chem: usize) -> f32 {
+        let n = self.cols * self.rows;
+        let mut s = 0.0;
+        for r in 0..n {
+            s += self.dissolved[r * AMBIENT_STRIDE + chem];
+        }
+        s
+    }
+
+    /// Per-chem total vector (length = CHEMICAL_COUNT). Used by the
+    /// snapshot's `ambient_chems` so clients can show the world-wide
+    /// dissolved roster without iterating regions.
+    pub fn totals_per_chem(&self) -> Vec<f32> {
+        let mut out = vec![0.0; AMBIENT_STRIDE];
+        let n = self.cols * self.rows;
+        for r in 0..n {
+            let b = r * AMBIENT_STRIDE;
+            for (k, slot) in out.iter_mut().enumerate().take(AMBIENT_STRIDE) {
+                *slot += self.dissolved[b + k];
+            }
+        }
+        out
     }
 }
 
@@ -69,32 +178,83 @@ const LEAK_PER_S: f32 = 0.005;
 /// drift.
 const UPTAKE_PER_S: f32 = 0.005;
 
-/// Run leak + uptake against every cell, mass-conservingly. Skipped
-/// per chem when the cell has no pool AND the ambient has no stock
-/// (the common case for sensor activation chems).
+/// Run leak + uptake against every cell at its local region.
+/// Mass-conservingly. Skips signal chems (activation pool slots that
+/// carry signed amplitudes, not physical mass).
 pub fn run_ambient_exchange(creatures: &mut CreatureStore, ambient: &mut AmbientField, dt: f32) {
     let leak_frac = (LEAK_PER_S * dt).min(1.0);
     let uptake_frac = (UPTAKE_PER_S * dt).min(1.0);
     let n = creatures.n;
-    for chem_id in 0..NAMED_CHEMICAL_COUNT {
-        // Signal chems are the activation-pool slots that carry
-        // signed amplitudes, not physical mass. Excluding them keeps
-        // mass balance honest.
-        if crate::chem_ids::is_signal(chem_id) {
-            continue;
-        }
-        let col = &mut creatures.chems[chem_id];
-        let ambient_slot = &mut ambient.stock[chem_id];
-        for slot in col.iter_mut().take(n) {
-            let cell_amount = *slot;
+    for i in 0..n {
+        let x = creatures.x[i];
+        let y = creatures.y[i];
+        for chem in 0..NAMED_CHEMICAL_COUNT {
+            if crate::chem_ids::is_signal(chem) {
+                continue;
+            }
+            let cell_amount = creatures.chems[chem][i];
             // Leak cell -> ambient.
             let leak = cell_amount * leak_frac;
-            *slot = cell_amount - leak;
-            *ambient_slot += leak;
-            // Uptake ambient -> cell.
-            let uptake = *ambient_slot * uptake_frac;
-            *ambient_slot -= uptake;
-            *slot += uptake;
+            creatures.chems[chem][i] -= leak;
+            ambient.deposit_at(chem, leak, x, y);
+            // Uptake ambient -> cell. Compute desired against current
+            // slot, then take_at honours availability (idempotent if
+            // another cell drained the slot earlier this pass).
+            let desired = ambient.at(chem, x, y) * uptake_frac;
+            let taken = ambient.take_at(chem, desired, x, y);
+            creatures.chems[chem][i] += taken;
+        }
+    }
+}
+
+/// Jacobi cross-region diffusion of the dissolved field. Smears out
+/// per-region gradients toward a uniform world value with a
+/// ~60-second half-life across the longest wavelength. No temperature
+/// scaling yet (depends on regionTemp), no solid-rock barrier yet
+/// (depends on terrain). Mass-conserving: each pair-wise exchange
+/// adds and removes the same amount, scratch-buffered so order /
+/// direction don't matter.
+pub fn diffuse_dissolved(ambient: &mut AmbientField, dt: f32) {
+    let cols = ambient.cols;
+    let rows = ambient.rows;
+    let n = cols * rows;
+    if n < 2 {
+        return;
+    }
+    // Per-edge exchange fraction. Lambda = ln(2) / ticks_to_halflife;
+    // alpha solves lambda = alpha * (pi/N)^2 for the longest-wavelength
+    // mode (small-mode approximation). Clamped to 0.1 well under the
+    // 2-D explicit stability ceiling.
+    const HALFLIFE_S: f32 = 60.0;
+    let n_max = cols.max(rows) as f32;
+    let ticks = HALFLIFE_S / dt.max(1e-6);
+    let wmode = std::f32::consts::PI / n_max;
+    let mut alpha = std::f32::consts::LN_2 / (ticks * wmode * wmode);
+    if alpha > 0.1 {
+        alpha = 0.1;
+    }
+    let old = ambient.dissolved.clone();
+    for ry in 0..rows {
+        for rx in 0..cols {
+            let ri = ry * cols + rx;
+            let base = ri * AMBIENT_STRIDE;
+            // Four neighbour indices (or -1 = none).
+            let nbs: [Option<usize>; 4] = [
+                if rx > 0 { Some(ri - 1) } else { None },
+                if rx < cols - 1 { Some(ri + 1) } else { None },
+                if ry > 0 { Some(ri - cols) } else { None },
+                if ry < rows - 1 { Some(ri + cols) } else { None },
+            ];
+            for nb in nbs.iter().flatten() {
+                let jb = nb * AMBIENT_STRIDE;
+                for k in 0..AMBIENT_STRIDE {
+                    let oi = old[base + k];
+                    let oj = old[jb + k];
+                    if oi != oj {
+                        ambient.dissolved[base + k] += alpha * (oj - oi);
+                    }
+                }
+            }
         }
     }
 }
@@ -105,55 +265,114 @@ mod tests {
     use crate::chem_ids::{CHEM_GLU, NAMED_CHEMICAL_COUNT};
     use crate::creatures::CreatureInit;
 
-    fn make_cell(glu: f32) -> CreatureStore {
+    fn make_cell_at(glu: f32, x: f32, y: f32) -> CreatureStore {
         let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
         chems[CHEM_GLU] = glu;
         let mut s = CreatureStore::new();
-        s.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
+        s.push(CreatureInit {
+            x,
+            y,
+            r: 8.0,
+            chems: Some(chems),
+            ..CreatureInit::default()
+        });
         s
     }
 
     #[test]
     fn high_cell_leaks_into_empty_ambient() {
-        let mut cs = make_cell(100.0);
+        let mut cs = make_cell_at(100.0, 25.0, 25.0);
         let mut amb = AmbientField::new();
         run_ambient_exchange(&mut cs, &mut amb, 1.0);
         assert!(cs.chems[CHEM_GLU][0] < 100.0, "cell should leak");
-        assert!(amb.stock[CHEM_GLU] > 0.0, "ambient should gain");
+        assert!(amb.at(CHEM_GLU, 25.0, 25.0) > 0.0, "ambient should gain");
     }
 
     #[test]
     fn high_ambient_seeps_into_empty_cell() {
-        let mut cs = make_cell(0.0);
+        let mut cs = make_cell_at(0.0, 25.0, 25.0);
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 100.0;
+        amb.deposit_at(CHEM_GLU, 100.0, 25.0, 25.0);
         run_ambient_exchange(&mut cs, &mut amb, 1.0);
         assert!(cs.chems[CHEM_GLU][0] > 0.0, "cell should take up");
-        assert!(amb.stock[CHEM_GLU] < 100.0, "ambient should drop");
+        assert!(amb.at(CHEM_GLU, 25.0, 25.0) < 100.0, "ambient should drop");
     }
 
     #[test]
     fn mass_is_conserved_per_chem() {
-        let mut cs = make_cell(60.0);
+        let mut cs = make_cell_at(60.0, 25.0, 25.0);
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 40.0;
-        let total0 = cs.chems[CHEM_GLU][0] + amb.stock[CHEM_GLU];
+        amb.deposit_at(CHEM_GLU, 40.0, 25.0, 25.0);
+        let total0 = cs.chems[CHEM_GLU][0] + amb.total_per_chem(CHEM_GLU);
         run_ambient_exchange(&mut cs, &mut amb, 1.0);
-        let total1 = cs.chems[CHEM_GLU][0] + amb.stock[CHEM_GLU];
-        assert!((total1 - total0).abs() < 1e-3, "mass should be conserved: {total0} -> {total1}");
+        let total1 = cs.chems[CHEM_GLU][0] + amb.total_per_chem(CHEM_GLU);
+        assert!(
+            (total1 - total0).abs() < 1e-3,
+            "mass should be conserved: {total0} -> {total1}"
+        );
     }
 
     #[test]
     fn signal_chems_are_skipped() {
-        // CHEM_ACT_PHOTO_VISIBLE = 16 is a signal chem; the leak
-        // pass must not touch it.
         let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
         chems[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE] = 7.0;
         let mut cs = CreatureStore::new();
-        cs.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
+        cs.push(CreatureInit {
+            x: 25.0,
+            y: 25.0,
+            r: 8.0,
+            chems: Some(chems),
+            ..CreatureInit::default()
+        });
         let mut amb = AmbientField::new();
         run_ambient_exchange(&mut cs, &mut amb, 1.0);
         assert_eq!(cs.chems[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE][0], 7.0);
-        assert_eq!(amb.stock[crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE], 0.0);
+        assert_eq!(
+            amb.at(crate::chem_ids::CHEM_ACT_PHOTO_VISIBLE, 25.0, 25.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn region_isolation_keeps_local_deposits_local() {
+        // 200x200 world -> 4x4 = 16 regions. Depositing in the corner
+        // shouldn't immediately appear in the far corner.
+        let mut amb = AmbientField::new_for_world(200.0, 200.0);
+        amb.deposit_at(CHEM_GLU, 100.0, 10.0, 10.0);
+        assert!(amb.at(CHEM_GLU, 10.0, 10.0) >= 100.0);
+        // Far corner only carries the seeded AMBIENT_TARGET (0 for GLU).
+        assert_eq!(amb.at(CHEM_GLU, 190.0, 190.0), 0.0);
+    }
+
+    #[test]
+    fn jacobi_diffusion_spreads_gradient_and_conserves_mass() {
+        let mut amb = AmbientField::new_for_world(200.0, 200.0);
+        amb.deposit_at(CHEM_GLU, 100.0, 10.0, 10.0);
+        let before = amb.total_per_chem(CHEM_GLU);
+        // Run a handful of diffusion ticks; mass leaks into neighbours.
+        for _ in 0..60 {
+            diffuse_dissolved(&mut amb, 1.0);
+        }
+        let after = amb.total_per_chem(CHEM_GLU);
+        assert!(
+            (after - before).abs() < 1e-2,
+            "diffusion should conserve mass: {before} -> {after}"
+        );
+        // The far corner should now hold some of the originally-corner
+        // mass.
+        assert!(
+            amb.at(CHEM_GLU, 190.0, 190.0) > 0.0,
+            "gradient should have spread to the far corner"
+        );
+    }
+
+    #[test]
+    fn totals_per_chem_sums_across_regions() {
+        let mut amb = AmbientField::new_for_world(200.0, 200.0);
+        amb.deposit_at(CHEM_GLU, 10.0, 10.0, 10.0);
+        amb.deposit_at(CHEM_GLU, 20.0, 110.0, 10.0);
+        amb.deposit_at(CHEM_GLU, 30.0, 110.0, 110.0);
+        let totals = amb.totals_per_chem();
+        assert!((totals[CHEM_GLU] - 60.0).abs() < 1e-3);
     }
 }

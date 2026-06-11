@@ -35,7 +35,6 @@ pub fn run_maintenance(store: &mut CreatureStore, ambient: &mut AmbientField, dt
     let dt_atp_mass = MASS_METABOLIC_ATP_PER_S * dt;
     let dt_mem = BASE_METABOLIC_MEMBRANE_PER_S * dt;
     let n = store.n;
-    let mut waste_emitted = 0.0_f32;
     for i in 0..n {
         let total_mass: f32 = store.chems.iter().map(|c| c[i]).sum();
         let atp_cost = dt_atp_base + dt_atp_mass * total_mass;
@@ -48,10 +47,11 @@ pub fn run_maintenance(store: &mut CreatureStore, ambient: &mut AmbientField, dt
         let mem = store.chems[CHEM_MEMBRANE][i];
         let mem_lost = dt_mem.min(mem);
         store.chems[CHEM_MEMBRANE][i] = mem - mem_lost;
-        waste_emitted += mem_lost;
-    }
-    if waste_emitted > 0.0 {
-        ambient.deposit(CHEM_WASTE, waste_emitted);
+        // WASTE deposits into the cell's local region (was a single
+        // global lump pre-regions; now positional).
+        if mem_lost > 0.0 {
+            ambient.deposit_at(CHEM_WASTE, mem_lost, store.x[i], store.y[i]);
+        }
     }
 }
 

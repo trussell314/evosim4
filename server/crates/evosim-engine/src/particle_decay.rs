@@ -50,19 +50,21 @@ pub fn run_particle_decay(store: &mut ParticleStore, ambient: &mut AmbientField,
         let r_old = store.r[i];
         store.age[i] += dt;
         store.r[i] = (r_old - RADIUS_SHRINK_PER_S * dt).max(0.0);
-        // Mass lost to shrinkage -> ambient.
+        let px = store.x[i];
+        let py = store.y[i];
+        // Mass lost to shrinkage -> local region's dissolved field.
         if chem_id < CHEMICAL_COUNT {
             let dissolved = particle_mass(r_old, density) - particle_mass(store.r[i], density);
             if dissolved > 0.0 {
-                ambient.deposit(chem_id, dissolved);
+                ambient.deposit_at(chem_id, dissolved, px, py);
             }
         }
         if store.age[i] >= MAX_AGE_S || store.r[i] <= MIN_RADIUS {
-            // Cull: deposit remaining mass.
+            // Cull: deposit remaining mass at the particle's last position.
             if chem_id < CHEMICAL_COUNT {
                 let remaining = particle_mass(store.r[i], density);
                 if remaining > 0.0 {
-                    ambient.deposit(chem_id, remaining);
+                    ambient.deposit_at(chem_id, remaining, px, py);
                 }
             }
             store.remove_swap_pop(i);

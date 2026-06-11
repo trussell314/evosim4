@@ -245,14 +245,19 @@ impl Engine {
         // field bounded so a long-running session doesn't grow the
         // particle store without limit.
         particle_decay::run_particle_decay(&mut self.world.particle_store, &mut self.world.ambient, dt as f32);
-        // Ambient exchange: cells leak chems into the world-wide
-        // ambient pool and pull a little out. Mass-conserving per
+        // Ambient exchange: cells leak chems into their local region's
+        // dissolved field and pull a little out. Mass-conserving per
         // chem so the food web has a slow background mixer.
         ambient::run_ambient_exchange(
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
         );
+        // Regional dissolved diffusion: smear out per-region gradients
+        // with a ~60s domain-spanning half-life. Mass-conserving Jacobi
+        // pass; no temperature scaling or rock barriers yet (depend on
+        // the vent / terrain ports).
+        ambient::diffuse_dissolved(&mut self.world.ambient, dt as f32);
         // Catalyst-gated transporter reactions: cells with a
         // catalyst pool for a specific transport slot move that
         // chem cell <-> ambient down its concentration gradient.
@@ -446,7 +451,7 @@ impl Engine {
             ambient_light,
             top_species,
             bonds: bond_pairs,
-            ambient_chems: self.world.ambient.stock.clone(),
+            ambient_chems: self.world.ambient.totals_per_chem(),
             mass: mass::report(
                 &self.world.creature_store,
                 &self.world.particle_store,

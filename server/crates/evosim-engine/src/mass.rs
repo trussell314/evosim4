@@ -57,13 +57,14 @@ pub fn report(
         }
     }
 
-    // Ambient (count -> mass).
-    for k in 0..ambient.stock.len() {
+    // Ambient (count -> mass). Sums across all regions per chem.
+    let totals = ambient.totals_per_chem();
+    for (k, &count) in totals.iter().enumerate() {
         if is_signal(k) {
             continue;
         }
         let mm = if k < molar.len() { molar[k] as f64 } else { 1.0 };
-        r.ambient += ambient.stock[k] as f64 * mm;
+        r.ambient += count as f64 * mm;
     }
 
     // Particles.
@@ -118,7 +119,7 @@ mod tests {
     fn ambient_counted_in_total() {
         let cs = CreatureStore::new();
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 7.0;
+        amb.deposit_at(CHEM_GLU, 7.0, 0.0, 0.0);
         let r = report(&cs, &ParticleStore::new(), &amb);
         assert!((r.ambient - 7.0).abs() < 1e-3);
     }

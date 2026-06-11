@@ -46,25 +46,27 @@ pub fn run_transport_reactions(creatures: &mut CreatureStore, ambient: &mut Ambi
             if pool <= 0.0 {
                 continue;
             }
+            let cx = creatures.x[i];
+            let cy = creatures.y[i];
             let cell = creatures.chems[chem_id][i];
-            let amb = ambient.stock[chem_id];
-            let gradient = cell - amb;
+            let amb_local = ambient.at(chem_id, cx, cy);
+            let gradient = cell - amb_local;
             if gradient.abs() < 1e-6 {
                 continue;
             }
             // Facilitated rate. Signed: positive gradient -> export
-            // (cell -> ambient).
+            // (cell -> local region).
             let rate = vmax * (pool / CAT_REF) * gradient;
             let mut flux = rate * dt;
-            // Bound the flux by the source's available mass.
             if flux > 0.0 {
                 flux = flux.min(cell);
                 creatures.chems[chem_id][i] = cell - flux;
-                ambient.deposit(chem_id, flux);
+                ambient.deposit_at(chem_id, flux, cx, cy);
             } else {
-                flux = (-flux).min(amb);
-                ambient.stock[chem_id] -= flux;
-                creatures.chems[chem_id][i] += flux;
+                let want = -flux;
+                let taken = ambient.take_at(chem_id, want, cx, cy);
+                creatures.chems[chem_id][i] += taken;
+                flux = taken;
             }
             if flux > 0.0 {
                 flux_events += 1;
@@ -100,7 +102,7 @@ mod tests {
         // No catalyst pool means no flux.
         run_transport_reactions(&mut cs, &mut amb, 1.0);
         assert_eq!(cs.chems[CHEM_GLU][0], 50.0);
-        assert_eq!(amb.stock[CHEM_GLU], 0.0);
+        assert_eq!(amb.at(CHEM_GLU, 0.0, 0.0), 0.0);
     }
 
     #[test]
@@ -111,7 +113,7 @@ mod tests {
         run_transport_reactions(&mut cs, &mut amb, 1.0);
         // Cell GLU should drop, ambient should gain.
         assert!(cs.chems[CHEM_GLU][0] < 50.0);
-        assert!(amb.stock[CHEM_GLU] > 0.0);
+        assert!(amb.at(CHEM_GLU, 0.0, 0.0) > 0.0);
     }
 
     #[test]
@@ -119,10 +121,10 @@ mod tests {
         let mut cs = make_cell(0.0);
         cs.catalyst[TRANSPORT_GLU_SLOT][0] = 5.0;
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 50.0;
+        amb.deposit_at(CHEM_GLU, 50.0, 0.0, 0.0);
         run_transport_reactions(&mut cs, &mut amb, 1.0);
         assert!(cs.chems[CHEM_GLU][0] > 0.0);
-        assert!(amb.stock[CHEM_GLU] < 50.0);
+        assert!(amb.at(CHEM_GLU, 0.0, 0.0) < 50.0);
     }
 
     #[test]
@@ -131,12 +133,12 @@ mod tests {
         let mut cs = make_cell(20.0);
         cs.catalyst[TRANSPORT_GLU_SLOT][0] = 5.0;
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 20.0;
+        amb.deposit_at(CHEM_GLU, 20.0, 0.0, 0.0);
         let cell_before = cs.chems[CHEM_GLU][0];
-        let amb_before = amb.stock[CHEM_GLU];
+        let amb_before = amb.at(CHEM_GLU, 0.0, 0.0);
         run_transport_reactions(&mut cs, &mut amb, 1.0);
         assert!((cs.chems[CHEM_GLU][0] - cell_before).abs() < 1e-3);
-        assert!((amb.stock[CHEM_GLU] - amb_before).abs() < 1e-3);
+        assert!((amb.at(CHEM_GLU, 0.0, 0.0) - amb_before).abs() < 1e-3);
     }
 
     #[test]
@@ -144,10 +146,10 @@ mod tests {
         let mut cs = make_cell(40.0);
         cs.catalyst[TRANSPORT_GLU_SLOT][0] = 2.0;
         let mut amb = AmbientField::new();
-        amb.stock[CHEM_GLU] = 10.0;
-        let total0 = cs.chems[CHEM_GLU][0] + amb.stock[CHEM_GLU];
+        amb.deposit_at(CHEM_GLU, 10.0, 0.0, 0.0);
+        let total0 = cs.chems[CHEM_GLU][0] + amb.at(CHEM_GLU, 0.0, 0.0);
         run_transport_reactions(&mut cs, &mut amb, 1.0);
-        let total1 = cs.chems[CHEM_GLU][0] + amb.stock[CHEM_GLU];
+        let total1 = cs.chems[CHEM_GLU][0] + amb.at(CHEM_GLU, 0.0, 0.0);
         assert!((total1 - total0).abs() < 1e-3);
     }
 }

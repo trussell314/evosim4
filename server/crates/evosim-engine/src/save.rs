@@ -35,9 +35,12 @@ use crate::world::World;
 ///   1 -- foundational SavedWorld (world dims, RNG, particles, creatures)
 ///   2 -- adds ambient field + day_period_s
 ///   3 -- adds eDNA field
+///   4 -- regional dissolved field (was flat `stock[chem]`,
+///        now per-region `dissolved[region*chems+chem]` + cols/rows
+///        + world dims duplicated for self-validation)
 pub fn save_schema() -> String {
     format!(
-        "evosim-native:3:{}:{}:{}",
+        "evosim-native:4:{}:{}:{}",
         CATALYST_COUNT, CHEMICAL_COUNT, NAMED_CHEMICAL_COUNT
     )
 }

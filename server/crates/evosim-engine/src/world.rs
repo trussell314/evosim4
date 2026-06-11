@@ -103,7 +103,7 @@ impl World {
             depth: crate::regions::REGION_PX,
             particle_store: ParticleStore::new(),
             creature_store: CreatureStore::new(),
-            ambient: AmbientField::new(),
+            ambient: AmbientField::new_for_world(width, height),
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 
@@ -140,7 +140,7 @@ impl World {
         self.t = 0.0;
         self.particle_store.clear();
         self.creature_store.clear();
-        self.ambient = AmbientField::new();
+        self.ambient = AmbientField::new_for_world(self.width, self.height);
         self.edna = EdnaField::new();
     }
 }

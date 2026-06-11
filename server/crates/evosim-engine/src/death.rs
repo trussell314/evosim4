@@ -90,7 +90,7 @@ pub fn run_death(
                 // remaining chem mass exactly. That keeps total
                 // world mass invariant across an autolysis event.
                 let dissolved_count = amount * AMBIENT_DISSOLVE_FRACTION;
-                ambient.deposit(k, dissolved_count);
+                ambient.deposit_at(k, dissolved_count, cx, cy);
 
                 let particle_count = amount - dissolved_count;
                 let mass = particle_count * chem_mm[k];
