@@ -34,9 +34,12 @@ const MIN_TOTAL_MASS: f32 = 0.1;
 /// the rare borderline death so we don't spam particles for tiny
 /// fractional pools.
 const PARTICLE_EMIT_THRESHOLD: f32 = 0.05;
-/// Particle radius for autolysed chem releases. Same scale as the
-/// demo particle seeder.
-const AUTOLYSED_PARTICLE_R: f32 = 2.0;
+/// Floor on the radius of an autolysed particle so the renderer can
+/// see it. Real radius is sized to carry the chem's mass exactly.
+const MIN_AUTOLYSED_R: f32 = 0.4;
+/// Upper cap so a giant cell's autolysis particles don't dwarf the
+/// world.
+const MAX_AUTOLYSED_R: f32 = 6.0;
 
 /// Walk the creature store, killing every cell that fails viability
 /// and emitting its remaining named-chem mass as particles. Returns
@@ -74,22 +77,33 @@ pub fn run_death(
         let cx = creatures.x[i];
         let cy = creatures.y[i];
         if total_mass >= MIN_TOTAL_MASS {
+            let chem_density = &crate::chemistry::table().base_density;
+            let chem_mm = &crate::chemistry::table().molar_mass;
             for k in 0..NAMED_CHEMICAL_COUNT {
                 let amount = creatures.chems[k][i];
                 if amount < PARTICLE_EMIT_THRESHOLD {
                     continue;
                 }
-                // Split the chem between the ambient field and a
-                // particle, so the food web has both a long-range
-                // signal and a local nutrient pile.
-                let dissolved = amount * AMBIENT_DISSOLVE_FRACTION;
-                ambient.deposit(k, dissolved);
+                // Split: AMBIENT_DISSOLVE_FRACTION dissolves into
+                // ambient (in count units), the remainder becomes a
+                // particle SIZED so its volume*density equals the
+                // remaining chem mass exactly. That keeps total
+                // world mass invariant across an autolysis event.
+                let dissolved_count = amount * AMBIENT_DISSOLVE_FRACTION;
+                ambient.deposit(k, dissolved_count);
+
+                let particle_count = amount - dissolved_count;
+                let mass = particle_count * chem_mm[k];
+                let density = chem_density[k].max(1e-3);
+                // r = (3 * mass / (4 pi density))^(1/3)
+                let r_cubed = (3.0 * mass) / (4.0 * std::f32::consts::PI * density);
+                let r = r_cubed.cbrt().clamp(MIN_AUTOLYSED_R, MAX_AUTOLYSED_R);
                 let jitter_x = (rng.next_f64() as f32 - 0.5) * 8.0;
                 let jitter_y = (rng.next_f64() as f32 - 0.5) * 8.0;
                 particles.push(ParticleInit {
                     x: cx + jitter_x,
                     y: cy + jitter_y,
-                    r: AUTOLYSED_PARTICLE_R,
+                    r,
                     chem_id: k as u8,
                     ..ParticleInit::default()
                 });

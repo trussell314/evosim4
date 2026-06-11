@@ -30,17 +30,23 @@ pub fn report(
     let mut r = MassReport::default();
     let n = creatures.n;
 
-    // Cell chem pools.
+    // Cell chem pools (count -> mass via per-chem molar mass).
+    let molar = &chem_table().molar_mass;
     if !creatures.chems.is_empty() {
         for k in 0..NAMED_CHEMICAL_COUNT {
             if is_signal(k) {
                 continue;
             }
+            let mm = molar[k] as f64;
             let col = &creatures.chems[k];
-            r.cell_chems += col.iter().take(n).map(|&v| v as f64).sum::<f64>();
+            r.cell_chems +=
+                col.iter().take(n).map(|&v| v as f64 * mm).sum::<f64>();
         }
     }
-    // Catalysts + inhibitors.
+    // Catalysts + inhibitors are protein-like and don't have a
+    // table molar mass; treat them as molar_mass=1 (they were
+    // synthesised from 0.5 AA + 0.5 MIN at substrate mass 1, so
+    // mass-conserving math works at = 1).
     if !creatures.catalyst.is_empty() {
         for k in 0..CATALYST_COUNT {
             let cc = &creatures.catalyst[k];
@@ -50,12 +56,13 @@ pub fn report(
         }
     }
 
-    // Ambient.
+    // Ambient (count -> mass).
     for k in 0..ambient.stock.len() {
         if is_signal(k) {
             continue;
         }
-        r.ambient += ambient.stock[k] as f64;
+        let mm = if k < molar.len() { molar[k] as f64 } else { 1.0 };
+        r.ambient += ambient.stock[k] as f64 * mm;
     }
 
     // Particles.
