@@ -15,6 +15,7 @@ pub mod creature_update;
 pub mod creatures;
 pub mod day_cycle;
 pub mod death;
+pub mod describe;
 pub mod excrete_transport;
 pub mod forces;
 pub mod founders;
@@ -272,11 +273,16 @@ impl Engine {
         let top_species: Vec<evosim_protocol::SpeciesSummary> = ranked
             .iter()
             .take(TOP_SPECIES_MAX)
-            .map(|(key, count)| evosim_protocol::SpeciesSummary {
-                coding_key: key.clone(),
-                count: *count,
-                color: species_color_from_key(key),
-                genome: representative_genome.get(key).cloned().unwrap_or_default(),
+            .map(|(key, count)| {
+                let genome = representative_genome.get(key).cloned().unwrap_or_default();
+                let description = describe::describe(&genome);
+                evosim_protocol::SpeciesSummary {
+                    coding_key: key.clone(),
+                    count: *count,
+                    color: species_color_from_key(key),
+                    genome,
+                    description,
+                }
             })
             .collect();
         // Build a key -> index map so per-cell coloring is O(1).

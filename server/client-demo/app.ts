@@ -10,7 +10,7 @@ interface BuildInfo { version: string; commit: string; built_at: number; }
 interface ServerCaps { gpu_compute: boolean; cpu_threads: number; admin: boolean; }
 interface NamedBlob { name: string; stride: number; data: Uint8Array; }
 interface Soa { count: number; blobs: NamedBlob[]; }
-interface SpeciesSummary { coding_key: string; count: number; color: string; genome?: Uint8Array; }
+interface SpeciesSummary { coding_key: string; count: number; color: string; genome?: Uint8Array; description?: string; }
 // Minimal op-name lookup so the client can render a basic disasm. Not
 // exhaustive -- enough for the demo. Mirrors src/genome.rs.
 const OP_NAMES: Record<number, string> = {
@@ -305,12 +305,14 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
     }
     li.onclick = () => {
       selectedSpeciesKey = s.coding_key;
+      const parts: string[] = [];
+      if (s.description) parts.push(s.description);
       const genome = s.genome;
       if (genome && genome.length > 0) {
-        disasmEl.textContent = disassemble(genome instanceof Uint8Array ? genome : new Uint8Array(genome));
-      } else {
-        disasmEl.textContent = "(no genome bytes)";
+        parts.push("");
+        parts.push(disassemble(genome instanceof Uint8Array ? genome : new Uint8Array(genome)));
       }
+      disasmEl.textContent = parts.length > 0 ? parts.join("\n") : "(no genome bytes)";
     };
     speciesList.appendChild(li);
   }

@@ -127,6 +127,11 @@ pub struct SpeciesSummary {
     #[serde(default)]
     #[serde(with = "serde_bytes")]
     pub genome: Vec<u8>,
+    /// Server-rendered plain-English summary of what this genome
+    /// does. Multi-line. Lets the client show a description without
+    /// shipping the opcode table or duplicating the describer.
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
