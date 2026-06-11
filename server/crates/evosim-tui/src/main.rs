@@ -30,7 +30,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Sparkline};
 use ratatui::Terminal;
 use std::io::stdout;
 use std::sync::Arc;
@@ -53,6 +53,12 @@ struct Cli {
     token: Option<String>,
 }
 
+/// Number of history samples kept for the sparklines. At the
+/// snapshot cadence (10 Hz on the server) 600 samples is ~ 60 sec
+/// of recent state -- enough trajectory to see population trends
+/// without scrolling the data.
+const HISTORY_LEN: usize = 600;
+
 #[derive(Default)]
 struct UiState {
     last_snapshot: Option<Snapshot>,
@@ -63,6 +69,24 @@ struct UiState {
     admin: bool,
     connected: bool,
     err: Option<String>,
+    /// Rolling history rings for sparklines. Oldest at the front.
+    history_cells: std::collections::VecDeque<u64>,
+    history_species: std::collections::VecDeque<u64>,
+    history_mass: std::collections::VecDeque<u64>,
+}
+
+impl UiState {
+    fn push_history(&mut self, snap: &Snapshot) {
+        if self.history_cells.len() >= HISTORY_LEN {
+            self.history_cells.pop_front();
+            self.history_species.pop_front();
+            self.history_mass.pop_front();
+        }
+        self.history_cells.push_back(snap.creatures.count as u64);
+        self.history_species.push_back(snap.species_count as u64);
+        // Mass to u64 (sparkline wants u64). Total fits comfortably.
+        self.history_mass.push_back(snap.mass.total.max(0.0) as u64);
+    }
 }
 
 #[tokio::main]
@@ -122,6 +146,7 @@ async fn main() -> Result<()> {
                     );
                 }
                 ServerMessage::Snapshot(s) => {
+                    u.push_history(&s);
                     u.last_snapshot = Some(s);
                     u.last_snapshot_at = Some(Instant::now());
                 }
@@ -271,6 +296,9 @@ struct UiView {
     admin: bool,
     connected: bool,
     err: Option<String>,
+    history_cells: Vec<u64>,
+    history_species: Vec<u64>,
+    history_mass: Vec<u64>,
 }
 
 impl UiState {
@@ -284,6 +312,9 @@ impl UiState {
             admin: self.admin,
             connected: self.connected,
             err: self.err.clone(),
+            history_cells: self.history_cells.iter().copied().collect(),
+            history_species: self.history_species.iter().copied().collect(),
+            history_mass: self.history_mass.iter().copied().collect(),
         }
     }
 }
@@ -304,8 +335,55 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
         .constraints([Constraint::Min(0), Constraint::Length(48)])
         .split(chunks[1]);
     render_map(f, body[0], u);
-    render_species(f, body[1], u);
+    // Right column: species roster on top, history sparklines below.
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(11)])
+        .split(body[1]);
+    render_species(f, right[0], u);
+    render_history(f, right[1], u);
     render_help(f, chunks[2], u);
+}
+
+fn render_history(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
+    let block = Block::default().borders(Borders::ALL).title("history (~60s)");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height < 3 || u.history_cells.is_empty() {
+        return;
+    }
+    // Three stacked sparklines: cells, species, mass.
+    let h = inner.height as usize;
+    let row = (h / 3).max(1) as u16;
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(row),
+            Constraint::Length(row),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+    let cell_max = *u.history_cells.iter().max().unwrap_or(&1);
+    let spc_max = *u.history_species.iter().max().unwrap_or(&1);
+    let mass_max = *u.history_mass.iter().max().unwrap_or(&1);
+    let cells = Sparkline::default()
+        .block(Block::default().title(format!("cells ({})", cell_max)))
+        .data(&u.history_cells)
+        .style(Style::default().fg(Color::LightGreen))
+        .max(cell_max.max(1));
+    let species = Sparkline::default()
+        .block(Block::default().title(format!("species ({})", spc_max)))
+        .data(&u.history_species)
+        .style(Style::default().fg(Color::LightCyan))
+        .max(spc_max.max(1));
+    let mass = Sparkline::default()
+        .block(Block::default().title(format!("mass ({})", mass_max)))
+        .data(&u.history_mass)
+        .style(Style::default().fg(Color::LightYellow))
+        .max(mass_max.max(1));
+    f.render_widget(cells, layout[0]);
+    f.render_widget(species, layout[1]);
+    f.render_widget(mass, layout[2]);
 }
 
 fn render_status(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
