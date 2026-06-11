@@ -310,6 +310,69 @@ Live smoke after this session's commits:
 Five sim-minutes of stable evolutionary equilibrium with mass
 conservation provable from a snapshot.
 
+### Sensor activation pass -- ALL 7 modalities
+
+The activation pass now covers every receptor/activation chem pair
+the chemistry table defines:
+
+  - photo (visible/long/surface bands) -- ambient_light from day
+    cycle PLUS bioluminescence (EMIT[1] from nearby cells via
+    1/dsq weighting)
+  - electric (xy) -- nearby cells' ATP + EMIT[0]
+  - vibration (xy) -- particle motion + nearby cells' EMIT[2]
+  - pH (scalar) -- local + ambient CO2
+  - magnetic (xy) -- uniform world compass (+y)
+  - thermal (scalar) -- linear depth gradient TEMP_TOP -> TEMP_BOTTOM
+  - mechanical (xy) -- cell's own velocity
+
+That's 13 activation channels across 9 receptor chems. The VM's
+SENSE_CHEMICAL on every CHEM_ACT_* slot is a real environmental
+signal.
+
+### EMIT op consumption
+
+The VM's EMIT op was inert. Now active emission feeds the
+activation pass:
+  - EMIT[0] electric    -> electroreceptor source (500x stronger
+                          than passive ATP per unit)
+  - EMIT[1] light       -> photoreceptor bioluminescence
+  - EMIT[2] vibration   -> cell-to-cell vibration signalling
+  - EMIT[3] magnetic    -> no receiver (no biological analog)
+
+### Per-species biomass + ATP
+
+Snapshot summaries grow biomass and atp fields. The client roster
+shows count + mass + ATP per species, surfacing ecological insight
+the count column alone misses.
+
+### Configure admin command
+
+Admin can reset the engine with custom world parameters (width,
+height, seed, day_period_s, founders_per_strategy). Resizes without
+restarting the binary.
+
+### Phototactic founder
+
+New 9th founder strategy uses the activation pass end-to-end:
+  GENE SYNTH CAT 12 SENSE_CHEMICAL 16 PUSH8 0 SWAP THRUST END
+Synthesizes its own photoreceptors, reads the activated chem,
+swims based on the signal. Demonstrates that the receptor ->
+activation -> behaviour loop is complete and live in the demo.
+
+## Engine status: feature-complete for the substrate
+
+Every behaviour loop the VM was capable of expressing now closes:
+  - 256 opcodes including all sensors and effectors
+  - All 7 sensor modalities active
+  - All 3 EMIT channels with receivers
+  - Three evolutionary mechanisms (fission, somatic, HGT)
+  - Mass-conserving (verifiable from a snapshot)
+  - Self-sustaining demo with 9 trophic strategies
+
+What remains is optimisation (rayon for the O(N^2) sensor and
+collision passes, WebGPU for the force kernel) and spatial
+localisation (region grid for per-region ambient).
+
 ## Up next, in suggested order
 
 ### 1. Region / atmosphere passes (~ 1 week)
