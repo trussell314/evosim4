@@ -10,6 +10,7 @@
 pub mod chem_ids;
 pub mod chemistry;
 pub mod genome_consts;
+pub mod particles;
 pub mod reactions;
 pub mod rng;
 
