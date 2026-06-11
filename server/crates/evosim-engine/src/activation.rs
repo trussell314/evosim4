@@ -48,6 +48,11 @@ const ELECTRO_EMIT_GAIN: f32 = 0.5;
 /// Gain on the active EMIT[VIBRATION] component (also a directional
 /// signal a vibroreceptor cell can read).
 const VIB_EMIT_GAIN: f32 = 5.0;
+/// Range over which a photoreceptor "sees" bioluminescence.
+const BIOLIGHT_RANGE: f32 = 160.0;
+/// Per-unit gain on bioluminescence -- adds to ambient_light
+/// contribution to the photoreceptor sense.
+const BIOLIGHT_GAIN: f32 = 0.02;
 /// Range over which a vibroreceptor "feels" particle motion.
 const VIB_RANGE: f32 = 120.0;
 /// Per-unit gain on the vibration signal.
@@ -106,6 +111,7 @@ pub fn run_activation(
         (CHEM_PHOTORECEPTOR_LONG, CHEM_ACT_PHOTO_LONG),
         (CHEM_PHOTORECEPTOR_SURFACE, CHEM_ACT_PHOTO_SURFACE),
     ];
+    let biolight_range_sq = BIOLIGHT_RANGE * BIOLIGHT_RANGE;
     #[allow(clippy::needless_range_loop)]
     for (receptor_slot, act_slot) in bands {
         for i in 0..n {
@@ -114,7 +120,33 @@ pub fn run_activation(
             // this tick's stimulus contribution. The new value is
             // continuous in time.
             let prev = creatures.chems[act_slot][i] * keep;
-            let stimulus = receptor * ambient_light * PHOTO_GAIN;
+            // Ambient (sun) contribution.
+            let mut stimulus = receptor * ambient_light * PHOTO_GAIN;
+            // Bioluminescence: sum nearby cells' EMIT[1] weighted
+            // by 1/dsq. A glowing cell "lights up" its
+            // neighbours.
+            if receptor > 0.0 {
+                let cx = creatures.x[i];
+                let cy = creatures.y[i];
+                let mut bio = 0.0_f32;
+                for j in 0..n {
+                    if j == i {
+                        continue;
+                    }
+                    let emit_light = creatures.vm_out[j].emit.get(1).copied().unwrap_or(0.0) as f32;
+                    if emit_light <= 0.0 {
+                        continue;
+                    }
+                    let dx = creatures.x[j] - cx;
+                    let dy = creatures.y[j] - cy;
+                    let dsq = dx * dx + dy * dy;
+                    if dsq < 1.0 || dsq >= biolight_range_sq {
+                        continue;
+                    }
+                    bio += emit_light / dsq;
+                }
+                stimulus += receptor * bio * BIOLIGHT_GAIN;
+            }
             creatures.chems[act_slot][i] = prev + stimulus * decay;
         }
     }
@@ -383,6 +415,25 @@ mod tests {
         let mut s = CreatureStore::new();
         run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 600.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn bioluminescence_lights_neighbours_in_dark() {
+        // Receiver cell with photoreceptor, in total darkness.
+        // Emitter cell nearby with EMIT[1] active. Receiver should
+        // pick up the bioluminescence even though ambient_light=0.
+        let mut receiver_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        receiver_chems[CHEM_PHOTORECEPTOR_VISIBLE] = 1.0;
+        let emitter_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { x: 0.0, y: 0.0, r: 8.0, chems: Some(receiver_chems), ..CreatureInit::default() });
+        s.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(emitter_chems), ..CreatureInit::default() });
+        s.vm_out[1].emit[1] = 50.0;
+        for _ in 0..30 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 600.0, 1.0 / 60.0);
+        }
+        let signal = s.chems[CHEM_ACT_PHOTO_VISIBLE][0];
+        assert!(signal > 0.0, "expected bioluminescence to drive photo activation, got {signal}");
     }
 
     #[test]
