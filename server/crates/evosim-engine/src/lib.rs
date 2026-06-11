@@ -33,6 +33,7 @@ pub mod reproduction;
 pub mod rng;
 pub mod save;
 pub mod sensor_bins;
+pub mod somatic;
 pub mod transport_reactions;
 pub mod vm;
 pub mod world;
@@ -68,6 +69,8 @@ pub struct Engine {
     /// stays a pure numeric column layout (bonds are variable-length
     /// neighbour lists, which don't fit the SoA model).
     bonds: bonding::BondList,
+    /// Per-cell repair-window counter. Same lifecycle as bonds.
+    repair_ticks: somatic::RepairTicks,
 }
 
 impl Engine {
@@ -79,6 +82,7 @@ impl Engine {
             sensor_bins: sensor_bins::SensorBins::new(),
             pending_deaths: 0,
             bonds: bonding::make_bonds(0),
+            repair_ticks: somatic::make_repair_ticks(0),
         };
         engine.seed_demo_particles();
         engine.seed_founders();
@@ -244,6 +248,16 @@ impl Engine {
         // larger sense range eventually, larger surface area for
         // photosynth (the r^2 term in the surface_scale slot).
         growth::run_growth(&mut self.world.creature_store);
+        // Somatic mutation: probability scales with cell age^2 *
+        // mutation_rate_mul; CHEM_REPAIR pool suppresses by
+        // refreshing a per-cell mutation-block window.
+        somatic::run_somatic_mutation(
+            &mut self.world.creature_store,
+            &mut self.repair_ticks,
+            &mut self.world.sim_rng,
+            self.world.t,
+            dt as f32,
+        );
     }
 
     /// Serialise the current world to a JSON string. Schema string
@@ -270,6 +284,7 @@ impl Engine {
         self.tick = 0;
         self.world = World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED);
         self.bonds = bonding::make_bonds(0);
+        self.repair_ticks = somatic::make_repair_ticks(0);
         self.seed_demo_particles();
         self.seed_founders();
     }
