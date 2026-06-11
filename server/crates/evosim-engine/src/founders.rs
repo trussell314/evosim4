@@ -68,6 +68,11 @@ fn founder_genomes() -> Vec<Vec<u8>> {
         //   GENE SENSE_OUT 11 THRUST PUSH8 1 INGEST END
         //   (chem 11 = biopolymer; INGEST threshold = 0.02)
         vec![OP_GENE, OP_SENSE_OUT, 11, OP_THRUST, OP_PUSH8, 1, OP_INGEST, OP_END],
+        // Predator: every tick it fires PREDATE. With its larger
+        // starter membrane and the size-advantage rule it eats
+        // smaller neighbours when one is in body contact.
+        //   GENE PREDATE END
+        vec![OP_GENE, OP_PREDATE, OP_END],
     ]
 }
 
@@ -114,15 +119,23 @@ fn founder_chems() -> Vec<Vec<f32>> {
     ingester[CHEM_O2] = 80.0;
     ingester[CHEM_ADP] = 50.0;
 
+    // Predator: bigger membrane so the size-advantage rule actually
+    // gives it prey. Carries some respiratory fuel for the chase.
+    let mut predator = vec![0.0; NAMED_CHEMICAL_COUNT];
+    predator[CHEM_ATP] = FOUNDER_ATP;
+    predator[CHEM_MEMBRANE] = FOUNDER_MEMBRANE * 2.0;
+    predator[CHEM_O2] = 80.0;
+    predator[CHEM_ADP] = 50.0;
+
     // Also give every line some enzyme + biopolymer for the digest
     // path: a metabolizer can switch to that route if its glucose
     // ever runs out.
-    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester].iter_mut() {
+    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester, &mut predator].iter_mut() {
         chems[CHEM_ENZ] = 5.0;
         chems[CHEM_BIOPOLYMER] = 20.0;
     }
 
-    vec![photo, metab, seeker, reproducer, osmotroph, ingester]
+    vec![photo, metab, seeker, reproducer, osmotroph, ingester, predator]
 }
 
 /// Place `n_per_strategy` cells of each founder genome at random
@@ -177,8 +190,8 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
-        assert_eq!(n, 30); // 6 strategies x 5 each
-        assert_eq!(store.len(), 30);
+        assert_eq!(n, 35); // 7 strategies x 5 each
+        assert_eq!(store.len(), 35);
     }
 
     #[test]

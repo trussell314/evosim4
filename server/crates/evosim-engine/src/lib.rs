@@ -24,6 +24,7 @@ pub mod ingest;
 pub mod maintenance;
 pub mod particle_decay;
 pub mod particles;
+pub mod predate;
 pub mod reactions;
 pub mod reproduction;
 pub mod rng;
@@ -165,6 +166,11 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.particle_store,
         );
+        // PREDATE pass: cells that ran PREDATE eat at most one
+        // smaller, in-range cell. Prey's entire chem + catalyst pool
+        // transfers to the predator; prey's membrane is zeroed so
+        // the death pass culls it.
+        predate::run_predate(&mut self.world.creature_store);
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
         // update_creatures so the per-tick vm_out.reproduce flag has
@@ -475,8 +481,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // 4 founders per strategy * 6 strategies = 24.
-        assert_eq!(snap.creatures.count, 24);
+        // 4 founders per strategy * 7 strategies = 28.
+        assert_eq!(snap.creatures.count, 28);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),
