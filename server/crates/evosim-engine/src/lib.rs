@@ -169,6 +169,7 @@ impl Engine {
         activation::run_activation(
             &mut self.world.creature_store,
             &self.world.particle_store,
+            &self.world.ambient,
             ctx.ambient_light,
             dt as f32,
         );

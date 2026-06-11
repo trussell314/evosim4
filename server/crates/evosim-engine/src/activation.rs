@@ -14,11 +14,13 @@
 //! decay naturally each tick (the cell-side activation pool fades
 //! when stimulus falls).
 
+use crate::ambient::AmbientField;
 use crate::chem_ids::{
-    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_PHOTO_LONG,
+    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_PH, CHEM_ACT_PHOTO_LONG,
     CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE, CHEM_ACT_VIB_X, CHEM_ACT_VIB_Y,
-    CHEM_ATP, CHEM_ELECTRORECEPTOR, CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE,
-    CHEM_PHOTORECEPTOR_VISIBLE, CHEM_VIBRORECEPTOR,
+    CHEM_ATP, CHEM_CO2, CHEM_ELECTRORECEPTOR, CHEM_PHOTORECEPTOR_LONG,
+    CHEM_PHOTORECEPTOR_SURFACE, CHEM_PHOTORECEPTOR_VISIBLE, CHEM_PHRECEPTOR,
+    CHEM_VIBRORECEPTOR,
 };
 use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
@@ -41,13 +43,20 @@ const ELECTRO_GAIN: f32 = 0.001;
 const VIB_RANGE: f32 = 120.0;
 /// Per-unit gain on the vibration signal.
 const VIB_GAIN: f32 = 0.05;
+/// Per-unit gain on the pH signal. pH is a scalar (acidity feels
+/// like a magnitude, not a direction), driven by both the cell's
+/// own CO2 pool and the ambient CO2 stock.
+const PH_GAIN: f32 = 0.05;
 
 /// Run sensor activation for every cell. `ambient_light` is the
 /// world's current light level (0..1). `particles` is the world's
-/// particle store -- vibration sensing reads it for motion.
+/// particle store (vibration sensing reads it for motion).
+/// `ambient` provides the world-wide dissolved-chem stocks (pH
+/// sensing reads CO2 from it).
 pub fn run_activation(
     creatures: &mut CreatureStore,
     particles: &ParticleStore,
+    ambient: &AmbientField,
     ambient_light: f32,
     dt: f32,
 ) {
@@ -176,6 +185,28 @@ pub fn run_activation(
             creatures.chems[CHEM_ACT_VIB_Y][i] += sy * gain * decay;
         }
     }
+
+    // pH: scalar acidity. Driven by the cell's own CO2 pool plus
+    // the world-wide ambient CO2 stock; a cell sitting in dissolved
+    // CO2 from autolysis or its own respiration feels the rising
+    // acidity. Useful as a "crowding" signal -- a metabolically
+    // active region emits CO2.
+    let ambient_co2 = ambient
+        .stock
+        .get(CHEM_CO2)
+        .copied()
+        .unwrap_or(0.0);
+    for i in 0..n {
+        let receptor = creatures.chems[CHEM_PHRECEPTOR][i];
+        let prev = creatures.chems[CHEM_ACT_PH][i] * keep;
+        if receptor <= 0.0 {
+            creatures.chems[CHEM_ACT_PH][i] = prev;
+            continue;
+        }
+        let local_co2 = creatures.chems[CHEM_CO2][i];
+        let stimulus = (local_co2 + ambient_co2 * 0.1) * receptor * PH_GAIN;
+        creatures.chems[CHEM_ACT_PH][i] = prev + stimulus * decay;
+    }
 }
 
 #[cfg(test)]
@@ -195,14 +226,14 @@ mod tests {
     #[test]
     fn no_receptor_no_activation() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 0.0);
-        run_activation(&mut s, &ParticleStore::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
         assert_eq!(s.chems[CHEM_ACT_PHOTO_VISIBLE][0], 0.0);
     }
 
     #[test]
     fn receptor_with_light_produces_activation() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 2.0);
-        run_activation(&mut s, &ParticleStore::new(), 0.5, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.5, 1.0);
         assert!(s.chems[CHEM_ACT_PHOTO_VISIBLE][0] > 0.0);
     }
 
@@ -210,12 +241,12 @@ mod tests {
     fn activation_decays_in_dark() {
         let mut s = cell_with_receptor(CHEM_PHOTORECEPTOR_VISIBLE, 2.0);
         // Charge it up.
-        run_activation(&mut s, &ParticleStore::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
         let charged = s.chems[CHEM_ACT_PHOTO_VISIBLE][0];
         assert!(charged > 0.0);
         // Run several ticks in the dark.
         for _ in 0..30 {
-            run_activation(&mut s, &ParticleStore::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
         }
         let after = s.chems[CHEM_ACT_PHOTO_VISIBLE][0];
         assert!(after < charged * 0.5, "activation should decay; got {after} vs {charged}");
@@ -224,8 +255,22 @@ mod tests {
     #[test]
     fn no_cells_is_safe() {
         let mut s = CreatureStore::new();
-        run_activation(&mut s, &ParticleStore::new(), 1.0, 1.0);
+        run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 1.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn phreceptor_responds_to_co2() {
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_PHRECEPTOR] = 1.0;
+        chems[CHEM_CO2] = 5.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { r: 8.0, chems: Some(chems), ..CreatureInit::default() });
+        for _ in 0..20 {
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
+        }
+        let ph = s.chems[CHEM_ACT_PH][0];
+        assert!(ph > 0.0, "expected ph activation, got {ph}");
     }
 
     #[test]
@@ -241,7 +286,7 @@ mod tests {
         s.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(b_chems), ..CreatureInit::default() });
         // Charge the signal.
         for _ in 0..20 {
-            run_activation(&mut s, &ParticleStore::new(), 0.0, 1.0 / 60.0);
+            run_activation(&mut s, &ParticleStore::new(), &AmbientField::new(), 0.0, 1.0 / 60.0);
         }
         let sx = s.chems[CHEM_ACT_ELECTRO_X][0];
         assert!(sx > 0.0, "expected +x electro signal, got {sx}");
