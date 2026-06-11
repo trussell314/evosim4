@@ -92,6 +92,15 @@ pub struct Snapshot {
     /// per-window mortality rate without keeping its own history.
     #[serde(default)]
     pub deaths_this_window: u32,
+    /// Sim-second period of one day/night cycle. The client uses this
+    /// to render a sun position, schedule UI animations, etc.
+    /// 0 means daylight is constant (no cycle).
+    #[serde(default)]
+    pub day_period_s: f64,
+    /// Current ambient light in `[0, 1]`. Sampled by the engine from
+    /// the day/night cycle.
+    #[serde(default)]
+    pub ambient_light: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

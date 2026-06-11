@@ -11,12 +11,14 @@ pub mod chemistry;
 pub mod collision;
 pub mod creature_update;
 pub mod creatures;
+pub mod day_cycle;
 pub mod death;
 pub mod forces;
 pub mod founders;
 pub mod genome;
 pub mod genome_consts;
 pub mod maintenance;
+pub mod particle_decay;
 pub mod particles;
 pub mod reactions;
 pub mod reproduction;
@@ -125,9 +127,10 @@ impl Engine {
             t: self.world.t,
             width: self.world.width,
             height: self.world.height,
-            // Flat ambient until the region/atmosphere port. 0.5 lets
-            // a chl-bearing cell run photosynth at ~half rate.
-            ambient_light: 0.5,
+            // Sampled from the day/night cycle so photosynth tracks
+            // the diurnal rhythm. ambient_light is 0 at dawn/dusk
+            // and 1 at noon.
+            ambient_light: day_cycle::ambient_light_at(self.world.t, self.world.day_period_s),
         };
         // Baseline metabolic drain BEFORE update_creatures so a cell
         // that scrapes by on reaction output gets credited the same
@@ -160,6 +163,10 @@ impl Engine {
             &mut self.world.sim_rng,
         );
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
+        // Particle aging + decay: keeps the autolysis-emitted particle
+        // field bounded so a long-running session doesn't grow the
+        // particle store without limit.
+        particle_decay::run_particle_decay(&mut self.world.particle_store, dt as f32);
     }
 
     /// Serialise the current world to a JSON string. Schema string
@@ -204,6 +211,7 @@ impl Engine {
             keys.len() as u32
         };
         let deaths_this_window = std::mem::take(&mut self.pending_deaths);
+        let ambient_light = day_cycle::ambient_light_at(self.world.t, self.world.day_period_s);
         Snapshot {
             tick: self.tick,
             t: self.world.t,
@@ -216,6 +224,8 @@ impl Engine {
             gpu_last_ms: 0.0,
             species_count,
             deaths_this_window,
+            day_period_s: self.world.day_period_s,
+            ambient_light,
         }
     }
 }

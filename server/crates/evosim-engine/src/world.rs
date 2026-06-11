@@ -71,6 +71,11 @@ pub struct World {
     pub collision_iters: u32,
     /// Coefficient of restitution. TS default is 0.8.
     pub restitution: f32,
+
+    /// Period of one day/night cycle in sim-seconds. The day_cycle
+    /// helper samples ambient light against this; 0 disables the
+    /// cycle (constant daylight).
+    pub day_period_s: f64,
 }
 
 impl World {
@@ -110,6 +115,7 @@ impl World {
             surface_activity: 1.0,
             collision_iters: 2,
             restitution: 0.8,
+            day_period_s: crate::day_cycle::DEFAULT_DAY_PERIOD_S,
         }
     }
 
