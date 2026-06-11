@@ -10,6 +10,7 @@ pub mod cell_reactions;
 pub mod chem_ids;
 pub mod chemistry;
 pub mod collision;
+pub mod creature_collision;
 pub mod creature_update;
 pub mod creatures;
 pub mod day_cycle;
@@ -171,6 +172,10 @@ impl Engine {
         // transfers to the predator; prey's membrane is zeroed so
         // the death pass culls it.
         predate::run_predate(&mut self.world.creature_store);
+        // Cell-vs-cell collision: resolve position overlap so cells
+        // can't phase through each other. Predators can now corner
+        // prey; swarms can't compress to a point.
+        creature_collision::run_creature_collisions(&mut self.world.creature_store);
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
         // update_creatures so the per-tick vm_out.reproduce flag has

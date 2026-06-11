@@ -12,27 +12,30 @@
 use crate::chem_ids::{CHEM_ATP, CHEM_MEMBRANE};
 use crate::creatures::CreatureStore;
 
-/// ATP units per sim-second of idle drain. Small enough that a
-/// reproducer cell carrying 20 ATP and metabolising on glucose can
-/// outpace it indefinitely; large enough that an inert seeker with
-/// 50 starter ATP dies in ~ 5 minutes of sim time.
-const BASE_METABOLIC_ATP_PER_S: f32 = 0.15;
-/// Membrane units per sim-second of idle drain. An undisturbed cell
-/// loses its starter membrane (5.0) in ~ 100 seconds, well outside
-/// the demo's interesting window but inside any long-run cull.
+/// Fixed ATP cost per cell per second regardless of size. Small
+/// enough that a metabolising cell easily outpaces it; large enough
+/// that an inert cell with 50 starter ATP dies in ~ 5 minutes.
+const BASE_METABOLIC_ATP_PER_S: f32 = 0.1;
+/// Mass-scaled ATP cost: per-second drain *per unit total mass*.
+/// Bigger cells cost proportionally more upkeep, so a cell that
+/// bloats to 200 units of membrane pays a real ATP tax for it. This
+/// is the selection pressure against unbounded size accumulation.
+const MASS_METABOLIC_ATP_PER_S: f32 = 0.005;
+/// Membrane drain per sim-second. Constant for now (no size-scale
+/// on the chem itself); a fed cell rebuilds it through biosynth.
 const BASE_METABOLIC_MEMBRANE_PER_S: f32 = 0.05;
 
 pub fn run_maintenance(store: &mut CreatureStore, dt: f32) {
-    let dt_atp = BASE_METABOLIC_ATP_PER_S * dt;
+    let dt_atp_base = BASE_METABOLIC_ATP_PER_S * dt;
+    let dt_atp_mass = MASS_METABOLIC_ATP_PER_S * dt;
     let dt_mem = BASE_METABOLIC_MEMBRANE_PER_S * dt;
     let n = store.n;
     for i in 0..n {
-        // Saturating at zero: never push pool below 0 (the death
-        // pass keys off membrane being < MIN_VIABLE_MEMBRANE, not
-        // < 0, so a negative pool isn't load-bearing -- this is
-        // just hygiene).
+        // Mass scaling: total mass = sum of all named chems.
+        let total_mass: f32 = store.chems.iter().map(|c| c[i]).sum();
+        let atp_cost = dt_atp_base + dt_atp_mass * total_mass;
         let atp = store.chems[CHEM_ATP][i];
-        store.chems[CHEM_ATP][i] = (atp - dt_atp).max(0.0);
+        store.chems[CHEM_ATP][i] = (atp - atp_cost).max(0.0);
         let mem = store.chems[CHEM_MEMBRANE][i];
         store.chems[CHEM_MEMBRANE][i] = (mem - dt_mem).max(0.0);
     }
@@ -59,6 +62,30 @@ mod tests {
         run_maintenance(&mut store, 1.0);
         assert!(store.chems[CHEM_ATP][0] < 10.0);
         assert!(store.chems[CHEM_MEMBRANE][0] < 10.0);
+    }
+
+    #[test]
+    fn bigger_cell_pays_more_atp() {
+        // Two cells, same starter ATP. The bigger one (more total
+        // mass) should drain proportionally more after 1 sec.
+        let mut small_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        small_chems[CHEM_ATP] = 100.0;
+        small_chems[CHEM_MEMBRANE] = 10.0;
+        let mut big_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        big_chems[CHEM_ATP] = 100.0;
+        big_chems[CHEM_MEMBRANE] = 200.0;
+        let mut store = CreatureStore::new();
+        store.push(CreatureInit { r: 4.0, chems: Some(small_chems), ..CreatureInit::default() });
+        store.push(CreatureInit { r: 16.0, chems: Some(big_chems), ..CreatureInit::default() });
+        run_maintenance(&mut store, 1.0);
+        let small_drain = 100.0 - store.chems[CHEM_ATP][0];
+        let big_drain = 100.0 - store.chems[CHEM_ATP][1];
+        assert!(
+            big_drain > small_drain,
+            "big cell should pay more ATP: {} vs {}",
+            big_drain,
+            small_drain
+        );
     }
 
     #[test]
