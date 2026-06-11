@@ -248,6 +248,7 @@ version = "0.1.0"
 dependencies = [
  "evosim-protocol",
  "serde",
+ "serde_json",
  "tracing",
 ]
 

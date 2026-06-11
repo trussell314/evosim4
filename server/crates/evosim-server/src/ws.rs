@@ -181,17 +181,17 @@ async fn handle_client_message(
                 let _ = engine_cmd.send(EngineCmd::SetSimRate(rate)).await;
             }
         }
-        ClientMessage::Save { .. } => {
-            // Save lands with the save/load port (PORT_PROGRESS step 9).
-            // The save format is the same JSON the TS world uses; the
-            // serde shape is what's pending. Until then surface an
-            // honest error rather than a silent drop.
-            let _ = reply_tx
-                .send(ServerMessage::Error {
-                    code: "unimplemented".into(),
-                    message: "save lands with the save/load port".into(),
-                })
-                .await;
+        ClientMessage::Save { name } => {
+            let Some(engine_cmd) = engine_cmd else {
+                let _ = reply_tx
+                    .send(ServerMessage::Error {
+                        code: "internal".into(),
+                        message: "engine command channel missing".into(),
+                    })
+                    .await;
+                return;
+            };
+            admin::save_to_disk(name, state.clone(), engine_cmd.clone(), reply_tx.clone()).await;
         }
         ClientMessage::Admin { command } => {
             if !*is_admin {
@@ -226,6 +226,8 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
         Snapshot => "snapshot",
         Reset => "reset",
         Status => "status",
+        Load { .. } => "load",
+        Saves => "saves",
     }
 }
 

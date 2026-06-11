@@ -17,6 +17,7 @@ pub mod genome_consts;
 pub mod particles;
 pub mod reactions;
 pub mod rng;
+pub mod save;
 pub mod vm;
 pub mod world;
 
@@ -165,6 +166,25 @@ impl Engine {
             ambient_light: 0.5,
         };
         creature_update::update_creatures(ctx, &mut self.world.creature_store, dt as f32);
+    }
+
+    /// Serialise the current world to a JSON string. Schema string
+    /// inside the JSON guards against loading into a newer binary
+    /// that's grown columns since the save was written.
+    pub fn save_json(&self) -> Result<String, serde_json::Error> {
+        let saved = save::save_world(&self.world);
+        serde_json::to_string(&saved)
+    }
+
+    /// Load a JSON-encoded save, replacing the current world. Tick
+    /// counter resets to zero (the saved t is restored on the
+    /// world, but the engine's tick count is just a wall-clock
+    /// counter and doesn't roundtrip).
+    pub fn load_json(&mut self, json: &str) -> Result<(), save::LoadError> {
+        let parsed: save::SavedWorld = serde_json::from_str(json)?;
+        save::load_world(&mut self.world, parsed)?;
+        self.tick = 0;
+        Ok(())
     }
 
     /// Reset to defaults. Called by `AdminCommand::Reset`.
@@ -354,6 +374,41 @@ mod tests {
         let atp1 = store.chems[CHEM_ATP][2];
         assert!(glu1 < glu0, "glucose should drop, {glu0} -> {glu1}");
         assert!(atp1 > atp0, "ATP should rise, {atp0} -> {atp1}");
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_state() {
+        let mut e = Engine::new();
+        for _ in 0..30 {
+            e.step(1.0 / 60.0);
+        }
+        let snap0 = e.snapshot();
+        let json = e.save_json().expect("save");
+
+        let mut e2 = Engine::new();
+        e2.load_json(&json).expect("load");
+        let snap1 = e2.snapshot();
+
+        assert_eq!(snap1.t, snap0.t);
+        assert_eq!(snap1.width, snap0.width);
+        assert_eq!(snap1.particles.count, snap0.particles.count);
+        assert_eq!(snap1.creatures.count, snap0.creatures.count);
+
+        let x_bytes_0 = &snap0
+            .particles
+            .blobs
+            .iter()
+            .find(|b| b.name == "x")
+            .unwrap()
+            .data;
+        let x_bytes_1 = &snap1
+            .particles
+            .blobs
+            .iter()
+            .find(|b| b.name == "x")
+            .unwrap()
+            .data;
+        assert_eq!(x_bytes_0, x_bytes_1, "particle x should round-trip exactly");
     }
 
     #[test]

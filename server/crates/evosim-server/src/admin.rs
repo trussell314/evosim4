@@ -38,6 +38,8 @@ pub async fn handle(
         AdminCommand::Snapshot => snapshot_now(engine_cmd).await,
         AdminCommand::Reset => reset(engine_cmd).await,
         AdminCommand::Status => status(state.clone()).await,
+        AdminCommand::Load { name } => load_from_disk(name, state.clone(), engine_cmd).await,
+        AdminCommand::Saves => list_saves(state.clone()).await,
     };
     let msg = match result {
         Ok(ack) => ServerMessage::AdminAck { command: label.into(), message: ack },
@@ -53,6 +55,8 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Snapshot => "snapshot",
         AdminCommand::Reset => "reset",
         AdminCommand::Status => "status",
+        AdminCommand::Load { .. } => "load",
+        AdminCommand::Saves => "saves",
     }
 }
 
@@ -138,6 +142,172 @@ async fn status(state: Arc<AppState>) -> anyhow::Result<Option<String>> {
         state.build.version, state.build.commit, state.build.built_at, uptime_s, conns
     );
     Ok(Some(json))
+}
+
+/// Sanitise a user-supplied save name. Strips path separators and any
+/// leading dots; refuses an empty name. Returns the cleaned name
+/// (without an `.json` suffix). Keeps the save directory flat -- one
+/// flat folder per server, no nesting -- so a malicious or careless
+/// name can't escape into `/etc/passwd` or up the tree.
+fn sanitise_save_name(raw: &str) -> Result<String, anyhow::Error> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("save name is empty");
+    }
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
+        .collect();
+    let cleaned = cleaned.trim_start_matches('.').trim_end_matches('.');
+    let cleaned = cleaned.strip_suffix(".json").unwrap_or(cleaned);
+    if cleaned.is_empty() {
+        anyhow::bail!("save name reduces to empty after sanitisation");
+    }
+    Ok(cleaned.to_string())
+}
+
+/// Save the current world to the configured save directory.
+/// Triggered by `ClientMessage::Save { name }`. The directory is
+/// created on demand. Replies through the per-connection
+/// `reply_tx` so the operator sees an ack with the resolved path.
+pub async fn save_to_disk(
+    name: Option<String>,
+    state: Arc<AppState>,
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    reply: mpsc::Sender<ServerMessage>,
+) {
+    let cfg = state.cfg();
+    let raw = name.unwrap_or_else(|| {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("save-{secs}")
+    });
+    let cleaned = match sanitise_save_name(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = reply
+                .send(ServerMessage::Error {
+                    code: "save".into(),
+                    message: e.to_string(),
+                })
+                .await;
+            return;
+        }
+    };
+    // Pull the JSON from the engine task.
+    let (tx, rx) = oneshot::channel();
+    if engine_cmd.send(EngineCmd::SaveJson(tx)).await.is_err() {
+        let _ = reply
+            .send(ServerMessage::Error {
+                code: "save".into(),
+                message: "engine task is gone".into(),
+            })
+            .await;
+        return;
+    }
+    let json = match rx.await {
+        Ok(Ok(json)) => json,
+        Ok(Err(e)) => {
+            let _ = reply
+                .send(ServerMessage::Error {
+                    code: "save".into(),
+                    message: format!("serialise: {e}"),
+                })
+                .await;
+            return;
+        }
+        Err(_) => {
+            let _ = reply
+                .send(ServerMessage::Error {
+                    code: "save".into(),
+                    message: "engine did not respond".into(),
+                })
+                .await;
+            return;
+        }
+    };
+    // Write atomically: write to <name>.tmp then rename.
+    let path = cfg.save_dir.join(format!("{cleaned}.json"));
+    let tmp = cfg.save_dir.join(format!("{cleaned}.json.tmp"));
+    if let Err(e) = tokio::fs::create_dir_all(&cfg.save_dir).await {
+        let _ = reply
+            .send(ServerMessage::Error {
+                code: "save".into(),
+                message: format!("mkdir {}: {e}", cfg.save_dir.display()),
+            })
+            .await;
+        return;
+    }
+    if let Err(e) = tokio::fs::write(&tmp, json.as_bytes()).await {
+        let _ = reply
+            .send(ServerMessage::Error {
+                code: "save".into(),
+                message: format!("write {}: {e}", tmp.display()),
+            })
+            .await;
+        return;
+    }
+    if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+        let _ = reply
+            .send(ServerMessage::Error {
+                code: "save".into(),
+                message: format!("rename to {}: {e}", path.display()),
+            })
+            .await;
+        return;
+    }
+    info!(path = %path.display(), "saved");
+    let _ = reply
+        .send(ServerMessage::AdminAck {
+            command: "save".into(),
+            message: Some(format!("wrote {}", path.display())),
+        })
+        .await;
+}
+
+async fn load_from_disk(
+    name: String,
+    state: Arc<AppState>,
+    engine_cmd: mpsc::Sender<EngineCmd>,
+) -> anyhow::Result<Option<String>> {
+    let cfg = state.cfg();
+    let cleaned = sanitise_save_name(&name)?;
+    let path = cfg.save_dir.join(format!("{cleaned}.json"));
+    let json = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::LoadJson(json, tx))
+        .await
+        .map_err(|_| anyhow::anyhow!("engine task is gone"))?;
+    rx.await
+        .map_err(|_| anyhow::anyhow!("engine did not respond"))?
+        .map_err(|e| anyhow::anyhow!("load: {e}"))?;
+    Ok(Some(format!("loaded {}", path.display())))
+}
+
+async fn list_saves(state: Arc<AppState>) -> anyhow::Result<Option<String>> {
+    let cfg = state.cfg();
+    let mut names = Vec::new();
+    if let Ok(mut rd) = tokio::fs::read_dir(&cfg.save_dir).await {
+        while let Ok(Some(e)) = rd.next_entry().await {
+            if let Some(n) = e.file_name().to_str() {
+                if let Some(stem) = n.strip_suffix(".json") {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    // Inline JSON array; no serde_json dep just for this one shape.
+    let body: Vec<String> = names
+        .iter()
+        .map(|n| format!("\"{}\"", n.replace('"', "\\\"")))
+        .collect();
+    Ok(Some(format!("[{}]", body.join(","))))
 }
 
 fn progress(command: &str, msg: &str) -> ServerMessage {

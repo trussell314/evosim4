@@ -41,6 +41,13 @@ pub enum EngineCmd {
     /// 0.5 = half speed, 2.0 = double speed. Clamped to a sane band
     /// server-side.
     SetSimRate(f32),
+    /// Serialise the world and reply with the JSON. The WS handler
+    /// writes it to the save directory; doing IO here would block
+    /// the tick loop.
+    SaveJson(oneshot::Sender<Result<String, String>>),
+    /// Load a saved JSON. Replies with the load outcome so the
+    /// caller can report success / failure on the wire.
+    LoadJson(String, oneshot::Sender<Result<(), String>>),
 }
 
 pub struct EngineHandle {
@@ -122,6 +129,14 @@ async fn run(
                             warn!(error = %e, "snapshot encode failed");
                         }
                         let _ = reply.send(());
+                    }
+                    Some(EngineCmd::SaveJson(reply)) => {
+                        let r = engine.save_json().map_err(|e| e.to_string());
+                        let _ = reply.send(r);
+                    }
+                    Some(EngineCmd::LoadJson(json, reply)) => {
+                        let r = engine.load_json(&json).map_err(|e| e.to_string());
+                        let _ = reply.send(r);
                     }
                     None => {
                         // Sender dropped -- the binary is exiting.

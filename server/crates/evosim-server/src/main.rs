@@ -83,6 +83,9 @@ pub struct Config {
     /// doesn't specify a branch. "origin/claude/native-engine"
     /// during the port; flip to the release branch later.
     pub default_update_ref: String,
+    /// Where the `Save` command writes JSON saves. Created on demand
+    /// (no eager `mkdir`). Defaults to `<repo_root>/server/saves`.
+    pub save_dir: std::path::PathBuf,
 }
 
 impl Config {
@@ -100,7 +103,10 @@ impl Config {
             .unwrap_or_else(|_| std::env::current_dir().expect("cwd"));
         let default_update_ref = std::env::var("EVOSIM_UPDATE_REF")
             .unwrap_or_else(|_| "origin/claude/native-engine".into());
-        Self { bind, admin_token, repo_root, default_update_ref }
+        let save_dir = std::env::var("EVOSIM_SAVE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| repo_root.join("server").join("saves"));
+        Self { bind, admin_token, repo_root, default_update_ref, save_dir }
     }
 }
 

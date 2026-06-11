@@ -35,6 +35,12 @@ impl Mulberry32 {
     pub fn next_f64(&mut self) -> f64 {
         self.next_u32() as f64 / 4_294_967_296.0
     }
+
+    /// Current internal state, for save/load. A `Mulberry32::new` of
+    /// the returned value resumes the same sequence.
+    pub fn peek_state(&self) -> u32 {
+        self.state
+    }
 }
 
 /// 32-bit murmur3-style mixer matching the TS `mixHash(...vals)`. Takes

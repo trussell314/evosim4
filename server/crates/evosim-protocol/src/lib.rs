@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 ///   2 -- Hello carries chem_colors + chem_names so the client can
 ///        render with the server's chemistry table instead of a
 ///        synthetic hue-by-id
-pub const PROTOCOL_VERSION: u32 = 2;
+///   3 -- AdminCommand grows Load { name } + Saves; ClientMessage
+///        Save semantics are real (the engine ports save/load JSON)
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Lightweight build identity sent in [`ServerMessage::Hello`]. The
 /// client surfaces these in the bottom HUD so it's obvious which
@@ -192,6 +194,14 @@ pub enum AdminCommand {
     /// Report engine + supervisor health. The reply carries a JSON
     /// blob in [`ServerMessage::AdminAck::message`].
     Status,
+    /// Load a previously-saved world JSON by file name (relative to
+    /// the server's save directory). Restricted to admin because
+    /// reading arbitrary state into the running engine is more
+    /// invasive than `SetRunning` / `SetSimRate`.
+    Load { name: String },
+    /// List the saves currently on disk. Reply message is a JSON
+    /// array of file names.
+    Saves,
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame
