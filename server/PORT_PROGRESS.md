@@ -88,30 +88,70 @@ per-tick output surface (thrust/turn/excrete/transport/reproduce/
 predate/engulf/ingest/synth masks/bond/splice/poke/partition/emit).
 11 unit tests + a TS golden captured from the identical genome.
 
+### Minimal CreatureStore + creature_update (`22593f6`)
+First end-to-end VM-driven creatures. SoA columns for kinematics +
+named-chem pool + catalyst/inhibitor + genome + VmState. Per-tick
+pass runs run_tick, applies thrust/turn/cat_synth_list to the cell,
+movement integrator with damping + world-wrap. The minimal output
+surface the engine can act on today; growing as more subsystems
+land.
+
+### Demo client renders creatures (`37829c4`)
+The standalone demo decodes the creature SoA columns and draws
+cells on top of the particle field, colored by energy.
+
+### Cell reaction driver (`5974552`)
+runGenericReactions ported. Cells now metabolise: substrate ->
+product under MM saturation, ATP credit/debit, machinery
+multipliers, the lot. Demo seeds reshuffled: metabolizers carry
+GLU+O2+ADP for aerobic respiration; photoautotrophs carry chl +
+mRNA + CO2 + ADP for photosynth + photophosphorylation. Live
+smoke shows ATP rising in both lines.
+
+### Save/load (`fc2ab95`)
+Rust-native JSON save schema. World dims, RNG state, particle SoA,
+creature SoA (incl genome + VmState + sparse catalyst/inhibitor),
+schema fingerprint. Wire commands Save / Load / Saves over the
+WebSocket with constant-time admin auth + path sanitisation. Atomic
+disk writes. Engine save_json / load_json round-trips byte-for-byte.
+
+### Spatial sensor bins -- SENSE_OUT real (`6ed019e`, `08f4a46`)
+chemGradient ported. 40px bin grid, per-chem centroid sums, rebuilt
+every tick after physics. SENSE_OUT now returns a real gradient
+vector. Live demo cells with [GENE SENSE_OUT <c> THRUST END] swim
+up the chem-c gradient.
+
+### Minimal fission (`4e4cc0d`)
+reproduce_op produces a daughter: parent_fraction proportional
+split of chems + catalyst + inhibitor, ATP cost on parent,
+point-mutated genome copy. Reproducer demo cells visibly multiply.
+
+### Death + autolysis (`fe3ff4b`)
+Cells below MIN_VIABLE_MEMBRANE get culled; their chem mass releases
+as particles, closing mass conservation across fission and death.
+
+### Baseline metabolic drain (`b75119b`)
+Per-second ATP + membrane tax. The slow clock that makes selection
+bite: unfed cells starve.
+
+### Species count + per-window deaths (`3901c38`)
+Snapshot grows species_count (distinct coding-key) + deaths_this_window
+fields. Live smoke confirms emergent evolutionary dynamics:
+extinctions, mass conservation, equilibria.
+
 ## Up next, in suggested order
 
-### 1. Creature store + update (~ 2 weeks)
-Now unblocked -- the VM interpreter it depends on has landed.
-  - Port CreatureStore (SoA) from `src/sim/core.ts`: per-cell
-    chem pools, position/velocity, genome, VmState, energy/mass
-  - Port updateCreatures from `src/sim.ts`: the per-cell pass that
-    runs run_tick, applies VmOutputs (thrust/excrete/transport/
-    reproduce/predate/engulf/synth), runs the reaction network
-    against each cell's catalyst pools, handles fission + death
-  - Implement the Sensors trait against the live cell + particle
-    field (chem_conc from the cell pool, gradient from the
-    particle grid)
-  - Wire into Engine::step after the force/collision passes
-This is the messiest single function in the codebase; budget
-accordingly. Test against captured TS per-cell state traces.
+### 1. Founder seeding (~ 2 days)
+The current demo cells are hand-built and die out. Port the TS
+seedRamp / founder pass: spawn N viable founder cells with realistic
+starter pools so the world has a self-sustaining population. Without
+this no long-running session survives past ~ 100 sim-seconds.
 
 ### 2. Region / atmosphere passes (~ 1 week)
 Port `src/sim/regions.ts`, `environment.ts`, `chemolith.ts`,
-`vent.ts`. Pure functions over a region grid + the atmospheric
-gas pools. Doesn't need the VM; can land in parallel with it.
-
-### 3. Creature update + chemistry (~ 2 weeks)
-Port `updateCreatures` from `src/sim.ts`. Depends on the VM.
+`vent.ts`. Region grid + ambient + reserve fields. Once landed,
+ambient_light becomes a real per-position scalar (not a flat 0.5)
+and the day-night cycle gates photosynth.
 
 ### 4. Force kernel parallelism (~ 2-3 days)
 rayon par_chunks_mut over the SoA columns once particle counts
