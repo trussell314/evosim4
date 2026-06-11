@@ -32,6 +32,11 @@
         <span class="sep"></span>
         <button id="pause" disabled>Pause</button>
         <button id="resume" disabled>Resume</button>
+        <label>speed
+          <input id="speed" type="range" min="0.25" max="4" step="0.25" value="1" disabled />
+          <span id="speedReadout">1x</span>
+        </label>
+        <button id="save" disabled title="Admin only -- writes to EVOSIM_SAVE_DIR">Save</button>
         <button id="reset" disabled title="Admin only">Reset</button>
       </header>
       <div id="status"><span class="dim">disconnected</span></div>

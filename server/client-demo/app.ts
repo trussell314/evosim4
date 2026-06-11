@@ -42,6 +42,9 @@ const connectBtn = document.getElementById("connect") as HTMLButtonElement;
 const disconnectBtn = document.getElementById("disconnect") as HTMLButtonElement;
 const pauseBtn = document.getElementById("pause") as HTMLButtonElement;
 const resumeBtn = document.getElementById("resume") as HTMLButtonElement;
+const speedSlider = document.getElementById("speed") as HTMLInputElement;
+const speedReadout = document.getElementById("speedReadout") as HTMLSpanElement;
+const saveBtn = document.getElementById("save") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -77,6 +80,15 @@ disconnectBtn.onclick = () => {
 };
 pauseBtn.onclick = () => send({ type: "set-running", running: false });
 resumeBtn.onclick = () => send({ type: "set-running", running: true });
+speedSlider.oninput = () => {
+  const rate = parseFloat(speedSlider.value);
+  speedReadout.textContent = rate + "x";
+  send({ type: "set-sim-rate", rate });
+};
+saveBtn.onclick = () => {
+  const name = prompt("Save name (alphanumeric, leave blank for auto):", "");
+  send({ type: "save", name: name && name.trim() ? name.trim() : null });
+};
 resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
 
 function setStatus(html: string): void {
@@ -103,6 +115,8 @@ function connect(url: string, token: string | null): void {
     disconnectBtn.disabled = true;
     pauseBtn.disabled = true;
     resumeBtn.disabled = true;
+    speedSlider.disabled = true;
+    saveBtn.disabled = true;
     resetBtn.disabled = true;
     snapshot = null;
     ws = null;
@@ -125,6 +139,8 @@ function handle(msg: ServerMessage): void {
       chemColors = msg.chem_colors;
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
+      speedSlider.disabled = false;
+      saveBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
       updateHeaderStatus();
       break;
