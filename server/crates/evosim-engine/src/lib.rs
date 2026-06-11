@@ -19,6 +19,7 @@ pub mod forces;
 pub mod founders;
 pub mod genome;
 pub mod genome_consts;
+pub mod growth;
 pub mod ingest;
 pub mod maintenance;
 pub mod particle_decay;
@@ -197,6 +198,12 @@ impl Engine {
             &mut self.world.ambient,
             dt as f32,
         );
+        // Growth: recompute every cell's radius from its membrane
+        // chem pool. r ~ sqrt(membrane) so a cell that successfully
+        // builds membrane physically grows -- larger ingest target,
+        // larger sense range eventually, larger surface area for
+        // photosynth (the r^2 term in the surface_scale slot).
+        growth::run_growth(&mut self.world.creature_store);
     }
 
     /// Serialise the current world to a JSON string. Schema string
