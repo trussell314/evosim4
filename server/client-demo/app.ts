@@ -360,6 +360,14 @@ function frame(): void {
     const offX = (cw - wW * scale) / 2;
     const offY = (ch - wH * scale) / 2;
 
+    // Day/night tint: blend the world canvas color with a warmer
+    // hue during daylight and a cooler tone at night. Subtle so
+    // it doesn't drown out the particles.
+    const light = snapshot.ambient_light ?? 1.0;
+    const tint = `rgba(${Math.round(255 * (0.05 + 0.10 * light))}, ${Math.round(255 * (0.04 + 0.08 * light))}, ${Math.round(255 * (0.02 * (1.0 - light)))}, 1)`;
+    ctx.fillStyle = tint;
+    ctx.fillRect(offX, offY, wW * scale, wH * scale);
+
     // Pull X/Y/R/chemId blobs.
     const blobs: Record<string, NamedBlob> = {};
     for (const b of snapshot.particles.blobs) blobs[b.name] = b;
@@ -443,6 +451,21 @@ function frame(): void {
           ctx.stroke();
         }
       }
+    }
+
+    // Sun / moon indicator in the top-right of the world rect.
+    {
+      const sx = offX + wW * scale - 24;
+      const sy = offY + 24;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.fillStyle = light > 0.05
+        ? `rgba(255, ${200 + Math.round(50 * light)}, 80, ${0.3 + 0.6 * light})`
+        : `rgba(180, 200, 240, 0.7)`;
+      ctx.fill();
+      ctx.strokeStyle = light > 0.05 ? "#fc6" : "#9ab";
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     // Overlay world bbox.
