@@ -160,6 +160,16 @@ pub struct SpeciesSummary {
     /// shipping the opcode table or duplicating the describer.
     #[serde(default)]
     pub description: String,
+    /// Total biomass (sum of every cell's chem pool mass) for cells
+    /// of this species. A species with high biomass but low count
+    /// is doing well per cell; high count + low biomass means lots
+    /// of small starved cells.
+    #[serde(default)]
+    pub biomass: f32,
+    /// Total ATP across all cells of this species. A proxy for
+    /// energetic well-being of the lineage.
+    #[serde(default)]
+    pub atp: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

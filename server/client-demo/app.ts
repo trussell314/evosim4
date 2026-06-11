@@ -10,7 +10,15 @@ interface BuildInfo { version: string; commit: string; built_at: number; }
 interface ServerCaps { gpu_compute: boolean; cpu_threads: number; admin: boolean; }
 interface NamedBlob { name: string; stride: number; data: Uint8Array; }
 interface Soa { count: number; blobs: NamedBlob[]; }
-interface SpeciesSummary { coding_key: string; count: number; color: string; genome?: Uint8Array; description?: string; }
+interface SpeciesSummary {
+  coding_key: string;
+  count: number;
+  color: string;
+  genome?: Uint8Array;
+  description?: string;
+  biomass?: number;
+  atp?: number;
+}
 // Minimal op-name lookup so the client can render a basic disasm. Not
 // exhaustive -- enough for the demo. Mirrors src/genome.rs.
 const OP_NAMES: Record<number, string> = {
@@ -329,7 +337,9 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
     const li = document.createElement("li");
     li.style.cursor = "pointer";
     li.style.padding = "2px 0";
-    li.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${s.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>${s.count} <span class="dim" style="margin-left:4px;">${s.coding_key.slice(0, 24)}</span>`;
+    const biomass = s.biomass !== undefined ? ` <span class="dim">m=${s.biomass.toFixed(0)}</span>` : "";
+    const atp = s.atp !== undefined ? ` <span class="dim">atp=${s.atp.toFixed(0)}</span>` : "";
+    li.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${s.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>${s.count}${biomass}${atp} <span class="dim" style="margin-left:4px;">${s.coding_key.slice(0, 16)}</span>`;
     if (s.coding_key === selectedSpeciesKey) {
       li.style.background = "#0d1c26";
     }

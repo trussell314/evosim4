@@ -327,10 +327,16 @@ impl Engine {
         // we ship in SpeciesSummary.genome so the client can disasm
         // without an extra round trip.
         let mut representative_genome: HashMap<String, Vec<u8>> = HashMap::new();
-        for g in &self.world.creature_store.genome {
+        // Track per-species aggregates: total biomass and ATP.
+        let mut biomass_by_key: HashMap<String, f32> = HashMap::new();
+        let mut atp_by_key: HashMap<String, f32> = HashMap::new();
+        let cs = &self.world.creature_store;
+        for (i, g) in cs.genome.iter().enumerate() {
             let k = genome::coding_key(g);
             *counts.entry(k.clone()).or_insert(0) += 1;
             representative_genome.entry(k.clone()).or_insert_with(|| g.clone());
+            *biomass_by_key.entry(k.clone()).or_insert(0.0) += cs.total_mass(i);
+            *atp_by_key.entry(k.clone()).or_insert(0.0) += cs.energy(i);
             keys.push(k);
         }
         // Top species rows, sorted by population descending. Cap at
@@ -350,6 +356,8 @@ impl Engine {
                     color: species_color_from_key(key),
                     genome,
                     description,
+                    biomass: biomass_by_key.get(key).copied().unwrap_or(0.0),
+                    atp: atp_by_key.get(key).copied().unwrap_or(0.0),
                 }
             })
             .collect();
