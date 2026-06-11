@@ -179,6 +179,70 @@ Live smoke at the end of this session shows a stable food web at
 through 6 trophic strategies (photo / metab / seeker / reproducer
 / osmotroph / ingester).
 
+### Apex predation + cell-cell physics
+PREDATE op closes the apex predator loop -- cells eat smaller cells,
+absorb chem + catalyst pools wholesale, prey dies next tick. Cell-
+vs-cell collisions resolve overlap with mass-weighted Jacobi sweeps
+so predators can corner prey instead of phasing through them.
+Mass-scaled metabolic drain (per-mass ATP per-tick term) creates
+selection pressure against unbounded size accumulation.
+
+### Genome describer + interactive inspector
+describe.rs walks the genome's expressed code and produces an
+English summary: which ops fire, which chems are sensed/excreted,
+which catalyst slots are boosted, whether control flow is
+conditional or linear. Demo client clicks species -> shows
+description above the disassembler.
+
+### Catalyst-gated transport reactions
+The reaction table's tail slots (231..256) come alive: cells with
+non-zero catalyst pool at a transport slot facilitate the chem
+flux through their membrane. Mass-conserving, bounded by source
+availability. Combined with biosynth_catalyst this is how cells
+SPECIALISE -- you choose what transporters to build by what
+catalysts you express.
+
+### Bonding (cell-cell adhesion + multicellularity)
+bonding.rs lets cells form persistent connections when their VM
+bond markers match within tolerance and their CHEM_BOND pool is
+above threshold. Bonded cells experience a soft Hooke spring
+keeping them clustered. Bond marker is genome-encoded
+(greenbeard recognition). Bonded clusters resist drift past
+viability -- they're a real selective advantage.
+
+### Per-cell sense range from SENSE_AMP
+Cells now derive their sense range from a count of SENSE_AMP
+bytes in their genome (sqrt scaling). Sensor breadth is an
+evolvable trait paying a real cost in genome length.
+
+### Somatic mutation + REPAIR
+somatic.rs gives every cell a per-tick mutation probability
+scaling with age^2; CHEM_REPAIR above threshold refreshes a
+suppression window. Long-lived cells drift; repair-investing
+cells stay stable. Third evolvable axis for selection.
+
+### Top-species summary + species inspector
+Snapshot ships up to 16 species summaries (coding_key, count,
+HSL color from FNV hash, representative genome bytes, English
+description). Per-cell speciesIdx column for client coloring.
+Client roster + disassembler + describer all wired together.
+
+### Day/night cycle + particle decay + ambient field + transport
+- Day/night ambient_light cycles between 0 and 1 over 60-sec
+  default period; photosynth tracks it. Sun indicator in client
+- Particle decay: per-tick age + radius shrink; particles past
+  MAX_AGE_S (120) or below MIN_RADIUS (0.3) removed. Bounds
+  the autolysis chem field
+- AmbientField: per-chem world-wide stock with cell <-> ambient
+  passive leak/uptake. Death pass dissolves 40% of each chem.
+  Client shows top 10 dissolved chems in a left-side panel
+- VM's EXCRETE / TRANSPORT ops drain into / pull from ambient
+
+### Founder seeding -- 8 trophic strategies, clustered bonder spawn
+Founders: photoautotroph, metabolizer, seeker, reproducer,
+osmotroph, ingester, predator, bonder. 4 each = 32 founders.
+Bonder spawns as a tight cluster so the cohort actually meets.
+
 ## Up next, in suggested order
 
 ### 1. Region / atmosphere passes (~ 1 week)
