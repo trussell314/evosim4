@@ -380,54 +380,65 @@ Every behaviour loop the VM was capable of expressing now closes:
   - Three evolutionary mechanisms (fission, somatic, HGT)
   - Mass-conserving (verifiable from a snapshot)
   - Self-sustaining demo with 9 trophic strategies
+  - Bonded prey gets predation refuge (COLONY_GAPS #3 closed)
 
-What remains is optimisation (rayon for the O(N^2) sensor and
-collision passes, WebGPU for the force kernel) and spatial
-localisation (region grid for per-region ambient).
+## Up next -- finish parity with the TS substrate
 
-## Up next, in suggested order
+The native engine has every loop the TS VM exposes, but a handful of
+*world*-side TS modules are not yet ported. They're all live in TS
+production today, so this is closing the parity gap, not exploring
+new biology.
 
-### 1. Region / atmosphere passes (~ 1 week)
-Port `src/sim/regions.ts`, `environment.ts`, `chemolith.ts`,
-`vent.ts`. Region grid + ambient + reserve fields. Once landed,
-ambient_light becomes a real per-position scalar (not a flat 0.5)
-and the day-night cycle gates photosynth.
+### 1. Region grid + regional dissolved/reserve (`src/sim/regions.ts`)
+~534 lines TS. Replaces today's flat global `AmbientField` with
+per-region `dissolved[chem]` + `reserve[chem]` arrays on a 50px
+grid. Jacobi cross-region diffusion with a ~10-minute half-life,
+solubility-driven dissolve/precipitate with hysteresis, sedimented
+reserve bucket. Plan in `REGION_SYSTEM_PLAN.md`; phase gates by
+mass-conservation. Unlocks per-position ambient light and real
+spatial heterogeneity.
 
-### 4. Force kernel parallelism (~ 2-3 days)
-rayon par_chunks_mut over the SoA columns once particle counts
-warrant it. Brownian noise becomes per-chunk PCG keyed on
-(tick_seed, chunk_index) to keep it parallel-safe -- matches the
-GPU kernel's PCG approach.
+### 2. Static terrain (`src/sim/terrain.ts`, `terrain-shapes.ts`, `geology.ts`)
+~1100 lines TS. Hand-authored rock polygons (lobe-packed for the
+existing circle-collision path) plus seeded per-world vertex
+jitter. Static obstacles cells navigate around; required for the
+vent embed point.
 
-### 5. wgpu compute force kernel (~ 1 week)
-Direct port of `src/sim/gpu-forces-shader.ts`'s WGSL. Same shader
-language; only the host-side bind groups, buffer encoding, and
-dispatch differ.
+### 3. Obstacle collision (`src/sim/obstacle-collision.ts`)
+~512 lines TS. Static spatial index over terrain lobes; per-tick
+push-out passes for particles + creatures so moving bodies can't
+phase through rock. Reads `pointInPolygon` from terrain, writes
+back to the SoA columns in place.
 
-### 6. Collision parallelism (~ 3-5 days)
-Row-parity two-phase dispatch over rayon. The serial path was
-written with this split in mind: every cell only enumerates its
-four downstream-of-(cx,cy) neighbors, so even-y and odd-y phases
-have no overlapping writes.
+### 4. Hydrothermal vent (`src/sim/vent.ts`)
+~262 lines TS. Point feature embedded in seafloor rock; schedules
+dormant -> warmup -> main -> cooldown over an in-game day; emits a
+weighted cocktail of hot generic chems while active. True source
+in the mass ledger -- emissions tracked separately so
+mass-conservation closes.
 
-### 7. Save / load (~ 3 days)
-Use the existing JSON save schema. Serde + a small bridge for
-the parts where the TS schema names differ from the Rust struct.
+### 5. Chemolith derivation (`src/sim/chemolith.ts`)
+~78 lines TS. Reads the seeded reaction table to derive (a) the
+fuel cocktail a vent must emit and (b) the `SYNTH CAT` slots a
+chemolithoautotroph evolves to live on it. Closes the niche from
+COLONY_GAPS #6: vent + chemolith archetype is the world-side seed
+that makes chemolithoautotrophy a discoverable strategy.
 
-### 8. Snapshot wiring for creatures (~ 2 days)
-Once creatures land, populate the snapshot's creature SoA blobs
-the same way particles already are.
+## After substrate parity -- backlog (not blocking)
 
-### 9. Main TS app adapter (~ 3-5 days)
-Swap `new Worker(...)` in `src/main.ts` for a WebSocket-backed
-proxy that emits `WorkerOutbound` shaped messages. The renderer
-stays unchanged. Activated by `?server=wss://host` URL param.
-The `client-demo/` proves the wire shape works; this is the
-"now use it from the existing UI" step.
+These are perf / product surface, not biology. Recorded here so the
+list above stays substrate-only.
 
-### 10. Multi-client + persistence (~ 1 week)
-Session model, controller-vs-observer roles, per-observer
-overlays, periodic persistence, observability endpoints.
+- Force kernel rayon (`par_chunks_mut` with per-chunk PCG for
+  parallel-safe Brownian noise)
+- wgpu compute force kernel (direct WGSL port of `gpu-forces-shader.ts`)
+- Cell-cell collision rayon (row-parity two-phase dispatch; serial
+  path already written for it)
+- Main TS app adapter (swap `new Worker(...)` in `src/main.ts` for a
+  WebSocket proxy via `?server=wss://host` URL param; the demo
+  client + TUI both prove the wire shape works)
+- Multi-client + persistence (session model, controller/observer
+  roles, periodic persistence, observability endpoints)
 
 ## Operator notes
 
