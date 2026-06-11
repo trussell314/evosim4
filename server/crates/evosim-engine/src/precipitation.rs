@@ -58,6 +58,15 @@ pub fn run_precipitation(
     let four_thirds_pi = (4.0 / 3.0) * std::f32::consts::PI;
     let vol_per = four_thirds_pi * PRECIP_R.powi(3);
 
+    // Collect once per call: only chems that have ever been deposited
+    // can possibly be over-capacity. Skipping the inactive ones drops
+    // the inner from CHEMICAL_COUNT to the live set (~15 in the demo).
+    let active_chems: Vec<usize> = ambient
+        .chem_active
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &v)| if v != 0 { Some(k) } else { None })
+        .collect();
     let mut spawned = 0;
     for ry in 0..rows {
         for rx in 0..cols {
@@ -73,7 +82,7 @@ pub fn run_precipitation(
             // condensed phase. Falls back to baseline if the field
             // hasn't been seeded yet.
             let t_reg = region_temp.by_index(ri);
-            for k in 0..AMBIENT_STRIDE {
+            for &k in &active_chems {
                 let v = ambient.dissolved[base + k];
                 if v <= 0.0 {
                     continue;

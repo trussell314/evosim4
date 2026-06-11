@@ -53,6 +53,20 @@ pub struct AmbientField {
     /// the fast path.
     #[serde(default)]
     pub solid_mask: Vec<u8>,
+    /// Sticky per-chem activity flag. `true` for any chem that has ever
+    /// been deposited anywhere (or was seeded at construction). The
+    /// diffusion + precipitation passes iterate only flagged chems
+    /// instead of all 96 -- since most generic chems stay 0 in the
+    /// typical demo, this collapses the dissolved hot loop's inner
+    /// iteration count from ~96 to ~15. Sticky (never cleared on drain
+    /// to zero) so the optimisation is safe under any access pattern;
+    /// false positives are just an unnecessary scan cycle.
+    #[serde(default = "default_chem_active")]
+    pub chem_active: Vec<u8>,
+}
+
+fn default_chem_active() -> Vec<u8> {
+    vec![1; CHEMICAL_COUNT]
 }
 
 /// Stride between successive regions' chem blocks. Always equals
@@ -73,6 +87,7 @@ impl AmbientField {
             rows: 1,
             dissolved: vec![0.0; AMBIENT_STRIDE],
             solid_mask: vec![0_u8; 1],
+            chem_active: vec![0_u8; CHEMICAL_COUNT],
         }
     }
 
@@ -94,10 +109,14 @@ impl AmbientField {
         let n = cols * rows;
         let target = ambient_target();
         let mut dissolved = vec![0.0; n * AMBIENT_STRIDE];
+        let mut chem_active = vec![0_u8; CHEMICAL_COUNT];
         for r in 0..n {
             let base = r * AMBIENT_STRIDE;
             for (k, &v) in target.iter().enumerate().take(AMBIENT_STRIDE) {
                 dissolved[base + k] = v;
+                if v != 0.0 {
+                    chem_active[k] = 1;
+                }
             }
         }
         Self {
@@ -107,6 +126,7 @@ impl AmbientField {
             rows,
             dissolved,
             solid_mask: vec![0_u8; n],
+            chem_active,
         }
     }
 
@@ -134,6 +154,11 @@ impl AmbientField {
         }
         let base = self.base_at(x, y);
         self.dissolved[base + chem] += mass;
+        // Flip the sticky activity flag so diffuse / precipitation
+        // iterate this chem from here on.
+        if let Some(slot) = self.chem_active.get_mut(chem) {
+            *slot = 1;
+        }
     }
 
     /// Withdraw at most `want` of `chem` from the region containing
@@ -252,6 +277,16 @@ pub fn diffuse_dissolved(ambient: &mut AmbientField, dt: f32) {
         alpha = 0.1;
     }
     let old = ambient.dissolved.clone();
+    // Collect the active-chem indices once so the inner loop walks a
+    // dense list instead of iterating all CHEMICAL_COUNT slots and
+    // testing each. Most generic chems stay at zero in the default
+    // demo, so this typically drops the inner from 96 to ~15.
+    let active_chems: Vec<usize> = ambient
+        .chem_active
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &v)| if v != 0 { Some(k) } else { None })
+        .collect();
     for ry in 0..rows {
         for rx in 0..cols {
             let ri = ry * cols + rx;
@@ -272,7 +307,7 @@ pub fn diffuse_dissolved(ambient: &mut AmbientField, dt: f32) {
                     continue;
                 }
                 let jb = nb * AMBIENT_STRIDE;
-                for k in 0..AMBIENT_STRIDE {
+                for &k in &active_chems {
                     let oi = old[base + k];
                     let oj = old[jb + k];
                     if oi != oj {
