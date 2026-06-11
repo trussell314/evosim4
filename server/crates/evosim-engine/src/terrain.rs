@@ -27,7 +27,7 @@ pub struct ObstacleLobe {
 }
 
 /// A polygon vertex (matches the TS `{x, y}` shape).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PolygonPoint {
     pub x: f32,
     pub y: f32,

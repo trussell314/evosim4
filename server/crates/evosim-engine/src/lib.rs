@@ -23,6 +23,7 @@ pub mod edna;
 pub mod excrete_transport;
 pub mod forces;
 pub mod founders;
+pub mod geology;
 pub mod genome;
 pub mod genome_consts;
 pub mod growth;
@@ -39,9 +40,11 @@ pub mod region_temp;
 pub mod regions;
 pub mod reproduction;
 pub mod terrain;
+pub mod terrain_shapes;
 pub mod vent;
 pub mod rng;
 pub mod save;
+pub mod scene;
 pub mod sensor_bins;
 pub mod somatic;
 pub mod transport_reactions;
@@ -98,6 +101,12 @@ impl Engine {
             repair_ticks: somatic::make_repair_ticks(0),
             founders_per_strategy: 4,
         };
+        // Install the default terrain scene + vent BEFORE seeding
+        // founders so cells don't materialise inside rock. Geology
+        // seed defaults to the world seed for per-world variability;
+        // pass 0 in tests if a byte-stable un-perturbed silhouette is
+        // wanted.
+        scene::install_default_scene(&mut engine.world, DEFAULT_SEED);
         engine.seed_demo_particles();
         engine.seed_founders();
         engine

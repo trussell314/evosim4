@@ -108,6 +108,21 @@ pub fn run_cell_reactions(
             1.0
         };
 
+        // Skip reactions touching a generic chem (chem id >=
+        // NAMED_CHEMICAL_COUNT). Cells carry only named chems; any
+        // generic substrate / product can't be matched against a
+        // cell-internal pool. Generic chems are environmental --
+        // they enter / leave the cell exclusively via TRANSPORT /
+        // INGEST against the dissolved field.
+        let touches_generic = rxn
+            .s_chem
+            .iter()
+            .chain(rxn.p_chem.iter())
+            .any(|&c| (c as usize) >= crate::chem_ids::NAMED_CHEMICAL_COUNT);
+        if touches_generic {
+            continue;
+        }
+
         // Substrate gate + MM saturation.
         let mut limit = f64::INFINITY;
         let mut sat_product = 1.0_f64;
