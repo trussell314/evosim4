@@ -15,7 +15,8 @@
 //! when stimulus falls).
 
 use crate::chem_ids::{
-    CHEM_ACT_PHOTO_LONG, CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE,
+    CHEM_ACT_ELECTRO_X, CHEM_ACT_ELECTRO_Y, CHEM_ACT_PHOTO_LONG,
+    CHEM_ACT_PHOTO_SURFACE, CHEM_ACT_PHOTO_VISIBLE, CHEM_ATP, CHEM_ELECTRORECEPTOR,
     CHEM_PHOTORECEPTOR_LONG, CHEM_PHOTORECEPTOR_SURFACE, CHEM_PHOTORECEPTOR_VISIBLE,
 };
 use crate::creatures::CreatureStore;
@@ -29,6 +30,11 @@ const PHOTO_GAIN: f32 = 1.0;
 /// it the activation tracks the stimulus on a roughly per-second
 /// timescale.
 const ACTIVATION_DECAY_PER_S: f32 = 4.0;
+
+/// Range over which an electroreceptor "feels" other cells' ATP.
+const ELECTRO_RANGE: f32 = 100.0;
+/// Per-unit gain on the electro signal.
+const ELECTRO_GAIN: f32 = 0.001;
 
 /// Run sensor activation for every cell. `ambient_light` is the
 /// world's current light level (0..1).
@@ -48,6 +54,7 @@ pub fn run_activation(creatures: &mut CreatureStore, ambient_light: f32, dt: f32
         (CHEM_PHOTORECEPTOR_LONG, CHEM_ACT_PHOTO_LONG),
         (CHEM_PHOTORECEPTOR_SURFACE, CHEM_ACT_PHOTO_SURFACE),
     ];
+    #[allow(clippy::needless_range_loop)]
     for (receptor_slot, act_slot) in bands {
         for i in 0..n {
             let receptor = creatures.chems[receptor_slot][i];
@@ -57,6 +64,58 @@ pub fn run_activation(creatures: &mut CreatureStore, ambient_light: f32, dt: f32
             let prev = creatures.chems[act_slot][i] * keep;
             let stimulus = receptor * ambient_light * PHOTO_GAIN;
             creatures.chems[act_slot][i] = prev + stimulus * decay;
+        }
+    }
+
+    // Electric: directional. For each electroreceptor-carrying
+    // cell, sum the ATP of nearby cells weighted by 1/dsq and
+    // direction. Result lands in (CHEM_ACT_ELECTRO_X,
+    // CHEM_ACT_ELECTRO_Y) so SENSE_CHEMICAL on either reads the
+    // x or y component of the local "metabolism gradient." O(N^2)
+    // for now; spatial bins arrive later.
+    if n >= 2 {
+        let range_sq = ELECTRO_RANGE * ELECTRO_RANGE;
+        for i in 0..n {
+            let receptor = creatures.chems[CHEM_ELECTRORECEPTOR][i];
+            // Decay both axes regardless of whether we add new
+            // signal -- keeps the continuous-in-time semantics.
+            creatures.chems[CHEM_ACT_ELECTRO_X][i] *= keep;
+            creatures.chems[CHEM_ACT_ELECTRO_Y][i] *= keep;
+            if receptor <= 0.0 {
+                continue;
+            }
+            let cx = creatures.x[i];
+            let cy = creatures.y[i];
+            let mut sx = 0.0_f32;
+            let mut sy = 0.0_f32;
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let dx = creatures.x[j] - cx;
+                let dy = creatures.y[j] - cy;
+                let dsq = dx * dx + dy * dy;
+                if dsq < 1.0 || dsq >= range_sq {
+                    continue;
+                }
+                let atp = creatures.chems[CHEM_ATP][j];
+                if atp <= 0.0 {
+                    continue;
+                }
+                // 1/dsq weighting times the direction unit vector
+                // multiplied by ATP gives a per-axis signed signal
+                // that points TOWARD the nearby cell with strength
+                // proportional to its metabolism.
+                let d = dsq.sqrt();
+                let nx = dx / d;
+                let ny = dy / d;
+                let w = atp / dsq;
+                sx += nx * w;
+                sy += ny * w;
+            }
+            let gain = receptor * ELECTRO_GAIN;
+            creatures.chems[CHEM_ACT_ELECTRO_X][i] += sx * gain * decay;
+            creatures.chems[CHEM_ACT_ELECTRO_Y][i] += sy * gain * decay;
         }
     }
 }
@@ -109,5 +168,24 @@ mod tests {
         let mut s = CreatureStore::new();
         run_activation(&mut s, 1.0, 1.0);
         assert_eq!(s.len(), 0);
+    }
+
+    #[test]
+    fn electroreceptor_senses_nearby_atp_source() {
+        // Cell 0 has an electroreceptor; cell 1 has lots of ATP and
+        // is to the +x. Cell 0's CHEM_ACT_ELECTRO_X should rise.
+        let mut a_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        a_chems[CHEM_ELECTRORECEPTOR] = 1.0;
+        let mut b_chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        b_chems[CHEM_ATP] = 100.0;
+        let mut s = CreatureStore::new();
+        s.push(CreatureInit { x: 0.0, y: 0.0, r: 8.0, chems: Some(a_chems), ..CreatureInit::default() });
+        s.push(CreatureInit { x: 30.0, y: 0.0, r: 8.0, chems: Some(b_chems), ..CreatureInit::default() });
+        // Charge the signal.
+        for _ in 0..20 {
+            run_activation(&mut s, 0.0, 1.0 / 60.0);
+        }
+        let sx = s.chems[CHEM_ACT_ELECTRO_X][0];
+        assert!(sx > 0.0, "expected +x electro signal, got {sx}");
     }
 }
