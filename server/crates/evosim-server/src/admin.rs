@@ -35,6 +35,7 @@ pub async fn handle(
     let result = match cmd {
         AdminCommand::Restart => restart(state.clone(), &reply).await,
         AdminCommand::Update { branch } => update(state.clone(), branch, &reply).await,
+        AdminCommand::UpdateClient { pull } => update_client(state.clone(), pull, &reply).await,
         AdminCommand::Snapshot => snapshot_now(engine_cmd).await,
         AdminCommand::Reset => reset(engine_cmd).await,
         AdminCommand::Status => status(state.clone()).await,
@@ -59,6 +60,7 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
     match cmd {
         AdminCommand::Restart => "restart",
         AdminCommand::Update { .. } => "update",
+        AdminCommand::UpdateClient { .. } => "update-client",
         AdminCommand::Snapshot => "snapshot",
         AdminCommand::Reset => "reset",
         AdminCommand::Status => "status",
@@ -150,6 +152,81 @@ async fn update(
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     state.request_shutdown(EXIT_UPDATE_OK);
     Ok(Some(format!("updated to {target}")))
+}
+
+async fn update_client(
+    state: Arc<AppState>,
+    pull: bool,
+    reply: &mpsc::Sender<ServerMessage>,
+) -> anyhow::Result<Option<String>> {
+    let cfg = state.cfg();
+    let client_dir = cfg.repo_root.join("server").join("client-demo");
+    if !client_dir.exists() {
+        return Err(anyhow::anyhow!(
+            "client-demo dir not found: {}",
+            client_dir.display()
+        ));
+    }
+    info!(dir = %client_dir.display(), pull, "admin update-client requested");
+
+    if pull {
+        let _ = reply
+            .send(progress("update-client", "git fetch origin"))
+            .await;
+        let fetch = run_cmd(&cfg.repo_root, "git", &["fetch", "--prune", "origin"]).await?;
+        if !fetch.success {
+            return Err(anyhow::anyhow!("git fetch failed: {}", fetch.tail()));
+        }
+        let _ = reply
+            .send(progress(
+                "update-client",
+                &format!("git reset --hard {}", cfg.default_update_ref),
+            ))
+            .await;
+        let reset = run_cmd(
+            &cfg.repo_root,
+            "git",
+            &["reset", "--hard", &cfg.default_update_ref],
+        )
+        .await?;
+        if !reset.success {
+            return Err(anyhow::anyhow!("git reset failed: {}", reset.tail()));
+        }
+    }
+
+    let _ = reply
+        .send(progress("update-client", "npm ci"))
+        .await;
+    let install = run_cmd(&client_dir, "npm", &["ci"]).await?;
+    if !install.success {
+        // `npm ci` is strict about the lockfile; fall back to `npm
+        // install` so a missing lock or post-pull mismatch doesn't
+        // wedge the operator UI.
+        let _ = reply
+            .send(progress(
+                "update-client",
+                "npm ci failed; falling back to npm install",
+            ))
+            .await;
+        let install2 = run_cmd(&client_dir, "npm", &["install"]).await?;
+        if !install2.success {
+            return Err(anyhow::anyhow!(
+                "npm install failed: {}",
+                install2.tail()
+            ));
+        }
+    }
+
+    let _ = reply
+        .send(progress("update-client", "npm run build"))
+        .await;
+    let build = run_cmd(&client_dir, "npm", &["run", "build"]).await?;
+    if !build.success {
+        return Err(anyhow::anyhow!("npm run build failed: {}", build.tail()));
+    }
+    let dist = client_dir.join("dist");
+    info!(dist = %dist.display(), "client-demo rebuilt");
+    Ok(Some(format!("rebuilt {}", dist.display())))
 }
 
 async fn snapshot_now(engine_cmd: mpsc::Sender<EngineCmd>) -> anyhow::Result<Option<String>> {

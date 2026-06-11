@@ -61,6 +61,8 @@
         </label>
         <button id="save" disabled title="Admin only -- writes to EVOSIM_SAVE_DIR">Save</button>
         <button id="reset" disabled title="Admin only">Reset</button>
+        <button id="update-server" disabled title="Admin only -- git pull + cargo build + restart (~1-2 min). Client auto-reconnects.">Update server</button>
+        <button id="update-client" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
       </header>
       <div id="status"><span class="dim">disconnected</span></div>
       <div id="canvas-wrap"><canvas id="canvas"></canvas></div>

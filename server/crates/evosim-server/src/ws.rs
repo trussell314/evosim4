@@ -223,6 +223,7 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
     match cmd {
         Restart => "restart",
         Update { .. } => "update",
+        UpdateClient { .. } => "update-client",
         Snapshot => "snapshot",
         Reset => "reset",
         Status => "status",

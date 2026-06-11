@@ -344,6 +344,17 @@ pub enum AdminCommand {
     /// via a sequence of [`ServerMessage::AdminAck`] frames before
     /// the final [`ServerMessage::Goodbye`].
     Update { branch: Option<String> },
+    /// Rebuild the static client bundle (`server/client-demo`) on the
+    /// server's filesystem. Same workflow as `Update` minus the binary
+    /// restart -- intended for re-running `npm ci && npm run build`
+    /// after `Update` has pulled fresh source. The reply's
+    /// [`ServerMessage::AdminAck::message`] carries the dist directory
+    /// path so the client UI can confirm where the new bundle landed.
+    /// Pulls latest source first when `pull` is true.
+    UpdateClient {
+        #[serde(default)]
+        pull: bool,
+    },
     /// Snapshot the engine state and persist it to disk. Useful as a
     /// "save before risky thing" call.
     Snapshot,

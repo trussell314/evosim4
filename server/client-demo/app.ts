@@ -137,6 +137,8 @@ const speedSlider = document.getElementById("speed") as HTMLInputElement;
 const speedReadout = document.getElementById("speedReadout") as HTMLSpanElement;
 const saveBtn = document.getElementById("save") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset") as HTMLButtonElement;
+const updateServerBtn = document.getElementById("update-server") as HTMLButtonElement;
+const updateClientBtn = document.getElementById("update-client") as HTMLButtonElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
@@ -189,27 +191,51 @@ disconnectBtn.onclick = () => {
 
 // Auto-reconnect: if the user has connected at least once this
 // session and the socket dies (mobile background, network hiccup,
-// laptop sleep), reattach using the same URL + token whenever the
-// document becomes visible again. The manual Disconnect button clears
-// the intent flag so users who explicitly went idle stay idle.
+// laptop sleep, admin "Update server"), reattach using the same URL +
+// token whenever the document becomes visible again. The manual
+// Disconnect button clears the intent flag so users who explicitly
+// went idle stay idle.
+//
+// Backoff schedule is exponential and capped at 8s so the page stays
+// responsive while the server rebuilds (cargo build --release tends to
+// take 30-120s). The window of "page came back to the foreground" and
+// "network came back online" resets the backoff so a fresh attempt is
+// fast.
 let userIntendsConnection = false;
 let reconnectTimer: number | null = null;
-function scheduleReconnect(delayMs: number): void {
+let reconnectDelay = 500;
+const RECONNECT_DELAY_MIN = 500;
+const RECONNECT_DELAY_MAX = 8000;
+function scheduleReconnect(delayMs?: number): void {
   if (reconnectTimer !== null) return;
+  const d = delayMs ?? reconnectDelay;
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = null;
     if (!userIntendsConnection) return;
     if (ws && ws.readyState <= WebSocket.OPEN) return;
+    // Grow for the NEXT attempt; success resets via ws.onopen below.
+    reconnectDelay = Math.min(RECONNECT_DELAY_MAX, Math.max(RECONNECT_DELAY_MIN, reconnectDelay * 2));
     connect(urlInput.value, tokenInput.value || null);
-  }, delayMs);
+  }, d);
+}
+function resetReconnectBackoff(): void {
+  reconnectDelay = RECONNECT_DELAY_MIN;
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
 }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && userIntendsConnection) {
+    resetReconnectBackoff();
     if (!ws || ws.readyState >= WebSocket.CLOSING) scheduleReconnect(200);
   }
 });
 window.addEventListener("online", () => {
-  if (userIntendsConnection) scheduleReconnect(200);
+  if (userIntendsConnection) {
+    resetReconnectBackoff();
+    scheduleReconnect(200);
+  }
 });
 pauseBtn.onclick = () => send({ type: "set-running", running: false });
 resumeBtn.onclick = () => send({ type: "set-running", running: true });
@@ -223,6 +249,20 @@ saveBtn.onclick = () => {
   send({ type: "save", name: name && name.trim() ? name.trim() : null });
 };
 resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
+updateServerBtn.onclick = () => {
+  if (!confirm("Pull, rebuild, and restart the server? Takes ~1-2 min; the page will auto-reconnect when the new binary comes up.")) return;
+  pendingReload = false;
+  send({ type: "admin", command: { kind: "update", branch: null } });
+};
+updateClientBtn.onclick = () => {
+  if (!confirm("Pull the repo and rebuild the client bundle? The page will reload when the build completes.")) return;
+  pendingReload = true;
+  send({ type: "admin", command: { kind: "update-client", pull: true } });
+};
+/// Set true while an update-client is in flight so the AdminAck
+/// handler knows to reload the page on success rather than just
+/// echoing the path.
+let pendingReload = false;
 
 function setStatus(html: string): void {
   statusEl.innerHTML = html;
@@ -234,6 +274,7 @@ function connect(url: string, token: string | null): void {
   ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => {
+    resetReconnectBackoff();
     setStatus(`<span class="ok">connected</span> <span class="dim">— awaiting hello</span>`);
     disconnectBtn.disabled = false;
     if (token) send({ type: "auth", token });
@@ -251,13 +292,15 @@ function connect(url: string, token: string | null): void {
     speedSlider.disabled = true;
     saveBtn.disabled = true;
     resetBtn.disabled = true;
+    updateServerBtn.disabled = true;
+    updateClientBtn.disabled = true;
     snapshot = null;
     ws = null;
     // If the user didn't click Disconnect (e.g. mobile backgrounded,
-    // wifi dropped, laptop slept), keep trying. Backoff resets each
-    // time visibility returns / network comes back.
+    // wifi dropped, laptop slept, admin update-server in progress),
+    // keep trying with exponential backoff up to 8 s.
     if (userIntendsConnection && document.visibilityState === "visible") {
-      scheduleReconnect(1000);
+      scheduleReconnect();
     }
   };
   ws.onerror = () => {
@@ -282,6 +325,8 @@ function handle(msg: ServerMessage): void {
       speedSlider.disabled = false;
       saveBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
+      updateServerBtn.disabled = !isAdmin;
+      updateClientBtn.disabled = !isAdmin;
       updateHeaderStatus();
       break;
     case "snapshot":
@@ -303,6 +348,19 @@ function handle(msg: ServerMessage): void {
       break;
     case "admin-ack":
       setStatus(`<span class="ok">${msg.command}: ${msg.message ?? "ok"}</span>`);
+      // update-client final ack lands as a terminal AdminAck (the
+      // server sends progress AdminAcks while it's working, then this
+      // one with the dist path). Reload to pull the fresh bundle.
+      if (msg.command === "update-client" && pendingReload) {
+        // Distinguish progress acks (no path) from the terminal one --
+        // the terminal ack carries "rebuilt ..." in the message.
+        if (msg.message && msg.message.startsWith("rebuilt ")) {
+          pendingReload = false;
+          setStatus(`<span class="ok">update-client: rebuilt; reloading…</span>`);
+          // Give the operator a moment to see the message before reload.
+          setTimeout(() => location.reload(), 500);
+        }
+      }
       break;
     case "admin-nack":
       setStatus(`<span class="err">${msg.command} rejected: ${msg.reason}</span>`);
