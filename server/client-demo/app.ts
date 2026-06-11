@@ -103,6 +103,7 @@ interface Snapshot {
   ambient_light?: number;
   top_species?: SpeciesSummary[];
   bonds?: number[];
+  ambient_chems?: number[];
 }
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
@@ -130,6 +131,8 @@ const resetBtn = document.getElementById("reset") as HTMLButtonElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
+const ambientPanel = document.getElementById("ambient-panel") as HTMLElement;
+const ambientList = document.getElementById("ambient-list") as HTMLOListElement;
 let selectedSpeciesKey: string | null = null;
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -146,6 +149,7 @@ let snapWindowStart = performance.now();
 let isAdmin = false;
 let build: BuildInfo | null = null;
 let chemColors: string[] = [];
+let chemNames: string[] = [];
 
 // Save the URL + token in localStorage so a reload doesn't re-type.
 {
@@ -222,6 +226,7 @@ function handle(msg: ServerMessage): void {
       build = msg.build;
       isAdmin = msg.capabilities.admin;
       chemColors = msg.chem_colors;
+      chemNames = msg.chem_names;
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
       speedSlider.disabled = false;
@@ -288,6 +293,29 @@ function resize(): void {
 }
 window.addEventListener("resize", resize);
 resize();
+
+function renderAmbientPanel(stocks: number[]): void {
+  if (stocks.length === 0) {
+    ambientPanel.style.display = "none";
+    return;
+  }
+  ambientPanel.style.display = "block";
+  // Take top 10 chems by mass.
+  const sorted = stocks
+    .map((v, i) => ({ id: i, v }))
+    .sort((a, b) => b.v - a.v)
+    .slice(0, 10);
+  ambientList.innerHTML = "";
+  for (const row of sorted) {
+    if (row.v <= 0) continue;
+    const li = document.createElement("li");
+    li.style.padding = "1px 0";
+    const name = chemNames[row.id] ?? `chem ${row.id}`;
+    const color = chemColors[row.id] ?? "#9ee";
+    li.innerHTML = `<span style="display:inline-block;width:8px;height:8px;background:${color};margin-right:4px;vertical-align:-1px"></span>${name}: ${row.v.toFixed(1)}`;
+    ambientList.appendChild(li);
+  }
+}
 
 function renderSpeciesPanel(top: SpeciesSummary[]): void {
   if (top.length === 0) {
@@ -430,6 +458,7 @@ function frame(): void {
     const deaths = (snapshot as { deaths_this_window?: number }).deaths_this_window ?? 0;
     if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths})`;
     renderSpeciesPanel(snapshot.top_species ?? []);
+    renderAmbientPanel(snapshot.ambient_chems ?? []);
   }
 
   requestAnimationFrame(frame);

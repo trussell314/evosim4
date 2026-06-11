@@ -373,6 +373,7 @@ impl Engine {
             ambient_light,
             top_species,
             bonds: bond_pairs,
+            ambient_chems: self.world.ambient.stock.clone(),
         }
     }
 }

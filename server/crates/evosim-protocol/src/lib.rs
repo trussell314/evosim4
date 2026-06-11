@@ -114,6 +114,11 @@ pub struct Snapshot {
     /// bytes total.
     #[serde(default)]
     pub bonds: Vec<u32>,
+    /// World-wide dissolved-chem stocks. Length matches the chem
+    /// table; the client uses chem_colors / chem_names from Hello to
+    /// label and color them. Sized cheaply (96 floats = 384 bytes).
+    #[serde(default)]
+    pub ambient_chems: Vec<f32>,
 }
 
 /// One row of the per-snapshot species summary.
