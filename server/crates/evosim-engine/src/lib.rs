@@ -16,6 +16,7 @@ pub mod genome;
 pub mod genome_consts;
 pub mod particles;
 pub mod reactions;
+pub mod reproduction;
 pub mod rng;
 pub mod save;
 pub mod sensor_bins;
@@ -129,6 +130,11 @@ impl Engine {
         // (CHEM_GLU = 2) onto the stack, then THRUST swims up it.
         // Genome: GENE SENSE_OUT 2 THRUST END
         let seeker = vec![OP_GENE, OP_SENSE_OUT, 2, OP_THRUST, OP_END];
+        // A reproducer: pushes a parent-fraction stack value (0.5,
+        // sign-extended from byte 0) then REPRODUCE. Will keep
+        // dividing while it has > MIN_FISSION_ATP, so it makes a
+        // visible population growth in the snapshot.
+        let reproducer = vec![OP_GENE, OP_PUSH8, 0, OP_REPRODUCE, OP_END];
 
         struct Seed {
             genome: Vec<u8>,
@@ -139,6 +145,7 @@ impl Engine {
             Seed { genome: metabolizer, chems: metabolizer_chems() },
             Seed { genome: photo, chems: photo_chems() },
             Seed { genome: seeker, chems: starter_chems() },
+            Seed { genome: reproducer, chems: metabolizer_chems() }, // needs fuel to fission
         ];
         let mut idx = 0u32;
         for seed in &seeds {
@@ -186,6 +193,15 @@ impl Engine {
             &mut self.world.creature_store,
             &self.sensor_bins,
             dt as f32,
+        );
+        // Reproduction pass: a daughter for every cell that fired
+        // REPRODUCE and met the viability gates. Runs after
+        // update_creatures so the per-tick vm_out.reproduce flag has
+        // been set; the pass clears it as it consumes each.
+        reproduction::run_reproduction(
+            &mut self.world.creature_store,
+            &mut self.world.sim_rng,
+            self.world.t,
         );
     }
 
@@ -368,13 +384,29 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let e = Engine::new();
         let snap = e.snapshot();
-        assert_eq!(snap.creatures.count, 8);
+        // Initial population: 2 each of 5 seed types -> 10. Grows as
+        // the reproducer cells fission.
+        assert_eq!(snap.creatures.count, 10);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),
                 "creature SoA missing column {col}"
             );
         }
+    }
+
+    #[test]
+    fn population_grows_via_reproduction() {
+        let mut e = Engine::new();
+        let n0 = e.snapshot().creatures.count;
+        for _ in 0..120 {
+            e.step(1.0 / 60.0);
+        }
+        let n1 = e.snapshot().creatures.count;
+        assert!(
+            n1 > n0,
+            "reproducer cells should fission, {n0} -> {n1}"
+        );
     }
 
     #[test]
