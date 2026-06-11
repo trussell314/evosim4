@@ -390,13 +390,24 @@ production today, so this is closing the parity gap, not exploring
 new biology.
 
 ### 1. Region grid + regional dissolved/reserve (`src/sim/regions.ts`)
-~534 lines TS. Replaces today's flat global `AmbientField` with
-per-region `dissolved[chem]` + `reserve[chem]` arrays on a 50px
-grid. Jacobi cross-region diffusion with a ~10-minute half-life,
-solubility-driven dissolve/precipitate with hysteresis, sedimented
-reserve bucket. Plan in `REGION_SYSTEM_PLAN.md`; phase gates by
-mass-conservation. Unlocks per-position ambient light and real
-spatial heterogeneity.
+~534 lines TS. **Phases 0, 1, 3 shipped** in the native engine; Phase 4
+(reserve bucket + anisotropic vertical diffusion) waits on the
+terrain port for the rock no-flux mask.
+
+- **Phase 0 (`c2cb99d`)** -- grid geometry + solubility table
+  + Henry's-law temperature factor + capacity formula
+- **Phase 1 (`11f2974`)** -- per-region dissolved field replaces the
+  global stock; every consumer (excrete/transport, autolysis, leak/
+  uptake, maintenance, transport reactions, pH activation) acts on
+  the LOCAL region; mass-conserving Jacobi cross-region diffusion
+  with a 60s half-life; SAVE_SCHEMA bumped 3 -> 4
+- **Phase 3 (`<this>`)** -- supersaturated regions precipitate the
+  excess back into 2px particles, closing the dissolve <-> precipitate
+  loop so the dissolved field is bounded
+
+Still open: Phase 4 (reserve bucket with anisotropic vertical
+drift; needs terrain solid mask) and the regional temperature field
++ vent injection (needs vent port).
 
 ### 2. Static terrain (`src/sim/terrain.ts`, `terrain-shapes.ts`, `geology.ts`)
 ~1100 lines TS. Hand-authored rock polygons (lobe-packed for the

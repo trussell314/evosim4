@@ -30,6 +30,7 @@ pub mod maintenance;
 pub mod mass;
 pub mod particle_decay;
 pub mod particles;
+pub mod precipitation;
 pub mod predate;
 pub mod reactions;
 pub mod regions;
@@ -258,6 +259,22 @@ impl Engine {
         // pass; no temperature scaling or rock barriers yet (depend on
         // the vent / terrain ports).
         ambient::diffuse_dissolved(&mut self.world.ambient, dt as f32);
+        // Phase 3: precipitate supersaturated regions. Excess
+        // dissolved mass over per-region capacity sheds back into 2px
+        // particles, closing the dissolve <-> precipitate loop so the
+        // dissolved field can't accumulate without bound.
+        let precip_geom = precipitation::PrecipGeom {
+            width: self.world.width,
+            height: self.world.height,
+            depth: self.world.depth,
+            surface_y: self.world.surface_y,
+        };
+        precipitation::run_precipitation(
+            &mut self.world.ambient,
+            &mut self.world.particle_store,
+            precip_geom,
+            &mut self.world.sim_rng,
+        );
         // Catalyst-gated transporter reactions: cells with a
         // catalyst pool for a specific transport slot move that
         // chem cell <-> ambient down its concentration gradient.
