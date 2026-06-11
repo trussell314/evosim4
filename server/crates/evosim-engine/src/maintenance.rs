@@ -9,7 +9,8 @@
 //! intentionally tiny so a fed cell can easily outpace them and a
 //! single bad tick doesn't kill a healthy one.
 
-use crate::chem_ids::{CHEM_ATP, CHEM_MEMBRANE};
+use crate::ambient::AmbientField;
+use crate::chem_ids::{CHEM_ADP, CHEM_ATP, CHEM_MEMBRANE, CHEM_WASTE};
 use crate::creatures::CreatureStore;
 
 /// Fixed ATP cost per cell per second regardless of size. Small
@@ -25,19 +26,32 @@ const MASS_METABOLIC_ATP_PER_S: f32 = 0.005;
 /// on the chem itself); a fed cell rebuilds it through biosynth.
 const BASE_METABOLIC_MEMBRANE_PER_S: f32 = 0.05;
 
-pub fn run_maintenance(store: &mut CreatureStore, dt: f32) {
+/// Mass-conserving: ATP spent on maintenance converts to ADP (an
+/// energy-empty form of the same mass); membrane lost to upkeep
+/// dissolves into the world's ambient WASTE pool. So total world
+/// mass stays put across a maintenance tick.
+pub fn run_maintenance(store: &mut CreatureStore, ambient: &mut AmbientField, dt: f32) {
     let dt_atp_base = BASE_METABOLIC_ATP_PER_S * dt;
     let dt_atp_mass = MASS_METABOLIC_ATP_PER_S * dt;
     let dt_mem = BASE_METABOLIC_MEMBRANE_PER_S * dt;
     let n = store.n;
+    let mut waste_emitted = 0.0_f32;
     for i in 0..n {
-        // Mass scaling: total mass = sum of all named chems.
         let total_mass: f32 = store.chems.iter().map(|c| c[i]).sum();
         let atp_cost = dt_atp_base + dt_atp_mass * total_mass;
         let atp = store.chems[CHEM_ATP][i];
-        store.chems[CHEM_ATP][i] = (atp - atp_cost).max(0.0);
+        let atp_spent = atp_cost.min(atp);
+        store.chems[CHEM_ATP][i] = atp - atp_spent;
+        // ATP -> ADP swap conserves mass.
+        store.chems[CHEM_ADP][i] += atp_spent;
+
         let mem = store.chems[CHEM_MEMBRANE][i];
-        store.chems[CHEM_MEMBRANE][i] = (mem - dt_mem).max(0.0);
+        let mem_lost = dt_mem.min(mem);
+        store.chems[CHEM_MEMBRANE][i] = mem - mem_lost;
+        waste_emitted += mem_lost;
+    }
+    if waste_emitted > 0.0 {
+        ambient.deposit(CHEM_WASTE, waste_emitted);
     }
 }
 
@@ -59,7 +73,7 @@ mod tests {
             ..CreatureInit::default()
         });
         // 1 sim-second of drain.
-        run_maintenance(&mut store, 1.0);
+        run_maintenance(&mut store, &mut AmbientField::new(), 1.0);
         assert!(store.chems[CHEM_ATP][0] < 10.0);
         assert!(store.chems[CHEM_MEMBRANE][0] < 10.0);
     }
@@ -77,7 +91,7 @@ mod tests {
         let mut store = CreatureStore::new();
         store.push(CreatureInit { r: 4.0, chems: Some(small_chems), ..CreatureInit::default() });
         store.push(CreatureInit { r: 16.0, chems: Some(big_chems), ..CreatureInit::default() });
-        run_maintenance(&mut store, 1.0);
+        run_maintenance(&mut store, &mut AmbientField::new(), 1.0);
         let small_drain = 100.0 - store.chems[CHEM_ATP][0];
         let big_drain = 100.0 - store.chems[CHEM_ATP][1];
         assert!(
@@ -98,7 +112,7 @@ mod tests {
             chems: Some(chems),
             ..CreatureInit::default()
         });
-        run_maintenance(&mut store, 100.0);
+        run_maintenance(&mut store, &mut AmbientField::new(), 100.0);
         assert_eq!(store.chems[CHEM_ATP][0], 0.0);
     }
 }

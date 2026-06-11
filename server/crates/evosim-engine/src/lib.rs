@@ -26,6 +26,7 @@ pub mod genome_consts;
 pub mod growth;
 pub mod ingest;
 pub mod maintenance;
+pub mod mass;
 pub mod particle_decay;
 pub mod particles;
 pub mod predate;
@@ -155,7 +156,7 @@ impl Engine {
         // that scrapes by on reaction output gets credited the same
         // tick. This closes the selection loop: a cell with no fuel
         // path can't outpace the drain and eventually autolyses.
-        maintenance::run_maintenance(&mut self.world.creature_store, dt as f32);
+        maintenance::run_maintenance(&mut self.world.creature_store, &mut self.world.ambient, dt as f32);
         // Bond springs before update_creatures so the velocity
         // contribution shows up in the same tick's position advect.
         bonding::apply_bond_springs(
@@ -225,7 +226,7 @@ impl Engine {
         // Particle aging + decay: keeps the autolysis-emitted particle
         // field bounded so a long-running session doesn't grow the
         // particle store without limit.
-        particle_decay::run_particle_decay(&mut self.world.particle_store, dt as f32);
+        particle_decay::run_particle_decay(&mut self.world.particle_store, &mut self.world.ambient, dt as f32);
         // Ambient exchange: cells leak chems into the world-wide
         // ambient pool and pull a little out. Mass-conserving per
         // chem so the food web has a slow background mixer.
@@ -385,6 +386,11 @@ impl Engine {
             top_species,
             bonds: bond_pairs,
             ambient_chems: self.world.ambient.stock.clone(),
+            mass: mass::report(
+                &self.world.creature_store,
+                &self.world.particle_store,
+                &self.world.ambient,
+            ),
         }
     }
 }

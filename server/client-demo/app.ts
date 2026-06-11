@@ -104,6 +104,7 @@ interface Snapshot {
   top_species?: SpeciesSummary[];
   bonds?: number[];
   ambient_chems?: number[];
+  mass?: { cell_chems: number; cell_catalysts: number; particles: number; ambient: number; total: number };
 }
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
@@ -479,7 +480,8 @@ function frame(): void {
     void lastSnapshotAt;
     const species = (snapshot as { species_count?: number }).species_count ?? 0;
     const deaths = (snapshot as { deaths_this_window?: number }).deaths_this_window ?? 0;
-    if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths})`;
+    const massStr = snapshot.mass ? ` mass=${snapshot.mass.total.toFixed(0)}` : "";
+    if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths}${massStr})`;
     renderSpeciesPanel(snapshot.top_species ?? []);
     renderAmbientPanel(snapshot.ambient_chems ?? []);
   }

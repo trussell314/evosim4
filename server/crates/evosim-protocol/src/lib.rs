@@ -119,6 +119,22 @@ pub struct Snapshot {
     /// label and color them. Sized cheaply (96 floats = 384 bytes).
     #[serde(default)]
     pub ambient_chems: Vec<f32>,
+    /// Total-mass accounting for sanity / drift detection. Five
+    /// f64s; cheap to ship every snapshot.
+    #[serde(default)]
+    pub mass: MassReport,
+}
+
+/// Per-reservoir mass totals + grand total. All in chem-mass units;
+/// the snapshot ships this so the client can plot drift / verify
+/// conservation across ticks.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct MassReport {
+    pub cell_chems: f64,
+    pub cell_catalysts: f64,
+    pub particles: f64,
+    pub ambient: f64,
+    pub total: f64,
 }
 
 /// One row of the per-snapshot species summary.
