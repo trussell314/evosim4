@@ -14,6 +14,7 @@ pub mod creature_update;
 pub mod creatures;
 pub mod day_cycle;
 pub mod death;
+pub mod excrete_transport;
 pub mod forces;
 pub mod founders;
 pub mod genome;
@@ -142,6 +143,16 @@ impl Engine {
             ctx,
             &mut self.world.creature_store,
             &self.sensor_bins,
+            dt as f32,
+        );
+        // Excrete + transport: read the VM's just-written per-chem
+        // output vectors and move chems between cells and the
+        // ambient field. Closes the EXCRETE / TRANSPORT op loop and
+        // lets the photoautotroph -> heterotroph carbon cycle work
+        // through dissolved chemistry as well as particles.
+        excrete_transport::run_excrete_transport(
+            &mut self.world.creature_store,
+            &mut self.world.ambient,
             dt as f32,
         );
         // Reproduction pass: a daughter for every cell that fired
@@ -372,8 +383,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // 4 founders per strategy * 4 strategies = 16.
-        assert_eq!(snap.creatures.count, 16);
+        // 4 founders per strategy * 5 strategies = 20.
+        assert_eq!(snap.creatures.count, 20);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),

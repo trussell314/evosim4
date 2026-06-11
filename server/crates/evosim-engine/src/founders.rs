@@ -55,6 +55,13 @@ fn founder_genomes() -> Vec<Vec<u8>> {
         vec![OP_GENE, OP_SENSE_OUT, 2, OP_THRUST, OP_END],
         // Reproducer: GENE PUSH8 0 REPRODUCE END.
         vec![OP_GENE, OP_PUSH8, 0, OP_REPRODUCE, OP_END],
+        // Osmotroph: imports glucose from the ambient pool every
+        // tick. Genome: GENE PUSH8 100 TRANSPORT 2 END
+        //   PUSH8 100 puts +100 on the stack
+        //   TRANSPORT 2 pops it; positive = import CHEM_GLU from
+        //   ambient. The dissolved-chem path lets a cell rely on
+        //   what other cells leaked/dumped into the field.
+        vec![OP_GENE, OP_PUSH8, 100, OP_TRANSPORT, 2, OP_END],
     ]
 }
 
@@ -85,15 +92,23 @@ fn founder_chems() -> Vec<Vec<f32>> {
     reproducer[CHEM_GLU] = 200.0;
     reproducer[CHEM_MEMBRANE] = FOUNDER_MEMBRANE * 2.0;
 
+    // Osmotroph: relies on ambient GLU + O2 for respiration so
+    // starter pool is minimal.
+    let mut osmotroph = vec![0.0; NAMED_CHEMICAL_COUNT];
+    osmotroph[CHEM_ATP] = FOUNDER_ATP;
+    osmotroph[CHEM_MEMBRANE] = FOUNDER_MEMBRANE;
+    osmotroph[CHEM_O2] = 30.0; // some O2 for the start; later draws from ambient
+    osmotroph[CHEM_ADP] = 50.0;
+
     // Also give every line some enzyme + biopolymer for the digest
     // path: a metabolizer can switch to that route if its glucose
     // ever runs out.
-    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer].iter_mut() {
+    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph].iter_mut() {
         chems[CHEM_ENZ] = 5.0;
         chems[CHEM_BIOPOLYMER] = 20.0;
     }
 
-    vec![photo, metab, seeker, reproducer]
+    vec![photo, metab, seeker, reproducer, osmotroph]
 }
 
 /// Place `n_per_strategy` cells of each founder genome at random
@@ -148,8 +163,8 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
-        assert_eq!(n, 20); // 4 strategies x 5 each
-        assert_eq!(store.len(), 20);
+        assert_eq!(n, 25); // 5 strategies x 5 each
+        assert_eq!(store.len(), 25);
     }
 
     #[test]
