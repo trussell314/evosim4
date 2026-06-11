@@ -11,6 +11,7 @@ pub mod bonding;
 pub mod cell_reactions;
 pub mod chem_ids;
 pub mod chemistry;
+pub mod chemolith;
 pub mod collision;
 pub mod creature_collision;
 pub mod creature_update;

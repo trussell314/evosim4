@@ -390,9 +390,10 @@ production today, so this is closing the parity gap, not exploring
 new biology.
 
 ### 1. Region grid + regional dissolved/reserve (`src/sim/regions.ts`)
-~534 lines TS. **Phases 0, 1, 3 shipped** in the native engine; Phase 4
-(reserve bucket + anisotropic vertical diffusion) waits on the
-terrain port for the rock no-flux mask.
+~534 lines TS. **Phases 0, 1, 3 shipped; rock-aware diffusion +
+precipitation also shipped**. Phase 4 (reserve bucket + anisotropic
+vertical diffusion) and the regional temperature field + vent
+heat injection are the remaining sub-pieces.
 
 - **Phase 0 (`c2cb99d`)** -- grid geometry + solubility table
   + Henry's-law temperature factor + capacity formula
@@ -401,39 +402,60 @@ terrain port for the rock no-flux mask.
   uptake, maintenance, transport reactions, pH activation) acts on
   the LOCAL region; mass-conserving Jacobi cross-region diffusion
   with a 60s half-life; SAVE_SCHEMA bumped 3 -> 4
-- **Phase 3 (`<this>`)** -- supersaturated regions precipitate the
+- **Phase 3 (`adfbbd3`)** -- supersaturated regions precipitate the
   excess back into 2px particles, closing the dissolve <-> precipitate
   loop so the dissolved field is bounded
+- **Solid-mask integration (`8be9f91`)** -- diffusion and precipitation
+  honor the per-region rock mask once obstacles are populated;
+  caves / overhangs become genuinely isolated micro-environments
 
 Still open: Phase 4 (reserve bucket with anisotropic vertical
-drift; needs terrain solid mask) and the regional temperature field
-+ vent injection (needs vent port).
+drift) and the regional temperature field stepper that wires up
+`vent::vent_heat_at` as a source term.
 
-### 2. Static terrain (`src/sim/terrain.ts`, `terrain-shapes.ts`, `geology.ts`)
-~1100 lines TS. Hand-authored rock polygons (lobe-packed for the
-existing circle-collision path) plus seeded per-world vertex
-jitter. Static obstacles cells navigate around; required for the
-vent embed point.
+### 2. Static terrain (`src/sim/terrain.ts`, partial geology.ts)
+~600 lines TS. **Substrate shipped (`09c7516`)** -- Obstacle /
+ObstacleLobe / PolygonPoint types, point-in-polygon, lobe packing,
+heightmap, founder-blocked spawn test, nearest-edge query. Empty
+obstacles list by default; the hand-authored Inkscape polygons
+from `terrain-shapes.ts` are content (~265 lines of raw vertex
+data) and live in a future scene / world-config port, not the
+engine substrate.
 
 ### 3. Obstacle collision (`src/sim/obstacle-collision.ts`)
-~512 lines TS. Static spatial index over terrain lobes; per-tick
-push-out passes for particles + creatures so moving bodies can't
-phase through rock. Reads `pointInPolygon` from terrain, writes
-back to the SoA columns in place.
+~512 lines TS. **Shipped (`09c7516`)** -- ObstacleIndex (cell bitmap
++ per-cell lobe lists) built once per world via rebuild();
+resolve_obstacle_collisions per-tick polygon-edge push-out for
+particles + creatures with iteration order preserved bit-for-bit;
+evacuate_rocks safety net dissolves stuck particles into the
+nearest water region; deposit_region_base rock-aware ambient redirect.
 
 ### 4. Hydrothermal vent (`src/sim/vent.ts`)
-~262 lines TS. Point feature embedded in seafloor rock; schedules
-dormant -> warmup -> main -> cooldown over an in-game day; emits a
-weighted cocktail of hot generic chems while active. True source
-in the mass ledger -- emissions tracked separately so
-mass-conservation closes.
+~262 lines TS. **Shipped (`f1619ae`)** -- VentState on World as
+`Option<VentState>`, dormant/warmup/main/cooldown phase machine,
+weighted 10-chem cocktail emissions ramped by intensity^2,
+vent_heat_at Gaussian heat field. No-op when no vent is installed
+so existing demo runs unchanged. Skipped: global-saturation gate
+(needs per-chem capacity accumulator) and generic-molecules
+particle content tag.
 
 ### 5. Chemolith derivation (`src/sim/chemolith.ts`)
-~78 lines TS. Reads the seeded reaction table to derive (a) the
-fuel cocktail a vent must emit and (b) the `SYNTH CAT` slots a
-chemolithoautotroph evolves to live on it. Closes the niche from
-COLONY_GAPS #6: vent + chemolith archetype is the world-side seed
-that makes chemolithoautotrophy a discoverable strategy.
+~78 lines TS. **Shipped (`<this>`)** -- `energy_slot()` /
+`carbon_slot()` / `vent_fuel_chems()` derived once from the
+seeded reaction table. The vent's fuel cocktail and a
+chemolithoautotroph archetype's `SYNTH CAT` targets now agree
+by construction -- the seeded chemistry picks the niche, no
+hand-tuning.
+
+## Substrate parity status
+
+The TS engine's substrate is now ported. Open piece in the regional
+layer (Phase 4 reserve bucket + regional temperature stepper) is
+non-blocking -- the world ticks correctly without it; reserve adds
+heavy-chem sedimentation and regionTemp wires vent heat into
+solubility. Hand-authored terrain polygons and the
+chemolithoautotroph founder archetype are content / world-config,
+not substrate.
 
 ## After substrate parity -- backlog (not blocking)
 
