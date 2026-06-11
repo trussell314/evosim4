@@ -50,6 +50,8 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
         protocol: PROTOCOL_VERSION,
         build: state.build.clone(),
         capabilities: capabilities(&state, is_admin),
+        chem_colors: chem_colors(),
+        chem_names: chem_names(),
     };
     if !send_frame(&mut tx, &hello).await {
         return;
@@ -164,6 +166,8 @@ async fn handle_client_message(
                     protocol: PROTOCOL_VERSION,
                     build: state.build.clone(),
                     capabilities: capabilities(state, *is_admin),
+                    chem_colors: chem_colors(),
+                    chem_names: chem_names(),
                 })
                 .await;
         }
@@ -223,6 +227,26 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
         Reset => "reset",
         Status => "status",
     }
+}
+
+/// Hex colour for every chem id, cached at first call.
+fn chem_colors() -> Vec<String> {
+    // The chem table is pinned in a OnceLock; cloning the Vec<String>
+    // once per connect is fine.
+    evosim_engine::chemistry::table()
+        .chems
+        .iter()
+        .map(|c| c.color.clone())
+        .collect()
+}
+
+/// Human label for every chem id, same indexing as `chem_colors`.
+fn chem_names() -> Vec<String> {
+    evosim_engine::chemistry::table()
+        .chems
+        .iter()
+        .map(|c| c.name.clone())
+        .collect()
 }
 
 fn capabilities(_state: &AppState, is_admin: bool) -> ServerCapabilities {

@@ -18,7 +18,8 @@ interface Snapshot {
   gpu_last_ms: number;
 }
 type ServerMessage =
-  | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps }
+  | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
+      chem_colors: string[]; chem_names: string[] }
   | { type: "snapshot"; tick: number; t: number; width: number; height: number;
       particles: Soa; creatures: Soa;
       force_source: "gpu" | "cpu" | "serial";
@@ -50,6 +51,7 @@ let snapAccum = 0;
 let snapWindowStart = performance.now();
 let isAdmin = false;
 let build: BuildInfo | null = null;
+let chemColors: string[] = [];
 
 // Save the URL + token in localStorage so a reload doesn't re-type.
 {
@@ -114,6 +116,7 @@ function handle(msg: ServerMessage): void {
     case "hello":
       build = msg.build;
       isAdmin = msg.capabilities.admin;
+      chemColors = msg.chem_colors;
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
       resetBtn.disabled = !isAdmin;
@@ -201,12 +204,12 @@ function frame(): void {
     const r = f32(blobs.r.data, n);
     const chemId = blobs.chemId.data;
 
-    // Cheap chem-id -> hue mapping. Until the chemistry color table
-    // crosses the wire we just bucket by id; gives some visible
-    // separation without lying about specific chems.
+    // Use the server's chem table (sent in Hello). Fall back to the
+    // cheap chem-id -> hue mapping when an id is out of range or the
+    // table hasn't arrived yet (race on first frame).
     for (let i = 0; i < n; i++) {
-      const hue = (chemId[i] * 33) % 360;
-      ctx.fillStyle = `hsl(${hue} 70% 60%)`;
+      const cid = chemId[i];
+      ctx.fillStyle = chemColors[cid] ?? `hsl(${(cid * 33) % 360} 70% 60%)`;
       ctx.beginPath();
       ctx.arc(offX + x[i] * scale, offY + y[i] * scale, Math.max(1, r[i] * scale), 0, Math.PI * 2);
       ctx.fill();

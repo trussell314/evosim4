@@ -17,7 +17,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Protocol-major. Bump on any breaking change to either enum.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// History:
+///   1 -- initial release (foundation commit `f95c438`)
+///   2 -- Hello carries chem_colors + chem_names so the client can
+///        render with the server's chemistry table instead of a
+///        synthetic hue-by-id
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Lightweight build identity sent in [`ServerMessage::Hello`]. The
 /// client surfaces these in the bottom HUD so it's obvious which
@@ -114,6 +120,15 @@ pub enum ServerMessage {
         protocol: u32,
         build: BuildInfo,
         capabilities: ServerCapabilities,
+        /// Per-chem hex color and human label, indexed by chem id.
+        /// Sent once at handshake so the client renderer can colour
+        /// particles by their actual chemistry table -- avoids
+        /// shipping a duplicate static table on every snapshot.
+        /// Length matches the server's chem table; clients should
+        /// fall back to a synthetic colour when an index exceeds
+        /// the array length.
+        chem_colors: Vec<String>,
+        chem_names: Vec<String>,
     },
     /// Recurring snapshot. Push cadence ~10 Hz, matches TS sim worker.
     Snapshot(Snapshot),
@@ -208,6 +223,8 @@ mod tests {
                 cpu_threads: 8,
                 admin: false,
             },
+            chem_colors: vec!["#ff0000".into()],
+            chem_names: vec!["test".into()],
         };
         let bytes = encode_server(&msg).unwrap();
         let back: ServerMessage = rmp_serde::from_slice(&bytes).unwrap();
