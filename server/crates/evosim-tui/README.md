@@ -24,21 +24,28 @@ cargo build --release -p evosim-tui
 ## Layout
 
 ```
- ┌─ status ────────────────────────────────────────────────┐
- │ t=… cells=… species=… bonds=… mass=… light=… rate=…     │
- ├─ world ─────────────────────────────┬─ species ─────────┤
- │ A . . . . . B B  . . . . . . . . .  │ glyph count mass  │
- │ . . . . . . . . A . . . . . . . . . │ A      8    1871  │
- │ . . . . . . . . . . . . . . . . . . │ B      8    3509  │
- │ . . . . . . . . . . . . . . . . . . │ C      4    2229  │
- ├─ keys ──────────────────────────────┴───────────────────┤
- │ q quit  p pause  r resume  ]/[ rate +/-  s save  x reset │
- └──────────────────────────────────────────────────────────┘
+ ┌─ status ──────────────────────────────────────────────────┐
+ │ t=… cells=… species=… bonds=… mass=… light=… rate=…       │
+ ├─ ambient ───┬─ world ──────────────────┬─ species ────────┤
+ │ O2    7100 ████ │ A . . . . B B  .  . │ > A   8  1871 230│
+ │ CO2   2800 ██   │ . . A . . . . . . . │   B   8  3509 410│
+ │ ATP    400 ▍    │ . . . . . . . . . . │   C   4  2229 110│
+ │ light  100      │ . . . . . . . . . . ├─ species (A) ────┤
+ │              │ │ . . . . . . . . . . │ READS chem 3 then │
+ │              │ │                     │ EMITS light when …│
+ │              │ │                     ├─ history (~60s) ──┤
+ │              │ │                     │ cells: ▂▃▆▇▆▅▆▆▇  │
+ │              │ │                     │ species: ▁▂▂▂▃▃▃▃ │
+ ├─ keys ──────────┴─────────────────────┴───────────────────┤
+ │ q quit  p pause  r resume  ]/[ rate +/-  j/k species …    │
+ └───────────────────────────────────────────────────────────┘
 ```
 
 Cells are placed in a grid scaled to the terminal size. The letter
 (`A`–`P`) identifies the species; cells outside the top-N appear as
-`.`. The species panel mirrors the web client's roster.
+`.`. The ambient panel ranks ambient chems by mass; the species panel
+mirrors the web client's roster, and `j`/`k` selects a species whose
+description renders in the middle panel.
 
 ## Keys
 
@@ -49,6 +56,8 @@ Cells are placed in a grid scaled to the terminal size. The letter
 | `r` | Resume |
 | `]` / `+` / `=` | Sim rate × 2 (cap 8) |
 | `[` / `-` | Sim rate ÷ 2 (floor 1/16) |
+| `j` / `↓` | Select next species |
+| `k` / `↑` | Select previous species |
 | `s` | Save (auto-named `tui-<unix-secs>`) |
 | `x` | Admin Reset (requires --token) |
 
