@@ -4,13 +4,19 @@
 //! catalyst + inhibitor) transfer wholesale to the predator and the
 //! prey's membrane is zeroed so the death pass culls it next tick.
 //!
+//! Bonded prey: the size gate uses the prey's full bonded cluster's
+//! effective radius, not the prey cell's own. So a small cell that's
+//! bonded into a larger colony gets predation refuge -- a predator
+//! must out-size the *colony*, not the individual. This is what makes
+//! adhesion a real evolvable defense and not just a co-localization
+//! convenience (see COLONY_GAPS.md GAP #3).
+//!
 //! What's NOT here yet (kept honest):
 //!   - PREDATION_ATP_COST: TS charges energy per kill; we do not
 //!     yet so predation is currently free
 //!   - per-cell ingestCooldown that throttles serial kills
 //!   - membrane tear ceiling: TS refuses kills that would push the
 //!     predator over its envelope budget
-//!   - bonded-partner protection (TS guards bonded cells)
 //!   - generic-chem transfer (those columns don't exist yet)
 //!
 //! Selection: the predator gets a free mass transfer minus the prey's
@@ -19,6 +25,7 @@
 //! refuses prey larger than the predator -- you can't swallow what
 //! you can't engulf.
 
+use crate::bonding::BondList;
 use crate::chem_ids::{CHEM_MEMBRANE, NAMED_CHEMICAL_COUNT};
 use crate::creatures::CreatureStore;
 use crate::genome_consts::CATALYST_COUNT;
@@ -28,8 +35,41 @@ use crate::genome_consts::CATALYST_COUNT;
 /// pressure favors the larger cells.
 const PREDATOR_R_ADVANTAGE: f32 = 1.0;
 
+/// Effective radius of the bonded cluster the cell at `idx` belongs to.
+/// Computed as sqrt(sum of r^2 across the connected bond component).
+/// Because cell radius scales as sqrt(membrane mass), this proxy
+/// aggregates membrane mass additively -- i.e. cluster_r reflects the
+/// total membrane investment a predator must out-mass to clear the
+/// size gate.
+///
+/// Isolated cells (empty bond list) return their own radius.
+fn cluster_effective_radius(creatures: &CreatureStore, bonds: &BondList, idx: usize) -> f32 {
+    let n = creatures.n;
+    if idx >= n || idx >= bonds.len() || bonds[idx].is_empty() {
+        return creatures.r[idx];
+    }
+    // BFS over the bond graph, summing r^2.
+    let mut seen = vec![false; n];
+    let mut stack = vec![idx];
+    seen[idx] = true;
+    let mut sum_r2 = 0.0f32;
+    while let Some(i) = stack.pop() {
+        sum_r2 += creatures.r[i] * creatures.r[i];
+        if i < bonds.len() {
+            for &j_u32 in &bonds[i] {
+                let j = j_u32 as usize;
+                if j < n && !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    sum_r2.sqrt()
+}
+
 /// Returns the number of cells killed by predation this tick.
-pub fn run_predate(creatures: &mut CreatureStore) -> usize {
+pub fn run_predate(creatures: &mut CreatureStore, bonds: &BondList) -> usize {
     let n = creatures.n;
     if n < 2 {
         return 0;
@@ -47,7 +87,7 @@ pub fn run_predate(creatures: &mut CreatureStore) -> usize {
         if eaten[ci] {
             continue;
         }
-        // Scan for prey: nearest in-range, smaller-by-radius,
+        // Scan for prey: nearest in-range, smaller-by-cluster-radius,
         // not-yet-eaten cell.
         let cx = creatures.x[ci];
         let cy = creatures.y[ci];
@@ -58,7 +98,9 @@ pub fn run_predate(creatures: &mut CreatureStore) -> usize {
                 continue;
             }
             let pr = creatures.r[pi];
-            if cr < pr + PREDATOR_R_ADVANTAGE {
+            // Size gate is against the prey's bonded cluster.
+            let cluster_r = cluster_effective_radius(creatures, bonds, pi);
+            if cr < cluster_r + PREDATOR_R_ADVANTAGE {
                 continue;
             }
             let dx = creatures.x[pi] - cx;
@@ -112,6 +154,7 @@ pub fn run_predate(creatures: &mut CreatureStore) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bonding::make_bonds;
     use crate::chem_ids::{CHEM_ATP, CHEM_GLU};
     use crate::creatures::CreatureInit;
     use crate::vm::VmOutputs;
@@ -145,7 +188,8 @@ mod tests {
         push_cell(&mut s, a);
         push_cell(&mut s, b);
         fire_predate(&mut s, 0);
-        let kills = run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
         assert_eq!(kills, 1);
         // Predator absorbed prey's GLU pool.
         assert!(s.chems[CHEM_GLU][0] >= 30.0);
@@ -162,7 +206,8 @@ mod tests {
         push_cell(&mut s, a);
         push_cell(&mut s, b);
         fire_predate(&mut s, 0);
-        let kills = run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
         assert_eq!(kills, 0);
     }
 
@@ -176,7 +221,8 @@ mod tests {
         push_cell(&mut s, a);
         push_cell(&mut s, b);
         fire_predate(&mut s, 0);
-        let kills = run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
         assert_eq!(kills, 0);
     }
 
@@ -191,7 +237,8 @@ mod tests {
         push_cell(&mut s, a);
         push_cell(&mut s, b);
         fire_predate(&mut s, 0);
-        let kills = run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
         assert_eq!(kills, 1);
     }
 
@@ -203,8 +250,51 @@ mod tests {
         push_cell(&mut s, a);
         push_cell(&mut s, b);
         // No predate flag set.
-        let kills = run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
         assert_eq!(kills, 0);
+    }
+
+    #[test]
+    fn bonded_cluster_protects_small_prey() {
+        // Predator r=10 vs single isolated cell r=8: eats normally.
+        // But if the prey is bonded to two siblings (also r=8), the
+        // cluster's effective r = sqrt(3*64) = ~13.86 > predator's 10
+        // so the predator must refuse.
+        let mut s = CreatureStore::new();
+        let (predator, _) = cell_at(50.0, 50.0, 10.0, 5.0, 20.0, 0.0);
+        let (a, _) = cell_at(52.0, 50.0, 8.0, 5.0, 5.0, 30.0);
+        let (b, _) = cell_at(53.0, 50.0, 8.0, 5.0, 5.0, 30.0);
+        let (c, _) = cell_at(54.0, 50.0, 8.0, 5.0, 5.0, 30.0);
+        push_cell(&mut s, predator);
+        push_cell(&mut s, a);
+        push_cell(&mut s, b);
+        push_cell(&mut s, c);
+        fire_predate(&mut s, 0);
+        // Bond a-b-c in a chain.
+        let mut bonds = make_bonds(s.n);
+        bonds[1].push(2);
+        bonds[2].push(1);
+        bonds[2].push(3);
+        bonds[3].push(2);
+        let kills = run_predate(&mut s, &bonds);
+        assert_eq!(kills, 0, "bonded cluster should refuse predation");
+    }
+
+    #[test]
+    fn predator_eats_lone_member_when_cluster_radius_low() {
+        // Sanity: with no bonds the same prey r=8 vs predator r=10
+        // gets eaten. (Same as predator_eats_smaller_prey_in_range,
+        // here for symmetry with bonded_cluster_protects_small_prey.)
+        let mut s = CreatureStore::new();
+        let (predator, _) = cell_at(50.0, 50.0, 10.0, 5.0, 20.0, 0.0);
+        let (lone, _) = cell_at(52.0, 50.0, 8.0, 5.0, 5.0, 30.0);
+        push_cell(&mut s, predator);
+        push_cell(&mut s, lone);
+        fire_predate(&mut s, 0);
+        let bonds = make_bonds(s.n);
+        let kills = run_predate(&mut s, &bonds);
+        assert_eq!(kills, 1);
     }
 
     #[test]
@@ -217,7 +307,8 @@ mod tests {
         s.catalyst[7][1] = 4.5;
         s.inhibitor[7][1] = 1.5;
         fire_predate(&mut s, 0);
-        run_predate(&mut s);
+        let bonds = make_bonds(s.n);
+        run_predate(&mut s, &bonds);
         assert_eq!(s.catalyst[7][0], 4.5);
         assert_eq!(s.inhibitor[7][0], 1.5);
         assert_eq!(s.catalyst[7][1], 0.0);

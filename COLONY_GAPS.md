@@ -14,6 +14,32 @@ supply).
 
 ---
 
+## GAP #3 — colony predation refuge (RESOLVED 2026-06-11, native engine)
+
+**Fix shipped** (`server/crates/evosim-engine/src/predate.rs`). The
+predator's size-gate now compares against the prey's full bonded
+cluster's *effective radius* (sqrt of sum-of-squared-radii across the
+connected bond component), not the prey cell's own radius. Because
+cell radius scales as sqrt(membrane mass), this aggregates membrane
+mass additively across the colony, so a predator must out-size the
+*colony* to clear the gate. A small cell bonded into three siblings
+of the same size gets a cluster radius ~1.73× its own, putting it out
+of reach of any predator that could have eaten it solo.
+
+**Selection consequence.** Bonds become a real evolvable defense, not
+just a co-localization convenience. Greenbeard marker matching now
+pays selection rent twice: cross-feeding (shared diffusion) AND
+predation refuge. The TS-side fix sketch is preserved below; the
+native engine implementation is in
+`cluster_effective_radius` + the updated size-gate at the prey-scan
+loop, with tests `bonded_cluster_protects_small_prey` and
+`predator_eats_lone_member_when_cluster_radius_low`.
+
+The original TS-side description and validation are kept below for the
+record; the gap is closed in the substrate the project is shipping.
+
+---
+
 ## GAP #3 — No colony/size predation refuge (VALIDATED 2026-05-18)
 
 **Finding:** being in a colony confers zero protection from

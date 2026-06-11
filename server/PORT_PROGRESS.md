@@ -339,6 +339,18 @@ activation pass:
   - EMIT[2] vibration   -> cell-to-cell vibration signalling
   - EMIT[3] magnetic    -> no receiver (no biological analog)
 
+### Colony predation refuge (COLONY_GAPS #3)
+
+predate.rs's size gate now compares against the prey's full bonded
+cluster's effective radius (sqrt of sum-of-squared-radii across the
+connected bond component), not the prey cell's own. Because r scales
+as sqrt(membrane mass), this aggregates membrane mass additively, so
+a predator must out-size the *colony* to clear the gate. Adhesion
+now pays selection rent twice: cross-feeding (shared diffusion) AND
+predation refuge -- a real evolvable defense rather than just
+co-localization. Substrate addition, not scripted behavior; closes
+COLONY_GAPS.md GAP #3 in the native engine.
+
 ### Per-species biomass + ATP
 
 Snapshot summaries grow biomass and atp fields. The client roster

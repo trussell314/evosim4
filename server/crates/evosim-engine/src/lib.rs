@@ -213,7 +213,7 @@ impl Engine {
         // smaller, in-range cell. Prey's entire chem + catalyst pool
         // transfers to the predator; prey's membrane is zeroed so
         // the death pass culls it.
-        predate::run_predate(&mut self.world.creature_store);
+        predate::run_predate(&mut self.world.creature_store, &self.bonds);
         // Cell-vs-cell collision: resolve position overlap so cells
         // can't phase through each other. Predators can now corner
         // prey; swarms can't compress to a point.
