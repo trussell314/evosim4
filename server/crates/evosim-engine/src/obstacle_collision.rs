@@ -25,6 +25,16 @@ use crate::creatures::CreatureStore;
 use crate::particles::ParticleStore;
 use crate::terrain::{nearest_polygon_edge_point, point_in_polygon, Obstacle};
 
+/// Particles below this count run on the serial path. Most per-particle
+/// work in this pass is the cell-bitmap fast-reject (~1 ns per particle)
+/// not the polygon walk -- a particle reaching the polygon walk is
+/// genuinely rare. The rayon dispatch overhead therefore needs a high
+/// breakeven; bench (`perf_obstacle_collision_parallel_wins`) shows the
+/// crossover around N=2k for this scene.
+const PAR_PARTICLE_THRESHOLD: usize = 2048;
+/// Particles per rayon chunk for the obstacle-collision pass.
+const PAR_PARTICLE_CHUNK: usize = 512;
+
 /// Cell size (px) for the obstacle bitmap + per-cell lobe index.
 const OBSTACLE_CELL_SIZE: f32 = 12.0;
 /// Margin added when registering an obstacle / lobe into the bitmap
@@ -320,10 +330,76 @@ fn process_at_cell(
     out
 }
 
+/// Parallel variant of the particle push-out loop. Splits the SoA
+/// columns into `PAR_PARTICLE_CHUNK` stripes, dispatches via rayon.
+/// Each chunk reads `obstacles` + `index` by shared reference and
+/// writes only its own particle slots, so the inner loop has zero
+/// synchronisation overhead.
+fn run_particle_obstacle_collision_parallel(
+    obstacles: &[Obstacle],
+    index: &ObstacleIndex,
+    particles: &mut ParticleStore,
+    restitution: f32,
+    min_y: f32,
+) {
+    use rayon::prelude::*;
+    let pr = &particles.r[..];
+    let px = particles.x.par_chunks_mut(PAR_PARTICLE_CHUNK);
+    let py = particles.y.par_chunks_mut(PAR_PARTICLE_CHUNK);
+    let pvx = particles.vx.par_chunks_mut(PAR_PARTICLE_CHUNK);
+    let pvy = particles.vy.par_chunks_mut(PAR_PARTICLE_CHUNK);
+
+    px.zip(py)
+        .zip(pvx)
+        .zip(pvy)
+        .enumerate()
+        .for_each(|(ci, (((cx, cy), cvx), cvy))| {
+            let from = ci * PAR_PARTICLE_CHUNK;
+            for local in 0..cx.len() {
+                let global = from + local;
+                let yk = cy[local];
+                let rk = pr[global];
+                if yk + rk < min_y {
+                    continue;
+                }
+                let xk = cx[local];
+                if !xk.is_finite() || !yk.is_finite() || !rk.is_finite() {
+                    continue;
+                }
+                let Some(cell_i) = index.cell_at(xk, yk) else { continue };
+                if index.cell_grid[cell_i] == 0 {
+                    continue;
+                }
+                let out = process_at_cell(
+                    index,
+                    obstacles,
+                    cell_i,
+                    xk,
+                    yk,
+                    cvx[local],
+                    cvy[local],
+                    rk,
+                    restitution,
+                );
+                cx[local] = out.x;
+                cy[local] = out.y;
+                cvx[local] = out.vx;
+                cvy[local] = out.vy;
+            }
+        });
+}
+
 /// Per-tick collision pass: push particles and creatures back out of
 /// rock. No-op when there are no obstacles. Restitution comes from
 /// the world's collision settings; the creature pass uses a softer
 /// constant (TS uses 0.1) so cells don't ping off rock.
+///
+/// Particles in this pass are independent (each one reads obstacles +
+/// the spatial index, writes only its own SoA slot). Above
+/// `PAR_PARTICLE_THRESHOLD` particles the loop dispatches via rayon
+/// `par_chunks_mut`. Per-particle work is heavier than the force kernel
+/// (polygon-edge walk for hits) so the threshold sits much lower than
+/// forces'.
 pub fn resolve_obstacle_collisions(
     obstacles: &[Obstacle],
     index: &ObstacleIndex,
@@ -335,36 +411,46 @@ pub fn resolve_obstacle_collisions(
         return;
     }
     let min_y = index.min_y;
-    // Particles.
-    for k in 0..particles.len() {
-        let yk = particles.y[k];
-        let rk = particles.r[k];
-        if yk + rk < min_y {
-            continue;
-        }
-        let xk = particles.x[k];
-        if !xk.is_finite() || !yk.is_finite() || !rk.is_finite() {
-            continue;
-        }
-        let Some(ci) = index.cell_at(xk, yk) else { continue };
-        if index.cell_grid[ci] == 0 {
-            continue;
-        }
-        let out = process_at_cell(
-            index,
+    let n = particles.len();
+    if n >= PAR_PARTICLE_THRESHOLD {
+        run_particle_obstacle_collision_parallel(
             obstacles,
-            ci,
-            xk,
-            yk,
-            particles.vx[k],
-            particles.vy[k],
-            rk,
+            index,
+            particles,
             restitution,
+            min_y,
         );
-        particles.x[k] = out.x;
-        particles.y[k] = out.y;
-        particles.vx[k] = out.vx;
-        particles.vy[k] = out.vy;
+    } else {
+        for k in 0..n {
+            let yk = particles.y[k];
+            let rk = particles.r[k];
+            if yk + rk < min_y {
+                continue;
+            }
+            let xk = particles.x[k];
+            if !xk.is_finite() || !yk.is_finite() || !rk.is_finite() {
+                continue;
+            }
+            let Some(ci) = index.cell_at(xk, yk) else { continue };
+            if index.cell_grid[ci] == 0 {
+                continue;
+            }
+            let out = process_at_cell(
+                index,
+                obstacles,
+                ci,
+                xk,
+                yk,
+                particles.vx[k],
+                particles.vy[k],
+                rk,
+                restitution,
+            );
+            particles.x[k] = out.x;
+            particles.y[k] = out.y;
+            particles.vx[k] = out.vx;
+            particles.vy[k] = out.vy;
+        }
     }
     // Creatures (softer restitution).
     let cn = creatures.n;
@@ -584,11 +670,98 @@ fn region_center_is_solid(obstacles: &[Obstacle], ambient: &AmbientField, region
     false
 }
 
+/// Microbench: time the serial vs parallel particle-collision loop at
+/// high N. Used by the ignored `perf_obstacle_collision_parallel_wins`
+/// test to pick `PAR_PARTICLE_THRESHOLD`.
+#[doc(hidden)]
+pub fn microbench_obstacle_collision(n: usize, iters: usize) -> (f64, f64) {
+    use crate::particles::ParticleInit;
+    use crate::terrain::{make_obstacle_from_polygon, PolygonPoint};
+    use std::time::Instant;
+    let mut store = ParticleStore::new();
+    for i in 0..n {
+        store.push(ParticleInit {
+            x: ((i * 37) % 1000) as f32,
+            y: ((i * 53) % 600) as f32,
+            r: 2.0,
+            chem_id: 0,
+            density: 1.0,
+            ..ParticleInit::default()
+        });
+    }
+    let ob = make_obstacle_from_polygon(vec![
+        PolygonPoint { x: 200.0, y: 200.0 },
+        PolygonPoint { x: 600.0, y: 200.0 },
+        PolygonPoint { x: 600.0, y: 500.0 },
+        PolygonPoint { x: 200.0, y: 500.0 },
+    ])
+    .unwrap();
+    let obs = vec![ob];
+    let mut idx = ObstacleIndex::new();
+    idx.rebuild(&obs, 1000.0, 600.0);
+    let min_y = idx.min_y;
+
+    // Serial path.
+    let t0 = Instant::now();
+    for _ in 0..iters {
+        for k in 0..store.len() {
+            let yk = store.y[k];
+            let rk = store.r[k];
+            if yk + rk < min_y {
+                continue;
+            }
+            let xk = store.x[k];
+            if !xk.is_finite() || !yk.is_finite() || !rk.is_finite() {
+                continue;
+            }
+            let Some(ci) = idx.cell_at(xk, yk) else { continue };
+            if idx.cell_grid[ci] == 0 {
+                continue;
+            }
+            let out = process_at_cell(
+                &idx,
+                &obs,
+                ci,
+                xk,
+                yk,
+                store.vx[k],
+                store.vy[k],
+                rk,
+                0.8,
+            );
+            store.x[k] = out.x;
+            store.y[k] = out.y;
+            store.vx[k] = out.vx;
+            store.vy[k] = out.vy;
+        }
+    }
+    let serial_ms = t0.elapsed().as_secs_f64() * 1000.0 / iters as f64;
+
+    let t0 = Instant::now();
+    for _ in 0..iters {
+        run_particle_obstacle_collision_parallel(&obs, &idx, &mut store, 0.8, min_y);
+    }
+    let parallel_ms = t0.elapsed().as_secs_f64() * 1000.0 / iters as f64;
+    (serial_ms, parallel_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::particles::ParticleInit;
     use crate::terrain::{make_obstacle_from_polygon, PolygonPoint};
+
+    #[test]
+    #[ignore]
+    fn perf_obstacle_collision_parallel_wins() {
+        for n in [1024_usize, 2048, 4096, 8192, 16384] {
+            let (s, par) = super::microbench_obstacle_collision(n, 50);
+            let speedup = s / par.max(1e-6);
+            println!(
+                "N={n:>5}  serial={s:>6.2} ms  parallel={par:>6.2} ms  speedup={speedup:>4.2}x"
+            );
+        }
+    }
 
     fn square(min: f32, max: f32) -> Vec<PolygonPoint> {
         vec![
