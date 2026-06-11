@@ -88,14 +88,14 @@ The supervisor wrapper distinguishes exit codes:
 
 Three layered options, none requiring Tailscale or a static IP:
 
-1. **Reverse tunnel via Cloudflare Tunnel (recommended).** Install
-   `cloudflared`, point it at `http://127.0.0.1:8080`, get back a
-   public `https://*.trycloudflare.com` URL (or a custom domain).
-   No router changes, no port forwarding. TLS terminates at
-   Cloudflare. Auth: stack Cloudflare Access (free for personal use,
-   email-based gating) in front of `/sim` so only your email can
-   open the WebSocket *before* it hits the admin token check. Two
-   independent gates.
+1. **Cloudflare Tunnel (recommended).** Ready-to-use config and runner
+   script in `server/cloudflared/`. Quick-tunnel mode gives you an
+   ephemeral `*.trycloudflare.com` URL with `./server/scripts/tunnel.sh
+   quick`. Named-tunnel mode adds Cloudflare Access (free; gates by
+   email/Google/GitHub) as an independent second layer on top of the
+   admin bearer token. No router config, no port forwarding, TLS
+   terminates at Cloudflare. Full setup walkthrough in
+   `server/cloudflared/README.md`.
 
 2. **Caddy + Let's Encrypt + port forward 443.** If you control the
    router. Caddy auto-provisions a cert if you have a domain. TLS +
