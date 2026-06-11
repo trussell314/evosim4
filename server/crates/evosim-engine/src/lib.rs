@@ -13,6 +13,7 @@ pub mod creature_update;
 pub mod creatures;
 pub mod death;
 pub mod forces;
+pub mod founders;
 pub mod genome;
 pub mod genome_consts;
 pub mod maintenance;
@@ -27,9 +28,7 @@ pub mod world;
 
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
 
-use crate::chem_ids::{CHEM_ATP, NAMED_CHEMICAL_COUNT};
-use crate::creatures::{CreatureInit, CreatureStore};
-use crate::genome::*;
+use crate::creatures::CreatureStore;
 use crate::particles::ParticleInit;
 use crate::world::World;
 
@@ -66,7 +65,7 @@ impl Engine {
             pending_deaths: 0,
         };
         engine.seed_demo_particles();
-        engine.seed_demo_creatures();
+        engine.seed_founders();
         engine
     }
 
@@ -92,94 +91,19 @@ impl Engine {
         }
     }
 
-    /// Spawn a small demo population of creatures so the snapshot
-    /// has visible cells before the founder / spawn pass lands. Each
-    /// cell runs a different short genome (swimmer / turner / synth),
-    /// two of each, spread across the world.
-    fn seed_demo_creatures(&mut self) {
-        use crate::chem_ids::{
-            CHEM_ADP, CHEM_CHL, CHEM_CO2, CHEM_GLU, CHEM_MEMBRANE, CHEM_MRNA, CHEM_O2,
-        };
-        let w = self.world.width;
-        let h = self.world.height;
-        // Every seed needs a starter membrane > MIN_VIABLE_MEMBRANE
-        // so the death pass doesn't autolyse them on tick 1. Real
-        // founders carry more (TS uses ~5x); we use exactly enough
-        // for the demo to live.
-        const STARTER_MEMBRANE: f32 = 5.0;
-        let starter_chems = || {
-            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
-            chems[CHEM_ATP] = 50.0;
-            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
-            chems
-        };
-        // A "respirator": comes equipped with glucose + O2 + ADP so
-        // the aerobic respiration slot (RX_SLOT_RESPIRATION) actually
-        // fires once cell_reactions ticks. Without ADP no exergonic
-        // slot can phosphorylate, so include some.
-        let metabolizer_chems = || {
-            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
-            chems[CHEM_ATP] = 20.0;
-            chems[CHEM_GLU] = 80.0;
-            chems[CHEM_O2] = 80.0;
-            chems[CHEM_ADP] = 40.0;
-            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
-            chems
-        };
-        // A "photoautotroph": carries chlorophyll + mRNA + CO2 + ADP
-        // so photosynth (slot 3) + photophosphorylation (slot 25)
-        // fire once cell_reactions ticks under ambient light.
-        let photo_chems = || {
-            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
-            chems[CHEM_ATP] = 20.0;
-            chems[CHEM_CO2] = 80.0;
-            chems[CHEM_ADP] = 40.0;
-            chems[CHEM_CHL] = 4.0;
-            chems[CHEM_MRNA] = 5.0;
-            chems[CHEM_MEMBRANE] = STARTER_MEMBRANE;
-            chems
-        };
-
-        let swimmer = vec![OP_GENE, OP_PUSH8, 0, OP_PUSH8, 6, OP_THRUST, OP_END];
-        let metabolizer = vec![OP_GENE, OP_NOP, OP_END];
-        let photo = vec![OP_GENE, OP_NOP, OP_END];
-        // A real seeker: pushes the spatial gradient of glucose
-        // (CHEM_GLU = 2) onto the stack, then THRUST swims up it.
-        // Genome: GENE SENSE_OUT 2 THRUST END
-        let seeker = vec![OP_GENE, OP_SENSE_OUT, 2, OP_THRUST, OP_END];
-        // A reproducer: pushes a parent-fraction stack value (0.5,
-        // sign-extended from byte 0) then REPRODUCE. Will keep
-        // dividing while it has > MIN_FISSION_ATP, so it makes a
-        // visible population growth in the snapshot.
-        let reproducer = vec![OP_GENE, OP_PUSH8, 0, OP_REPRODUCE, OP_END];
-
-        struct Seed {
-            genome: Vec<u8>,
-            chems: Vec<f32>,
-        }
-        let seeds = [
-            Seed { genome: swimmer, chems: starter_chems() },
-            Seed { genome: metabolizer, chems: metabolizer_chems() },
-            Seed { genome: photo, chems: photo_chems() },
-            Seed { genome: seeker, chems: starter_chems() },
-            Seed { genome: reproducer, chems: metabolizer_chems() }, // needs fuel to fission
-        ];
-        let mut idx = 0u32;
-        for seed in &seeds {
-            for j in 0..2 {
-                let x = (0.25 + 0.5 * (j as f32)) * w;
-                let y = ((idx as f32 + 1.0) / (seeds.len() as f32 + 2.0)) * h;
-                self.world.creature_store.push(CreatureInit {
-                    x,
-                    y,
-                    r: 8.0,
-                    genome: seed.genome.clone(),
-                    chems: Some(seed.chems.clone()),
-                    ..CreatureInit::default()
-                });
-                idx += 1;
-            }
-        }
+    /// Seed the world with viable founders so a long-running sim can
+    /// self-sustain instead of running to extinction. 4 trophic
+    /// strategies, `N_FOUNDERS_PER_STRATEGY` of each. Goes away when
+    /// the world-config / per-session founder count lands.
+    fn seed_founders(&mut self) {
+        const N_FOUNDERS_PER_STRATEGY: usize = 4;
+        founders::seed_founders(
+            &mut self.world.creature_store,
+            &mut self.world.sim_rng,
+            self.world.width,
+            self.world.height,
+            N_FOUNDERS_PER_STRATEGY,
+        );
     }
 
     /// Advance the simulation by one tick. Force / collision pass on
@@ -262,7 +186,7 @@ impl Engine {
         self.tick = 0;
         self.world = World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED);
         self.seed_demo_particles();
-        self.seed_demo_creatures();
+        self.seed_founders();
     }
 
     /// Pack the current state into a snapshot for broadcast. Particle
@@ -428,9 +352,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // Initial population: 2 each of 5 seed types -> 10. Grows as
-        // the reproducer cells fission.
-        assert_eq!(snap.creatures.count, 10);
+        // 4 founders per strategy * 4 strategies = 16.
+        assert_eq!(snap.creatures.count, 16);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),
@@ -447,13 +370,13 @@ mod tests {
         // Reset to a fresh world without the demo cells/particles.
         e.world.creature_store.clear();
         e.world.particle_store.clear();
-        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
-        chems[CHEM_ATP] = 5.0;
+        let mut chems = vec![0.0; chem_ids::NAMED_CHEMICAL_COUNT];
+        chems[chem_ids::CHEM_ATP] = 5.0;
         chems[chem_ids::CHEM_GLU] = 5.0;
         e.world.creature_store.push(creatures::CreatureInit {
             r: 8.0,
             chems: Some(chems),
-            genome: vec![OP_NOP],
+            genome: vec![genome::OP_NOP],
             ..creatures::CreatureInit::default()
         });
         let creatures_before = e.world.creature_store.len();
@@ -482,20 +405,19 @@ mod tests {
 
     #[test]
     fn metabolizer_cells_burn_glucose_for_atp() {
-        // The "metabolizer" pair (indices 2,3) carries GLU + O2 + ADP
-        // so the aerobic respiration named reaction fires every
-        // tick. After ~ a second of sim time glucose should drop and
-        // ATP should rise above its starting 20.
+        // Metabolizer founders live at indices 4..8 (photo: 0..4,
+        // metab: 4..8). After 1s of sim time aerobic respiration
+        // should have drained GLU and raised ATP.
         let mut e = Engine::new();
         let store0 = &e.world.creature_store;
-        let glu0 = store0.chems[chem_ids::CHEM_GLU][2];
-        let atp0 = store0.chems[CHEM_ATP][2];
+        let glu0 = store0.chems[chem_ids::CHEM_GLU][4];
+        let atp0 = store0.chems[chem_ids::CHEM_ATP][4];
         for _ in 0..60 {
             e.step(1.0 / 60.0);
         }
         let store = &e.world.creature_store;
-        let glu1 = store.chems[chem_ids::CHEM_GLU][2];
-        let atp1 = store.chems[CHEM_ATP][2];
+        let glu1 = store.chems[chem_ids::CHEM_GLU][4];
+        let atp1 = store.chems[chem_ids::CHEM_ATP][4];
         assert!(glu1 < glu0, "glucose should drop, {glu0} -> {glu1}");
         assert!(atp1 > atp0, "ATP should rise, {atp0} -> {atp1}");
     }
@@ -537,15 +459,15 @@ mod tests {
 
     #[test]
     fn photoautotroph_cells_fix_carbon_under_light() {
-        // The "photo" pair (indices 4,5) carries chl + mRNA + CO2 +
-        // ADP. Under flat ambient light = 0.5 the photosynth slot
-        // fires and glucose accumulates.
+        // Photo founders live at indices 0..4. Under flat ambient
+        // light = 0.5 the photosynth slot fires and glucose
+        // accumulates.
         let mut e = Engine::new();
-        let glu0 = e.world.creature_store.chems[chem_ids::CHEM_GLU][4];
+        let glu0 = e.world.creature_store.chems[chem_ids::CHEM_GLU][0];
         for _ in 0..60 {
             e.step(1.0 / 60.0);
         }
-        let glu1 = e.world.creature_store.chems[chem_ids::CHEM_GLU][4];
+        let glu1 = e.world.creature_store.chems[chem_ids::CHEM_GLU][0];
         assert!(glu1 > glu0, "photo cell should fix C into GLU, {glu0} -> {glu1}");
     }
 }
