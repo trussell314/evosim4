@@ -60,6 +60,11 @@ pub fn run_precipitation(
     for ry in 0..rows {
         for rx in 0..cols {
             let ri = ry * cols + rx;
+            // Solid regions don't precipitate -- particles inside rock
+            // get evacuated, not spawned.
+            if ambient.is_solid(ri) {
+                continue;
+            }
             let base = ri * AMBIENT_STRIDE;
             for k in 0..AMBIENT_STRIDE {
                 let v = ambient.dissolved[base + k];

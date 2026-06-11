@@ -164,13 +164,14 @@ impl World {
         self.obstacle_index = ObstacleIndex::new();
     }
 
-    /// Rebuild the heightmap + obstacle index after `obstacles` has
-    /// been mutated. The two are static derivatives of the obstacle
-    /// list and need to stay in sync.
+    /// Rebuild the heightmap + obstacle index + ambient solid mask
+    /// after `obstacles` has been mutated. All three are static
+    /// derivatives of the obstacle list and need to stay in sync.
     pub fn rebuild_terrain_derivatives(&mut self) {
         self.terrain_heightmap = crate::terrain::build_terrain_heightmap(&self.obstacles, self.width);
         self.obstacle_index
             .rebuild(&self.obstacles, self.width, self.height);
+        self.ambient.solid_mask = build_ambient_solid_mask(&self.obstacles, &self.ambient);
     }
 }
 
@@ -204,6 +205,34 @@ pub struct ParticleForceParams {
     pub current_drift: f32,
     pub world_floor_y: f32,
     pub world_width: f32,
+}
+
+/// Build a per-region solid mask: 1 if the region center sits inside
+/// any obstacle polygon. Empty obstacles list -> all-zero mask
+/// (every region treated as water; existing demo + tests unaffected).
+fn build_ambient_solid_mask(obstacles: &[Obstacle], ambient: &AmbientField) -> Vec<u8> {
+    let n = ambient.cols * ambient.rows;
+    let mut mask = vec![0_u8; n];
+    if obstacles.is_empty() {
+        return mask;
+    }
+    for (ri, slot) in mask.iter_mut().enumerate().take(n) {
+        let rx = (ri % ambient.cols) as f32;
+        let ry = (ri / ambient.cols) as f32;
+        let cx = rx * crate::regions::REGION_PX + crate::regions::REGION_PX * 0.5;
+        let cy = ry * crate::regions::REGION_PX + crate::regions::REGION_PX * 0.5;
+        for ob in obstacles {
+            if cx < ob.min_x || cx > ob.max_x || cy < ob.min_y || cy > ob.max_y {
+                continue;
+            }
+            let Some(poly) = &ob.polygon else { continue };
+            if crate::terrain::point_in_polygon(cx, cy, poly) {
+                *slot = 1;
+                break;
+            }
+        }
+    }
+    mask
 }
 
 pub fn build_particle_force_params(world: &World, dt: f32) -> ParticleForceParams {

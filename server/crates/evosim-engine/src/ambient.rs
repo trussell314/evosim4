@@ -45,6 +45,14 @@ pub struct AmbientField {
     /// Length = `cols * rows * CHEMICAL_COUNT`. Indexed
     /// `[region * CHEMICAL_COUNT + chem]`.
     pub dissolved: Vec<f32>,
+    /// Per-region solid flag: 1 if the region center sits inside rock.
+    /// Solid regions are no-flux barriers for the diffusion pass and
+    /// don't precipitate. Rebuilt by `World::rebuild_terrain_derivatives`
+    /// after the obstacle list changes; otherwise stays all-zero (the
+    /// "no terrain" default) and every diffusion / precip call takes
+    /// the fast path.
+    #[serde(default)]
+    pub solid_mask: Vec<u8>,
 }
 
 /// Stride between successive regions' chem blocks. Always equals
@@ -64,7 +72,16 @@ impl AmbientField {
             cols: 1,
             rows: 1,
             dissolved: vec![0.0; AMBIENT_STRIDE],
+            solid_mask: vec![0_u8; 1],
         }
+    }
+
+    /// True if the region at `region_idx` is flagged solid (rock).
+    /// Fast path: empty mask means "no terrain", every region treated
+    /// as water.
+    #[inline]
+    pub fn is_solid(&self, region_idx: usize) -> bool {
+        self.solid_mask.get(region_idx).copied().unwrap_or(0) != 0
     }
 
     /// Per-region grid sized for the world, seeded with `AMBIENT_TARGET`
@@ -89,6 +106,7 @@ impl AmbientField {
             cols,
             rows,
             dissolved,
+            solid_mask: vec![0_u8; n],
         }
     }
 
@@ -237,6 +255,10 @@ pub fn diffuse_dissolved(ambient: &mut AmbientField, dt: f32) {
     for ry in 0..rows {
         for rx in 0..cols {
             let ri = ry * cols + rx;
+            // Rock: no-flux barrier. Solid regions never exchange.
+            if ambient.is_solid(ri) {
+                continue;
+            }
             let base = ri * AMBIENT_STRIDE;
             // Four neighbour indices (or -1 = none).
             let nbs: [Option<usize>; 4] = [
@@ -246,6 +268,9 @@ pub fn diffuse_dissolved(ambient: &mut AmbientField, dt: f32) {
                 if ry < rows - 1 { Some(ri + cols) } else { None },
             ];
             for nb in nbs.iter().flatten() {
+                if ambient.is_solid(*nb) {
+                    continue;
+                }
                 let jb = nb * AMBIENT_STRIDE;
                 for k in 0..AMBIENT_STRIDE {
                     let oi = old[base + k];
@@ -364,6 +389,26 @@ mod tests {
             amb.at(CHEM_GLU, 190.0, 190.0) > 0.0,
             "gradient should have spread to the far corner"
         );
+    }
+
+    #[test]
+    fn solid_mask_blocks_diffusion() {
+        // 200x200 -> 4x4 = 16 regions. Mark region 1 (column 1, row 0)
+        // solid so the chem in region 0 can't diffuse east. It can
+        // still diffuse south.
+        let mut amb = AmbientField::new_for_world(200.0, 200.0);
+        amb.solid_mask[1] = 1;
+        amb.deposit_at(CHEM_GLU, 100.0, 10.0, 10.0);
+        for _ in 0..100 {
+            diffuse_dissolved(&mut amb, 1.0);
+        }
+        // Region east of region 0 (which is region 1) should still
+        // hold 0 GLU because the diffusion was blocked.
+        // region 1 corner is at x=50, y=0.
+        assert_eq!(amb.at(CHEM_GLU, 55.0, 10.0), 0.0);
+        // Region south of region 0 (region 4 at y=50) should have
+        // received some.
+        assert!(amb.at(CHEM_GLU, 10.0, 55.0) > 0.0);
     }
 
     #[test]
