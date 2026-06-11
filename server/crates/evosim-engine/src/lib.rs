@@ -28,6 +28,7 @@ pub mod growth;
 pub mod ingest;
 pub mod maintenance;
 pub mod mass;
+pub mod obstacle_collision;
 pub mod particle_decay;
 pub mod particles;
 pub mod precipitation;
@@ -35,6 +36,7 @@ pub mod predate;
 pub mod reactions;
 pub mod regions;
 pub mod reproduction;
+pub mod terrain;
 pub mod rng;
 pub mod save;
 pub mod sensor_bins;
@@ -220,6 +222,25 @@ impl Engine {
         // can't phase through each other. Predators can now corner
         // prey; swarms can't compress to a point.
         creature_collision::run_creature_collisions(&mut self.world.creature_store);
+        // Obstacle (static terrain) collision: push any particle /
+        // cell that's penetrating rock back along the polygon normal,
+        // and run the polygon-evacuation safety net for bodies whose
+        // centers ended up inside a rock (between-tick teleport or
+        // wave-clamp tunnel). No-op when obstacles is empty.
+        obstacle_collision::resolve_obstacle_collisions(
+            &self.world.obstacles,
+            &self.world.obstacle_index,
+            &mut self.world.particle_store,
+            &mut self.world.creature_store,
+            self.world.restitution,
+        );
+        obstacle_collision::evacuate_rocks(
+            &self.world.obstacles,
+            &self.world.obstacle_index,
+            &mut self.world.particle_store,
+            &mut self.world.creature_store,
+            &mut self.world.ambient,
+        );
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
         // update_creatures so the per-tick vm_out.reproduce flag has

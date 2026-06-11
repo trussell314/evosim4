@@ -9,8 +9,10 @@
 use crate::ambient::AmbientField;
 use crate::creatures::CreatureStore;
 use crate::edna::EdnaField;
+use crate::obstacle_collision::ObstacleIndex;
 use crate::particles::ParticleStore;
 use crate::rng::Mulberry32;
+use crate::terrain::Obstacle;
 
 /// Reference radius used in the force kernel's drag scaling. Matches
 /// `DRAG_REF_R` in `src/sim.ts`.
@@ -44,6 +46,18 @@ pub struct World {
     pub creature_store: CreatureStore,
     pub ambient: AmbientField,
     pub edna: EdnaField,
+
+    /// Static rocky terrain. Empty by default; populated by the
+    /// world-config / scene port (the hand-authored Inkscape
+    /// polygons from `terrain-shapes.ts` live there, not in the
+    /// engine substrate).
+    pub obstacles: Vec<Obstacle>,
+    /// Per-column topmost rock y (or `f32::INFINITY`). Built from
+    /// `obstacles` whenever it's rebuilt.
+    pub terrain_heightmap: Vec<f32>,
+    /// Spatial index over `obstacles` used by the per-tick
+    /// collision pass. Rebuilt whenever `obstacles` changes.
+    pub obstacle_index: ObstacleIndex,
 
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
@@ -104,6 +118,9 @@ impl World {
             particle_store: ParticleStore::new(),
             creature_store: CreatureStore::new(),
             ambient: AmbientField::new_for_world(width, height),
+            obstacles: Vec::new(),
+            terrain_heightmap: Vec::new(),
+            obstacle_index: ObstacleIndex::new(),
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 
@@ -142,6 +159,18 @@ impl World {
         self.creature_store.clear();
         self.ambient = AmbientField::new_for_world(self.width, self.height);
         self.edna = EdnaField::new();
+        self.obstacles.clear();
+        self.terrain_heightmap.clear();
+        self.obstacle_index = ObstacleIndex::new();
+    }
+
+    /// Rebuild the heightmap + obstacle index after `obstacles` has
+    /// been mutated. The two are static derivatives of the obstacle
+    /// list and need to stay in sync.
+    pub fn rebuild_terrain_derivatives(&mut self) {
+        self.terrain_heightmap = crate::terrain::build_terrain_heightmap(&self.obstacles, self.width);
+        self.obstacle_index
+            .rebuild(&self.obstacles, self.width, self.height);
     }
 }
 
