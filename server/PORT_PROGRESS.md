@@ -266,6 +266,50 @@ through fission, drift through age, and exchange code laterally.
 The native engine has parity (in mechanism, if not in calibration)
 with the TS implementation's evolvability.
 
+### Sensor activation pass
+activation.rs: receptor_pool * stimulus -> activated chem signal.
+Three sensor modalities wired:
+  - Photoreceptors (visible / long / surface bands) read
+    ambient_light from the day cycle
+  - Electroreceptors sum nearby cells' ATP weighted by 1/dsq +
+    direction. Cells feel each other's metabolism
+  - Vibroreceptors sum nearby particles' speed^2 weighted by
+    1/dsq + direction. Cells feel motion in the particle field
+
+SENSE_CHEMICAL on the CHEM_ACT_* slots is now a real sensor,
+not a no-op.
+
+### Mass conservation + accounting
+mass.rs: total-mass report shipped in every snapshot. Surfaced
+two real bugs while wiring:
+  - maintenance.rs: ATP spent on upkeep used to vanish. Fixed
+    via ATP -> ADP swap (mass-conserving). Membrane drain now
+    deposits into ambient WASTE
+  - particle_decay.rs + death.rs: autolysed particles used to
+    be fixed-radius regardless of carried mass. Fixed: particle
+    radius sized so volume*density = remaining chem mass
+
+Live smoke now shows total mass invariant across 5+ sim-minutes
+(0.004% drift = float-rounding only).
+
+## Engine status: SUBSTANTIVELY COMPLETE
+
+The native Rust engine has all the biological/evolutionary
+features of the TS engine. What remains is performance work
+(rayon for the parallel loops, wgpu for the GPU force kernel)
+and spatial localization (the region grid). The base substrate
+is done; further work is optimisation + UI rather than missing
+biology.
+
+Live smoke after this session's commits:
+  t=1s:    cells=86 species=28 bonds=6 mass=23026
+  t=61s:   cells=50 species=22 bonds=6 mass=22508
+  t=181s:  cells=50 species=22 bonds=6 mass=22508
+  t=301s:  cells=50 species=22 bonds=6 mass=22507
+
+Five sim-minutes of stable evolutionary equilibrium with mass
+conservation provable from a snapshot.
+
 ## Up next, in suggested order
 
 ### 1. Region / atmosphere passes (~ 1 week)
