@@ -1,0 +1,24 @@
+[package]
+name = "evosim-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+evosim-protocol.workspace = true
+evosim-engine.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures-util.workspace = true
+anyhow.workspace = true
+constant_time_eq.workspace = true
+
+[build-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
