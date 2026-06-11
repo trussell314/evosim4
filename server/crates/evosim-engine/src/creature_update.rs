@@ -22,7 +22,7 @@
 //! `[0, 0]` until the particle grid is consulted -- a real local
 //! gradient over the particle field lands with the spatial-bins port.
 
-use crate::cell_reactions::run_cell_reactions;
+use crate::cell_reactions::{biosynth_catalyst, biosynth_inhibitor, run_cell_reactions};
 use crate::creatures::CreatureStore;
 use crate::sensor_bins::SensorBins;
 use crate::vm::{run_tick, Sensors, VmSelf};
@@ -30,12 +30,9 @@ use crate::vm::{run_tick, Sensors, VmSelf};
 /// Per-tick instruction budget per cell. Matches the TS default.
 pub const VM_INSTRUCTION_BUDGET: u32 = 64;
 
-/// Slot-synth gain per tick. The real biosynth pass scales by
-/// reaction rates + ATP availability; for now any expressed slot
-/// gets a small linear bump so the per-cell pool actually accumulates
-/// and is observable from the snapshot. Tuned to ~1 unit per second
-/// of continuous expression at 60 Hz.
-const CAT_SYNTH_GAIN_PER_TICK: f32 = 1.0 / 60.0;
+// Catalyst pool growth used to be a flat linear bump; now we call
+// the real biosynth_catalyst / biosynth_inhibitor pass that consumes
+// AA + MIN + ATP per unit grown.
 
 /// Sensors implementation that closes over a single cell's chem pool
 /// plus the world-level spatial sensor bins. SENSE_CHEMICAL reads the
@@ -156,22 +153,29 @@ pub fn update_creatures(
             store.last_reproduce_fire_t[i] = t;
         }
 
-        // Catalyst pool growth for expressed slots. Iterate the
-        // compact list, not the 256-slot mask, so the per-cell cost
-        // is O(expressed).
-        for k in 0..out.cat_synth_count {
-            let slot = out.cat_synth_list[k] as usize;
-            store.catalyst[slot][i] += CAT_SYNTH_GAIN_PER_TICK;
-        }
-        for k in 0..out.inh_synth_count {
-            let slot = out.inh_synth_list[k] as usize;
-            store.inhibitor[slot][i] += CAT_SYNTH_GAIN_PER_TICK;
-        }
+        // Snapshot the expressed slot lists before we swap out vm_out
+        // -- biosynth_* mutate store.chems and store.catalyst, which
+        // would alias the &mut vm_out borrow we'd otherwise hold.
+        let cat_slots: Vec<usize> = (0..out.cat_synth_count)
+            .map(|k| out.cat_synth_list[k] as usize)
+            .collect();
+        let inh_slots: Vec<usize> = (0..out.inh_synth_count)
+            .map(|k| out.inh_synth_list[k] as usize)
+            .collect();
 
         // Restore the swapped-out fields.
         store.vm_state[i] = state;
         store.vm_out[i] = out;
         store.genome[i] = genome;
+
+        // Biosynth: real substrate-consuming, ATP-paying, mRNA-gated
+        // growth of the catalyst / inhibitor pools.
+        for slot in cat_slots {
+            biosynth_catalyst(store, slot, i, dt);
+        }
+        for slot in inh_slots {
+            biosynth_inhibitor(store, slot, i, dt);
+        }
 
         // Reaction kinetics: walk every catalyst-bearing reaction
         // slot and fire substrates -> products under MM saturation.
@@ -257,7 +261,14 @@ mod tests {
     #[test]
     fn synth_cat_grows_catalyst_pool() {
         let (ctx, mut store) = one_cell_world();
-        let chems = vec![0.0; crate::chem_ids::NAMED_CHEMICAL_COUNT];
+        let mut chems = vec![0.0; crate::chem_ids::NAMED_CHEMICAL_COUNT];
+        // Biosynth needs substrate (aa + min), mRNA, and ATP above
+        // the BIOSYNTH_ATP_FLOOR to fire.
+        chems[crate::chem_ids::CHEM_AA] = 50.0;
+        chems[crate::chem_ids::CHEM_MIN] = 50.0;
+        chems[crate::chem_ids::CHEM_MRNA] = 5.0;
+        chems[crate::chem_ids::CHEM_ATP] = 50.0;
+        chems[crate::chem_ids::CHEM_ADP] = 10.0;
         // GENE SYNTH CAT 3 END  -- expresses catalyst slot 3.
         let genome = vec![OP_GENE, OP_SYNTH, SYNTH_KIND_CAT, 3, OP_END];
         store.push(CreatureInit {

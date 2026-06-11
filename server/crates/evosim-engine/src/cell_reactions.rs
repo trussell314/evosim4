@@ -23,9 +23,9 @@
 //! "Float32Array storage, Number arithmetic" pattern.
 
 use crate::chem_ids::{
-    CHEM_ADP, CHEM_CHL, CHEM_ENZ, CHEM_MRNA, CHL_REF, ENZ_REF, MRNA_REF,
+    CHEM_AA, CHEM_ADP, CHEM_ATP, CHEM_CHL, CHEM_ENZ, CHEM_MIN, CHEM_MRNA, CHL_REF, ENZ_REF,
+    MRNA_REF,
 };
-use crate::chem_ids::CHEM_ATP;
 use crate::creatures::{CreatureStore, MIN_CREATURE_R};
 use crate::genome_consts::N_REACTIONS;
 use crate::reactions::table as reactions_table;
@@ -36,6 +36,17 @@ const INH_K: f64 = 1.0;
 /// Endergonic reactions keep this much ATP in reserve when atp_floor
 /// is set. Matches TS `BIOSYNTH_ATP_FLOOR`.
 const BIOSYNTH_ATP_FLOOR: f64 = 4.0;
+
+/// Max rate of catalyst-pool synthesis per second. Matches TS
+/// `CAT_SYNTH_VMAX`.
+const CAT_SYNTH_VMAX: f64 = 0.3;
+/// ATP cost per unit catalyst (or inhibitor) synthesised. Matches TS
+/// `CAT_ATP_COST`.
+const CAT_ATP_COST: f64 = 4.0;
+/// AA consumed per unit synthesised. Half the substrate is amino
+/// acids, half is minerals (TS `CAT_SUBSTRATE_COUNT`).
+const CAT_AA_PER_UNIT: f64 = 0.5;
+const CAT_MIN_PER_UNIT: f64 = 0.5;
 
 /// Run all reaction slots for cell `i`. `ambient_light` is the local
 /// solar light value the photosynth slots gate on; 1.0 is bright sun,
@@ -197,6 +208,65 @@ pub fn run_cell_reactions(
     }
 }
 
+/// Grow the catalyst pool at `slot` for cell `i` by running the
+/// canonical synth reaction: 0.5 AA + 0.5 MIN -> 1 unit, costing
+/// `CAT_ATP_COST` ATP, gated by mRNA / BIOSYNTH_ATP_FLOOR.
+/// Returns the amount synthesised. Replaces the placeholder linear
+/// bump that used to grow pools without paying any substrate or
+/// ATP cost.
+pub fn biosynth_catalyst(store: &mut CreatureStore, slot: usize, i: usize, dt: f32) -> f32 {
+    biosynth_pool(store, slot, i, dt, /* is_inhibitor */ false)
+}
+
+pub fn biosynth_inhibitor(store: &mut CreatureStore, slot: usize, i: usize, dt: f32) -> f32 {
+    biosynth_pool(store, slot, i, dt, /* is_inhibitor */ true)
+}
+
+fn biosynth_pool(
+    store: &mut CreatureStore,
+    slot: usize,
+    i: usize,
+    dt: f32,
+    is_inhibitor: bool,
+) -> f32 {
+    let dt = dt as f64;
+    let aa = store.chems[CHEM_AA][i] as f64;
+    let mn = store.chems[CHEM_MIN][i] as f64;
+    let atp = store.chems[CHEM_ATP][i] as f64;
+    let mrna = store.chems[CHEM_MRNA][i] as f64;
+    // Mandatory mRNA gate: no mRNA -> no biosynth.
+    if mrna <= 0.0 || aa <= 0.0 || mn <= 0.0 {
+        return 0.0;
+    }
+    // ATP floor: keep BIOSYNTH_ATP_FLOOR in reserve so newborns
+    // don't dry themselves growing.
+    let atp_avail = atp - BIOSYNTH_ATP_FLOOR;
+    if atp_avail <= 0.0 {
+        return 0.0;
+    }
+    let mrna_mult = (mrna / MRNA_REF as f64).min(1.0);
+    let rate_cap = CAT_SYNTH_VMAX * mrna_mult * dt;
+    // Substrate-bounded amount.
+    let aa_limit = aa / CAT_AA_PER_UNIT;
+    let mn_limit = mn / CAT_MIN_PER_UNIT;
+    let atp_limit = atp_avail / CAT_ATP_COST;
+    let amount = rate_cap.min(aa_limit).min(mn_limit).min(atp_limit);
+    if amount <= 0.0 {
+        return 0.0;
+    }
+    store.chems[CHEM_AA][i] -= (amount * CAT_AA_PER_UNIT) as f32;
+    store.chems[CHEM_MIN][i] -= (amount * CAT_MIN_PER_UNIT) as f32;
+    let atp_spent = (amount * CAT_ATP_COST) as f32;
+    store.chems[CHEM_ATP][i] -= atp_spent;
+    store.chems[CHEM_ADP][i] += atp_spent;
+    if is_inhibitor {
+        store.inhibitor[slot][i] += amount as f32;
+    } else {
+        store.catalyst[slot][i] += amount as f32;
+    }
+    amount as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +368,55 @@ mod tests {
         // Light: should run.
         run_cell_reactions(&mut store, 0, 1.0, 1.0);
         assert!(store.chems[CHEM_GLU][0] > glu0, "photosynth should make glu");
+    }
+
+    #[test]
+    fn biosynth_catalyst_consumes_substrate_and_atp() {
+        let mut chems = empty_chems();
+        chems[CHEM_AA] = 10.0;
+        chems[CHEM_MIN] = 10.0;
+        chems[CHEM_MRNA] = 5.0;
+        chems[CHEM_ATP] = 50.0;
+        chems[CHEM_ADP] = 0.0;
+        let mut store = make_cell(chems);
+        let aa0 = store.chems[CHEM_AA][0];
+        let atp0 = store.chems[CHEM_ATP][0];
+        let cat0 = store.catalyst[7][0];
+        let amount = biosynth_catalyst(&mut store, 7, 0, 1.0);
+        assert!(amount > 0.0);
+        // AA + MIN consumed, ATP spent, ADP rose, catalyst slot grew.
+        assert!(store.chems[CHEM_AA][0] < aa0);
+        assert!(store.chems[CHEM_ATP][0] < atp0);
+        assert!(store.chems[CHEM_ADP][0] > 0.0);
+        assert!(store.catalyst[7][0] > cat0);
+    }
+
+    #[test]
+    fn biosynth_catalyst_refuses_without_mrna() {
+        let mut chems = empty_chems();
+        chems[CHEM_AA] = 10.0;
+        chems[CHEM_MIN] = 10.0;
+        // No mRNA -> no biosynth.
+        chems[CHEM_ATP] = 50.0;
+        let mut store = make_cell(chems);
+        let amount = biosynth_catalyst(&mut store, 7, 0, 1.0);
+        assert_eq!(amount, 0.0);
+        assert_eq!(store.catalyst[7][0], 0.0);
+    }
+
+    #[test]
+    fn biosynth_inhibitor_uses_inhibitor_pool() {
+        let mut chems = empty_chems();
+        chems[CHEM_AA] = 10.0;
+        chems[CHEM_MIN] = 10.0;
+        chems[CHEM_MRNA] = 5.0;
+        chems[CHEM_ATP] = 50.0;
+        let mut store = make_cell(chems);
+        let amount = biosynth_inhibitor(&mut store, 7, 0, 1.0);
+        assert!(amount > 0.0);
+        assert!(store.inhibitor[7][0] > 0.0);
+        // The catalyst pool stays empty.
+        assert_eq!(store.catalyst[7][0], 0.0);
     }
 
     #[test]
