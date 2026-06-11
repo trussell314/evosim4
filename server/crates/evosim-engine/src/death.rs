@@ -57,6 +57,7 @@ pub fn run_death(
     ambient: &mut AmbientField,
     edna: &mut EdnaField,
     rng: &mut Mulberry32,
+    particle_cap: usize,
 ) -> usize {
     let mut deaths = 0;
     let mut i = creatures.n;
@@ -100,13 +101,20 @@ pub fn run_death(
                 let r = r_cubed.cbrt().clamp(MIN_AUTOLYSED_R, MAX_AUTOLYSED_R);
                 let jitter_x = (rng.next_f64() as f32 - 0.5) * 8.0;
                 let jitter_y = (rng.next_f64() as f32 - 0.5) * 8.0;
-                particles.push(ParticleInit {
-                    x: cx + jitter_x,
-                    y: cy + jitter_y,
-                    r,
-                    chem_id: k as u8,
-                    ..ParticleInit::default()
-                });
+                // Particle cap: if we'd overflow, redirect the
+                // would-be particle's mass into the local dissolved
+                // field instead. Mass-conserving.
+                if particles.len() >= particle_cap {
+                    ambient.deposit_at(k, particle_count, cx, cy);
+                } else {
+                    particles.push(ParticleInit {
+                        x: cx + jitter_x,
+                        y: cy + jitter_y,
+                        r,
+                        chem_id: k as u8,
+                        ..ParticleInit::default()
+                    });
+                }
             }
         }
         // eDNA: release the dying cell's genome into the field so
@@ -149,7 +157,7 @@ mod tests {
             chems: Some(make_cell_chems(2.0, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng, usize::MAX);
         assert_eq!(killed, 0);
         assert_eq!(cs.len(), 1);
         assert_eq!(ps.len(), 0);
@@ -165,7 +173,7 @@ mod tests {
             chems: Some(make_cell_chems(0.3, 10.0, 5.0)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng, usize::MAX);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Particles emitted for the three populated chems
@@ -183,7 +191,7 @@ mod tests {
             chems: Some(make_cell_chems(0.0, 0.01, 0.01)),
             ..CreatureInit::default()
         });
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng, usize::MAX);
         assert_eq!(killed, 1);
         assert_eq!(cs.len(), 0);
         // Total mass < MIN_TOTAL_MASS so no particles emitted.
@@ -205,7 +213,7 @@ mod tests {
                 ..CreatureInit::default()
             });
         }
-        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng);
+        let killed = run_death(&mut cs, &mut ps, &mut AmbientField::new(), &mut EdnaField::new(), &mut rng, usize::MAX);
         assert_eq!(killed, 3);
         assert_eq!(cs.len(), 0);
         // 3 dead cells * 2 emitted chems each (ATP, GLU; membrane

@@ -33,6 +33,11 @@ pub struct PrecipGeom {
     pub height: f32,
     pub depth: f32,
     pub surface_y: f32,
+    /// Global rendered-particle ceiling. Once the store hits this
+    /// the pass stops spawning -- supersaturated dissolved mass stays
+    /// dissolved (it'll precipitate later when other particles age
+    /// out or get ingested). `usize::MAX` = unbounded.
+    pub particle_cap: usize,
 }
 
 /// Walk every (region, chem) pair; precipitate supersaturated excess.
@@ -92,7 +97,18 @@ pub fn run_precipitation(
                 if count_f <= 0.0 {
                     continue;
                 }
-                let count = count_f as usize;
+                let mut count = count_f as usize;
+                // Throttle the spawn against the global particle cap.
+                // Whatever doesn't fit stays dissolved -- the loop will
+                // come back to it once other particles age out, so this
+                // is mass-conserving across ticks.
+                let room = geom.particle_cap.saturating_sub(particles.len());
+                if room == 0 {
+                    return spawned;
+                }
+                if count > room {
+                    count = room;
+                }
                 let x0 = rx as f32 * REGION_PX;
                 let y0 = ry as f32 * REGION_PX;
                 for _ in 0..count {
@@ -112,7 +128,7 @@ pub fn run_precipitation(
                     });
                     spawned += 1;
                 }
-                ambient.dissolved[base + k] = v - count_f * amount_per;
+                ambient.dissolved[base + k] = v - (count as f32) * amount_per;
             }
         }
     }
@@ -130,6 +146,7 @@ mod tests {
             height,
             depth: REGION_PX,
             surface_y,
+            particle_cap: usize::MAX,
         }
     }
 
@@ -190,6 +207,29 @@ mod tests {
             (total_after - dissolved_before).abs() < 1e-2,
             "mass should be conserved: {dissolved_before} -> {total_after}"
         );
+    }
+
+    #[test]
+    fn cap_throttles_spawn_and_preserves_dissolved_mass() {
+        let mut amb = AmbientField::new_for_world(200.0, 200.0);
+        amb.deposit_at(CHEM_MEMBRANE, 10_000.0, 50.0, 50.0);
+        let mut ps = ParticleStore::new();
+        let mut rng = Mulberry32::new(1);
+        let mut g = geom(200.0, 200.0, 0.0);
+        g.particle_cap = 5; // Hard ceiling.
+        let spawned = run_precipitation(
+            &mut amb,
+            &mut ps,
+            &RegionTempField::new(),
+            g,
+            &mut rng,
+        );
+        assert_eq!(spawned, 5, "cap should limit spawn to 5");
+        assert_eq!(ps.len(), 5);
+        // Mass that DIDN'T spawn stays in dissolved (mass-conserving).
+        // Since cap was hit, the remaining MEMBRANE dissolved is still
+        // far above the cap-induced cap-related limit -- not zero.
+        assert!(amb.totals_per_chem()[CHEM_MEMBRANE] > 1000.0);
     }
 
     #[test]

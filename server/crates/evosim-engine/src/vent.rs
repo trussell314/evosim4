@@ -152,12 +152,16 @@ fn pick_emission(rng: &mut Mulberry32) -> EmitSpec {
 
 /// Tick the vent: advance the phase machine, set intensity, emit
 /// particles into `particles`. `t` is the world's sim seconds.
+/// `particle_cap` is a hard ceiling on the store length; once hit,
+/// the vent still cycles (phase machine + intensity + heat field) but
+/// skips emission so it can't push particles over the ceiling.
 pub fn step_vent(
     vent: &mut VentState,
     particles: &mut ParticleStore,
     t: f64,
     dt: f64,
     day_period_s: f64,
+    particle_cap: usize,
     rng: &mut Mulberry32,
 ) {
     // Phase transitions.
@@ -191,9 +195,15 @@ pub fn step_vent(
     vent.emit_clock += dt;
     while vent.emit_clock >= VENT_EMIT_PERIOD {
         vent.emit_clock -= VENT_EMIT_PERIOD;
+        // Cycle continues even when emissions are blocked by the cap.
+        if particles.len() >= particle_cap {
+            continue;
+        }
         let ramp = vent.intensity * vent.intensity;
         let expected = VENT_BATCH_AT_PEAK * ramp + rng.next_f64() as f32;
-        let n = expected.floor().max(0.0) as usize;
+        let n_wanted = expected.floor().max(0.0) as usize;
+        let room = particle_cap.saturating_sub(particles.len());
+        let n = n_wanted.min(room);
         for _ in 0..n {
             let spec = pick_emission(rng);
             let r = 1.0 + rng.next_f64() as f32 * 1.2;
@@ -257,7 +267,7 @@ mod tests {
         let dt = 0.1_f64;
         let mut t = 0.0_f64;
         while t < v.next_eruption_at + 0.5 {
-            step_vent(&mut v, &mut ps, t, dt, 600.0, &mut rng);
+            step_vent(&mut v, &mut ps, t, dt, 600.0, usize::MAX, &mut rng);
             t += dt;
         }
         assert!(v.active);
@@ -272,8 +282,8 @@ mod tests {
         v.next_eruption_at = 0.0;
         let dt = 0.1;
         // Step in for one warmup second: intensity should be partial.
-        step_vent(&mut v, &mut ps, 0.0, dt, 600.0, &mut rng);
-        step_vent(&mut v, &mut ps, 1.0, dt, 600.0, &mut rng);
+        step_vent(&mut v, &mut ps, 0.0, dt, 600.0, usize::MAX, &mut rng);
+        step_vent(&mut v, &mut ps, 1.0, dt, 600.0, usize::MAX, &mut rng);
         assert!(v.active);
         assert!(v.intensity > 0.0 && v.intensity <= 1.0);
         // Mid-main: intensity should be 1.
@@ -283,6 +293,7 @@ mod tests {
             VENT_WARMUP_SEC + VENT_MAIN_SEC * 0.5,
             dt,
             600.0,
+            usize::MAX,
             &mut rng,
         );
         assert_eq!(v.intensity, 1.0);

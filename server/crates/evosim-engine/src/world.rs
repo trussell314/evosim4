@@ -66,6 +66,12 @@ pub struct World {
     /// `TEMP_BASELINE`, and absorbs vent heat. Consumed by the
     /// solubility / capacity formula and the precipitation pass.
     pub region_temp: crate::region_temp::RegionTempField,
+    /// Global rendered-particle ceiling. Passes that ADD particles
+    /// (vent emissions, precipitation, autolysis) consult this before
+    /// pushing; once the store hits the cap, surplus stays in the
+    /// dissolved field (or is silently dropped on the death path).
+    /// `None` = unbounded, which is the historical behaviour.
+    pub particle_cap: Option<usize>,
 
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
@@ -131,6 +137,10 @@ impl World {
             obstacle_index: ObstacleIndex::new(),
             vent: None,
             region_temp: crate::region_temp::RegionTempField::new(),
+            // Default cap sized for the demo world: keeps the dissolve <->
+            // precipitate loop healthy without letting autolysis +
+            // precipitation pile particles indefinitely.
+            particle_cap: Some(3000),
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 

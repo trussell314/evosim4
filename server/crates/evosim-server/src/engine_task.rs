@@ -89,6 +89,15 @@ async fn run(
     mut cmd_rx: mpsc::Receiver<EngineCmd>,
 ) {
     let mut engine = Engine::new();
+    // Optional EVOSIM_PARTICLE_CAP env override. Lets the operator
+    // dial the cap without recompiling (bench harness, A/B testing).
+    if let Ok(s) = std::env::var("EVOSIM_PARTICLE_CAP") {
+        match s.parse::<usize>() {
+            Ok(0) => engine.set_particle_cap(None),
+            Ok(n) => engine.set_particle_cap(Some(n)),
+            Err(e) => tracing::warn!("EVOSIM_PARTICLE_CAP parse error: {e}"),
+        }
+    }
     let mut running = true;
     let mut sim_rate: f32 = 1.0;
     let mut tick_timer = make_tick_timer(sim_rate);

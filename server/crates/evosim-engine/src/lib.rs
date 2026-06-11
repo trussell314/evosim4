@@ -273,6 +273,7 @@ impl Engine {
                 self.world.t,
                 dt,
                 self.world.day_period_s,
+                self.world.particle_cap.unwrap_or(usize::MAX),
                 &mut self.world.sim_rng,
             );
         }
@@ -300,6 +301,7 @@ impl Engine {
             &mut self.world.ambient,
             &mut self.world.edna,
             &mut self.world.sim_rng,
+            self.world.particle_cap.unwrap_or(usize::MAX),
         );
         self.perf.add_since(Pass::Death, t);
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
@@ -321,6 +323,7 @@ impl Engine {
             height: self.world.height,
             depth: self.world.depth,
             surface_y: self.world.surface_y,
+            particle_cap: self.world.particle_cap.unwrap_or(usize::MAX),
         };
         let t = Instant::now();
         precipitation::run_precipitation(
@@ -368,6 +371,13 @@ impl Engine {
     /// Serialise the current world to a JSON string. Schema string
     /// inside the JSON guards against loading into a newer binary
     /// that's grown columns since the save was written.
+    /// Configure the global rendered-particle cap. `None` removes the
+    /// cap (unbounded -- vent / autolysis / precipitation can pile
+    /// particles freely). Pass-through to `world.particle_cap`.
+    pub fn set_particle_cap(&mut self, cap: Option<usize>) {
+        self.world.particle_cap = cap;
+    }
+
     pub fn save_json(&self) -> Result<String, serde_json::Error> {
         let saved = save::save_world(&self.world);
         serde_json::to_string(&saved)
