@@ -215,6 +215,48 @@ function frame(): void {
       ctx.fill();
     }
 
+    // Creatures: render after particles so cells sit visually on top
+    // of the particle field. Color by energy (ATP) on a dim->bright
+    // green ramp; stroke so they're distinguishable from particles
+    // even when small. Heading shown as a short whisker.
+    const cBlobs: Record<string, NamedBlob> = {};
+    for (const b of snapshot.creatures.blobs) cBlobs[b.name] = b;
+    const cN = snapshot.creatures.count;
+    if (cN > 0 && cBlobs.x && cBlobs.y && cBlobs.r) {
+      const cx = f32(cBlobs.x.data, cN);
+      const cy = f32(cBlobs.y.data, cN);
+      const cr = f32(cBlobs.r.data, cN);
+      const heading = cBlobs.heading ? f32(cBlobs.heading.data, cN) : null;
+      const energy = cBlobs.energy ? f32(cBlobs.energy.data, cN) : null;
+      for (let i = 0; i < cN; i++) {
+        const px = offX + cx[i] * scale;
+        const py = offY + cy[i] * scale;
+        const pr = Math.max(2, cr[i] * scale);
+        const e = energy ? energy[i] : 0;
+        // 0..100 -> dim..bright green; clamps either side.
+        const t = Math.max(0, Math.min(1, e / 100));
+        const lum = 25 + (60 - 25) * t;
+        ctx.fillStyle = `hsl(140 70% ${lum}%)`;
+        ctx.strokeStyle = "#cfe";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, pr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        if (heading) {
+          const a = heading[i];
+          const wx = px + Math.cos(a) * (pr + 4);
+          const wy = py + Math.sin(a) * (pr + 4);
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(wx, wy);
+          ctx.strokeStyle = "#9ee";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+    }
+
     // Overlay world bbox.
     ctx.strokeStyle = "#1a3340";
     ctx.lineWidth = 1;
@@ -224,7 +266,7 @@ function frame(): void {
     const sps = snapsPerSec.toFixed(1);
     const lag = ((performance.now() - lastSnapshotAt) | 0).toString();
     const el = document.getElementById("sps");
-    if (el) el.textContent = `${sps} (last ${lag}ms ago, tick ${snapshot.tick})`;
+    if (el) el.textContent = `${sps} (last ${lag}ms ago, tick ${snapshot.tick}, particles=${n}, creatures=${cN})`;
   }
 
   requestAnimationFrame(frame);
