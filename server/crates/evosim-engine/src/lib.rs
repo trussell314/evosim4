@@ -32,6 +32,7 @@ pub mod particle_decay;
 pub mod particles;
 pub mod predate;
 pub mod reactions;
+pub mod regions;
 pub mod reproduction;
 pub mod rng;
 pub mod save;

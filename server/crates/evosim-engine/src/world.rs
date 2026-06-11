@@ -31,9 +31,14 @@ pub const CURRENT_FREQ: f64 = std::f64::consts::TAU / 600.0;
 pub struct World {
     /// Sim seconds since epoch. Bumped by `step()`.
     pub t: f64,
-    /// World extent in pixels.
+    /// World extent in pixels. `depth` is the out-of-plane size used
+    /// by the regional dissolved capacity formula (volume = w * h * d
+    /// per region, scaled through the 10 m world-height convention).
+    /// Zero rendering / kinematics impact; only `regions::region_volume_l`
+    /// reads it.
     pub width: f32,
     pub height: f32,
+    pub depth: f32,
 
     pub particle_store: ParticleStore,
     pub creature_store: CreatureStore,
@@ -91,6 +96,11 @@ impl World {
             t: 0.0,
             width,
             height,
+            // Default depth matches REGION_PX so a single column of
+            // regions is cubic. The TS world is parameterised; until
+            // the world-config port lands the default is a reasonable
+            // mid-water-column slice.
+            depth: crate::regions::REGION_PX,
             particle_store: ParticleStore::new(),
             creature_store: CreatureStore::new(),
             ambient: AmbientField::new(),
