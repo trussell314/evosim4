@@ -8,6 +8,8 @@
 pub mod chem_ids;
 pub mod chemistry;
 pub mod collision;
+pub mod creature_update;
+pub mod creatures;
 pub mod forces;
 pub mod genome;
 pub mod genome_consts;
@@ -19,6 +21,9 @@ pub mod world;
 
 use evosim_protocol::{ForceSource, NamedBlob, Snapshot, Soa};
 
+use crate::chem_ids::{CHEM_ATP, NAMED_CHEMICAL_COUNT};
+use crate::creatures::{CreatureInit, CreatureStore};
+use crate::genome::*;
 use crate::particles::ParticleInit;
 use crate::world::World;
 
@@ -48,6 +53,7 @@ impl Engine {
             collision_scratch: collision::CollisionScratch::new(),
         };
         engine.seed_demo_particles();
+        engine.seed_demo_creatures();
         engine
     }
 
@@ -73,14 +79,55 @@ impl Engine {
         }
     }
 
-    /// Advance the simulation by one tick. Today this is just the
-    /// force pass + clock; chemistry / creatures / regions arrive in
-    /// later commits.
+    /// Spawn a small demo population of creatures so the snapshot
+    /// has visible cells before the founder / spawn pass lands. Each
+    /// cell runs a different short genome (swimmer / turner / synth),
+    /// two of each, spread across the world.
+    fn seed_demo_creatures(&mut self) {
+        let w = self.world.width;
+        let h = self.world.height;
+        let starter_chems = || {
+            let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+            chems[CHEM_ATP] = 50.0;
+            chems
+        };
+
+        let swimmer = vec![OP_GENE, OP_PUSH8, 0, OP_PUSH8, 6, OP_THRUST, OP_END];
+        let turner = vec![OP_GENE, OP_PUSH8, 4, OP_TURN, OP_PUSH8, 6, OP_PUSH8, 0, OP_THRUST, OP_END];
+        let synth = vec![OP_GENE, OP_SYNTH, SYNTH_KIND_CAT, 7, OP_END];
+
+        let genomes = [swimmer, turner, synth];
+        let mut idx = 0u32;
+        for g in &genomes {
+            for j in 0..2 {
+                let x = (0.25 + 0.5 * (j as f32)) * w;
+                let y = ((idx as f32 + 1.0) / (genomes.len() as f32 + 2.0)) * h;
+                self.world.creature_store.push(CreatureInit {
+                    x,
+                    y,
+                    r: 8.0,
+                    genome: g.clone(),
+                    chems: Some(starter_chems()),
+                    ..CreatureInit::default()
+                });
+                idx += 1;
+            }
+        }
+    }
+
+    /// Advance the simulation by one tick. Force / collision pass on
+    /// particles, then the VM / movement pass on creatures.
     pub fn step(&mut self, dt: f64) {
         self.tick += 1;
         self.world.t += dt;
         forces::apply_forces(&mut self.world, dt as f32);
         collision::resolve_collisions(&mut self.world, &mut self.collision_scratch);
+        let ctx = creature_update::UpdateCtx {
+            t: self.world.t,
+            width: self.world.width,
+            height: self.world.height,
+        };
+        creature_update::update_creatures(ctx, &mut self.world.creature_store, dt as f32);
     }
 
     /// Reset to defaults. Called by `AdminCommand::Reset`.
@@ -88,6 +135,7 @@ impl Engine {
         self.tick = 0;
         self.world = World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED);
         self.seed_demo_particles();
+        self.seed_demo_creatures();
     }
 
     /// Pack the current state into a snapshot for broadcast. Particle
@@ -95,13 +143,14 @@ impl Engine {
     /// client decodes them as TypedArrays of the declared stride.
     pub fn snapshot(&self) -> Snapshot {
         let particles = pack_particle_soa(&self.world.particle_store);
+        let creatures = pack_creature_soa(&self.world.creature_store);
         Snapshot {
             tick: self.tick,
             t: self.world.t,
             width: self.world.width,
             height: self.world.height,
             particles,
-            creatures: Soa { count: 0, blobs: empty_creature_blobs() },
+            creatures,
             force_source: ForceSource::Serial,
             cpu_pool_workers: 0,
             gpu_last_ms: 0.0,
@@ -158,15 +207,34 @@ fn bytemuck_f32(data: &[f32]) -> Vec<u8> {
     out
 }
 
-fn empty_creature_blobs() -> Vec<NamedBlob> {
-    ["x", "y", "r", "mass", "energy"]
-        .into_iter()
-        .map(|name| NamedBlob {
-            name: name.into(),
-            stride: 4,
-            data: Vec::new(),
-        })
-        .collect()
+fn pack_creature_soa(store: &CreatureStore) -> Soa {
+    // Per-cell ATP / total-mass are derived columns the client wants
+    // for rendering (color by energy, size by mass). We compute them
+    // once into scratch vecs so the blob payload stays a plain f32
+    // packed stream.
+    let n = store.len();
+    let mut energy = Vec::with_capacity(n);
+    let mut mass = Vec::with_capacity(n);
+    for i in 0..n {
+        energy.push(store.energy(i));
+        mass.push(store.total_mass(i));
+    }
+    let blob_f32 = |name: &str, data: &[f32]| NamedBlob {
+        name: name.into(),
+        stride: 4,
+        data: bytemuck_f32(data),
+    };
+    Soa {
+        count: n as u32,
+        blobs: vec![
+            blob_f32("x", &store.x),
+            blob_f32("y", &store.y),
+            blob_f32("r", &store.r),
+            blob_f32("heading", &store.heading),
+            blob_f32("mass", &mass),
+            blob_f32("energy", &energy),
+        ],
+    }
 }
 
 #[cfg(test)]
@@ -216,5 +284,38 @@ mod tests {
         assert_eq!(snap.tick, 0);
         assert_eq!(snap.t, 0.0);
         assert_eq!(snap.particles.count, 200);
+    }
+
+    #[test]
+    fn snapshot_carries_demo_creatures() {
+        let e = Engine::new();
+        let snap = e.snapshot();
+        assert_eq!(snap.creatures.count, 6);
+        for col in ["x", "y", "r", "heading", "mass", "energy"] {
+            assert!(
+                snap.creatures.blobs.iter().any(|b| b.name == col),
+                "creature SoA missing column {col}"
+            );
+        }
+    }
+
+    #[test]
+    fn creatures_synthesise_catalyst_over_time() {
+        let mut e = Engine::new();
+        // The third pair of demo cells expresses SYNTH CAT 7 every
+        // tick. After ~ a second of sim time their catalyst slot 7
+        // pool should be non-zero.
+        for _ in 0..120 {
+            e.step(1.0 / 60.0);
+        }
+        let store = &e.world.creature_store;
+        let synth_indices = [4, 5];
+        for &i in &synth_indices {
+            assert!(
+                store.catalyst[7][i] > 0.1,
+                "demo synth cell {i} should have grown catalyst 7 (got {})",
+                store.catalyst[7][i]
+            );
+        }
     }
 }
