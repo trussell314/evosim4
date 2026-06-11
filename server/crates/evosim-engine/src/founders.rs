@@ -62,6 +62,12 @@ fn founder_genomes() -> Vec<Vec<u8>> {
         //   ambient. The dissolved-chem path lets a cell rely on
         //   what other cells leaked/dumped into the field.
         vec![OP_GENE, OP_PUSH8, 100, OP_TRANSPORT, 2, OP_END],
+        // Ingester: SENSE_OUT for biopolymer particles, THRUST toward
+        // them, then INGEST with a low threshold so it'll eat
+        // anything organic on contact. Genome:
+        //   GENE SENSE_OUT 11 THRUST PUSH8 1 INGEST END
+        //   (chem 11 = biopolymer; INGEST threshold = 0.02)
+        vec![OP_GENE, OP_SENSE_OUT, 11, OP_THRUST, OP_PUSH8, 1, OP_INGEST, OP_END],
     ]
 }
 
@@ -97,18 +103,26 @@ fn founder_chems() -> Vec<Vec<f32>> {
     let mut osmotroph = vec![0.0; NAMED_CHEMICAL_COUNT];
     osmotroph[CHEM_ATP] = FOUNDER_ATP;
     osmotroph[CHEM_MEMBRANE] = FOUNDER_MEMBRANE;
-    osmotroph[CHEM_O2] = 30.0; // some O2 for the start; later draws from ambient
+    osmotroph[CHEM_O2] = 30.0;
     osmotroph[CHEM_ADP] = 50.0;
+
+    // Ingester: hunts particles. Carries enough O2 to keep
+    // respiration running as it digests its catches.
+    let mut ingester = vec![0.0; NAMED_CHEMICAL_COUNT];
+    ingester[CHEM_ATP] = FOUNDER_ATP;
+    ingester[CHEM_MEMBRANE] = FOUNDER_MEMBRANE * 1.5;
+    ingester[CHEM_O2] = 80.0;
+    ingester[CHEM_ADP] = 50.0;
 
     // Also give every line some enzyme + biopolymer for the digest
     // path: a metabolizer can switch to that route if its glucose
     // ever runs out.
-    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph].iter_mut() {
+    for chems in [&mut photo, &mut metab, &mut seeker, &mut reproducer, &mut osmotroph, &mut ingester].iter_mut() {
         chems[CHEM_ENZ] = 5.0;
         chems[CHEM_BIOPOLYMER] = 20.0;
     }
 
-    vec![photo, metab, seeker, reproducer, osmotroph]
+    vec![photo, metab, seeker, reproducer, osmotroph, ingester]
 }
 
 /// Place `n_per_strategy` cells of each founder genome at random
@@ -163,8 +177,8 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
-        assert_eq!(n, 25); // 5 strategies x 5 each
-        assert_eq!(store.len(), 25);
+        assert_eq!(n, 30); // 6 strategies x 5 each
+        assert_eq!(store.len(), 30);
     }
 
     #[test]

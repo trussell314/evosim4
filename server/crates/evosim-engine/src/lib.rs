@@ -19,6 +19,7 @@ pub mod forces;
 pub mod founders;
 pub mod genome;
 pub mod genome_consts;
+pub mod ingest;
 pub mod maintenance;
 pub mod particle_decay;
 pub mod particles;
@@ -154,6 +155,14 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.ambient,
             dt as f32,
+        );
+        // INGEST pass: cells that ran INGEST with a finite threshold
+        // try to absorb at most one nearby particle whose
+        // bond-potential clears the threshold. Mass-conserving: the
+        // particle's mass moves into the cell's chem pool.
+        ingest::run_ingest(
+            &mut self.world.creature_store,
+            &mut self.world.particle_store,
         );
         // Reproduction pass: a daughter for every cell that fired
         // REPRODUCE and met the viability gates. Runs after
@@ -459,8 +468,8 @@ mod tests {
     fn snapshot_carries_demo_creatures() {
         let mut e = Engine::new();
         let snap = e.snapshot();
-        // 4 founders per strategy * 5 strategies = 20.
-        assert_eq!(snap.creatures.count, 20);
+        // 4 founders per strategy * 6 strategies = 24.
+        assert_eq!(snap.creatures.count, 24);
         for col in ["x", "y", "r", "heading", "mass", "energy"] {
             assert!(
                 snap.creatures.blobs.iter().any(|b| b.name == col),
