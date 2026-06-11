@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 ///        synthetic hue-by-id
 ///   3 -- AdminCommand grows Load { name } + Saves; ClientMessage
 ///        Save semantics are real (the engine ports save/load JSON)
-pub const PROTOCOL_VERSION: u32 = 3;
+///   4 -- AdminCommand grows Configure { ... }; SpeciesSummary adds
+///        biomass + atp fields (serde default so older clients OK)
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Lightweight build identity sent in [`ServerMessage::Hello`]. The
 /// client surfaces these in the bottom HUD so it's obvious which
@@ -290,6 +292,15 @@ pub enum AdminCommand {
     /// List the saves currently on disk. Reply message is a JSON
     /// array of file names.
     Saves,
+    /// Reset the engine with custom world parameters. Optional
+    /// fields keep their current default when omitted.
+    Configure {
+        width: Option<f32>,
+        height: Option<f32>,
+        seed: Option<u32>,
+        day_period_s: Option<f64>,
+        founders_per_strategy: Option<u32>,
+    },
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame

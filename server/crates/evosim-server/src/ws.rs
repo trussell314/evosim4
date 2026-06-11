@@ -228,6 +228,7 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
         Status => "status",
         Load { .. } => "load",
         Saves => "saves",
+        Configure { .. } => "configure",
     }
 }
 

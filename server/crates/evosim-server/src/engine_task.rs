@@ -48,6 +48,15 @@ pub enum EngineCmd {
     /// Load a saved JSON. Replies with the load outcome so the
     /// caller can report success / failure on the wire.
     LoadJson(String, oneshot::Sender<Result<(), String>>),
+    /// Reconfigure the world. Any None field keeps its current value.
+    Configure {
+        width: Option<f32>,
+        height: Option<f32>,
+        seed: Option<u32>,
+        day_period_s: Option<f64>,
+        founders_per_strategy: Option<u32>,
+        reply: oneshot::Sender<()>,
+    },
 }
 
 pub struct EngineHandle {
@@ -137,6 +146,25 @@ async fn run(
                     Some(EngineCmd::LoadJson(json, reply)) => {
                         let r = engine.load_json(&json).map_err(|e| e.to_string());
                         let _ = reply.send(r);
+                    }
+                    Some(EngineCmd::Configure {
+                        width,
+                        height,
+                        seed,
+                        day_period_s,
+                        founders_per_strategy,
+                        reply,
+                    }) => {
+                        info!(
+                            width = ?width,
+                            height = ?height,
+                            seed = ?seed,
+                            day_period_s = ?day_period_s,
+                            founders_per_strategy = ?founders_per_strategy,
+                            "engine reconfigure",
+                        );
+                        engine.configure(width, height, seed, day_period_s, founders_per_strategy);
+                        let _ = reply.send(());
                     }
                     None => {
                         // Sender dropped -- the binary is exiting.

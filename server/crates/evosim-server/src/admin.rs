@@ -40,6 +40,13 @@ pub async fn handle(
         AdminCommand::Status => status(state.clone()).await,
         AdminCommand::Load { name } => load_from_disk(name, state.clone(), engine_cmd).await,
         AdminCommand::Saves => list_saves(state.clone()).await,
+        AdminCommand::Configure {
+            width,
+            height,
+            seed,
+            day_period_s,
+            founders_per_strategy,
+        } => configure(width, height, seed, day_period_s, founders_per_strategy, engine_cmd).await,
     };
     let msg = match result {
         Ok(ack) => ServerMessage::AdminAck { command: label.into(), message: ack },
@@ -57,7 +64,36 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Status => "status",
         AdminCommand::Load { .. } => "load",
         AdminCommand::Saves => "saves",
+        AdminCommand::Configure { .. } => "configure",
     }
+}
+
+async fn configure(
+    width: Option<f32>,
+    height: Option<f32>,
+    seed: Option<u32>,
+    day_period_s: Option<f64>,
+    founders_per_strategy: Option<u32>,
+    engine_cmd: mpsc::Sender<EngineCmd>,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::Configure {
+            width,
+            height,
+            seed,
+            day_period_s,
+            founders_per_strategy,
+            reply: tx,
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("engine task is gone"))?;
+    rx.await
+        .map_err(|_| anyhow::anyhow!("engine did not respond"))?;
+    Ok(Some(format!(
+        "configured w={:?} h={:?} seed={:?} day_period_s={:?} founders_per_strategy={:?}",
+        width, height, seed, day_period_s, founders_per_strategy
+    )))
 }
 
 async fn restart(

@@ -74,6 +74,9 @@ pub struct Engine {
     bonds: bonding::BondList,
     /// Per-cell repair-window counter. Same lifecycle as bonds.
     repair_ticks: somatic::RepairTicks,
+    /// Founder-cohort spawn count per trophic strategy. Configurable
+    /// via AdminCommand::Configure; default is 4.
+    founders_per_strategy: usize,
 }
 
 impl Engine {
@@ -86,6 +89,7 @@ impl Engine {
             pending_deaths: 0,
             bonds: bonding::make_bonds(0),
             repair_ticks: somatic::make_repair_ticks(0),
+            founders_per_strategy: 4,
         };
         engine.seed_demo_particles();
         engine.seed_founders();
@@ -119,13 +123,12 @@ impl Engine {
     /// strategies, `N_FOUNDERS_PER_STRATEGY` of each. Goes away when
     /// the world-config / per-session founder count lands.
     fn seed_founders(&mut self) {
-        const N_FOUNDERS_PER_STRATEGY: usize = 4;
         founders::seed_founders(
             &mut self.world.creature_store,
             &mut self.world.sim_rng,
             self.world.width,
             self.world.height,
-            N_FOUNDERS_PER_STRATEGY,
+            self.founders_per_strategy,
         );
     }
 
@@ -292,6 +295,36 @@ impl Engine {
         serde_json::to_string(&saved)
     }
 
+    /// Reconfigure the world. Any None field keeps its current
+    /// value. Resets the simulation (clears bonds / repair ticks /
+    /// particle + creature stores; reseeds founders and demo
+    /// particles in the new dimensions). Used by the admin
+    /// Configure command.
+    pub fn configure(
+        &mut self,
+        width: Option<f32>,
+        height: Option<f32>,
+        seed: Option<u32>,
+        day_period_s: Option<f64>,
+        founders_per_strategy: Option<u32>,
+    ) {
+        let w = width.unwrap_or(self.world.width).max(100.0);
+        let h = height.unwrap_or(self.world.height).max(100.0);
+        let s = seed.unwrap_or_else(|| self.world.sim_rng.peek_state());
+        let dp = day_period_s.unwrap_or(self.world.day_period_s).max(0.0);
+        let fps = founders_per_strategy
+            .map(|v| (v as usize).clamp(1, 64))
+            .unwrap_or(self.founders_per_strategy);
+        self.founders_per_strategy = fps;
+        self.tick = 0;
+        self.world = World::new(w, h, s);
+        self.world.day_period_s = dp;
+        self.bonds = bonding::make_bonds(0);
+        self.repair_ticks = somatic::make_repair_ticks(0);
+        self.seed_demo_particles();
+        self.seed_founders();
+    }
+
     /// Load a JSON-encoded save, replacing the current world. Tick
     /// counter resets to zero (the saved t is restored on the
     /// world, but the engine's tick count is just a wall-clock
@@ -306,7 +339,12 @@ impl Engine {
     /// Reset to defaults. Called by `AdminCommand::Reset`.
     pub fn reset(&mut self) {
         self.tick = 0;
-        self.world = World::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_SEED);
+        let w = self.world.width;
+        let h = self.world.height;
+        let seed = self.world.sim_rng.peek_state(); // preserve seed across resets
+        let day = self.world.day_period_s;
+        self.world = World::new(w, h, seed);
+        self.world.day_period_s = day;
         self.bonds = bonding::make_bonds(0);
         self.repair_ticks = somatic::make_repair_ticks(0);
         self.seed_demo_particles();
