@@ -91,11 +91,19 @@ async fn run(
     let mut engine = Engine::new();
     // Optional EVOSIM_PARTICLE_CAP env override. Lets the operator
     // dial the cap without recompiling (bench harness, A/B testing).
+    // Integer values are taken literally (0 = no particles can spawn
+    // from cap-honoring passes -- the field drains as decay ages
+    // existing particles out). To opt out of the cap entirely, set
+    // the var to "none" / "off" / "unbounded".
     if let Ok(s) = std::env::var("EVOSIM_PARTICLE_CAP") {
-        match s.parse::<usize>() {
-            Ok(0) => engine.set_particle_cap(None),
-            Ok(n) => engine.set_particle_cap(Some(n)),
-            Err(e) => tracing::warn!("EVOSIM_PARTICLE_CAP parse error: {e}"),
+        let trimmed = s.trim();
+        match trimmed {
+            "" => {}
+            "none" | "off" | "unbounded" => engine.set_particle_cap(None),
+            _ => match trimmed.parse::<usize>() {
+                Ok(n) => engine.set_particle_cap(Some(n)),
+                Err(e) => tracing::warn!("EVOSIM_PARTICLE_CAP parse error: {e}"),
+            },
         }
     }
     let mut running = true;

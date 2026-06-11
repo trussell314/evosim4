@@ -55,13 +55,15 @@ tracking.
 ## Knobs
 
 - `EVOSIM_PARTICLE_CAP=<n>` env var sets the global rendered-particle
-  cap before `Engine` startup. `0` removes the cap (unbounded).
+  cap before `Engine` startup. `0` is a literal cap of 0 -- the
+  field drains as decay ages existing particles out. To opt out of
+  the cap entirely, set the var to `none` / `off` / `unbounded`.
   Default in code is 3000.
 - `EVOSIM_BIND`, `EVOSIM_ADMIN_TOKEN` -- see `server/README.md`.
 
 ## Baseline (default scene, sim_rate=1, 60 sim seconds, release)
 
-### Uncapped (`EVOSIM_PARTICLE_CAP=0`)
+### Uncapped (`EVOSIM_PARTICLE_CAP=none`)
 
 ```
 tick_ms          mean 2.43  p50 2.39  p95 3.28  p99 3.72  max 3.74
