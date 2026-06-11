@@ -25,6 +25,7 @@ pub mod forces;
 pub mod founders;
 pub mod geology;
 pub mod genome;
+pub mod gpu_forces;
 pub mod genome_consts;
 pub mod growth;
 pub mod ingest;
@@ -376,6 +377,31 @@ impl Engine {
     /// particles freely). Pass-through to `world.particle_cap`.
     pub fn set_particle_cap(&mut self, cap: Option<usize>) {
         self.world.particle_cap = cap;
+    }
+
+    /// Try to install the wgpu compute force kernel. Returns `true` if
+    /// a compute-capable adapter was found and the pipeline built;
+    /// `false` (and stays on the CPU paths) otherwise. Idempotent --
+    /// rebuilding is a no-op once the pipeline exists.
+    pub fn enable_gpu_forces(&mut self) -> bool {
+        if self.world.gpu_forces.is_some() {
+            return true;
+        }
+        // Size for the demo world's current cap so the first few
+        // dispatches don't have to grow the buffer.
+        let initial_capacity = self
+            .world
+            .particle_cap
+            .unwrap_or(8192)
+            .max(1024);
+        self.world.gpu_forces = gpu_forces::GpuForcesPipeline::new(initial_capacity);
+        self.world.gpu_forces.is_some()
+    }
+
+    /// Drop the GPU pipeline if one was installed. The force kernel
+    /// falls back to the CPU paths.
+    pub fn disable_gpu_forces(&mut self) {
+        self.world.gpu_forces = None;
     }
 
     pub fn save_json(&self) -> Result<String, serde_json::Error> {

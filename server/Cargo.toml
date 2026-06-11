@@ -28,6 +28,9 @@ anyhow = "1"
 thiserror = "1"
 constant_time_eq = "0.3"
 rayon = "1.10"
+wgpu = "26"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
 
 # Internal
 evosim-protocol = { path = "crates/evosim-protocol" }

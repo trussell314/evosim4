@@ -73,6 +73,12 @@ pub struct World {
     /// `None` = unbounded, which is the historical behaviour.
     pub particle_cap: Option<usize>,
 
+    /// Optional wgpu compute pipeline for the force kernel. Built lazily
+    /// via `Engine::enable_gpu_forces()`; `None` on machines without a
+    /// compute-capable adapter or when the operator hasn't opted in.
+    /// Runtime-only resource; not persisted across save/load.
+    pub gpu_forces: Option<crate::gpu_forces::GpuForcesPipeline>,
+
     /// Per-engine PRNG for the force kernel's brownian noise. TS uses
     /// a module-level `simRng`; we hold it on the world so the engine
     /// task owns it cleanly.
@@ -141,6 +147,7 @@ impl World {
             // precipitate loop healthy without letting autolysis +
             // precipitation pile particles indefinitely.
             particle_cap: Some(3000),
+            gpu_forces: None,
             edna: EdnaField::new(),
             sim_rng: Mulberry32::new(seed),
 

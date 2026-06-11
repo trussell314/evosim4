@@ -106,6 +106,16 @@ async fn run(
             },
         }
     }
+    // EVOSIM_GPU_FORCES=1 opts in to the wgpu compute force kernel.
+    // Falls back to CPU silently if no compute-capable adapter is
+    // present (sandboxed CI, headless servers without a GPU).
+    if matches!(
+        std::env::var("EVOSIM_GPU_FORCES").as_deref(),
+        Ok("1") | Ok("on") | Ok("true")
+    ) {
+        let ok = engine.enable_gpu_forces();
+        tracing::info!("EVOSIM_GPU_FORCES requested; installed={ok}");
+    }
     let mut running = true;
     let mut sim_rate: f32 = 1.0;
     let mut tick_timer = make_tick_timer(sim_rate);

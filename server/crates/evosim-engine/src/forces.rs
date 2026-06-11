@@ -150,16 +150,17 @@ pub fn apply_particle_forces_range(
 }
 
 /// Convenience wrapper around `apply_particle_forces_range` that runs
-/// the kernel across every particle in `world`. Used by the engine's
-/// serial path. Borrows the chem table internally so callers don't
-/// thread it through.
+/// the kernel across every particle in `world`. Three dispatch paths:
 ///
-/// Above `PARALLEL_THRESHOLD` particles the work splits across rayon
-/// threads using a per-chunk PCG for Brownian noise (the same
-/// approach the wgpu shader takes -- deterministic per (tick_seed,
-/// chunk_idx), independent of the serial RNG draw order). Below the
-/// threshold, the thread-pool overhead would dominate so we stay on
-/// the strictly-serial path.
+///   `gpu`        N >= GPU_FORCES_THRESHOLD and a wgpu pipeline is
+///                installed -- compute shader on the GPU
+///   `parallel`   N >= PARALLEL_THRESHOLD -- rayon par_chunks_mut
+///   `serial`     otherwise -- the original strictly-serial loop
+///
+/// The GPU + parallel paths share the per-chunk / per-particle PCG
+/// pattern for Brownian noise (matches `gpu-forces-shader.ts`). The
+/// serial path keeps the engine's documented "deterministic only on
+/// the serial CPU path" invariant.
 pub fn apply_forces(world: &mut World, dt: f32) {
     if world.particle_store.n == 0 {
         return;
@@ -167,6 +168,16 @@ pub fn apply_forces(world: &mut World, dt: f32) {
     let params = crate::world::build_particle_force_params(world, dt);
     let mat_base = &crate::chemistry::table().base_density[..];
     let n = world.particle_store.n;
+    // GPU path -- if the pipeline is installed on the world AND N is
+    // past the GPU-vs-CPU breakeven, dispatch the compute kernel.
+    if n >= crate::gpu_forces::GPU_FORCES_THRESHOLD {
+        if let Some(gpu) = world.gpu_forces.as_mut() {
+            let tick_seed = world.sim_rng.peek_state();
+            let _ = world.sim_rng.next_u32();
+            gpu.dispatch(&mut world.particle_store, mat_base, &params, tick_seed);
+            return;
+        }
+    }
     if n >= PARALLEL_THRESHOLD {
         let tick_seed = world.sim_rng.peek_state();
         // Pull a single draw so the serial-path determinism boundary is
