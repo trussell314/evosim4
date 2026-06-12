@@ -162,10 +162,33 @@ let build: BuildInfo | null = null;
 let chemColors: string[] = [];
 let chemNames: string[] = [];
 
+// Default the URL field to a ws/wss URL on the same host the page was
+// served from, with the configured server port. So a phone that loaded
+// http://192.168.1.13:5174/ gets ws://192.168.1.13:8080/sim prefilled
+// instead of ws://127.0.0.1... (which only worked from the host itself).
+// Use wss:// when the page was served over https so mixed-content
+// blocking doesn't kill the connection.
+function defaultServerUrl(): string {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  // Allow ?serverPort=8080 to override; otherwise hardcoded to the
+  // up.sh default. If the page itself is served from the same port as
+  // the server (unusual but possible), point at it explicitly.
+  const portFromUrl = new URLSearchParams(window.location.search).get("serverPort");
+  const port = portFromUrl ?? "8080";
+  const host = window.location.hostname || "127.0.0.1";
+  return `${proto}://${host}:${port}/sim`;
+}
+
 // Save the URL + token in localStorage so a reload doesn't re-type.
+// The URL precedence is:
+//   1. ?server=... query string (one-shot override -- handy for phones
+//      pinning a specific LAN IP via QR code)
+//   2. localStorage (last successful URL the user connected with)
+//   3. defaultServerUrl() built from window.location
 {
+  const overrideUrl = new URLSearchParams(window.location.search).get("server");
   const savedUrl = localStorage.getItem("evosim:url");
-  if (savedUrl) urlInput.value = savedUrl;
+  urlInput.value = overrideUrl ?? savedUrl ?? defaultServerUrl();
   const savedTok = localStorage.getItem("evosim:token");
   if (savedTok) tokenInput.value = savedTok;
 }

@@ -125,9 +125,19 @@ impl GpuForcesPipeline {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
+        // Prefer the LowPower adapter (integrated GPU when one's
+        // available, otherwise still the system default) so other GPU
+        // workloads on the same host aren't starved by us grabbing the
+        // discrete card. The server is normally a background compute
+        // sim, not a foreground render task; HighPerformance is the
+        // wrong default for that role. Operators who genuinely want
+        // the discrete GPU can override at the wgpu adapter pick by
+        // editing this preference -- it's intentionally hard-coded so
+        // it travels with the "be polite to other workloads" stance
+        // the up.sh script encodes (nice 19 + ionice -c 3 / taskpolicy -b).
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })

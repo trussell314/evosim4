@@ -21,17 +21,26 @@
 # Both relaunched processes are detached via `setsid nohup ... &` so
 # closing the shell that ran this script doesn't kill them.
 #
+# Both server + client run at the lowest CPU + I/O priority the OS
+# offers (nice 19 + ionice -c 3 on Linux, taskpolicy -b on macOS) so
+# other workloads on the host take precedence. If `--tmux` is used,
+# the supervisor inside tmux is wrapped the same way so the niceness
+# applies to every relaunch.
+#
 # Env knobs (all optional):
 #   EVOSIM_BIND          server bind (default 0.0.0.0:8080)
 #   EVOSIM_CLIENT_PORT   client dev server port (default 5174)
 #   EVOSIM_TOKEN_FILE    admin token path (default /tmp/evosim-token)
 #   EVOSIM_LOG_DIR       log directory (default /tmp/evosim-logs)
 #   EVOSIM_UPDATE_REF    git ref to reset to (default origin/<current branch>)
+#   EVOSIM_NICE          nice value for server/client (default 19, range -20..19)
 #   EVOSIM_SKIP_PULL=1   skip git fetch + reset
 #   EVOSIM_SKIP_BUILD=1  skip cargo + npm build
 #   EVOSIM_SNAPSHOT_HZ   snapshot rate sent to the server (default 30)
 #   EVOSIM_PARTICLE_CAP  particle cap (default unset -> engine default of 3000)
 #   EVOSIM_GPU_FORCES=1  opt in to the wgpu force kernel
+#                        (also picks the LowPower adapter so other GPU
+#                         workloads on the same host aren't starved)
 #
 # Security: binds are 0.0.0.0 so a phone on the same wifi can connect.
 # Admin token gates the destructive ops (Reset, Update server, Update
@@ -56,6 +65,39 @@ detach() {
     if command -v setsid >/dev/null 2>&1; then
         echo "setsid"
     fi
+    return 0
+}
+
+# Background-priority prefix. Wraps a command with everything needed
+# to make other workloads on the host take precedence:
+#
+#   - `nice -n ${EVOSIM_NICE:-19}` lowers CPU scheduling priority
+#     (19 is the most generous value on every Unix; the kernel only
+#     runs the process when nothing else wants the CPU).
+#   - `ionice -c 3` on Linux puts disk I/O in the idle class (no
+#     reads/writes while another process is waiting for the disk).
+#   - `taskpolicy -b` on macOS puts the process in Darwin's
+#     background priority class (lowered CPU + I/O + QoS tier).
+#
+# All three are *prefixes* -- the resulting string is meant to be
+# stitched in front of the actual launch command. Returns 0 even when
+# none of the tools are installed; we fall back to plain `nice` then
+# to nothing rather than failing the launch.
+nice_prefix() {
+    local parts=()
+    local nval="${EVOSIM_NICE:-19}"
+    if command -v nice >/dev/null 2>&1; then
+        parts+=("nice" "-n" "${nval}")
+    fi
+    case "$(uname -s 2>/dev/null)" in
+        Linux)
+            command -v ionice >/dev/null 2>&1 && parts+=("ionice" "-c" "3")
+            ;;
+        Darwin)
+            command -v taskpolicy >/dev/null 2>&1 && parts+=("taskpolicy" "-b")
+            ;;
+    esac
+    printf '%s ' "${parts[@]}"
     return 0
 }
 
@@ -267,6 +309,11 @@ fi
 
 # ------ start server + client --------------------------------------------
 SERVER_LAUNCHER="$(detach)"
+# Lowest-priority CPU + I/O so other workloads on the host take
+# precedence. nice 19 on every Unix, plus ionice -c 3 on Linux or
+# taskpolicy -b on macOS. The supervisor is also wrapped so its child
+# (the evosim-server binary) inherits the niceness on every restart.
+NICE_PREFIX="$(nice_prefix)"
 
 # Optional env vars get folded into a flat string that's safe to inline
 # in either the tmux command or the detached background launch. The
@@ -279,9 +326,9 @@ OPT_ENV=""
     OPT_ENV+="EVOSIM_GPU_FORCES=${EVOSIM_GPU_FORCES} "
 
 if [[ ${USE_TMUX} == 1 ]]; then
-    echo "[start] tmux session 'evosim' (server + client windows)"
-    # Server window: cd + env + supervisor wrapper. tmux holds the pty
-    # for each command; logs stream live there. The session is
+    echo "[start] tmux session 'evosim' (server + client, background-priority)"
+    # Server window: cd + env + nice + supervisor wrapper. tmux holds
+    # the pty for each command; logs stream live there. The session is
     # detached (-d) so this script returns immediately.
     tmux new-session -d -s evosim -n server -c "${SERVER_DIR}" \
         "EVOSIM_BIND='${SERVER_BIND}' \
@@ -289,14 +336,14 @@ if [[ ${USE_TMUX} == 1 ]]; then
          EVOSIM_REPO_ROOT='${REPO_ROOT}' \
          EVOSIM_SNAPSHOT_HZ='${SNAPSHOT_HZ}' \
          ${OPT_ENV} \
-         exec '${SCRIPT_DIR}/run.sh'"
+         exec ${NICE_PREFIX} '${SCRIPT_DIR}/run.sh'"
     tmux new-window -t evosim:1 -n client -c "${CLIENT_DIR}" \
-        "exec ./node_modules/.bin/vite --host 0.0.0.0 \
+        "exec ${NICE_PREFIX} ./node_modules/.bin/vite --host 0.0.0.0 \
          --port ${CLIENT_PORT} --strictPort"
     SERVER_PID="tmux:evosim:server"
     CLIENT_PID="tmux:evosim:client"
 else
-    echo "[start] evosim-server (via supervisor, detached)"
+    echo "[start] evosim-server (via supervisor, detached, background-priority)"
     cd "${SERVER_DIR}"
     env EVOSIM_BIND="${SERVER_BIND}" \
         EVOSIM_ADMIN_TOKEN="${TOKEN}" \
@@ -304,14 +351,14 @@ else
         EVOSIM_SNAPSHOT_HZ="${SNAPSHOT_HZ}" \
         ${EVOSIM_PARTICLE_CAP:+EVOSIM_PARTICLE_CAP="${EVOSIM_PARTICLE_CAP}"} \
         ${EVOSIM_GPU_FORCES:+EVOSIM_GPU_FORCES="${EVOSIM_GPU_FORCES}"} \
-        ${SERVER_LAUNCHER} nohup "${SCRIPT_DIR}/run.sh" \
+        ${SERVER_LAUNCHER} nohup ${NICE_PREFIX} "${SCRIPT_DIR}/run.sh" \
             > "${LOG_DIR}/server.log" 2>&1 < /dev/null &
     SERVER_PID=$!
     disown ${SERVER_PID} 2>/dev/null || true
 
-    echo "[start] vite (client-demo dev server, host 0.0.0.0, detached)"
+    echo "[start] vite (client-demo dev server, host 0.0.0.0, detached, background-priority)"
     cd "${CLIENT_DIR}"
-    ${SERVER_LAUNCHER} nohup ./node_modules/.bin/vite \
+    ${SERVER_LAUNCHER} nohup ${NICE_PREFIX} ./node_modules/.bin/vite \
         --host 0.0.0.0 --port "${CLIENT_PORT}" --strictPort \
             > "${LOG_DIR}/client.log" 2>&1 < /dev/null &
     CLIENT_PID=$!
