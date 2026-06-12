@@ -116,7 +116,9 @@ interface Snapshot {
 }
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
-      chem_colors: string[]; chem_names: string[] }
+      chem_colors: string[]; chem_names: string[];
+      // Each inner array is one rock as alternating x,y pairs flattened.
+      terrain?: number[][] }
   | { type: "snapshot"; tick: number; t: number; width: number; height: number;
       particles: Soa; creatures: Soa;
       force_source: "gpu" | "cpu" | "serial";
@@ -139,6 +141,10 @@ const saveBtn = document.getElementById("save") as HTMLButtonElement;
 const resetBtn = document.getElementById("reset") as HTMLButtonElement;
 const updateServerBtn = document.getElementById("update-server") as HTMLButtonElement;
 const updateClientBtn = document.getElementById("update-client") as HTMLButtonElement;
+const toggleAmbientBtn = document.getElementById("toggle-ambient") as HTMLButtonElement;
+const toggleSpeciesBtn = document.getElementById("toggle-species") as HTMLButtonElement;
+const ambientCloseBtn = document.getElementById("ambient-close") as HTMLButtonElement;
+const speciesCloseBtn = document.getElementById("species-close") as HTMLButtonElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
@@ -161,6 +167,17 @@ let isAdmin = false;
 let build: BuildInfo | null = null;
 let chemColors: string[] = [];
 let chemNames: string[] = [];
+// Static terrain polygons from the Hello frame. One Float32Array per
+// rock, alternating x,y. Empty until Hello lands; rendered every frame.
+let terrain: Float32Array[] = [];
+// Panel visibility -- start closed on narrow viewports so the header
+// isn't covered. Restored from localStorage so the operator's choice
+// persists across reloads.
+const isNarrow = window.innerWidth < 700;
+let showAmbient = localStorage.getItem("evosim:ambient") === "1"
+  || (localStorage.getItem("evosim:ambient") === null && !isNarrow);
+let showSpecies = localStorage.getItem("evosim:species") === "1"
+  || (localStorage.getItem("evosim:species") === null && !isNarrow);
 
 // Default the URL field to a ws/wss URL on the same host the page was
 // served from, with the configured server port. So a phone that loaded
@@ -179,6 +196,19 @@ function defaultServerUrl(): string {
   return `${proto}://${host}:${port}/sim`;
 }
 
+/// Force a saved URL into the ws://host:port/sim canonical shape. Old
+/// saved entries occasionally lacked the /sim path; without it the
+/// server hits the catch-all 404. Idempotent.
+function normaliseServerUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (u.pathname === "/" || u.pathname === "") u.pathname = "/sim";
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 // Save the URL + token in localStorage so a reload doesn't re-type.
 // The URL precedence is:
 //   1. ?server=... query string (one-shot override -- handy for phones
@@ -188,12 +218,13 @@ function defaultServerUrl(): string {
 {
   const overrideUrl = new URLSearchParams(window.location.search).get("server");
   const savedUrl = localStorage.getItem("evosim:url");
-  urlInput.value = overrideUrl ?? savedUrl ?? defaultServerUrl();
+  urlInput.value = normaliseServerUrl(overrideUrl ?? savedUrl ?? defaultServerUrl());
   const savedTok = localStorage.getItem("evosim:token");
   if (savedTok) tokenInput.value = savedTok;
 }
 
 function startConnect(): void {
+  urlInput.value = normaliseServerUrl(urlInput.value);
   localStorage.setItem("evosim:url", urlInput.value);
   localStorage.setItem("evosim:token", tokenInput.value);
   userIntendsConnection = true;
@@ -251,6 +282,22 @@ function resetReconnectBackoff(): void {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && userIntendsConnection) {
     resetReconnectBackoff();
+    // iOS Safari / Brave often leave `ws.readyState === OPEN` after a
+    // background period even when the underlying TCP connection is
+    // already dead. Without the force-close below, the conditional
+    // below would see readyState=OPEN and refuse to reconnect, leaving
+    // the page stuck on a zombie socket. Closing here triggers the
+    // existing ws.onclose path which schedules a reconnect.
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Sanity: if we got a snapshot in the last 5 s, the socket is
+      // genuinely live and a close would be wasteful; otherwise treat
+      // it as half-open and recycle.
+      const stale = lastSnapshotAt === 0
+        || (performance.now() - lastSnapshotAt) > 5000;
+      if (stale) {
+        try { ws.close(); } catch (_) { /* nothing */ }
+      }
+    }
     if (!ws || ws.readyState >= WebSocket.CLOSING) scheduleReconnect(200);
   }
 });
@@ -286,6 +333,29 @@ updateClientBtn.onclick = () => {
 /// handler knows to reload the page on success rather than just
 /// echoing the path.
 let pendingReload = false;
+
+function applyPanelVisibility(): void {
+  // The render*Panel functions force-show their aside when data is
+  // available; respect the toggle here by hiding them again on the
+  // next frame. Cheap and idempotent.
+  ambientPanel.style.display = showAmbient ? "block" : "none";
+  speciesPanel.style.display = showSpecies ? "block" : "none";
+  toggleAmbientBtn.style.background = showAmbient ? "#0d1c26" : "#07111a";
+  toggleSpeciesBtn.style.background = showSpecies ? "#0d1c26" : "#07111a";
+}
+toggleAmbientBtn.onclick = () => {
+  showAmbient = !showAmbient;
+  localStorage.setItem("evosim:ambient", showAmbient ? "1" : "0");
+  applyPanelVisibility();
+};
+toggleSpeciesBtn.onclick = () => {
+  showSpecies = !showSpecies;
+  localStorage.setItem("evosim:species", showSpecies ? "1" : "0");
+  applyPanelVisibility();
+};
+ambientCloseBtn.onclick = () => toggleAmbientBtn.click();
+speciesCloseBtn.onclick = () => toggleSpeciesBtn.click();
+applyPanelVisibility();
 
 function setStatus(html: string): void {
   statusEl.innerHTML = html;
@@ -343,6 +413,12 @@ function handle(msg: ServerMessage): void {
       isAdmin = msg.capabilities.admin;
       chemColors = msg.chem_colors;
       chemNames = msg.chem_names;
+      // Terrain only ships on the initial handshake (the post-auth
+      // re-Hello sends an empty array); keep what we have when the
+      // server tells us nothing new.
+      if (msg.terrain && msg.terrain.length > 0) {
+        terrain = msg.terrain.map((flat) => Float32Array.from(flat));
+      }
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
       speedSlider.disabled = false;
@@ -442,7 +518,7 @@ if (typeof ResizeObserver !== "undefined") {
 resize();
 
 function renderAmbientPanel(stocks: number[]): void {
-  if (stocks.length === 0) {
+  if (stocks.length === 0 || !showAmbient) {
     ambientPanel.style.display = "none";
     return;
   }
@@ -465,7 +541,7 @@ function renderAmbientPanel(stocks: number[]): void {
 }
 
 function renderSpeciesPanel(top: SpeciesSummary[]): void {
-  if (top.length === 0) {
+  if (top.length === 0 || !showSpecies) {
     speciesPanel.style.display = "none";
     return;
   }
@@ -517,12 +593,37 @@ function frame(): void {
     const offY = (ch - wH * scale) / 2;
 
     // Day/night tint: blend the world canvas color with a warmer
-    // hue during daylight and a cooler tone at night. Subtle so
-    // it doesn't drown out the particles.
+    // hue during daylight and a cooler tone at night. Layered with a
+    // water blue so the seabed reads as water rather than empty
+    // black. Subtle so it doesn't drown out the particles.
     const light = snapshot.ambient_light ?? 1.0;
-    const tint = `rgba(${Math.round(255 * (0.05 + 0.10 * light))}, ${Math.round(255 * (0.04 + 0.08 * light))}, ${Math.round(255 * (0.02 * (1.0 - light)))}, 1)`;
-    ctx.fillStyle = tint;
+    const wR = Math.round(8 + 22 * light);
+    const wG = Math.round(24 + 36 * light);
+    const wB = Math.round(48 + 40 * light);
+    ctx.fillStyle = `rgb(${wR}, ${wG}, ${wB})`;
     ctx.fillRect(offX, offY, wW * scale, wH * scale);
+
+    // Static terrain: fill each rock polygon with a dark rust tone so
+    // the water/rock distinction is visible. Stroke too so thin
+    // outcroppings still read at small scales. Drawn AFTER the
+    // water tint and BEFORE particles + cells so cells visually sit
+    // in the open water above rock.
+    if (terrain.length > 0) {
+      ctx.fillStyle = "#2a1810";
+      ctx.strokeStyle = "#3a261a";
+      ctx.lineWidth = 1;
+      for (const poly of terrain) {
+        if (poly.length < 6) continue;
+        ctx.beginPath();
+        ctx.moveTo(offX + poly[0] * scale, offY + poly[1] * scale);
+        for (let i = 2; i < poly.length; i += 2) {
+          ctx.lineTo(offX + poly[i] * scale, offY + poly[i + 1] * scale);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
 
     // Pull X/Y/R/chemId blobs.
     const blobs: Record<string, NamedBlob> = {};

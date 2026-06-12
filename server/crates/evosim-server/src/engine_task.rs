@@ -68,6 +68,11 @@ pub enum EngineCmd {
         founders_per_strategy: Option<u32>,
         reply: oneshot::Sender<()>,
     },
+    /// Return the static terrain polygons. Each inner Vec is a single
+    /// rock as alternating (x, y) f32 pairs flattened. Used by the WS
+    /// handler to populate the Hello frame so the client can render
+    /// the terrain silhouette.
+    GetTerrain(oneshot::Sender<Vec<Vec<f32>>>),
 }
 
 pub struct EngineHandle {
@@ -208,6 +213,25 @@ async fn run(
                         );
                         engine.configure(width, height, seed, day_period_s, founders_per_strategy);
                         let _ = reply.send(());
+                    }
+                    Some(EngineCmd::GetTerrain(reply)) => {
+                        // Flatten polygons to alternating (x, y) pairs
+                        // so the wire shape is one Vec<f32> per rock.
+                        let polys: Vec<Vec<f32>> = engine
+                            .world()
+                            .obstacles
+                            .iter()
+                            .filter_map(|ob| ob.polygon.as_ref())
+                            .map(|poly| {
+                                let mut flat = Vec::with_capacity(poly.len() * 2);
+                                for v in poly {
+                                    flat.push(v.x);
+                                    flat.push(v.y);
+                                }
+                                flat
+                            })
+                            .collect();
+                        let _ = reply.send(polys);
                     }
                     None => {
                         // Sender dropped -- the binary is exiting.

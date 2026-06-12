@@ -379,6 +379,13 @@ impl Engine {
         self.world.particle_cap = cap;
     }
 
+    /// Read-only access to the underlying world. Used by the server
+    /// task to populate the Hello frame with the static terrain
+    /// silhouette (and a future renderer-feature dump).
+    pub fn world(&self) -> &world::World {
+        &self.world
+    }
+
     /// Try to install the wgpu compute force kernel. Returns `true` if
     /// a compute-capable adapter was found and the pipeline built;
     /// `false` (and stays on the CPU paths) otherwise. Idempotent --

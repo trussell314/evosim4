@@ -11,7 +11,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use evosim_protocol::{
@@ -45,18 +45,6 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
     // Per-connection state lives on the stack; flipped by Auth.
     let mut is_admin = false;
 
-    // Send Hello before anything else.
-    let hello = ServerMessage::Hello {
-        protocol: PROTOCOL_VERSION,
-        build: state.build.clone(),
-        capabilities: capabilities(&state, is_admin),
-        chem_colors: chem_colors(),
-        chem_names: chem_names(),
-    };
-    if !send_frame(&mut tx, &hello).await {
-        return;
-    }
-
     // We can't share `engine_cmd_tx` through state without an extra
     // Arc layer; for now per-task admin handler picks it up from the
     // EngineHandle stored at boot. To avoid plumbing the handle into
@@ -64,6 +52,34 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
     // later commit; today admin handlers get a clone from a static
     // helper.
     let engine_cmd = state_engine_cmd();
+
+    // Hello carries the static terrain so the client can render it.
+    // Ask the engine task for the polygon list; on failure (engine
+    // gone) we still ship an empty list rather than failing the
+    // handshake.
+    let terrain = if let Some(ec) = engine_cmd.as_ref() {
+        let (tx_t, rx_t) = oneshot::channel();
+        if ec.send(EngineCmd::GetTerrain(tx_t)).await.is_ok() {
+            rx_t.await.unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Send Hello before anything else.
+    let hello = ServerMessage::Hello {
+        protocol: PROTOCOL_VERSION,
+        build: state.build.clone(),
+        capabilities: capabilities(&state, is_admin),
+        chem_colors: chem_colors(),
+        chem_names: chem_names(),
+        terrain,
+    };
+    if !send_frame(&mut tx, &hello).await {
+        return;
+    }
 
     let mut snap_rx = snap_rx;
 
@@ -161,6 +177,9 @@ async fn handle_client_message(
                 .unwrap_or(false);
             // Re-issue capabilities so the client UI can light up the
             // admin controls.
+            // Terrain is static; the post-auth re-Hello doesn't need
+            // it, so ship an empty Vec. The client uses the value from
+            // the initial handshake Hello.
             let _ = reply_tx
                 .send(ServerMessage::Hello {
                     protocol: PROTOCOL_VERSION,
@@ -168,6 +187,7 @@ async fn handle_client_message(
                     capabilities: capabilities(state, *is_admin),
                     chem_colors: chem_colors(),
                     chem_names: chem_names(),
+                    terrain: Vec::new(),
                 })
                 .await;
         }

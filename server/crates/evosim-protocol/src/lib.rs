@@ -289,6 +289,13 @@ pub enum ServerMessage {
         /// the array length.
         chem_colors: Vec<String>,
         chem_names: Vec<String>,
+        /// Static terrain polygons in world-pixel coordinates. Each
+        /// inner Vec is one rock; alternating (x, y) f32 pairs flattened
+        /// for compact msgpack encoding -- a 200-vertex polygon ships
+        /// as ~1600 bytes total. Empty when the world has no terrain
+        /// installed; clients should render nothing in that case.
+        #[serde(default)]
+        terrain: Vec<Vec<f32>>,
     },
     /// Recurring snapshot. Push cadence ~10 Hz, matches TS sim worker.
     Snapshot(Box<Snapshot>),
@@ -424,6 +431,7 @@ mod tests {
             },
             chem_colors: vec!["#ff0000".into()],
             chem_names: vec!["test".into()],
+            terrain: Vec::new(),
         };
         let bytes = encode_server(&msg).unwrap();
         let back: ServerMessage = rmp_serde::from_slice(&bytes).unwrap();
