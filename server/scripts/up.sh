@@ -43,6 +43,46 @@
 
 set -euo pipefail
 
+# Portable detached-launch helper. Uses `setsid` if available (Linux),
+# otherwise falls back to plain `nohup` + `disown` (macOS / BSD), which
+# survives terminal closure the same way -- the controlling tty is
+# discarded via I/O redirection + SIGHUP is ignored via nohup + the
+# shell drops the job table entry via disown.
+detach() { command -v setsid >/dev/null 2>&1 && echo "setsid"; }
+
+# Kill anything bound to a given TCP port. Tries lsof first (macOS +
+# most Linux distros), falls back to fuser (Linux). Silent if nothing
+# was bound.
+kill_tcp_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids="$(lsof -ti tcp:"${port}" 2>/dev/null || true)"
+        if [[ -n "${pids}" ]]; then
+            kill -9 ${pids} 2>/dev/null || true
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -n tcp "${port}" 2>/dev/null || true
+    fi
+}
+
+# Enumerate IPv4 addresses across all non-loopback interfaces. Linux,
+# macOS, BSD all have one of these.
+list_addresses() {
+    if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
+        # GNU hostname (Linux)
+        hostname -I 2>/dev/null | tr ' ' '\n'
+    elif command -v ip >/dev/null 2>&1; then
+        ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+    elif command -v ifconfig >/dev/null 2>&1; then
+        # BSD ifconfig (macOS). Skip 127.* loopback + link-local 169.254/16.
+        ifconfig 2>/dev/null | awk '
+            /^[a-z]/ { iface=$1 }
+            /inet / && $2 !~ /^127\./ && $2 !~ /^169\.254\./ { print $2 }
+        '
+    fi
+}
+
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SERVER_DIR="$( cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd )"
 REPO_ROOT="$( cd -- "${SERVER_DIR}/.." &> /dev/null && pwd )"
@@ -75,18 +115,40 @@ else
 fi
 TOKEN="$(<"${TOKEN_FILE}")"
 
+# ------ argument parsing -------------------------------------------------
+USE_TMUX=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tmux)
+            USE_TMUX=1
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,/^$/p' "${BASH_SOURCE[0]}"
+            exit 0
+            ;;
+        *)
+            echo "unknown argument: $1" >&2
+            echo "try: $0 --help" >&2
+            exit 2
+            ;;
+    esac
+done
+if [[ ${USE_TMUX} == 1 ]] && ! command -v tmux >/dev/null 2>&1; then
+    echo "--tmux requested but tmux is not installed" >&2
+    exit 1
+fi
+
 # ------ stop existing processes -----------------------------------------
 echo "[stop] killing any running server/client"
 pkill -x evosim-server 2>/dev/null || true
-# Client dev server: kill anything on the dev port (Vite + the node
-# wrapper around it). Prefer fuser; fall back to lsof; last resort the
-# pkill the script-tag pattern Vite uses.
-if command -v fuser &>/dev/null; then
-    fuser -k -n tcp "${CLIENT_PORT}" 2>/dev/null || true
-elif command -v lsof &>/dev/null; then
-    lsof -ti tcp:"${CLIENT_PORT}" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
-fi
+# Kill the supervisor wrapper if it's running (so it doesn't relaunch
+# the binary we just killed).
+pkill -f "scripts/run\.sh$" 2>/dev/null || true
+kill_tcp_port "${CLIENT_PORT}"
 pkill -f "vite.*--port[= ]*${CLIENT_PORT}" 2>/dev/null || true
+# Tear down any prior tmux session we own so the new launch starts clean.
+tmux kill-session -t evosim 2>/dev/null || true
 sleep 1
 
 # ------ pull -------------------------------------------------------------
@@ -119,50 +181,83 @@ else
     echo "[build] skipped (EVOSIM_SKIP_BUILD=1)"
 fi
 
-# ------ start server -----------------------------------------------------
-echo "[start] evosim-server (via supervisor)"
-cd "${SERVER_DIR}"
-env EVOSIM_BIND="${SERVER_BIND}" \
-    EVOSIM_ADMIN_TOKEN="${TOKEN}" \
-    EVOSIM_REPO_ROOT="${REPO_ROOT}" \
-    EVOSIM_SNAPSHOT_HZ="${SNAPSHOT_HZ}" \
-    ${EVOSIM_PARTICLE_CAP:+EVOSIM_PARTICLE_CAP="${EVOSIM_PARTICLE_CAP}"} \
-    ${EVOSIM_GPU_FORCES:+EVOSIM_GPU_FORCES="${EVOSIM_GPU_FORCES}"} \
-    setsid nohup "${SCRIPT_DIR}/run.sh" \
-        > "${LOG_DIR}/server.log" 2>&1 < /dev/null &
-SERVER_PID=$!
-disown ${SERVER_PID} 2>/dev/null || true
+# ------ start server + client --------------------------------------------
+SERVER_LAUNCHER="$(detach)"
 
-# ------ start client dev server -----------------------------------------
-echo "[start] vite (client-demo dev server, host 0.0.0.0)"
-cd "${CLIENT_DIR}"
-setsid nohup ./node_modules/.bin/vite \
-    --host 0.0.0.0 --port "${CLIENT_PORT}" --strictPort \
-        > "${LOG_DIR}/client.log" 2>&1 < /dev/null &
-CLIENT_PID=$!
-disown ${CLIENT_PID} 2>/dev/null || true
+# Optional env vars get folded into a flat string that's safe to inline
+# in either the tmux command or the detached background launch. The
+# values come from this script's env so they don't need to be shell-
+# quoted -- they're already valid identifiers (numeric/0/1/etc).
+OPT_ENV=""
+[[ -n "${EVOSIM_PARTICLE_CAP:-}" ]] && \
+    OPT_ENV+="EVOSIM_PARTICLE_CAP=${EVOSIM_PARTICLE_CAP} "
+[[ -n "${EVOSIM_GPU_FORCES:-}" ]] && \
+    OPT_ENV+="EVOSIM_GPU_FORCES=${EVOSIM_GPU_FORCES} "
+
+if [[ ${USE_TMUX} == 1 ]]; then
+    echo "[start] tmux session 'evosim' (server + client windows)"
+    # Server window: cd + env + supervisor wrapper. tmux holds the pty
+    # for each command; logs stream live there. The session is
+    # detached (-d) so this script returns immediately.
+    tmux new-session -d -s evosim -n server -c "${SERVER_DIR}" \
+        "EVOSIM_BIND='${SERVER_BIND}' \
+         EVOSIM_ADMIN_TOKEN='${TOKEN}' \
+         EVOSIM_REPO_ROOT='${REPO_ROOT}' \
+         EVOSIM_SNAPSHOT_HZ='${SNAPSHOT_HZ}' \
+         ${OPT_ENV} \
+         exec '${SCRIPT_DIR}/run.sh'"
+    tmux new-window -t evosim:1 -n client -c "${CLIENT_DIR}" \
+        "exec ./node_modules/.bin/vite --host 0.0.0.0 \
+         --port ${CLIENT_PORT} --strictPort"
+    SERVER_PID="tmux:evosim:server"
+    CLIENT_PID="tmux:evosim:client"
+else
+    echo "[start] evosim-server (via supervisor, detached)"
+    cd "${SERVER_DIR}"
+    env EVOSIM_BIND="${SERVER_BIND}" \
+        EVOSIM_ADMIN_TOKEN="${TOKEN}" \
+        EVOSIM_REPO_ROOT="${REPO_ROOT}" \
+        EVOSIM_SNAPSHOT_HZ="${SNAPSHOT_HZ}" \
+        ${EVOSIM_PARTICLE_CAP:+EVOSIM_PARTICLE_CAP="${EVOSIM_PARTICLE_CAP}"} \
+        ${EVOSIM_GPU_FORCES:+EVOSIM_GPU_FORCES="${EVOSIM_GPU_FORCES}"} \
+        ${SERVER_LAUNCHER} nohup "${SCRIPT_DIR}/run.sh" \
+            > "${LOG_DIR}/server.log" 2>&1 < /dev/null &
+    SERVER_PID=$!
+    disown ${SERVER_PID} 2>/dev/null || true
+
+    echo "[start] vite (client-demo dev server, host 0.0.0.0, detached)"
+    cd "${CLIENT_DIR}"
+    ${SERVER_LAUNCHER} nohup ./node_modules/.bin/vite \
+        --host 0.0.0.0 --port "${CLIENT_PORT}" --strictPort \
+            > "${LOG_DIR}/client.log" 2>&1 < /dev/null &
+    CLIENT_PID=$!
+    disown ${CLIENT_PID} 2>/dev/null || true
+fi
 
 # Give them a moment to bind.
 sleep 2
 
 # ------ status -----------------------------------------------------------
 SERVER_OK="no"; CLIENT_OK="no"
-ps -p ${SERVER_PID} >/dev/null 2>&1 && SERVER_OK="yes"
-ps -p ${CLIENT_PID} >/dev/null 2>&1 && CLIENT_OK="yes"
-
-# Collect every LAN address (IPv4 only; phones / laptops want the
-# numeric URL so they don't need DNS). `hostname -I` is the cheapest
-# way on Linux. Fall back to `ip addr` if it's not present.
-addrs() {
-    if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
-        hostname -I 2>/dev/null | tr ' ' '\n'
-    elif command -v ip >/dev/null 2>&1; then
-        ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+if [[ ${USE_TMUX} == 1 ]]; then
+    if tmux has-session -t evosim 2>/dev/null; then
+        SERVER_OK="yes"
+        CLIENT_OK="yes"
     fi
-}
+else
+    ps -p ${SERVER_PID} >/dev/null 2>&1 && SERVER_OK="yes"
+    ps -p ${CLIENT_PID} >/dev/null 2>&1 && CLIENT_OK="yes"
+fi
 
-mapfile -t IPS < <(addrs | grep -v '^$' | sort -u)
-[[ ${#IPS[@]} -eq 0 ]] && IPS=("127.0.0.1")
+# Collect every LAN address into IPS[]. bash 3.2 (default on macOS)
+# lacks mapfile, so use a while-read loop.
+IPS=()
+while IFS= read -r line; do
+    [[ -n "${line}" ]] && IPS+=("${line}")
+done < <(list_addresses | sort -u)
+if [[ ${#IPS[@]} -eq 0 ]]; then
+    IPS=("127.0.0.1")
+fi
 
 printf '\n'
 printf '==============================================\n'
@@ -181,10 +276,20 @@ for ip in "${IPS[@]}"; do
         "${ip}" "${CLIENT_PORT}" "${ip}" "${SERVER_PORT}"
 done
 printf '\n'
-printf 'Logs:\n'
-printf '  server : %s/server.log\n' "${LOG_DIR}"
-printf '  client : %s/client.log\n' "${LOG_DIR}"
-printf '\n'
-printf 'Stop everything:\n'
-printf '  pkill -x evosim-server; fuser -k -n tcp %s 2>/dev/null || true\n' "${CLIENT_PORT}"
+if [[ ${USE_TMUX} == 1 ]]; then
+    printf 'Logs / live output:\n'
+    printf '  tmux attach -t evosim         # Ctrl-b 0/1 to switch between server / client\n'
+    printf '  tmux attach -t evosim:server  # land directly in the server window\n'
+    printf '  tmux capture-pane -t evosim:server -p | tail -50\n'
+    printf '\n'
+    printf 'Stop everything:\n'
+    printf '  %s/down.sh\n' "${SCRIPT_DIR}"
+else
+    printf 'Logs:\n'
+    printf '  server : %s/server.log\n' "${LOG_DIR}"
+    printf '  client : %s/client.log\n' "${LOG_DIR}"
+    printf '\n'
+    printf 'Stop everything:\n'
+    printf '  %s/down.sh\n' "${SCRIPT_DIR}"
+fi
 printf '==============================================\n'
