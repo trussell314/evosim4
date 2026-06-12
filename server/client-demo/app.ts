@@ -197,6 +197,32 @@ function defaultServerUrl(): string {
   return `${proto}://${host}:${port}/sim`;
 }
 
+/// Sun / moon position. Returns canvas pixel coords + which body to
+/// render. Day phase 0..0.5 -> sun arcs left to right across the sky;
+/// night phase 0.5..1 -> moon does the same. The arc peaks at the
+/// midpoint of each half-cycle (high noon / high midnight).
+///
+/// `surfaceCanvasY` is where the sky ends; the body's horizon line
+/// sits just above it.
+function sunMoonPos(
+  t: number,
+  periodS: number,
+  canvasW: number,
+  surfaceCanvasY: number,
+): { x: number; y: number; isDay: boolean } | null {
+  if (!periodS || periodS <= 0) return null;
+  const phase = ((t / periodS) % 1 + 1) % 1; // robust mod for negative t
+  const isDay = phase < 0.5;
+  const halfProgress = isDay ? phase * 2 : (phase - 0.5) * 2; // 0..1
+  const x = canvasW * halfProgress;
+  // Arc peaks at halfProgress=0.5; horizon at 0 and 1.
+  const horizonY = Math.max(20, surfaceCanvasY - 8);
+  const peakY = Math.max(20, surfaceCanvasY * 0.15);
+  const arcDepth = horizonY - peakY;
+  const y = horizonY - Math.sin(halfProgress * Math.PI) * arcDepth;
+  return { x, y, isDay };
+}
+
 /// Force a saved URL into the ws://host:port/sim canonical shape. Old
 /// saved entries occasionally lacked the /sim path; without it the
 /// server hits the catch-all 404. Idempotent.
@@ -726,22 +752,31 @@ function frame(): void {
       }
     }
 
-    // Sun / moon indicator, always anchored to the canvas top-right.
-    // Used to live in the world-rect's corner, which got hidden
-    // behind the species panel on portrait phones. Bigger here so
-    // it's legible on a phone too.
-    {
-      const sx = cw - 32;
-      const sy = 32;
+    // Sun / moon, animated. Arc traces left -> right -> left across
+    // the sky as the day phase advances. The TS client did the same;
+    // the previous Rust port reduced this to a static corner badge,
+    // so a user looking at the page rarely caught the moment of
+    // sunrise. The position function lives separately for unit-
+    // testability (see sunMoonPos below).
+    const pmoon = sunMoonPos(snapshot.t, snapshot.day_period_s ?? 300, cw, surfaceCanvasY);
+    if (pmoon) {
+      const { x: sx, y: sy, isDay } = pmoon;
       ctx.beginPath();
       ctx.arc(sx, sy, 14, 0, Math.PI * 2);
-      ctx.fillStyle = light > 0.05
-        ? `rgba(255, ${200 + Math.round(50 * light)}, 80, ${0.3 + 0.7 * light})`
-        : `rgba(180, 200, 240, 0.7)`;
+      ctx.fillStyle = isDay
+        ? `rgba(255, ${200 + Math.round(50 * light)}, 80, ${0.5 + 0.5 * light})`
+        : `rgba(220, 230, 250, 0.85)`;
       ctx.fill();
-      ctx.strokeStyle = light > 0.05 ? "#fc6" : "#9ab";
+      ctx.strokeStyle = isDay ? "#fc6" : "#cdf";
       ctx.lineWidth = 1.5;
       ctx.stroke();
+      if (!isDay) {
+        // Crater shadow gives the moon a recognisable shape.
+        ctx.beginPath();
+        ctx.arc(sx + 4, sy - 2, 11, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(2, 12, 18, 0.35)";
+        ctx.fill();
+      }
     }
 
     // Overlay world bbox.
