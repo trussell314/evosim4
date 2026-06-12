@@ -45,14 +45,26 @@ if command -v tmux >/dev/null 2>&1 && tmux has-session -t evosim 2>/dev/null; th
 fi
 
 # Server binary + its supervisor wrapper. Order matters: kill the
-# supervisor first so it doesn't immediately relaunch the binary.
-if pgrep -f "scripts/run\.sh$" >/dev/null 2>&1; then
-    pkill -f "scripts/run\.sh$" 2>/dev/null || true
-    echo "  killed supervisor (run.sh)"
-fi
-if pgrep -x evosim-server >/dev/null 2>&1; then
-    pkill -x evosim-server 2>/dev/null || true
-    echo "  killed evosim-server"
+# supervisor first (it would otherwise relaunch the binary the moment
+# we kill it), then the binary itself. Repeat once after a short
+# settle to catch a respawn race (the supervisor sometimes manages to
+# fork+exec a child between our SIGTERM-to-supervisor and the next
+# kill -- after a 200 ms pause both sides are gone).
+kill_server_tree() {
+    if pgrep -f "scripts/run\.sh$" >/dev/null 2>&1; then
+        pkill -f "scripts/run\.sh$" 2>/dev/null || true
+        echo "  killed supervisor (run.sh)"
+    fi
+    if pgrep -x evosim-server >/dev/null 2>&1; then
+        pkill -9 -x evosim-server 2>/dev/null || true
+        echo "  killed evosim-server"
+    fi
+}
+kill_server_tree
+sleep 0.2
+# Second pass catches anything the supervisor re-spawned in the gap.
+if pgrep -x evosim-server >/dev/null 2>&1 || pgrep -f "scripts/run\.sh$" >/dev/null 2>&1; then
+    kill_server_tree
 fi
 
 # Client dev server

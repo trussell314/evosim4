@@ -48,7 +48,16 @@ set -euo pipefail
 # survives terminal closure the same way -- the controlling tty is
 # discarded via I/O redirection + SIGHUP is ignored via nohup + the
 # shell drops the job table entry via disown.
-detach() { command -v setsid >/dev/null 2>&1 && echo "setsid"; }
+#
+# Always exits 0 so `VAR=$(detach)` is safe under `set -e` even when
+# setsid is missing (which would otherwise short-circuit to exit 1 and
+# kill the script).
+detach() {
+    if command -v setsid >/dev/null 2>&1; then
+        echo "setsid"
+    fi
+    return 0
+}
 
 # Kill anything bound to a given TCP port. Tries lsof first (macOS +
 # most Linux distros), falls back to fuser (Linux). Silent if nothing
@@ -138,6 +147,81 @@ if [[ ${USE_TMUX} == 1 ]] && ! command -v tmux >/dev/null 2>&1; then
     echo "--tmux requested but tmux is not installed" >&2
     exit 1
 fi
+
+# ------ defaults the trap depends on -----------------------------------
+# Set BEFORE pull/build/launch so the EXIT-trap status banner still
+# prints (with whatever we managed to do) if something later fails
+# under `set -e`.
+SERVER_OK="no"; CLIENT_OK="no"
+SERVER_PID="?"; CLIENT_PID="?"
+SERVER_PORT="${SERVER_BIND##*:}"
+
+print_status() {
+    local rc=$?
+    if [[ ${USE_TMUX} == 1 ]]; then
+        if command -v tmux >/dev/null 2>&1 && tmux has-session -t evosim 2>/dev/null; then
+            SERVER_OK="yes"
+            CLIENT_OK="yes"
+        fi
+    else
+        ps -p "${SERVER_PID}" >/dev/null 2>&1 && SERVER_OK="yes" || true
+        ps -p "${CLIENT_PID}" >/dev/null 2>&1 && CLIENT_OK="yes" || true
+    fi
+
+    local IPS=()
+    local line
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && IPS+=("${line}")
+    done < <(list_addresses 2>/dev/null | sort -u)
+    if [[ ${#IPS[@]} -eq 0 ]]; then
+        IPS=("127.0.0.1")
+    fi
+
+    # NB: every printf format that begins with `-` (e.g. `'----'`) is
+    # passed through `'%s\n' '----'` so bash's printf builtin doesn't
+    # mistake the leading dashes for option flags.
+    printf '\n'
+    printf '%s\n' '=============================================='
+    if [[ ${rc} -ne 0 ]]; then
+        printf 'evosim: setup exited with status %s\n' "${rc}"
+        printf '%s\n' '(some steps may have been skipped; check log files)'
+    else
+        printf '%s\n' 'evosim is up'
+    fi
+    printf '%s\n' '----------------------------------------------'
+    printf '  server          %s   (pid %s)\n' "${SERVER_OK}" "${SERVER_PID}"
+    printf '  client          %s   (pid %s)\n' "${CLIENT_OK}" "${CLIENT_PID}"
+    printf '  snapshot rate   %s Hz\n' "${SNAPSHOT_HZ}"
+    printf '  token file      %s\n' "${TOKEN_FILE}"
+    printf '  token prefix    %s...\n' "${TOKEN:0:8}"
+    printf '\n'
+    printf '%s\n' 'Reachable URLs (open one of these in the browser, paste'
+    printf '%s\n' 'the matching ws://... into the server field, then the token):'
+    local ip
+    for ip in "${IPS[@]}"; do
+        printf '  http://%s:%s/   <-->   ws://%s:%s/sim\n' \
+            "${ip}" "${CLIENT_PORT}" "${ip}" "${SERVER_PORT}"
+    done
+    printf '\n'
+    if [[ ${USE_TMUX} == 1 ]]; then
+        printf '%s\n' 'Logs / live output:'
+        printf '%s\n' '  tmux attach -t evosim         # Ctrl-b 0/1 to switch windows'
+        printf '%s\n' '  tmux attach -t evosim:server  # land directly in the server window'
+        printf '%s\n' '  tmux capture-pane -t evosim:server -p | tail -50'
+        printf '\n'
+        printf '%s\n' 'Stop everything:'
+        printf '  %s/down.sh\n' "${SCRIPT_DIR}"
+    else
+        printf '%s\n' 'Logs:'
+        printf '  server : %s/server.log\n' "${LOG_DIR}"
+        printf '  client : %s/client.log\n' "${LOG_DIR}"
+        printf '\n'
+        printf '%s\n' 'Stop everything:'
+        printf '  %s/down.sh\n' "${SCRIPT_DIR}"
+    fi
+    printf '%s\n' '=============================================='
+}
+trap print_status EXIT
 
 # ------ stop existing processes -----------------------------------------
 echo "[stop] killing any running server/client"
@@ -234,62 +318,6 @@ else
     disown ${CLIENT_PID} 2>/dev/null || true
 fi
 
-# Give them a moment to bind.
+# Give them a moment to bind. The status banner prints from the EXIT
+# trap armed near the top, so we don't repeat it inline here.
 sleep 2
-
-# ------ status -----------------------------------------------------------
-SERVER_OK="no"; CLIENT_OK="no"
-if [[ ${USE_TMUX} == 1 ]]; then
-    if tmux has-session -t evosim 2>/dev/null; then
-        SERVER_OK="yes"
-        CLIENT_OK="yes"
-    fi
-else
-    ps -p ${SERVER_PID} >/dev/null 2>&1 && SERVER_OK="yes"
-    ps -p ${CLIENT_PID} >/dev/null 2>&1 && CLIENT_OK="yes"
-fi
-
-# Collect every LAN address into IPS[]. bash 3.2 (default on macOS)
-# lacks mapfile, so use a while-read loop.
-IPS=()
-while IFS= read -r line; do
-    [[ -n "${line}" ]] && IPS+=("${line}")
-done < <(list_addresses | sort -u)
-if [[ ${#IPS[@]} -eq 0 ]]; then
-    IPS=("127.0.0.1")
-fi
-
-printf '\n'
-printf '==============================================\n'
-printf 'evosim is up\n'
-printf '----------------------------------------------\n'
-printf '  server          %s   (pid %s)\n' "${SERVER_OK}" "${SERVER_PID}"
-printf '  client          %s   (pid %s)\n' "${CLIENT_OK}" "${CLIENT_PID}"
-printf '  snapshot rate   %s Hz\n' "${SNAPSHOT_HZ}"
-printf '  token file      %s\n' "${TOKEN_FILE}"
-printf '  token prefix    %s…\n' "${TOKEN:0:8}"
-printf '\n'
-printf 'Reachable URLs (open one of these in the browser, paste\n'
-printf 'the matching ws://... into the server field, then the token):\n'
-for ip in "${IPS[@]}"; do
-    printf '  http://%s:%s/   <-->   ws://%s:%s/sim\n' \
-        "${ip}" "${CLIENT_PORT}" "${ip}" "${SERVER_PORT}"
-done
-printf '\n'
-if [[ ${USE_TMUX} == 1 ]]; then
-    printf 'Logs / live output:\n'
-    printf '  tmux attach -t evosim         # Ctrl-b 0/1 to switch between server / client\n'
-    printf '  tmux attach -t evosim:server  # land directly in the server window\n'
-    printf '  tmux capture-pane -t evosim:server -p | tail -50\n'
-    printf '\n'
-    printf 'Stop everything:\n'
-    printf '  %s/down.sh\n' "${SCRIPT_DIR}"
-else
-    printf 'Logs:\n'
-    printf '  server : %s/server.log\n' "${LOG_DIR}"
-    printf '  client : %s/client.log\n' "${LOG_DIR}"
-    printf '\n'
-    printf 'Stop everything:\n'
-    printf '  %s/down.sh\n' "${SCRIPT_DIR}"
-fi
-printf '==============================================\n'
