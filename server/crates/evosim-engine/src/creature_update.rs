@@ -197,20 +197,32 @@ pub fn update_creatures(
         store.x[i] += store.vx[i] * dt;
         store.y[i] += store.vy[i] * dt;
 
-        // World wrap so a cell that escapes the box reappears on the
-        // far side. The TS engine clamps to walls; wrapping is
-        // friendlier for the no-collision-with-walls minimal pass.
+        // World horizontal wrap so a cell that drifts off the side
+        // reappears on the other -- the world is conceptually a
+        // cylinder along x. Vertically we CLAMP instead: a cell that
+        // would sink below the seafloor (or float above the air-water
+        // boundary) is held at the boundary with its inward velocity
+        // killed. Wrapping y, as the prior pass did, sent cells that
+        // fell through rock all the way back to the top of the world,
+        // which is the bug that surfaced in the live demo.
         let w = ctx.width;
         let h = ctx.height;
+        let r = store.r[i];
         if store.x[i] < 0.0 {
             store.x[i] += w;
         } else if store.x[i] >= w {
             store.x[i] -= w;
         }
-        if store.y[i] < 0.0 {
-            store.y[i] += h;
-        } else if store.y[i] >= h {
-            store.y[i] -= h;
+        if store.y[i] < r {
+            store.y[i] = r;
+            if store.vy[i] < 0.0 {
+                store.vy[i] = 0.0;
+            }
+        } else if store.y[i] > h - r {
+            store.y[i] = h - r;
+            if store.vy[i] > 0.0 {
+                store.vy[i] = 0.0;
+            }
         }
 
         // Age the cell by the tick. Pure bookkeeping.
@@ -236,6 +248,75 @@ mod tests {
         let (ctx, mut store) = one_cell_world();
         update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         assert_eq!(store.len(), 0);
+    }
+
+    /// Common-sense invariant: a cell pushed downward at any speed
+    /// must NEVER tunnel through the seafloor and reappear at the top
+    /// of the world. The previous wrap-y logic did exactly that and
+    /// surfaced as "cells fall through rock and wrap around" in the
+    /// live demo.
+    #[test]
+    fn cell_does_not_wrap_through_floor() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: 800.0,
+            y: ctx.height - 5.0, // already at the floor
+            r: 8.0,
+            vy: 5000.0, // hard downward kick
+            ..CreatureInit::default()
+        });
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        // The cell must be clamped at the floor minus its radius, not
+        // wrap to a Y near zero.
+        let y_after = store.y[0];
+        assert!(
+            y_after > ctx.height * 0.5,
+            "cell with downward kick should stay near floor, got y={}",
+            y_after
+        );
+        // The clamp also kills inward velocity so the next tick
+        // doesn't accumulate energy at the wall.
+        assert!(store.vy[0] <= 0.0, "vy at floor should be <= 0");
+    }
+
+    /// Mirror of the above: a cell flung upward stops at the top of
+    /// the world (above the surface_y line if it's high enough). It
+    /// must not tunnel up and reappear at the bottom.
+    #[test]
+    fn cell_does_not_wrap_through_ceiling() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: 800.0,
+            y: 5.0,
+            r: 8.0,
+            vy: -5000.0,
+            ..CreatureInit::default()
+        });
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        let y_after = store.y[0];
+        assert!(y_after < ctx.height * 0.5, "got y={}", y_after);
+        assert!(store.vy[0] >= 0.0, "vy at ceiling should be >= 0");
+    }
+
+    /// Horizontal wrap-around is still desired (the world is a
+    /// cylinder along x). A cell pushed off the right edge must
+    /// reappear on the left.
+    #[test]
+    fn cell_wraps_horizontally() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: ctx.width - 1.0,
+            y: 600.0,
+            r: 8.0,
+            vx: 1000.0,
+            ..CreatureInit::default()
+        });
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        assert!(
+            store.x[0] < ctx.width * 0.5,
+            "expected wrap to left, got x={}",
+            store.x[0]
+        );
     }
 
     #[test]

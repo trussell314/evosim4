@@ -553,6 +553,7 @@ impl Engine {
             t: self.world.t,
             width: self.world.width,
             height: self.world.height,
+            surface_y: self.world.surface_y,
             particles,
             creatures,
             force_source: ForceSource::Serial,

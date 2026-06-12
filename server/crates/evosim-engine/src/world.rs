@@ -168,10 +168,18 @@ impl World {
             swell_period: 9.0,
             updraft_length: 600.0,
             updraft_period: 8.0,
-            surface_amp: 55.0,
-            swell_amp: 16.0,
-            z_stir_amp: 6.0,
-            brownian_amp: 12.0,
+            // Wave amplitudes were inherited from TS pixel scale and
+            // produced ~insane particle motion in the demo -- surface
+            // 55 pushed buoyant chems clear across half the air space
+            // per tick. Dropped 3-5x so the water reads as choppy
+            // rather than violently flung. Calibration knobs land in
+            // EVOSIM_BIND-style env overrides when the world-config
+            // port goes live; the goldens that pin these values will
+            // come with that.
+            surface_amp: 16.0,
+            swell_amp: 5.0,
+            z_stir_amp: 2.0,
+            brownian_amp: 4.0,
             surface_activity: 1.0,
             collision_iters: 2,
             restitution: 0.8,

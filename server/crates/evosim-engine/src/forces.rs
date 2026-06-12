@@ -140,11 +140,24 @@ pub fn apply_particle_forces_range(
             vxi = -v_x_cap;
         }
 
+        // Water-surface clamp. Buoyant particles (density < 1, e.g.
+        // gases) try to keep rising forever. Hold them at-or-below
+        // surface_y so they bob along the surface like real bubbles
+        // instead of drifting into the air column. Heavy particles
+        // hit this no-op since their velocity is already downward.
+        let mut new_y = yi + vyi * dt;
+        if new_y < surface_y {
+            new_y = surface_y;
+            if vyi < 0.0 {
+                vyi = 0.0;
+            }
+        }
+
         pvx[i] = vxi;
         pvy[i] = vyi;
         pvz[i] = vzi;
         px[i] = xi + vxi * dt;
-        py[i] = yi + vyi * dt;
+        py[i] = new_y;
         pz[i] += vzi * dt;
     }
 }
@@ -361,11 +374,20 @@ fn apply_particle_forces_parallel(
                     vxi = -v_x_cap;
                 }
 
+                // Water-surface clamp matches the serial kernel.
+                let mut new_y = yi + vyi * p.dt;
+                if new_y < p.surface_y {
+                    new_y = p.surface_y;
+                    if vyi < 0.0 {
+                        vyi = 0.0;
+                    }
+                }
+
                 cvx[local] = vxi;
                 cvy[local] = vyi;
                 cvz[local] = vzi;
                 cx[local] = xi + vxi * p.dt;
-                cy[local] = yi + vyi * p.dt;
+                cy[local] = new_y;
                 cz[local] += vzi * p.dt;
             }
         });
@@ -499,6 +521,44 @@ mod tests {
         let y_after = w.particle_store.y[0];
         // Light particle should have risen (y decreased).
         assert!(y_after < y_before, "y_before={y_before} y_after={y_after}");
+    }
+
+    /// Buoyancy stops at the water surface -- a particle floating up
+    /// must not drift into the air column. Without the clamp added in
+    /// this fix, gas particles drifted up indefinitely past surface_y,
+    /// which the user reported as "bubbles rise up through the air".
+    #[test]
+    fn buoyant_particle_clamps_at_surface() {
+        let mut w = World::new(800.0, 600.0, 1);
+        w.surface_y = 100.0;
+        // Disable wave/brownian so the surface clamp is the only
+        // force keeping y at the boundary -- a noisy kernel could
+        // bounce the particle around enough to fool the assertion.
+        w.surface_amp = 0.0;
+        w.swell_amp = 0.0;
+        w.z_stir_amp = 0.0;
+        w.brownian_amp = 0.0;
+        w.updraft_amp = 0.0;
+        w.current_amp = 0.0;
+        w.particle_store.push(ParticleInit {
+            x: 400.0,
+            y: 300.0,
+            r: 2.0,
+            chem_id: 0,
+            density: 0.1, // very buoyant
+            ..ParticleInit::default()
+        });
+        for _ in 0..600 {
+            apply_forces(&mut w, 1.0 / 60.0);
+            w.t += 1.0 / 60.0;
+        }
+        let y_after = w.particle_store.y[0];
+        assert!(
+            y_after >= w.surface_y - 0.01,
+            "buoyant particle drifted above surface: y={} surface_y={}",
+            y_after,
+            w.surface_y
+        );
     }
 
     #[test]

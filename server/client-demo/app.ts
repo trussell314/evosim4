@@ -101,6 +101,7 @@ function disassemble(genome: Uint8Array): string {
 }
 interface Snapshot {
   tick: number; t: number; width: number; height: number;
+  surface_y?: number;
   particles: Soa; creatures: Soa;
   force_source: "gpu" | "cpu" | "serial";
   cpu_pool_workers: number;
@@ -279,27 +280,32 @@ function resetReconnectBackoff(): void {
     reconnectTimer = null;
   }
 }
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && userIntendsConnection) {
-    resetReconnectBackoff();
-    // iOS Safari / Brave often leave `ws.readyState === OPEN` after a
-    // background period even when the underlying TCP connection is
-    // already dead. Without the force-close below, the conditional
-    // below would see readyState=OPEN and refuse to reconnect, leaving
-    // the page stuck on a zombie socket. Closing here triggers the
-    // existing ws.onclose path which schedules a reconnect.
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      // Sanity: if we got a snapshot in the last 5 s, the socket is
-      // genuinely live and a close would be wasteful; otherwise treat
-      // it as half-open and recycle.
-      const stale = lastSnapshotAt === 0
-        || (performance.now() - lastSnapshotAt) > 5000;
-      if (stale) {
-        try { ws.close(); } catch (_) { /* nothing */ }
-      }
-    }
-    if (!ws || ws.readyState >= WebSocket.CLOSING) scheduleReconnect(200);
+function onMaybeForeground(): void {
+  if (!userIntendsConnection) return;
+  resetReconnectBackoff();
+  // iOS Safari / Brave keep `ws.readyState === OPEN` after a long
+  // background even when the TCP connection is already dead. Always
+  // recycle on foreground -- the cost is one fresh handshake (~50 ms)
+  // versus staying stuck on a zombie socket. If we recently saw a
+  // snapshot the socket is probably fine, but recycling is still
+  // cheaper than the alternative for the user.
+  if (ws) {
+    try { ws.close(); } catch (_) { /* nothing */ }
   }
+  scheduleReconnect(200);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") onMaybeForeground();
+});
+// pageshow fires when iOS restores from bfcache (back / forward
+// navigation, swipe-back, app switcher return). visibilitychange
+// doesn't reliably cover those.
+window.addEventListener("pageshow", () => {
+  if (document.visibilityState === "visible") onMaybeForeground();
+});
+// focus catches desktop case (tab switch return); harmless on mobile.
+window.addEventListener("focus", () => {
+  if (document.visibilityState === "visible") onMaybeForeground();
 });
 window.addEventListener("online", () => {
   if (userIntendsConnection) {
@@ -591,17 +597,27 @@ function frame(): void {
     const scale = Math.min(cw / wW, ch / wH);
     const offX = (cw - wW * scale) / 2;
     const offY = (ch - wH * scale) / 2;
+    const surfaceWorldY = snapshot.surface_y ?? (wH * 0.10);
+    const surfaceCanvasY = offY + surfaceWorldY * scale;
 
-    // Day/night tint: blend the world canvas color with a warmer
-    // hue during daylight and a cooler tone at night. Layered with a
-    // water blue so the seabed reads as water rather than empty
-    // black. Subtle so it doesn't drown out the particles.
+    // Sky + water bands span the WHOLE canvas width (not just the
+    // world rect), so the letterbox bars to the side read as sky
+    // above the surface and water below it. Otherwise on portrait
+    // phones the black letterbox dominates and the "air" portion
+    // looks enormous even though it's only ~10% of the world. Day /
+    // night light tweaks the sky much more than the water -- the
+    // ocean stays dim regardless of time of day.
     const light = snapshot.ambient_light ?? 1.0;
+    const skyR = Math.round(10 + 70 * light);
+    const skyG = Math.round(20 + 90 * light);
+    const skyB = Math.round(45 + 90 * light);
     const wR = Math.round(8 + 22 * light);
     const wG = Math.round(24 + 36 * light);
     const wB = Math.round(48 + 40 * light);
+    ctx.fillStyle = `rgb(${skyR}, ${skyG}, ${skyB})`;
+    ctx.fillRect(0, 0, cw, Math.max(0, surfaceCanvasY));
     ctx.fillStyle = `rgb(${wR}, ${wG}, ${wB})`;
-    ctx.fillRect(offX, offY, wW * scale, wH * scale);
+    ctx.fillRect(0, Math.max(0, surfaceCanvasY), cw, ch - Math.max(0, surfaceCanvasY));
 
     // Static terrain: fill each rock polygon with a dark rust tone so
     // the water/rock distinction is visible. Stroke too so thin
@@ -710,18 +726,21 @@ function frame(): void {
       }
     }
 
-    // Sun / moon indicator in the top-right of the world rect.
+    // Sun / moon indicator, always anchored to the canvas top-right.
+    // Used to live in the world-rect's corner, which got hidden
+    // behind the species panel on portrait phones. Bigger here so
+    // it's legible on a phone too.
     {
-      const sx = offX + wW * scale - 24;
-      const sy = offY + 24;
+      const sx = cw - 32;
+      const sy = 32;
       ctx.beginPath();
-      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+      ctx.arc(sx, sy, 14, 0, Math.PI * 2);
       ctx.fillStyle = light > 0.05
-        ? `rgba(255, ${200 + Math.round(50 * light)}, 80, ${0.3 + 0.6 * light})`
+        ? `rgba(255, ${200 + Math.round(50 * light)}, 80, ${0.3 + 0.7 * light})`
         : `rgba(180, 200, 240, 0.7)`;
       ctx.fill();
       ctx.strokeStyle = light > 0.05 ? "#fc6" : "#9ab";
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.stroke();
     }
 

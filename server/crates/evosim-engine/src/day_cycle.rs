@@ -6,11 +6,13 @@
 
 use std::f64::consts::TAU;
 
-/// Default sim-second period for one full day/night cycle. 60 sim-s
-/// is short enough that a demo session sees several cycles. TS uses
-/// configurable values; we'll surface that with the world-config
-/// port.
-pub const DEFAULT_DAY_PERIOD_S: f64 = 60.0;
+/// Default sim-second period for one full day/night cycle. Was 60 s
+/// (30 s daylight / 30 s night), which strobed too fast in the live
+/// demo -- most observers caught the dark half and never saw the
+/// sun. 300 s (5 min real time) is long enough that you see
+/// photosynth fire before night returns, and short enough to step
+/// through several cycles in a session.
+pub const DEFAULT_DAY_PERIOD_S: f64 = 300.0;
 
 /// Sample ambient light at sim-time `t` for the given day period.
 /// Output in `[0.0, 1.0]`. Peak at noon (period * 0.5), zero before

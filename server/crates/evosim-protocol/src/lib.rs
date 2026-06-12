@@ -72,6 +72,12 @@ pub struct Snapshot {
     pub t: f64,
     pub width: f32,
     pub height: f32,
+    /// Y-coordinate of the still water line in world pixels. Everything
+    /// above this is air, everything at-or-below is submerged. Shipped
+    /// every snapshot so the client renderer can position the
+    /// air/water boundary without round-tripping through Hello.
+    #[serde(default)]
+    pub surface_y: f32,
     /// SoA blobs. Layout described in `server/PROTOCOL.md`; each block
     /// is a contiguous TypedArray-compatible buffer.
     pub particles: Soa,

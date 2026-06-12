@@ -92,9 +92,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let cS = u.wS / u.kS; let cL = u.wL / u.kL;
   let vxCap = 1.3 * max(cS, cL);
   vxi = clamp(vxi, -vxCap, vxCap);
+  // Water-surface clamp: keep buoyant particles from drifting up
+  // into the air. Matches the CPU kernels.
+  var newY: f32 = yi + vyi * u.dt;
+  if (newY < u.surfaceY) {
+    newY = u.surfaceY;
+    if (vyi < 0.0) { vyi = 0.0; }
+  }
   p.vx = vxi; p.vy = vyi; p.vz = vzi;
   p.x = xi + vxi * u.dt;
-  p.y = yi + vyi * u.dt;
+  p.y = newY;
   p.z = p.z + vzi * u.dt;
   P[i] = p;
 }
