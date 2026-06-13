@@ -123,11 +123,7 @@ type ServerMessage =
       chem_colors: string[]; chem_names: string[];
       // Each inner array is one rock as alternating x,y pairs flattened.
       terrain?: number[][] }
-  | { type: "snapshot"; tick: number; t: number; width: number; height: number;
-      particles: Soa; creatures: Soa;
-      force_source: "gpu" | "cpu" | "serial";
-      cpu_pool_workers: number; gpu_last_ms: number;
-      surface_y?: number; sim_rate?: number; running?: boolean; auto_reseeds?: number }
+  | ({ type: "snapshot" } & Snapshot)
   | { type: "error"; code: string; message: string }
   | { type: "goodbye"; reason: string }
   | { type: "admin-ack"; command: string; message: string | null }
@@ -240,7 +236,14 @@ let followSelectedCell = false;
 // summary frozen, so an extinction-on-the-edge case still appears in
 // the panel.
 const pinnedSpecies: Map<string, SpeciesSummary & { lastSeen: number }> = new Map();
-type OverlayMode = "none" | "density" | "light" | "mass" | "perf";
+type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history";
+// Rolling population history -- one sample per received snapshot, kept
+// for ~120s at 30 Hz. Drawn as a stacked sparkline overlay when the
+// 'history' mode is active so the operator can see the population
+// trajectory without leaving the canvas.
+interface HistorySample { t: number; cells: number; species: number; mass: number }
+const POP_HISTORY: HistorySample[] = [];
+const POP_HISTORY_MAX = 3600;
 let overlayMode: OverlayMode =
   (localStorage.getItem("evosim:overlay") as OverlayMode | null) ?? "none";
 overlaySelect.value = overlayMode;
@@ -650,6 +653,16 @@ function handle(msg: ServerMessage): void {
       const now = performance.now();
       lastSnapshotAt = now;
       snapAccum++;
+      // Append to the rolling population history so the operator can
+      // see the trajectory on the 'history' overlay even when sim
+      // time is jumping.
+      POP_HISTORY.push({
+        t: msg.t,
+        cells: msg.creatures.count,
+        species: (msg as { species_count?: number }).species_count ?? 0,
+        mass: msg.mass?.total ?? 0,
+      });
+      if (POP_HISTORY.length > POP_HISTORY_MAX) POP_HISTORY.shift();
       if (now - snapWindowStart > 1000) {
         snapsPerSec = snapAccum * 1000 / (now - snapWindowStart);
         snapAccum = 0;
@@ -1370,6 +1383,58 @@ function frame(): void {
       for (let i = 0; i < rows.length; i++) {
         ctx.fillText(rows[i], pad, ch - (rows.length - i) * lh - pad);
       }
+    }
+
+    // History overlay: stacked sparklines of population, species,
+    // and total mass across the rolling POP_HISTORY buffer (~120 s
+    // at 30 Hz). Drawn as a translucent strip across the bottom of
+    // the canvas so the trajectory is always one glance away.
+    if (overlayMode === "history" && POP_HISTORY.length > 1) {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const pad = 8 * dpr;
+      const stripH = Math.round(140 * dpr);
+      const stripW = cw - 2 * pad;
+      const x0 = pad;
+      const y0 = ch - stripH - pad;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.7)";
+      ctx.fillRect(x0 - 4, y0 - 4, stripW + 8, stripH + 8);
+      const rowH = stripH / 3;
+      const samples = POP_HISTORY;
+      const n = samples.length;
+      let maxCells = 1, maxSpecies = 1, maxMass = 1;
+      for (const s of samples) {
+        if (s.cells > maxCells) maxCells = s.cells;
+        if (s.species > maxSpecies) maxSpecies = s.species;
+        if (s.mass > maxMass) maxMass = s.mass;
+      }
+      const drawSpark = (
+        key: "cells" | "species" | "mass",
+        max: number,
+        color: string,
+        rowIdx: number,
+        label: string,
+      ) => {
+        const rowY = y0 + rowIdx * rowH;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const xv = x0 + (i / (n - 1)) * stripW;
+          const v = samples[i][key];
+          const yv = rowY + rowH - 4 - (v / max) * (rowH - 8);
+          if (i === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+        }
+        ctx.stroke();
+        const fs = Math.round(10 * dpr);
+        ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.fillStyle = "rgba(204, 224, 240, 0.85)";
+        ctx.textBaseline = "top";
+        const last = samples[n - 1][key];
+        ctx.fillText(`${label} ${last.toFixed(0)} (peak ${max.toFixed(0)})`, x0 + 4, rowY + 2);
+      };
+      drawSpark("cells", maxCells, "#9efba8", 0, "cells");
+      drawSpark("species", maxSpecies, "#9ee", 1, "species");
+      drawSpark("mass", maxMass, "#fc6", 2, "mass");
     }
 
     // Mass overlay: render the snapshot.mass ledger as bottom-left
