@@ -78,6 +78,21 @@ pub struct Snapshot {
     /// air/water boundary without round-tripping through Hello.
     #[serde(default)]
     pub surface_y: f32,
+    /// Server-wide sim rate multiplier (1.0 = realtime). Source of
+    /// truth -- clients display this rather than a per-connection
+    /// slider so all viewers see the same speed.
+    #[serde(default = "default_sim_rate")]
+    pub sim_rate: f32,
+    /// True when the engine is currently advancing. Pause is also
+    /// server-wide; the UI's pause/resume buttons reflect this value
+    /// instead of a per-client guess.
+    #[serde(default = "default_running")]
+    pub running: bool,
+    /// Cumulative auto-reseed count. Bumps every time the supervisor
+    /// reseeds founders after a population crash. Lets the client UI
+    /// surface a "reseeded N times" badge without state guessing.
+    #[serde(default)]
+    pub auto_reseeds: u32,
     /// SoA blobs. Layout described in `server/PROTOCOL.md`; each block
     /// is a contiguous TypedArray-compatible buffer.
     pub particles: Soa,
@@ -137,6 +152,13 @@ pub struct Snapshot {
     /// chart per-pass cost over time and spot regressions.
     #[serde(default)]
     pub perf: PerfReport,
+}
+
+fn default_sim_rate() -> f32 {
+    1.0
+}
+fn default_running() -> bool {
+    true
 }
 
 /// Per-reservoir mass totals + grand total. All in chem-mass units;
@@ -329,6 +351,11 @@ pub enum ClientMessage {
     /// Pause / resume the simulation. Read-only observers see the
     /// command and ignore it; controllers honour it.
     SetRunning { running: bool },
+    /// Advance the engine by one tick regardless of pause state.
+    /// Used by the UI's "Step" button when the world is paused so the
+    /// operator can inspect frame-by-frame without unpausing. No-op
+    /// when the engine is currently running.
+    Step,
     /// Adjust the per-tick wall-clock pacing (1.0 = real-time,
     /// 0.0 = paused, <0 forbidden). Snaps to nearest supported speed
     /// server-side; the snapshot's force_source / cpu_pool_workers

@@ -92,6 +92,20 @@ pub struct Engine {
     /// Per-tick wall-clock metrics. Folded into the snapshot each
     /// frame so clients can chart per-pass cost over time.
     perf: perf::PerfCollector,
+    /// Mirrored from the server task so the snapshot can broadcast
+    /// the truth to all clients. Engine doesn't act on these values;
+    /// the server task owns them.
+    pub mirror_sim_rate: f32,
+    pub mirror_running: bool,
+    /// Bump counter -- incremented whenever auto_reseed_if_extinct
+    /// repopulates founders after a crash. Clients use this to
+    /// surface "the world auto-respawned" feedback.
+    pub auto_reseeds: u32,
+    /// Sim-seconds the population has been below the extinction
+    /// threshold. Reset every tick where the count is above; used
+    /// to debounce the reseed (a transient blip during reset
+    /// shouldn't trigger a respawn).
+    extinction_for_s: f64,
 }
 
 impl Engine {
@@ -106,6 +120,10 @@ impl Engine {
             repair_ticks: somatic::make_repair_ticks(0),
             founders_per_strategy: 4,
             perf: perf::PerfCollector::new(),
+            mirror_sim_rate: 1.0,
+            mirror_running: true,
+            auto_reseeds: 0,
+            extinction_for_s: 0.0,
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -380,6 +398,39 @@ impl Engine {
         self.world.particle_cap = cap;
     }
 
+    /// Auto-reseed the founder cohort if the live population has been
+    /// at or below `min_cells` for `min_sustained_s` continuous sim
+    /// seconds. Without this an extinction event leaves clients
+    /// staring at a blank canvas until someone hits Reset. Call from
+    /// the server task once per snapshot cadence; the debounce
+    /// counter lives on `self.extinction_for_s`.
+    ///
+    /// Returns true if a reseed fired this call.
+    pub fn auto_reseed_if_extinct(
+        &mut self,
+        min_cells: usize,
+        min_sustained_s: f64,
+        dt_since_last_check_s: f64,
+    ) -> bool {
+        let alive = self.world.creature_store.n;
+        if alive > min_cells {
+            self.extinction_for_s = 0.0;
+            return false;
+        }
+        self.extinction_for_s += dt_since_last_check_s;
+        if self.extinction_for_s < min_sustained_s {
+            return false;
+        }
+        // Sustained extinction: reseed founders + the demo particle
+        // field. Doesn't touch the obstacles / vent / region_temp so
+        // the world keeps its terrain across crashes.
+        self.seed_demo_particles();
+        self.seed_founders();
+        self.auto_reseeds = self.auto_reseeds.saturating_add(1);
+        self.extinction_for_s = 0.0;
+        true
+    }
+
     /// Read-only access to the underlying world. Used by the server
     /// task to populate the Hello frame with the static terrain
     /// silhouette (and a future renderer-feature dump).
@@ -555,6 +606,9 @@ impl Engine {
             width: self.world.width,
             height: self.world.height,
             surface_y: self.world.surface_y,
+            sim_rate: self.mirror_sim_rate,
+            running: self.mirror_running,
+            auto_reseeds: self.auto_reseeds,
             particles,
             creatures,
             force_source: ForceSource::Serial,

@@ -173,6 +173,10 @@ async fn main() -> Result<()> {
                     );
                 }
                 ServerMessage::Snapshot(s) => {
+                    // Mirror server-wide truth so multiple clients
+                    // agree on speed and pause state.
+                    u.sim_rate = s.sim_rate;
+                    u.running = s.running;
                     u.push_history(&s);
                     u.last_snapshot = Some(*s);
                     u.last_snapshot_at = Some(Instant::now());
@@ -250,7 +254,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char(']') | KeyCode::Char('+') | KeyCode::Char('=') => {
                         let mut u = ui.lock().await;
-                        u.sim_rate = (u.sim_rate * 2.0).min(8.0);
+                        u.sim_rate = (u.sim_rate * 2.0).min(32.0);
                         let r = u.sim_rate;
                         drop(u);
                         send_msg(&writer, &ClientMessage::SetSimRate { rate: r }).await?;
@@ -261,6 +265,15 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         let r = u.sim_rate;
                         drop(u);
                         send_msg(&writer, &ClientMessage::SetSimRate { rate: r }).await?;
+                    }
+                    KeyCode::Char('M') => {
+                        // Snap to max sim rate.
+                        ui.lock().await.sim_rate = 32.0;
+                        send_msg(&writer, &ClientMessage::SetSimRate { rate: 32.0 }).await?;
+                    }
+                    KeyCode::Char('.') => {
+                        // Single-tick step (server no-ops if running).
+                        send_msg(&writer, &ClientMessage::Step).await?;
                     }
                     KeyCode::Char('s') => {
                         let name = format!(
@@ -843,7 +856,7 @@ fn colour_for_glyph(i: u8) -> Color {
 fn render_help(f: &mut ratatui::Frame<'_>, area: Rect, _u: &UiView) {
     let block = Block::default().borders(Borders::ALL).title("keys");
     let text =
-        "q quit  p pause  r resume  ]/[ rate  j/k species  m perf  s save  x reset(admin)";
+        "q quit  p pause  r resume  . step  ]/[ rate  M max  j/k species  m perf  s save  x reset(admin)";
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
 }

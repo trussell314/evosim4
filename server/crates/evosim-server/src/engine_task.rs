@@ -48,6 +48,10 @@ pub enum EngineCmd {
     /// firing but step() is skipped so the world stops advancing;
     /// snapshots continue so a paused world is still observable.
     SetRunning(bool),
+    /// Advance one tick regardless of running flag. No-op when the
+    /// engine is currently running -- step is only meaningful while
+    /// paused.
+    Step,
     /// Multiplier on the wall-clock tick cadence. 1.0 = real time,
     /// 0.5 = half speed, 2.0 = double speed. Clamped to a sane band
     /// server-side.
@@ -97,7 +101,9 @@ pub fn spawn(
 /// backwards) and we cap at 8x so a rogue controller can't melt the
 /// engine task.
 const SIM_RATE_MIN: f32 = 0.05;
-const SIM_RATE_MAX: f32 = 8.0;
+/// Was 8.0; bumped to 32.0 so operators can blast through the
+/// early-extinction window without staring at a paused-looking canvas.
+const SIM_RATE_MAX: f32 = 32.0;
 
 async fn run(
     _state: Arc<AppState>,
@@ -158,6 +164,21 @@ async fn run(
             }
 
             _ = snap_timer.tick() => {
+                // Mirror server-wide state into the engine so the
+                // outgoing snapshot tells clients the truth.
+                engine.mirror_sim_rate = sim_rate;
+                engine.mirror_running = running;
+                // Auto-reseed when the population crashes. <= 0 cells
+                // for >= 3 sim seconds repopulates founders so the
+                // canvas isn't permanently blank after an extinction.
+                let snap_dt = snap_interval.as_secs_f64();
+                let reseeded = engine.auto_reseed_if_extinct(0, 3.0, snap_dt);
+                if reseeded {
+                    info!(
+                        count = engine.auto_reseeds,
+                        "population extinct -- auto-reseeded founders"
+                    );
+                }
                 if let Err(e) = broadcast_snapshot(&mut engine, &snap_tx) {
                     warn!(error = %e, "snapshot encode failed");
                 }
@@ -168,6 +189,14 @@ async fn run(
                     Some(EngineCmd::Reset) => {
                         info!("engine reset");
                         engine.reset();
+                    }
+                    Some(EngineCmd::Step) => {
+                        // Step is meaningful only while paused; if
+                        // the engine is already running the next
+                        // tick is one TICK_DT away anyway.
+                        if !running {
+                            engine.step(TICK_DT);
+                        }
                     }
                     Some(EngineCmd::SetRunning(r)) => {
                         info!(running = r, "engine running flag changed");

@@ -196,6 +196,11 @@ async fn handle_client_message(
                 let _ = engine_cmd.send(EngineCmd::SetRunning(running)).await;
             }
         }
+        ClientMessage::Step => {
+            if let Some(engine_cmd) = engine_cmd {
+                let _ = engine_cmd.send(EngineCmd::Step).await;
+            }
+        }
         ClientMessage::SetSimRate { rate } => {
             if let Some(engine_cmd) = engine_cmd {
                 let _ = engine_cmd.send(EngineCmd::SetSimRate(rate)).await;

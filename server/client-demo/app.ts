@@ -102,6 +102,9 @@ function disassemble(genome: Uint8Array): string {
 interface Snapshot {
   tick: number; t: number; width: number; height: number;
   surface_y?: number;
+  sim_rate?: number;
+  running?: boolean;
+  auto_reseeds?: number;
   particles: Soa; creatures: Soa;
   force_source: "gpu" | "cpu" | "serial";
   cpu_pool_workers: number;
@@ -123,7 +126,8 @@ type ServerMessage =
   | { type: "snapshot"; tick: number; t: number; width: number; height: number;
       particles: Soa; creatures: Soa;
       force_source: "gpu" | "cpu" | "serial";
-      cpu_pool_workers: number; gpu_last_ms: number }
+      cpu_pool_workers: number; gpu_last_ms: number;
+      surface_y?: number; sim_rate?: number; running?: boolean; auto_reseeds?: number }
   | { type: "error"; code: string; message: string }
   | { type: "goodbye"; reason: string }
   | { type: "admin-ack"; command: string; message: string | null }
@@ -146,6 +150,9 @@ const toggleAmbientBtn = document.getElementById("toggle-ambient") as HTMLButton
 const toggleSpeciesBtn = document.getElementById("toggle-species") as HTMLButtonElement;
 const ambientCloseBtn = document.getElementById("ambient-close") as HTMLButtonElement;
 const speciesCloseBtn = document.getElementById("species-close") as HTMLButtonElement;
+const stepBtn = document.getElementById("step") as HTMLButtonElement;
+const speedMaxBtn = document.getElementById("speedMax") as HTMLButtonElement;
+const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
@@ -171,14 +178,12 @@ let chemNames: string[] = [];
 // Static terrain polygons from the Hello frame. One Float32Array per
 // rock, alternating x,y. Empty until Hello lands; rendered every frame.
 let terrain: Float32Array[] = [];
-// Panel visibility -- start closed on narrow viewports so the header
-// isn't covered. Restored from localStorage so the operator's choice
+// Panel visibility -- defaults to CLOSED so the canvas is the
+// focal point on first load; toolbar buttons A and S open them on
+// demand. Restored from localStorage so the operator's choice
 // persists across reloads.
-const isNarrow = window.innerWidth < 700;
-let showAmbient = localStorage.getItem("evosim:ambient") === "1"
-  || (localStorage.getItem("evosim:ambient") === null && !isNarrow);
-let showSpecies = localStorage.getItem("evosim:species") === "1"
-  || (localStorage.getItem("evosim:species") === null && !isNarrow);
+let showAmbient = localStorage.getItem("evosim:ambient") === "1";
+let showSpecies = localStorage.getItem("evosim:species") === "1";
 
 // Default the URL field to a ws/wss URL on the same host the page was
 // served from, with the configured server port. So a phone that loaded
@@ -341,10 +346,22 @@ window.addEventListener("online", () => {
 });
 pauseBtn.onclick = () => send({ type: "set-running", running: false });
 resumeBtn.onclick = () => send({ type: "set-running", running: true });
+stepBtn.onclick = () => send({ type: "step" });
+// Local input draws ground-truth slider position out from under the
+// server snapshot; suppress the server-driven reset for a short
+// window so the user's drag isn't fought.
+let speedLocalUntil = 0;
 speedSlider.oninput = () => {
   const rate = parseFloat(speedSlider.value);
   speedReadout.textContent = rate + "x";
+  speedLocalUntil = performance.now() + 1500;
   send({ type: "set-sim-rate", rate });
+};
+speedMaxBtn.onclick = () => {
+  speedSlider.value = "32";
+  speedReadout.textContent = "32x";
+  speedLocalUntil = performance.now() + 1500;
+  send({ type: "set-sim-rate", rate: 32 });
 };
 saveBtn.onclick = () => {
   const name = prompt("Save name (alphanumeric, leave blank for auto):", "");
@@ -414,11 +431,14 @@ function connect(url: string, token: string | null): void {
     disconnectBtn.disabled = true;
     pauseBtn.disabled = true;
     resumeBtn.disabled = true;
+    stepBtn.disabled = true;
     speedSlider.disabled = true;
+    speedMaxBtn.disabled = true;
     saveBtn.disabled = true;
     resetBtn.disabled = true;
     updateServerBtn.disabled = true;
     updateClientBtn.disabled = true;
+    pausedOverlay.style.display = "none";
     snapshot = null;
     ws = null;
     // If the user didn't click Disconnect (e.g. mobile backgrounded,
@@ -453,7 +473,9 @@ function handle(msg: ServerMessage): void {
       }
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
+      stepBtn.disabled = false;
       speedSlider.disabled = false;
+      speedMaxBtn.disabled = false;
       saveBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
@@ -469,6 +491,19 @@ function handle(msg: ServerMessage): void {
         snapsPerSec = snapAccum * 1000 / (now - snapWindowStart);
         snapAccum = 0;
         snapWindowStart = now;
+      }
+      // Sync UI controls to the server-wide ground truth so multiple
+      // clients agree on speed / running state. Skip the slider sync
+      // while the user is actively dragging.
+      if (typeof msg.sim_rate === "number" && now > speedLocalUntil) {
+        speedSlider.value = String(msg.sim_rate);
+        speedReadout.textContent = msg.sim_rate + "x";
+      }
+      if (typeof msg.running === "boolean") {
+        pausedOverlay.style.display = msg.running ? "none" : "flex";
+        pauseBtn.disabled = !msg.running;
+        resumeBtn.disabled = msg.running;
+        stepBtn.disabled = msg.running;
       }
       break;
     case "error":
