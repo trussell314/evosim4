@@ -153,12 +153,25 @@ const speciesCloseBtn = document.getElementById("species-close") as HTMLButtonEl
 const stepBtn = document.getElementById("step") as HTMLButtonElement;
 const speedMaxBtn = document.getElementById("speedMax") as HTMLButtonElement;
 const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElement;
+const configureBtn = document.getElementById("configure") as HTMLButtonElement;
+const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
+const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
 const ambientPanel = document.getElementById("ambient-panel") as HTMLElement;
 const ambientList = document.getElementById("ambient-list") as HTMLOListElement;
+const inspectorPanel = document.getElementById("inspector-panel") as HTMLElement;
+const inspectorBody = document.getElementById("inspector-body") as HTMLElement;
+const inspectorCloseBtn = document.getElementById("inspector-close") as HTMLButtonElement;
 let selectedSpeciesKey: string | null = null;
+// Tracked cell selection. Stored as a world-coordinate "memo" so the
+// inspector follows the cell across snapshots even when its SoA index
+// shifts (death + reproduction reshuffle indices). On each frame we
+// re-resolve to the nearest live cell within SELECT_FOLLOW_R px.
+interface SelectedCellMemo { x: number; y: number; r: number }
+let selectedCell: SelectedCellMemo | null = null;
+const SELECT_FOLLOW_R = 30;
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d");
@@ -368,6 +381,32 @@ saveBtn.onclick = () => {
   send({ type: "save", name: name && name.trim() ? name.trim() : null });
 };
 resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
+resetViewBtn.onclick = () => resetView();
+configureBtn.onclick = () => configureDialog.showModal();
+configureDialog.addEventListener("close", () => {
+  if (configureDialog.returnValue !== "apply") return;
+  // Build the AdminCommand::Configure payload. Empty fields stay
+  // unset so they keep their current server-side value.
+  const num = (id: string): number | null => {
+    const el = document.getElementById(id) as HTMLInputElement;
+    const v = el.value.trim();
+    if (v === "") return null;
+    const parsed = parseFloat(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const cmd: Record<string, unknown> = { kind: "configure" };
+  const width = num("cfg-width");
+  const height = num("cfg-height");
+  const seed = num("cfg-seed");
+  const day = num("cfg-day");
+  const founders = num("cfg-founders");
+  if (width != null) cmd.width = width;
+  if (height != null) cmd.height = height;
+  if (seed != null) cmd.seed = Math.floor(seed);
+  if (day != null) cmd.day_period_s = day;
+  if (founders != null) cmd.founders_per_strategy = Math.floor(founders);
+  send({ type: "admin", command: cmd });
+});
 updateServerBtn.onclick = () => {
   if (!confirm("Pull, rebuild, and restart the server? Takes ~1-2 min; the page will auto-reconnect when the new binary comes up.")) return;
   pendingReload = false;
@@ -404,6 +443,21 @@ toggleSpeciesBtn.onclick = () => {
 };
 ambientCloseBtn.onclick = () => toggleAmbientBtn.click();
 speciesCloseBtn.onclick = () => toggleSpeciesBtn.click();
+inspectorCloseBtn.onclick = () => {
+  selectedCell = null;
+  inspectorPanel.style.display = "none";
+};
+// Keyboard shortcut: 'i' toggles the inspector. Lets a phone user
+// dismiss without aiming for the tiny x.
+window.addEventListener("keydown", (ev) => {
+  if (ev.target instanceof HTMLInputElement) return;
+  if (ev.key === "i" || ev.key === "I") {
+    if (selectedCell) {
+      selectedCell = null;
+      inspectorPanel.style.display = "none";
+    }
+  }
+});
 applyPanelVisibility();
 
 function setStatus(html: string): void {
@@ -436,6 +490,7 @@ function connect(url: string, token: string | null): void {
     speedMaxBtn.disabled = true;
     saveBtn.disabled = true;
     resetBtn.disabled = true;
+    configureBtn.disabled = true;
     updateServerBtn.disabled = true;
     updateClientBtn.disabled = true;
     pausedOverlay.style.display = "none";
@@ -478,6 +533,7 @@ function handle(msg: ServerMessage): void {
       speedMaxBtn.disabled = false;
       saveBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
+      configureBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
       updateClientBtn.disabled = !isAdmin;
       updateHeaderStatus();
@@ -556,6 +612,171 @@ function f32(bytes: Uint8Array, n: number): Float32Array {
   const aligned = new ArrayBuffer(n * 4);
   new Uint8Array(aligned).set(bytes.subarray(0, n * 4));
   return new Float32Array(aligned);
+}
+
+// --- View state. zoom is a multiplier on top of the aspect-fit
+// scale; pan is a translation in canvas pixels added after centring.
+// Together with the world's aspect-fit they form the affine transform
+// the renderer + pointer handlers share.
+let zoom = 1.0;
+let panX = 0;
+let panY = 0;
+function resetView(): void {
+  zoom = 1.0;
+  panX = 0;
+  panY = 0;
+}
+
+// --- Renderer transform cache. Populated each frame so click + touch
+// handlers can convert pointer coords back into world coords without
+// recomputing.
+let lastScale = 1;
+let lastOffX = 0;
+let lastOffY = 0;
+
+/// Convert a pointer event (in CSS px relative to the viewport) into
+/// world coordinates (the same units the engine stores). Used by
+/// click-to-select and the future zoom/pan implementation.
+function pointerToWorld(ev: PointerEvent): { x: number; y: number } {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cx = (ev.clientX - rect.left) * dpr;
+  const cy = (ev.clientY - rect.top) * dpr;
+  return {
+    x: (cx - lastOffX) / lastScale,
+    y: (cy - lastOffY) / lastScale,
+  };
+}
+
+// Pointer state for distinguishing tap (=cell select) from drag
+// (=pan) and pinch (=zoom). Active pointers tracked by pointerId so
+// touch + mouse + pencil all flow through the same handler.
+const activePointers = new Map<number, { x: number; y: number }>();
+let dragStart: { x: number; y: number; panX: number; panY: number } | null = null;
+let pinchStartDist: number | null = null;
+let pinchStartZoom: number | null = null;
+
+function tapHitTest(ev: PointerEvent): void {
+  if (!snapshot) return;
+  const world = pointerToWorld(ev);
+  const cBlobs: Record<string, NamedBlob> = {};
+  for (const b of snapshot.creatures.blobs) cBlobs[b.name] = b;
+  const cN = snapshot.creatures.count;
+  if (cN === 0 || !cBlobs.x || !cBlobs.y || !cBlobs.r) return;
+  const cx = f32(cBlobs.x.data, cN);
+  const cy = f32(cBlobs.y.data, cN);
+  const cr = f32(cBlobs.r.data, cN);
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < cN; i++) {
+    const d = Math.hypot(cx[i] - world.x, cy[i] - world.y);
+    if (d < Math.max(20, cr[i] * 3) && d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best >= 0) {
+    selectedCell = { x: cx[best], y: cy[best], r: cr[best] };
+  } else {
+    selectedCell = null;
+    inspectorPanel.style.display = "none";
+  }
+}
+
+canvas.addEventListener("pointerdown", (ev) => {
+  canvas.setPointerCapture(ev.pointerId);
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (activePointers.size === 1) {
+    dragStart = { x: ev.clientX, y: ev.clientY, panX, panY };
+    pinchStartDist = null;
+  } else if (activePointers.size === 2) {
+    const pts = Array.from(activePointers.values());
+    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    pinchStartZoom = zoom;
+    dragStart = null;
+  }
+});
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!activePointers.has(ev.pointerId)) return;
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (activePointers.size === 1 && dragStart) {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    panX = dragStart.panX + (ev.clientX - dragStart.x) * dpr;
+    panY = dragStart.panY + (ev.clientY - dragStart.y) * dpr;
+  } else if (activePointers.size === 2 && pinchStartDist != null && pinchStartZoom != null) {
+    const pts = Array.from(activePointers.values());
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (dist > 5) {
+      const newZoom = clamp(pinchStartZoom * (dist / pinchStartDist), 0.25, 16);
+      // Zoom around the midpoint between fingers so the world doesn't
+      // slide out from under the touch.
+      const cxM = (pts[0].x + pts[1].x) / 2;
+      const cyM = (pts[0].y + pts[1].y) / 2;
+      zoomAround(newZoom, cxM, cyM);
+    }
+  }
+});
+
+function endPointer(ev: PointerEvent): void {
+  const down = activePointers.get(ev.pointerId);
+  activePointers.delete(ev.pointerId);
+  if (dragStart && down) {
+    const dx = ev.clientX - dragStart.x;
+    const dy = ev.clientY - dragStart.y;
+    if (Math.hypot(dx, dy) < 6) {
+      tapHitTest(ev);
+    }
+  }
+  if (activePointers.size === 0) {
+    dragStart = null;
+    pinchStartDist = null;
+    pinchStartZoom = null;
+  }
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+
+// Mouse wheel zoom centered on the cursor.
+canvas.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const factor = ev.deltaY > 0 ? 0.9 : 1.1;
+  const newZoom = clamp(zoom * factor, 0.25, 16);
+  zoomAround(newZoom, ev.clientX, ev.clientY);
+}, { passive: false });
+
+// Double-click resets zoom + pan.
+canvas.addEventListener("dblclick", () => {
+  resetView();
+});
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/// Zoom such that the world point at the given client coords stays
+/// under the pointer. The math: world_at_pointer is invariant, so
+/// adjusting pan + scale together keeps it pinned.
+function zoomAround(newZoom: number, clientX: number, clientY: number): void {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cx = (clientX - rect.left) * dpr;
+  const cy = (clientY - rect.top) * dpr;
+  // World point currently under the pointer.
+  const wx = (cx - lastOffX) / lastScale;
+  const wy = (cy - lastOffY) / lastScale;
+  zoom = newZoom;
+  // Solve for pan so the same world point ends up under the pointer
+  // after the new zoom takes effect on the next frame.
+  if (snapshot) {
+    const cwd = canvas.width, chd = canvas.height;
+    const fitScale = Math.min(cwd / snapshot.width, chd / snapshot.height);
+    const newScale = fitScale * zoom;
+    const centeredOffX = (cwd - snapshot.width * newScale) / 2;
+    const centeredOffY = (chd - snapshot.height * newScale) / 2;
+    panX = cx - wx * newScale - centeredOffX;
+    panY = cy - wy * newScale - centeredOffY;
+  }
 }
 
 // --- Render loop.
@@ -648,16 +869,27 @@ function frame(): void {
     requestAnimationFrame(frame);
     return;
   }
+  // Crisp particles + cells over blurred ones for the small-radius
+  // demo scale. Anti-aliasing on shapes happens automatically; this
+  // line only affects scaled bitmap blits, but turning it off costs
+  // nothing.
+  ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = "#050b14";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (snapshot) {
     const cw = canvas.width, ch = canvas.height;
     const wW = snapshot.width, wH = snapshot.height;
-    // Fit world into canvas preserving aspect.
-    const scale = Math.min(cw / wW, ch / wH);
-    const offX = (cw - wW * scale) / 2;
-    const offY = (ch - wH * scale) / 2;
+    // Fit world into canvas preserving aspect, then layer the user's
+    // zoom + pan on top.
+    const fitScale = Math.min(cw / wW, ch / wH);
+    const scale = fitScale * zoom;
+    const offX = (cw - wW * scale) / 2 + panX;
+    const offY = (ch - wH * scale) / 2 + panY;
+    // Cache for the pointer handlers.
+    lastScale = scale;
+    lastOffX = offX;
+    lastOffY = offY;
     const surfaceWorldY = snapshot.surface_y ?? (wH * 0.10);
     const surfaceCanvasY = offY + surfaceWorldY * scale;
 
@@ -680,24 +912,43 @@ function frame(): void {
     ctx.fillStyle = `rgb(${wR}, ${wG}, ${wB})`;
     ctx.fillRect(0, Math.max(0, surfaceCanvasY), cw, ch - Math.max(0, surfaceCanvasY));
 
-    // Static terrain: fill each rock polygon with a dark rust tone so
-    // the water/rock distinction is visible. Stroke too so thin
-    // outcroppings still read at small scales. Drawn AFTER the
-    // water tint and BEFORE particles + cells so cells visually sit
-    // in the open water above rock.
+    // Static terrain. Each rock is drawn as a vertical gradient with
+    // a darker base and a slightly-lit crown so the silhouette has
+    // some depth even at small scales. Mineral-blue rim stroke gives
+    // a visible edge in dim light. Drawn AFTER the water tint and
+    // BEFORE particles + cells so cells visually sit in the open
+    // water above rock.
     if (terrain.length > 0) {
-      ctx.fillStyle = "#2a1810";
-      ctx.strokeStyle = "#3a261a";
       ctx.lineWidth = 1;
       for (const poly of terrain) {
         if (poly.length < 6) continue;
+        // Build the path once + reuse for fill + stroke.
         ctx.beginPath();
         ctx.moveTo(offX + poly[0] * scale, offY + poly[1] * scale);
+        let minY = poly[1], maxY = poly[1];
         for (let i = 2; i < poly.length; i += 2) {
-          ctx.lineTo(offX + poly[i] * scale, offY + poly[i + 1] * scale);
+          const px = offX + poly[i] * scale;
+          const py = offY + poly[i + 1] * scale;
+          ctx.lineTo(px, py);
+          if (poly[i + 1] < minY) minY = poly[i + 1];
+          if (poly[i + 1] > maxY) maxY = poly[i + 1];
         }
         ctx.closePath();
+        // Vertical gradient: lighter at the top, darker at the
+        // bottom. Light multiplies the highlight so daytime rocks
+        // read warm and nighttime rocks read cool.
+        const yTop = offY + minY * scale;
+        const yBot = offY + maxY * scale;
+        const grd = ctx.createLinearGradient(0, yTop, 0, yBot);
+        const tR = Math.round(40 + 40 * light);
+        const tG = Math.round(28 + 22 * light);
+        const tB = Math.round(20 + 16 * light);
+        grd.addColorStop(0, `rgb(${tR}, ${tG}, ${tB})`);
+        grd.addColorStop(0.4, "#241612");
+        grd.addColorStop(1, "#100805");
+        ctx.fillStyle = grd;
         ctx.fill();
+        ctx.strokeStyle = light > 0.05 ? "#4a382a" : "#234055";
         ctx.stroke();
       }
     }
@@ -751,8 +1002,30 @@ function frame(): void {
       const cy = f32(cBlobs.y.data, cN);
       const cr = f32(cBlobs.r.data, cN);
       const heading = cBlobs.heading ? f32(cBlobs.heading.data, cN) : null;
+      const mass = cBlobs.mass ? f32(cBlobs.mass.data, cN) : null;
+      const energy = cBlobs.energy ? f32(cBlobs.energy.data, cN) : null;
       const speciesIdx = cBlobs.speciesIdx ? cBlobs.speciesIdx.data : null;
       const topSpecies = snapshot.top_species ?? [];
+      // Re-resolve the cell-selection memo. If the selected cell is
+      // still alive (closest cell within SELECT_FOLLOW_R px of the
+      // remembered position), follow it; otherwise drop the selection
+      // so the inspector closes itself.
+      let selectedIdx = -1;
+      if (selectedCell) {
+        let bestD = Infinity;
+        for (let i = 0; i < cN; i++) {
+          const d = Math.hypot(cx[i] - selectedCell.x, cy[i] - selectedCell.y);
+          if (d < SELECT_FOLLOW_R && d < bestD) {
+            bestD = d;
+            selectedIdx = i;
+          }
+        }
+        if (selectedIdx >= 0) {
+          selectedCell = { x: cx[selectedIdx], y: cy[selectedIdx], r: cr[selectedIdx] };
+        } else {
+          selectedCell = null;
+        }
+      }
       for (let i = 0; i < cN; i++) {
         const px = offX + cx[i] * scale;
         const py = offY + cy[i] * scale;
@@ -784,6 +1057,47 @@ function frame(): void {
           ctx.lineWidth = 1;
           ctx.stroke();
         }
+      }
+
+      // Selection ring on top of all cells, pulsing slightly so it's
+      // visible against any species color.
+      if (selectedIdx >= 0) {
+        const i = selectedIdx;
+        const px = offX + cx[i] * scale;
+        const py = offY + cy[i] * scale;
+        const pr = Math.max(2, cr[i] * scale);
+        const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 250);
+        ctx.beginPath();
+        ctx.arc(px, py, pr + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 240, 140, ${pulse})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // Inspector body. Built from the snapshot fields available
+        // (mass, energy, heading, species) plus the species genome /
+        // description when the cell sits inside the top-N row table.
+        const sidVal = speciesIdx ? speciesIdx[i] : 0xFF;
+        const sp = sidVal !== 0xFF ? topSpecies[sidVal] : undefined;
+        const parts: string[] = [];
+        parts.push(`<div><span class="dim">pos</span> ${cx[i].toFixed(0)}, ${cy[i].toFixed(0)} <span class="dim">r</span> ${cr[i].toFixed(1)}</div>`);
+        if (mass) parts.push(`<div><span class="dim">mass</span> ${mass[i].toFixed(0)}</div>`);
+        if (energy) parts.push(`<div><span class="dim">atp</span> ${energy[i].toFixed(0)}</div>`);
+        if (heading) parts.push(`<div><span class="dim">heading</span> ${(heading[i] * 180 / Math.PI).toFixed(0)}°</div>`);
+        if (sp) {
+          parts.push(`<div style="margin-top:6px;"><span style="display:inline-block;width:10px;height:10px;background:${sp.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>species <span class="dim">${sp.coding_key.slice(0, 12)}</span> · count <b>${sp.count}</b></div>`);
+          if (sp.description) {
+            parts.push(`<div style="margin-top:4px; white-space:pre-wrap;">${sp.description}</div>`);
+          }
+          if (sp.genome && sp.genome.length > 0) {
+            const genome = sp.genome instanceof Uint8Array ? sp.genome : new Uint8Array(sp.genome);
+            parts.push(`<details style="margin-top:6px;"><summary>genome disasm</summary><pre style="white-space:pre; margin:4px 0 0; max-height:30vh; overflow:auto;">${disassemble(genome)}</pre></details>`);
+          }
+        } else if (sidVal !== 0xFF) {
+          parts.push(`<div class="dim" style="margin-top:6px;">species idx ${sidVal} -- outside top-N roster</div>`);
+        }
+        inspectorBody.innerHTML = parts.join("");
+        inspectorPanel.style.display = "block";
+      } else if (!selectedCell) {
+        inspectorPanel.style.display = "none";
       }
     }
 

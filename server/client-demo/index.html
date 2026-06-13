@@ -79,16 +79,38 @@
         <button id="speedMax" disabled title="Snap to max sim rate (32x)">Max</button>
         <button id="save" disabled title="Admin only -- writes to EVOSIM_SAVE_DIR">Save</button>
         <button id="reset" disabled title="Admin only">Reset</button>
+        <button id="configure" disabled title="Admin only -- reseed with custom world parameters">Configure…</button>
         <button id="update-server" class="update" disabled title="Admin only -- git pull + cargo build + restart (~1-2 min). Client auto-reconnects.">Update server</button>
         <button id="update-client" class="update" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
-        <button id="toggle-ambient" title="Show/hide the ambient chems panel">A</button>
-        <button id="toggle-species" title="Show/hide the species panel">S</button>
+        <button id="toggle-ambient" title="Show/hide the ambient chems panel (key A)">A</button>
+        <button id="toggle-species" title="Show/hide the species panel (key S)">S</button>
+        <button id="reset-view" title="Reset zoom + pan (double-click on canvas)">⌖</button>
       </header>
+      <dialog id="configure-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Configure world</div>
+          <div style="color:#789; margin-bottom:10px;">Empty fields leave the current value. Submitting resets the world.</div>
+          <label style="display:block; margin-bottom:6px;">width <input id="cfg-width" type="number" min="200" max="6400" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1600" /></label>
+          <label style="display:block; margin-bottom:6px;">height <input id="cfg-height" type="number" min="200" max="6400" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1200" /></label>
+          <label style="display:block; margin-bottom:6px;">seed <input id="cfg-seed" type="number" min="0" max="2147483647" step="1" style="width:120px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1791989" /></label>
+          <label style="display:block; margin-bottom:6px;">day period (s) <input id="cfg-day" type="number" min="0" max="3600" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="300" /></label>
+          <label style="display:block; margin-bottom:10px;">founders / strategy <input id="cfg-founders" type="number" min="0" max="200" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="4" /></label>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Cancel</button>
+            <button id="cfg-apply" value="apply" type="submit" style="background:#0d1c26; border:1px solid #2a4d62; color:#cef; padding:4px 10px; cursor:pointer; font:inherit;">Apply</button>
+          </div>
+        </form>
+      </dialog>
       <div id="status"><span class="dim">disconnected</span></div>
       <div id="canvas-wrap">
         <canvas id="canvas"></canvas>
         <div id="paused-overlay" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; pointer-events:none; background:rgba(2,8,14,0.35); font:bold 32px ui-monospace, SFMono-Regular, Menlo, monospace; color:rgba(204,224,240,0.9); text-shadow: 0 1px 2px #000, 0 0 18px rgba(2,8,14,0.6); letter-spacing: 4px;">PAUSED</div>
       </div>
+      <aside id="inspector-panel" style="position:fixed; left:50%; transform:translateX(-50%); top:60px; max-width:340px; min-width:240px; max-height:70vh; overflow:auto; background:rgba(2,12,18,0.95); border:1px solid #2a4d62; padding:8px 18px 8px 8px; font:10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:#9ee; display:none;">
+        <button id="inspector-close" class="panel-close" title="Hide (toggle with I)">×</button>
+        <div style="font-weight:bold; color:#cef;">Cell inspector</div>
+        <div id="inspector-body" style="margin-top:6px;"></div>
+      </aside>
       <aside id="ambient-panel" style="position:fixed; left:8px; top:60px; max-width:200px; max-height:60vh; overflow:auto; background:rgba(2,12,18,0.93); border:1px solid #1a3340; padding:8px 18px 8px 8px; font:10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:#9ee; display:none;">
         <button id="ambient-close" class="panel-close" title="Hide (toggle with A)">×</button>
         <div style="font-weight:bold; color:#cef;">Ambient (top 10)</div>
