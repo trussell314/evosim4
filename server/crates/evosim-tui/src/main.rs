@@ -90,6 +90,14 @@ struct UiState {
     /// (cells / species / mass); true = perf breakdown (tick wall-
     /// time + particles + top-N pass cost). Toggled by `m`.
     perf_view: bool,
+    /// Save-list popup. `None` when closed; `Some` after `L` has
+    /// fetched the list. j/k navigates, Enter loads, Esc closes.
+    save_list: Option<Vec<String>>,
+    save_selected: usize,
+    /// Cell-kill confirmation: `Some(species_idx)` means we sent a
+    /// KillCell admin command targeting a cell of that species; the
+    /// status bar reports the outcome.
+    pending_kill_species: Option<usize>,
 }
 
 impl UiState {
@@ -182,8 +190,17 @@ async fn main() -> Result<()> {
                     u.last_snapshot_at = Some(Instant::now());
                 }
                 ServerMessage::AdminAck { command, message } => {
-                    u.status_line =
-                        format!("ack[{command}] {}", message.unwrap_or_default());
+                    let body = message.unwrap_or_default();
+                    if command == "saves" {
+                        // Payload is a JSON array of strings -- cheap
+                        // hand-parse so we don't pull in serde_json
+                        // just for this one shape.
+                        u.save_list = Some(parse_json_string_array(&body));
+                        u.save_selected = 0;
+                        u.status_line = format!("saves ({})", u.save_list.as_ref().map(|v| v.len()).unwrap_or(0));
+                    } else {
+                        u.status_line = format!("ack[{command}] {body}");
+                    }
                 }
                 ServerMessage::AdminNack { command, reason } => {
                     u.status_line = format!("nack[{command}] {reason}");
@@ -239,14 +256,70 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     should_quit = true;
                     break;
                 }
+                // Pop-up handling first: when the save-list dialog is
+                // open, j/k/Enter/Esc are scoped to it rather than the
+                // species roster.
+                let popup_open = ui.lock().await.save_list.is_some();
+                if popup_open {
+                    match k.code {
+                        KeyCode::Esc | KeyCode::Char('L') => {
+                            ui.lock().await.save_list = None;
+                            continue;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            let mut u = ui.lock().await;
+                            if let Some(list) = u.save_list.as_ref() {
+                                let n = list.len();
+                                if n > 0 {
+                                    u.save_selected = (u.save_selected + 1) % n;
+                                }
+                            }
+                            continue;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            let mut u = ui.lock().await;
+                            if let Some(list) = u.save_list.as_ref() {
+                                let n = list.len();
+                                if n > 0 {
+                                    u.save_selected =
+                                        if u.save_selected == 0 { n - 1 } else { u.save_selected - 1 };
+                                }
+                            }
+                            continue;
+                        }
+                        KeyCode::Enter => {
+                            let mut u = ui.lock().await;
+                            let pick = u.save_list.as_ref().and_then(|list| {
+                                list.get(u.save_selected.min(list.len().saturating_sub(1))).cloned()
+                            });
+                            u.save_list = None;
+                            drop(u);
+                            if let Some(name) = pick {
+                                send_msg(
+                                    &writer,
+                                    &ClientMessage::Admin {
+                                        command: AdminCommand::Load { name },
+                                    },
+                                )
+                                .await?;
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
                 match k.code {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         should_quit = true;
                         break;
                     }
-                    KeyCode::Char('p') => {
-                        send_msg(&writer, &ClientMessage::SetRunning { running: false }).await?;
-                        ui.lock().await.running = false;
+                    KeyCode::Char('p') | KeyCode::Char(' ') => {
+                        // Toggle pause/run on a single key so muscle
+                        // memory from the web client carries over.
+                        let new_running = !ui.lock().await.running;
+                        send_msg(&writer, &ClientMessage::SetRunning { running: new_running }).await?;
+                        ui.lock().await.running = new_running;
                     }
                     KeyCode::Char('r') => {
                         send_msg(&writer, &ClientMessage::SetRunning { running: true }).await?;
@@ -325,6 +398,43 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         )
                         .await?;
                     }
+                    KeyCode::Char('L') => {
+                        // Fetches save list; reply lands in AdminAck
+                        // handler and opens the popup.
+                        send_msg(
+                            &writer,
+                            &ClientMessage::Admin {
+                                command: AdminCommand::Saves,
+                            },
+                        )
+                        .await?;
+                    }
+                    KeyCode::Char('X') => {
+                        // Kill a cell of the currently-selected species
+                        // (admin only). Looks up the first cell in the
+                        // snapshot whose speciesIdx matches the cursor.
+                        let target = {
+                            let u = ui.lock().await;
+                            cell_position_for_species(
+                                u.last_snapshot.as_ref(),
+                                u.selected_species,
+                            )
+                        };
+                        if let Some((x, y)) = target {
+                            send_msg(
+                                &writer,
+                                &ClientMessage::Admin {
+                                    command: AdminCommand::KillCell { x, y },
+                                },
+                            )
+                            .await?;
+                            let mut u = ui.lock().await;
+                            u.pending_kill_species = Some(u.selected_species);
+                        } else {
+                            ui.lock().await.status_line =
+                                "no visible cell for selected species".into();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -375,6 +485,8 @@ struct UiView {
     /// (tick_us + particles sparklines on top, top-5 most expensive
     /// passes as a text list below). Toggled by the 'P' key.
     perf_view: bool,
+    save_list: Option<Vec<String>>,
+    save_selected: usize,
 }
 
 impl UiState {
@@ -396,6 +508,8 @@ impl UiState {
             chem_names: self.chem_names.clone(),
             selected_species: self.selected_species,
             perf_view: self.perf_view,
+            save_list: self.save_list.clone(),
+            save_selected: self.save_selected,
         }
     }
 }
@@ -439,6 +553,10 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
         render_history(f, right[2], u);
     }
     render_help(f, chunks[2], u);
+    // Pop-up renders last so it covers everything underneath.
+    if u.save_list.is_some() {
+        render_save_popup(f, chunks[1], u);
+    }
 }
 
 fn render_history(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
@@ -856,9 +974,91 @@ fn colour_for_glyph(i: u8) -> Color {
 fn render_help(f: &mut ratatui::Frame<'_>, area: Rect, _u: &UiView) {
     let block = Block::default().borders(Borders::ALL).title("keys");
     let text =
-        "q quit  p pause  r resume  . step  ]/[ rate  M max  j/k species  m perf  s save  x reset(admin)";
+        "q quit  space pause  . step  ]/[ rate  M max  j/k species  m perf  s save  L load  X kill  x reset";
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
+}
+
+/// Cheap JSON-array-of-strings parser; the admin "saves" reply is
+/// guaranteed to be this shape (no nested objects, no escape soup
+/// beyond backslash-quote) so we don't pull in `serde_json` just to
+/// read it.
+fn parse_json_string_array(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            i += 1;
+            let mut buf = String::new();
+            while i < bytes.len() && bytes[i] != b'"' {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    buf.push(bytes[i + 1] as char);
+                    i += 2;
+                } else {
+                    buf.push(bytes[i] as char);
+                    i += 1;
+                }
+            }
+            out.push(buf);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Find the (x, y) of the first cell whose speciesIdx matches the
+/// roster cursor, used to target the KillCell admin command. Falls
+/// back to `None` if the snapshot is missing fields or no cell of
+/// that species is currently in the top-N roster.
+fn cell_position_for_species(snap: Option<&Snapshot>, species: usize) -> Option<(f32, f32)> {
+    let s = snap?;
+    let target = species as u8;
+    let xb = s.creatures.blobs.iter().find(|b| b.name == "x").map(|b| as_f32(&b.data))?;
+    let yb = s.creatures.blobs.iter().find(|b| b.name == "y").map(|b| as_f32(&b.data))?;
+    let sids = s.creatures.blobs.iter().find(|b| b.name == "speciesIdx").map(|b| b.data.clone())?;
+    for i in 0..(s.creatures.count as usize) {
+        if sids.get(i).copied().unwrap_or(0xFF) == target {
+            return Some((*xb.get(i)?, *yb.get(i)?));
+        }
+    }
+    None
+}
+
+fn render_save_popup(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
+    let Some(list) = u.save_list.as_ref() else { return };
+    // Centre a fixed-size popup over the body area.
+    let w = 48.min(area.width.saturating_sub(4));
+    let h = (list.len().min(16) as u16 + 4).min(area.height.saturating_sub(4));
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(ratatui::widgets::Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("load -- Enter loads, Esc cancels");
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    if list.is_empty() {
+        f.render_widget(Paragraph::new("(no saves on disk)"), inner);
+        return;
+    }
+    let sel = u.save_selected.min(list.len() - 1);
+    let rows = inner.height as usize;
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows);
+    for (i, name) in list.iter().take(rows).enumerate() {
+        let cursor = if i == sel { '>' } else { ' ' };
+        let line = format!("{cursor} {name}");
+        let mut style = Style::default();
+        if i == sel {
+            style = style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        }
+        lines.push(Line::from(vec![Span::styled(line, style)]));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn as_f32(bytes: &[u8]) -> Vec<f32> {
