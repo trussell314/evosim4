@@ -236,6 +236,22 @@ let followSelectedCell = false;
 // summary frozen, so an extinction-on-the-edge case still appears in
 // the panel.
 const pinnedSpecies: Map<string, SpeciesSummary & { lastSeen: number }> = new Map();
+// Hall-of-fame: session-scoped record of every coding_key we've ever
+// seen with its peak count, peak biomass, and last-seen sim time.
+// Kept separate from `pinnedSpecies` (which is the operator's manual
+// list, persisted to localStorage) so a busy run doesn't auto-pin
+// hundreds of one-frame lineages. Cleared on reset by reloading the
+// page.
+interface Notable {
+  coding_key: string;
+  color: string;
+  peak_count: number;
+  peak_mass: number;
+  last_seen: number;
+  first_seen: number;
+}
+const notableSpecies: Map<string, Notable> = new Map();
+const NOTABLE_KEEP = 8;
 type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history";
 // Rolling population history -- one sample per received snapshot, kept
 // for ~120s at 30 Hz. Drawn as a stacked sparkline overlay when the
@@ -971,6 +987,31 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
       if (pinnedSpecies.has(s.coding_key)) {
         pinnedSpecies.set(s.coding_key, { ...s, lastSeen: snapshot.t });
       }
+      // Update / insert into the hall-of-fame. Only retains the top
+      // NOTABLE_KEEP by peak biomass so a long run doesn't grow the
+      // map without bound.
+      const prev = notableSpecies.get(s.coding_key);
+      const peak_count = Math.max(prev?.peak_count ?? 0, s.count);
+      const peak_mass = Math.max(prev?.peak_mass ?? 0, s.biomass ?? 0);
+      notableSpecies.set(s.coding_key, {
+        coding_key: s.coding_key,
+        color: s.color,
+        peak_count,
+        peak_mass,
+        last_seen: snapshot.t,
+        first_seen: prev?.first_seen ?? snapshot.t,
+      });
+    }
+    if (notableSpecies.size > NOTABLE_KEEP * 4) {
+      // Cheap prune: keep the top 4*N by peak mass so the next
+      // refresh re-ranks without re-querying server.
+      const ranked = Array.from(notableSpecies.values()).sort(
+        (a, b) => b.peak_mass - a.peak_mass,
+      );
+      notableSpecies.clear();
+      for (const n of ranked.slice(0, NOTABLE_KEEP * 2)) {
+        notableSpecies.set(n.coding_key, n);
+      }
     }
   }
   if ((top.length === 0 && pinnedSpecies.size === 0) || !showSpecies) {
@@ -1021,6 +1062,33 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
       disasmEl.textContent = parts.length > 0 ? parts.join("\n") : "(no genome bytes)";
     };
     speciesList.appendChild(li);
+  }
+  // Hall-of-fame: top-N coding_keys by peak biomass this session,
+  // separated from the live roster by a faint divider. Lets the
+  // operator notice a lineage that briefly dominated even when the
+  // current snapshot's top-N has rotated past it.
+  const visibleKeys = new Set([
+    ...top.map((s) => s.coding_key),
+    ...Array.from(pinnedSpecies.keys()),
+  ]);
+  const notable = Array.from(notableSpecies.values())
+    .filter((n) => !visibleKeys.has(n.coding_key))
+    .sort((a, b) => b.peak_mass - a.peak_mass)
+    .slice(0, NOTABLE_KEEP);
+  if (notable.length > 0) {
+    const header = document.createElement("li");
+    header.style.cssText = "list-style:none; margin:8px 0 2px -16px; padding:6px 0 2px 16px; border-top:1px solid #1a3340; color:#789; font-weight:bold;";
+    header.textContent = "notable (peak this run)";
+    speciesList.appendChild(header);
+    for (const n of notable) {
+      const li = document.createElement("li");
+      li.style.padding = "1px 0";
+      li.style.opacity = "0.75";
+      const ageS = snapshot ? Math.max(0, snapshot.t - n.last_seen) : 0;
+      const ageStr = ageS > 1 ? `<span class="dim">(${ageS.toFixed(0)}s ago)</span> ` : "";
+      li.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${n.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>${ageStr}peak m=<b>${n.peak_mass.toFixed(0)}</b> n=${n.peak_count} <span class="dim" style="margin-left:4px;">${n.coding_key.slice(0, 12)}</span>`;
+      speciesList.appendChild(li);
+    }
   }
 }
 
