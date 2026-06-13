@@ -84,6 +84,14 @@
         <button id="update-client" class="update" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
         <button id="toggle-ambient" title="Show/hide the ambient chems panel (key A)">A</button>
         <button id="toggle-species" title="Show/hide the species panel (key S)">S</button>
+        <label style="display:inline-flex; align-items:center; gap:4px;">overlay
+          <select id="overlay-mode" style="background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px; font:inherit;">
+            <option value="none">none</option>
+            <option value="density">density</option>
+            <option value="light">light</option>
+            <option value="mass">mass</option>
+          </select>
+        </label>
         <button id="reset-view" title="Reset zoom + pan (double-click on canvas)">⌖</button>
       </header>
       <dialog id="configure-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">

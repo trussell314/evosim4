@@ -156,6 +156,7 @@ const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElemen
 const configureBtn = document.getElementById("configure") as HTMLButtonElement;
 const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
 const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
+const overlaySelect = document.getElementById("overlay-mode") as HTMLSelectElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
 const disasmEl = document.getElementById("disasm") as HTMLElement;
@@ -165,6 +166,21 @@ const inspectorPanel = document.getElementById("inspector-panel") as HTMLElement
 const inspectorBody = document.getElementById("inspector-body") as HTMLElement;
 const inspectorCloseBtn = document.getElementById("inspector-close") as HTMLButtonElement;
 let selectedSpeciesKey: string | null = null;
+let followSelectedCell = false;
+// Species pinned by the user. Pinned entries persist across
+// snapshots even if they fall out of the top-N roster -- they're
+// rendered at the top of the species list with their last-known
+// summary frozen, so an extinction-on-the-edge case still appears in
+// the panel.
+const pinnedSpecies: Map<string, SpeciesSummary & { lastSeen: number }> = new Map();
+type OverlayMode = "none" | "density" | "light" | "mass";
+let overlayMode: OverlayMode =
+  (localStorage.getItem("evosim:overlay") as OverlayMode | null) ?? "none";
+overlaySelect.value = overlayMode;
+overlaySelect.onchange = () => {
+  overlayMode = overlaySelect.value as OverlayMode;
+  localStorage.setItem("evosim:overlay", overlayMode);
+};
 // Tracked cell selection. Stored as a world-coordinate "memo" so the
 // inspector follows the cell across snapshots even when its SoA index
 // shifts (death + reproduction reshuffle indices). On each frame we
@@ -266,6 +282,28 @@ function normaliseServerUrl(raw: string): string {
   urlInput.value = normaliseServerUrl(overrideUrl ?? savedUrl ?? defaultServerUrl());
   const savedTok = localStorage.getItem("evosim:token");
   if (savedTok) tokenInput.value = savedTok;
+  // Restore pinned species (keyed by coding_key).
+  try {
+    const raw = localStorage.getItem("evosim:pinned");
+    if (raw) {
+      const arr = JSON.parse(raw) as Array<SpeciesSummary & { lastSeen: number }>;
+      for (const sp of arr) pinnedSpecies.set(sp.coding_key, sp);
+    }
+  } catch (_) { /* ignore corrupted */ }
+}
+
+function persistPinnedSpecies(): void {
+  try {
+    const arr = Array.from(pinnedSpecies.values()).map((sp) => ({
+      ...sp,
+      // Strip Uint8Array genome -- localStorage stores JSON, so the
+      // disasm only renders for currently-roster species. The
+      // coding_key + color + last-known count is what matters across
+      // reloads.
+      genome: undefined,
+    }));
+    localStorage.setItem("evosim:pinned", JSON.stringify(arr));
+  } catch (_) { /* ignore quota */ }
 }
 
 function startConnect(): void {
@@ -829,12 +867,41 @@ function renderAmbientPanel(stocks: number[]): void {
 }
 
 function renderSpeciesPanel(top: SpeciesSummary[]): void {
-  if (top.length === 0 || !showSpecies) {
+  // Refresh pinned summaries from the current top-N so the pinned
+  // list shows current counts when the species is still alive.
+  if (snapshot) {
+    for (const s of top) {
+      if (pinnedSpecies.has(s.coding_key)) {
+        pinnedSpecies.set(s.coding_key, { ...s, lastSeen: snapshot.t });
+      }
+    }
+  }
+  if ((top.length === 0 && pinnedSpecies.size === 0) || !showSpecies) {
     speciesPanel.style.display = "none";
     return;
   }
   speciesPanel.style.display = "block";
   speciesList.innerHTML = "";
+  // Pinned first.
+  const topKeys = new Set(top.map((s) => s.coding_key));
+  for (const s of pinnedSpecies.values()) {
+    if (topKeys.has(s.coding_key)) continue;
+    const li = document.createElement("li");
+    li.style.padding = "2px 0";
+    li.style.opacity = "0.7";
+    const ageS = snapshot ? Math.max(0, snapshot.t - s.lastSeen) : 0;
+    li.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${s.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span><span class="dim">extinct (${ageS.toFixed(0)}s)</span> ${s.coding_key.slice(0, 12)} <button data-unpin="${s.coding_key}" style="background:transparent; border:1px solid #1a3340; color:#fc6; padding:0 4px; cursor:pointer; font:inherit;">★</button>`;
+    speciesList.appendChild(li);
+  }
+  // Bind the unpin buttons.
+  speciesList.querySelectorAll<HTMLButtonElement>("button[data-unpin]").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const key = btn.getAttribute("data-unpin");
+      if (key) pinnedSpecies.delete(key);
+      persistPinnedSpecies();
+    };
+  });
   for (const s of top) {
     const li = document.createElement("li");
     li.style.cursor = "pointer";
@@ -973,6 +1040,47 @@ function frame(): void {
       ctx.fill();
     }
 
+    // Overlay (optional). Drawn between particles + cells so cells
+    // stay readable. Density = per-grid-cell particle count heatmap;
+    // light = ambient_light read out as a single bar at the top of
+    // the world rect; mass = canvas-corner text readout of the mass
+    // ledger components.
+    if (overlayMode === "density") {
+      const GRID = 24;
+      const cols = Math.max(1, Math.floor(wW / GRID));
+      const rows = Math.max(1, Math.floor(wH / GRID));
+      const counts = new Uint32Array(cols * rows);
+      const px = f32(blobs.x.data, n);
+      const py = f32(blobs.y.data, n);
+      for (let i = 0; i < n; i++) {
+        const gx = Math.min(cols - 1, Math.max(0, (px[i] / wW * cols) | 0));
+        const gy = Math.min(rows - 1, Math.max(0, (py[i] / wH * rows) | 0));
+        counts[gy * cols + gx]++;
+      }
+      let maxC = 1;
+      for (const c of counts) if (c > maxC) maxC = c;
+      const cellW = GRID * scale;
+      const cellH = GRID * scale;
+      for (let gy = 0; gy < rows; gy++) {
+        for (let gx = 0; gx < cols; gx++) {
+          const c = counts[gy * cols + gx];
+          if (c === 0) continue;
+          const a = 0.15 + 0.65 * (c / maxC);
+          ctx.fillStyle = `rgba(120, 200, 255, ${a})`;
+          ctx.fillRect(
+            offX + gx * GRID * scale,
+            offY + gy * GRID * scale,
+            cellW + 1,
+            cellH + 1,
+          );
+        }
+      }
+    } else if (overlayMode === "light") {
+      const bar = Math.max(2, 6 * (window.devicePixelRatio || 1));
+      ctx.fillStyle = `rgba(255, 230, 120, ${0.2 + 0.6 * light})`;
+      ctx.fillRect(offX, offY, wW * scale * light, bar);
+    }
+
     // Creatures: rendered after particles so cells sit visually on top
     // of the particle field. Color by species (from top_species[])
     // when available; fall back to a synthetic per-id hue for cells
@@ -1022,8 +1130,19 @@ function frame(): void {
         }
         if (selectedIdx >= 0) {
           selectedCell = { x: cx[selectedIdx], y: cy[selectedIdx], r: cr[selectedIdx] };
+          // Follow: lerp the pan so the cell stays near the canvas
+          // center. Smooth rather than snap so the user can still
+          // pinch + drag without fighting the camera.
+          if (followSelectedCell) {
+            const targetPanX = cw / 2 - (cx[selectedIdx] * scale + (cw - wW * scale) / 2);
+            const targetPanY = ch / 2 - (cy[selectedIdx] * scale + (ch - wH * scale) / 2);
+            const lerp = 0.12;
+            panX += (targetPanX - panX) * lerp;
+            panY += (targetPanY - panY) * lerp;
+          }
         } else {
           selectedCell = null;
+          followSelectedCell = false;
         }
       }
       for (let i = 0; i < cN; i++) {
@@ -1082,8 +1201,14 @@ function frame(): void {
         if (mass) parts.push(`<div><span class="dim">mass</span> ${mass[i].toFixed(0)}</div>`);
         if (energy) parts.push(`<div><span class="dim">atp</span> ${energy[i].toFixed(0)}</div>`);
         if (heading) parts.push(`<div><span class="dim">heading</span> ${(heading[i] * 180 / Math.PI).toFixed(0)}°</div>`);
+        const followClass = followSelectedCell ? "ok" : "dim";
+        parts.push(`<div style="display:flex; gap:6px; margin-top:6px;">
+          <button id="insp-follow" style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:2px 8px; cursor:pointer; font:inherit;" class="${followClass}">${followSelectedCell ? "✓ Follow" : "Follow"}</button>
+          ${isAdmin ? `<button id="insp-kill" title="Admin: mark this cell unviable" style="background:#1a0a0a; border:1px solid #4a1818; color:#f99; padding:2px 8px; cursor:pointer; font:inherit;">Kill</button>` : ""}
+        </div>`);
         if (sp) {
-          parts.push(`<div style="margin-top:6px;"><span style="display:inline-block;width:10px;height:10px;background:${sp.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>species <span class="dim">${sp.coding_key.slice(0, 12)}</span> · count <b>${sp.count}</b></div>`);
+          const pinned = pinnedSpecies.has(sp.coding_key);
+          parts.push(`<div style="margin-top:6px;"><span style="display:inline-block;width:10px;height:10px;background:${sp.color};border:1px solid #333;margin-right:4px;vertical-align:-1px"></span>species <span class="dim">${sp.coding_key.slice(0, 12)}</span> · count <b>${sp.count}</b> <button id="insp-pin" style="background:transparent; border:1px solid #1a3340; color:${pinned ? "#fc6" : "#9ee"}; padding:0 6px; cursor:pointer; font:inherit; margin-left:4px;">${pinned ? "★ pinned" : "☆ pin"}</button></div>`);
           if (sp.description) {
             parts.push(`<div style="margin-top:4px; white-space:pre-wrap;">${sp.description}</div>`);
           }
@@ -1096,8 +1221,60 @@ function frame(): void {
         }
         inspectorBody.innerHTML = parts.join("");
         inspectorPanel.style.display = "block";
+        // Re-bind the per-frame buttons since innerHTML rebuilds them.
+        const followBtn = document.getElementById("insp-follow") as HTMLButtonElement | null;
+        if (followBtn) {
+          followBtn.onclick = () => {
+            followSelectedCell = !followSelectedCell;
+          };
+        }
+        const killBtn = document.getElementById("insp-kill") as HTMLButtonElement | null;
+        if (killBtn && selectedCell) {
+          const targetX = selectedCell.x;
+          const targetY = selectedCell.y;
+          killBtn.onclick = () => {
+            send({ type: "admin", command: { kind: "kill-cell", x: targetX, y: targetY } });
+          };
+        }
+        const pinBtn = document.getElementById("insp-pin") as HTMLButtonElement | null;
+        if (pinBtn && sp) {
+          pinBtn.onclick = () => {
+            if (pinnedSpecies.has(sp.coding_key)) {
+              pinnedSpecies.delete(sp.coding_key);
+            } else {
+              pinnedSpecies.set(sp.coding_key, { ...sp, lastSeen: snapshot ? snapshot.t : 0 });
+            }
+            persistPinnedSpecies();
+          };
+        }
       } else if (!selectedCell) {
         inspectorPanel.style.display = "none";
+      }
+    }
+
+    // Mass overlay: render the snapshot.mass ledger as bottom-left
+    // canvas text. Cheap, doesn't disturb world rendering.
+    if (overlayMode === "mass" && snapshot.mass) {
+      const m = snapshot.mass;
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const fs = Math.round(11 * dpr);
+      ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.fillStyle = "rgba(204, 224, 240, 0.95)";
+      ctx.textBaseline = "top";
+      const rows = [
+        `mass total       ${m.total.toFixed(0)}`,
+        `cell chems       ${m.cell_chems.toFixed(0)}`,
+        `cell catalysts   ${m.cell_catalysts.toFixed(0)}`,
+        `particles        ${m.particles.toFixed(0)}`,
+        `ambient          ${m.ambient.toFixed(0)}`,
+      ];
+      const pad = 8 * dpr;
+      const lh = fs + 4;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.7)";
+      ctx.fillRect(pad - 4, ch - rows.length * lh - pad - 4, 32 * fs * 0.65, rows.length * lh + 8);
+      ctx.fillStyle = "rgba(204, 224, 240, 0.95)";
+      for (let i = 0; i < rows.length; i++) {
+        ctx.fillText(rows[i], pad, ch - (rows.length - i) * lh - pad);
       }
     }
 

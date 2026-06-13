@@ -77,6 +77,13 @@ pub enum EngineCmd {
     /// handler to populate the Hello frame so the client can render
     /// the terrain silhouette.
     GetTerrain(oneshot::Sender<Vec<Vec<f32>>>),
+    /// Mark the cell nearest (x, y) as unviable. Replies with the SoA
+    /// index of the killed cell, or None if no cell was close enough.
+    KillCell {
+        x: f32,
+        y: f32,
+        reply: oneshot::Sender<Option<usize>>,
+    },
 }
 
 pub struct EngineHandle {
@@ -242,6 +249,10 @@ async fn run(
                         );
                         engine.configure(width, height, seed, day_period_s, founders_per_strategy);
                         let _ = reply.send(());
+                    }
+                    Some(EngineCmd::KillCell { x, y, reply }) => {
+                        let idx = engine.kill_cell_nearest(x, y, 60.0);
+                        let _ = reply.send(idx);
                     }
                     Some(EngineCmd::GetTerrain(reply)) => {
                         // Flatten polygons to alternating (x, y) pairs

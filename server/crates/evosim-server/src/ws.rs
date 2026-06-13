@@ -255,6 +255,7 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
         Load { .. } => "load",
         Saves => "saves",
         Configure { .. } => "configure",
+        KillCell { .. } => "kill-cell",
     }
 }
 

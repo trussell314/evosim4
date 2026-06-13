@@ -398,6 +398,34 @@ impl Engine {
         self.world.particle_cap = cap;
     }
 
+    /// Find the closest live cell to (x, y) within `max_d` world px
+    /// and force-kill it by zeroing its membrane chem. Death pass
+    /// culls it next tick. Returns the SoA index of the killed cell
+    /// (for diagnostics) or None when nothing was close enough.
+    pub fn kill_cell_nearest(&mut self, x: f32, y: f32, max_d: f32) -> Option<usize> {
+        let store = &mut self.world.creature_store;
+        let n = store.n;
+        if n == 0 {
+            return None;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for i in 0..n {
+            let dx = store.x[i] - x;
+            let dy = store.y[i] - y;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > max_d {
+                continue;
+            }
+            if best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+        let (idx, _) = best?;
+        let mem_slot = crate::chem_ids::CHEM_MEMBRANE;
+        store.chems[mem_slot][idx] = 0.0;
+        Some(idx)
+    }
+
     /// Auto-reseed the founder cohort if the live population has been
     /// at or below `min_cells` for `min_sustained_s` continuous sim
     /// seconds. Without this an extinction event leaves clients

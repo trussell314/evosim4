@@ -38,6 +38,7 @@ pub async fn handle(
         AdminCommand::UpdateClient { pull } => update_client(state.clone(), pull, &reply).await,
         AdminCommand::Snapshot => snapshot_now(engine_cmd).await,
         AdminCommand::Reset => reset(engine_cmd).await,
+        AdminCommand::KillCell { x, y } => kill_cell(engine_cmd, x, y).await,
         AdminCommand::Status => status(state.clone()).await,
         AdminCommand::Load { name } => load_from_disk(name, state.clone(), engine_cmd).await,
         AdminCommand::Saves => list_saves(state.clone()).await,
@@ -63,6 +64,7 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::UpdateClient { .. } => "update-client",
         AdminCommand::Snapshot => "snapshot",
         AdminCommand::Reset => "reset",
+        AdminCommand::KillCell { .. } => "kill-cell",
         AdminCommand::Status => "status",
         AdminCommand::Load { .. } => "load",
         AdminCommand::Saves => "saves",
@@ -241,6 +243,25 @@ async fn reset(engine_cmd: mpsc::Sender<EngineCmd>) -> anyhow::Result<Option<Str
     engine_cmd.send(EngineCmd::Reset).await
         .map_err(|_| anyhow::anyhow!("engine task is gone"))?;
     Ok(Some("engine reset".into()))
+}
+
+async fn kill_cell(
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    x: f32,
+    y: f32,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::KillCell { x, y, reply: tx })
+        .await
+        .map_err(|_| anyhow::anyhow!("engine task is gone"))?;
+    let outcome = rx
+        .await
+        .map_err(|_| anyhow::anyhow!("engine did not respond"))?;
+    match outcome {
+        Some(idx) => Ok(Some(format!("killed cell idx={idx}"))),
+        None => Err(anyhow::anyhow!("no cell within tolerance")),
+    }
 }
 
 async fn status(state: Arc<AppState>) -> anyhow::Result<Option<String>> {

@@ -413,6 +413,10 @@ pub enum AdminCommand {
     Saves,
     /// Reset the engine with custom world parameters. Optional
     /// fields keep their current default when omitted.
+    /// Mark the cell nearest the given world coords as unviable
+    /// (membrane = 0). The death pass then culls it next tick. Used
+    /// by the operator's "Kill" button when a cell is selected.
+    KillCell { x: f32, y: f32 },
     Configure {
         width: Option<f32>,
         height: Option<f32>,
