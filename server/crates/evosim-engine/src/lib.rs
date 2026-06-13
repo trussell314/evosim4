@@ -151,6 +151,7 @@ impl Engine {
             self.world.width,
             self.world.height,
             self.founders_per_strategy,
+            &self.world.obstacles,
         );
     }
 

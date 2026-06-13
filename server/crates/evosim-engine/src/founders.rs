@@ -208,6 +208,7 @@ pub fn seed_founders(
     width: f32,
     height: f32,
     n_per_strategy: usize,
+    obstacles: &[crate::terrain::Obstacle],
 ) -> usize {
     let genomes = founder_genomes();
     let chems = founder_chems();
@@ -230,13 +231,32 @@ pub fn seed_founders(
                     }
                 }
             }
-            let (x, y) = if cluster {
-                let theta = rng.next_f64() as f32 * std::f32::consts::TAU;
-                let r = (rng.next_f64() as f32).sqrt() * cluster_r;
-                (cluster_cx + theta.cos() * r, cluster_cy + theta.sin() * r)
-            } else {
-                (rng.next_f64() as f32 * width, rng.next_f64() as f32 * height)
-            };
+            // Pick a spawn position; retry up to 24 times if the
+            // chosen one lands inside rock. Without this founders
+            // materialise inside the seafloor and the obstacle
+            // collision pass spends every tick trying to push them
+            // back out, while the cell does nothing visible.
+            let body_r = 8.0_f32;
+            let mut x;
+            let mut y;
+            let mut attempts = 0;
+            loop {
+                if cluster {
+                    let theta = rng.next_f64() as f32 * std::f32::consts::TAU;
+                    let r = (rng.next_f64() as f32).sqrt() * cluster_r;
+                    x = cluster_cx + theta.cos() * r;
+                    y = cluster_cy + theta.sin() * r;
+                } else {
+                    x = rng.next_f64() as f32 * width;
+                    y = rng.next_f64() as f32 * height;
+                }
+                attempts += 1;
+                if attempts >= 24
+                    || !crate::terrain::founder_terrain_blocked(obstacles, x, y, body_r + 4.0)
+                {
+                    break;
+                }
+            }
             store.push(CreatureInit {
                 x,
                 y,
@@ -259,7 +279,7 @@ mod tests {
     fn seeds_expected_count() {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
-        let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5);
+        let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5, &[]);
         assert_eq!(n, 45); // 9 strategies x 5 each
         assert_eq!(store.len(), 45);
     }
@@ -268,7 +288,7 @@ mod tests {
     fn founders_carry_viable_pools() {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
-        seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 2);
+        seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 2, &[]);
         for i in 0..store.len() {
             assert!(
                 store.chems[CHEM_MEMBRANE][i] >= 20.0,
@@ -286,7 +306,7 @@ mod tests {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
         let (w, h) = (1600.0_f32, 1200.0_f32);
-        seed_founders(&mut store, &mut rng, w, h, 5);
+        seed_founders(&mut store, &mut rng, w, h, 5, &[]);
         for i in 0..store.len() {
             assert!(store.x[i] >= 0.0 && store.x[i] <= w);
             assert!(store.y[i] >= 0.0 && store.y[i] <= h);
