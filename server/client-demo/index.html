@@ -78,7 +78,9 @@
         </label>
         <button id="speedMax" disabled title="Snap to max sim rate (32x)">Max</button>
         <button id="save" disabled title="Admin only -- writes to EVOSIM_SAVE_DIR">Save</button>
+        <button id="load" disabled title="Admin only -- list saves and reload one">Load…</button>
         <button id="reset" disabled title="Admin only">Reset</button>
+        <button id="help" title="Show keyboard shortcuts (key ?)">?</button>
         <button id="configure" disabled title="Admin only -- reseed with custom world parameters">Configure…</button>
         <button id="update-server" class="update" disabled title="Admin only -- git pull + cargo build + restart (~1-2 min). Client auto-reconnects.">Update server</button>
         <button id="update-client" class="update" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
@@ -90,6 +92,7 @@
             <option value="density">density</option>
             <option value="light">light</option>
             <option value="mass">mass</option>
+            <option value="perf">perf</option>
           </select>
         </label>
         <button id="reset-view" title="Reset zoom + pan (double-click on canvas)">⌖</button>
@@ -106,6 +109,37 @@
           <div style="display:flex; gap:8px; justify-content:flex-end;">
             <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Cancel</button>
             <button id="cfg-apply" value="apply" type="submit" style="background:#0d1c26; border:1px solid #2a4d62; color:#cef; padding:4px 10px; cursor:pointer; font:inherit;">Apply</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="load-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Load saved world</div>
+          <div id="load-list" style="margin-bottom:10px; max-height:50vh; overflow:auto;"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="help-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:340px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:8px;">Shortcuts &amp; controls</div>
+          <table style="border-collapse:collapse;">
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Tap / click</td><td>select cell under pointer</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Drag</td><td>pan</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Pinch / wheel</td><td>zoom (0.25× to 16×)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Double click</td><td>reset view</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">A / S</td><td>toggle Ambient / Species panel</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">I</td><td>dismiss inspector</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">P / R</td><td>pause / resume (server-wide)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">.</td><td>single-tick step (while paused)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">+ / -</td><td>sim rate × / ÷ 2</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">M</td><td>snap sim rate to max (32×)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">?</td><td>show this help</td></tr>
+          </table>
+          <div style="margin-top:10px; color:#789;">Admin features (Save / Load / Reset / Configure / Update / Kill) appear once the token is accepted.</div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
           </div>
         </form>
       </dialog>

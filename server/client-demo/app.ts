@@ -156,6 +156,73 @@ const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElemen
 const configureBtn = document.getElementById("configure") as HTMLButtonElement;
 const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
 const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
+const loadBtn = document.getElementById("load") as HTMLButtonElement;
+const loadDialog = document.getElementById("load-dialog") as HTMLDialogElement;
+const loadList = document.getElementById("load-list") as HTMLDivElement;
+const helpBtn = document.getElementById("help") as HTMLButtonElement;
+const helpDialog = document.getElementById("help-dialog") as HTMLDialogElement;
+helpBtn.onclick = () => helpDialog.showModal();
+window.addEventListener("keydown", (ev) => {
+  if (ev.target instanceof HTMLInputElement) return;
+  if (ev.key === "?") helpDialog.showModal();
+});
+loadBtn.onclick = async () => {
+  loadList.innerHTML = "<div class='dim'>loading…</div>";
+  loadDialog.showModal();
+  // Saves list comes back as a JSON string in AdminAck.message; we
+  // poll a oneshot via a per-call await pattern.
+  const reply = await sendAdminAwait({ kind: "saves" });
+  if (!reply || reply.type === "admin-nack") {
+    loadList.innerHTML = `<div class='err'>${reply ? reply.reason : "no reply"}</div>`;
+    return;
+  }
+  try {
+    const names: string[] = JSON.parse(reply.message ?? "[]");
+    if (names.length === 0) {
+      loadList.innerHTML = "<div class='dim'>(no saves)</div>";
+      return;
+    }
+    loadList.innerHTML = "";
+    for (const name of names) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #1a3340;";
+      row.innerHTML = `<span>${name}</span><button style="background:#0d1c26; border:1px solid #2a4d62; color:#cef; padding:2px 8px; cursor:pointer; font:inherit;">Load</button>`;
+      const btn = row.querySelector("button") as HTMLButtonElement;
+      btn.onclick = () => {
+        send({ type: "admin", command: { kind: "load", name } });
+        loadDialog.close();
+      };
+      loadList.appendChild(row);
+    }
+  } catch (e) {
+    loadList.innerHTML = `<div class='err'>parse: ${e}</div>`;
+  }
+};
+// Promise-based admin RPC: send, then wait for the matching ack/nack.
+// We hook a one-shot resolver onto the next handle() call for the
+// matching command kind. Multiple pending awaits queue in arrival
+// order.
+type AdminReply = { type: "admin-ack"; command: string; message: string | null }
+  | { type: "admin-nack"; command: string; reason: string };
+const pendingAdminAwaits: Map<string, ((r: AdminReply) => void)[]> = new Map();
+function sendAdminAwait(cmd: Record<string, unknown>): Promise<AdminReply | null> {
+  const kind = cmd.kind as string;
+  return new Promise((resolve) => {
+    const list = pendingAdminAwaits.get(kind) ?? [];
+    list.push(resolve);
+    pendingAdminAwaits.set(kind, list);
+    send({ type: "admin", command: cmd });
+    // Bail if no reply arrives within 8s.
+    setTimeout(() => {
+      const cur = pendingAdminAwaits.get(kind) ?? [];
+      const idx = cur.indexOf(resolve);
+      if (idx >= 0) {
+        cur.splice(idx, 1);
+        resolve(null);
+      }
+    }, 8000);
+  });
+}
 const overlaySelect = document.getElementById("overlay-mode") as HTMLSelectElement;
 const speciesPanel = document.getElementById("species-panel") as HTMLElement;
 const speciesList = document.getElementById("species-list") as HTMLOListElement;
@@ -173,7 +240,7 @@ let followSelectedCell = false;
 // summary frozen, so an extinction-on-the-edge case still appears in
 // the panel.
 const pinnedSpecies: Map<string, SpeciesSummary & { lastSeen: number }> = new Map();
-type OverlayMode = "none" | "density" | "light" | "mass";
+type OverlayMode = "none" | "density" | "light" | "mass" | "perf";
 let overlayMode: OverlayMode =
   (localStorage.getItem("evosim:overlay") as OverlayMode | null) ?? "none";
 overlaySelect.value = overlayMode;
@@ -527,6 +594,7 @@ function connect(url: string, token: string | null): void {
     speedSlider.disabled = true;
     speedMaxBtn.disabled = true;
     saveBtn.disabled = true;
+    loadBtn.disabled = true;
     resetBtn.disabled = true;
     configureBtn.disabled = true;
     updateServerBtn.disabled = true;
@@ -570,6 +638,7 @@ function handle(msg: ServerMessage): void {
       speedSlider.disabled = false;
       speedMaxBtn.disabled = false;
       saveBtn.disabled = !isAdmin;
+      loadBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
       configureBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
@@ -608,6 +677,14 @@ function handle(msg: ServerMessage): void {
       break;
     case "admin-ack":
       setStatus(`<span class="ok">${msg.command}: ${msg.message ?? "ok"}</span>`);
+      // Drain any pending sendAdminAwait waiter for this command kind.
+      {
+        const waiters = pendingAdminAwaits.get(msg.command);
+        if (waiters && waiters.length > 0) {
+          const w = waiters.shift();
+          if (w) w(msg);
+        }
+      }
       // update-client final ack lands as a terminal AdminAck (the
       // server sends progress AdminAcks while it's working, then this
       // one with the dist path). Reload to pull the fresh bundle.
@@ -624,6 +701,13 @@ function handle(msg: ServerMessage): void {
       break;
     case "admin-nack":
       setStatus(`<span class="err">${msg.command} rejected: ${msg.reason}</span>`);
+      {
+        const waiters = pendingAdminAwaits.get(msg.command);
+        if (waiters && waiters.length > 0) {
+          const w = waiters.shift();
+          if (w) w(msg);
+        }
+      }
       break;
   }
 }
@@ -1249,6 +1333,42 @@ function frame(): void {
         }
       } else if (!selectedCell) {
         inspectorPanel.style.display = "none";
+      }
+    }
+
+    // Perf overlay: per-pass mean ms, sorted descending. Reads
+    // snapshot.perf which the server ships every snapshot.
+    if (overlayMode === "perf" && (snapshot as any).perf) {
+      const p = (snapshot as any).perf as Record<string, number>;
+      const passes: Array<[string, number]> = [];
+      for (const [k, v] of Object.entries(p)) {
+        if (typeof v === "number" && k.endsWith("_ms")) {
+          passes.push([k.replace(/_ms$/, ""), v]);
+        }
+      }
+      passes.sort((a, b) => b[1] - a[1]);
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const fs = Math.round(11 * dpr);
+      ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      const lh = fs + 4;
+      const top = passes.slice(0, 10);
+      const rows: string[] = [
+        `tick     ${(p.tick_ms ?? 0).toFixed(2)} ms`,
+        `particles ${(p.particle_count ?? 0).toString().padStart(5)}`,
+        "",
+      ];
+      for (const [name, ms] of top) {
+        if (ms <= 0.0001) continue;
+        rows.push(`${name.padEnd(18)} ${ms.toFixed(3)} ms`);
+      }
+      const pad = 8 * dpr;
+      const w = 30 * fs * 0.6;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.7)";
+      ctx.fillRect(pad - 4, ch - rows.length * lh - pad - 4, w, rows.length * lh + 8);
+      ctx.fillStyle = "rgba(204, 224, 240, 0.95)";
+      ctx.textBaseline = "top";
+      for (let i = 0; i < rows.length; i++) {
+        ctx.fillText(rows[i], pad, ch - (rows.length - i) * lh - pad);
       }
     }
 
