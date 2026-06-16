@@ -122,6 +122,16 @@
           </div>
         </form>
       </dialog>
+      <dialog id="chem-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:340px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div id="chem-title" style="font-weight:bold; color:#cef; margin-bottom:6px;">chem</div>
+          <div id="chem-meta" style="color:#789; margin-bottom:8px;"></div>
+          <canvas id="chem-graph" width="320" height="120" style="display:block; background:#07111a; border:1px solid #1a3340; margin-bottom:8px;"></canvas>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="help-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:340px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
         <form method="dialog">
           <div style="font-weight:bold; color:#cef; margin-bottom:8px;">Shortcuts &amp; controls</div>

@@ -252,6 +252,11 @@ interface Notable {
 }
 const notableSpecies: Map<string, Notable> = new Map();
 const NOTABLE_KEEP = 8;
+// Rolling per-chem ambient history for the chem-detail modal. One
+// f32 per snapshot; capped to AMBIENT_HISTORY_MAX so the buffers
+// don't grow unbounded across a multi-hour session.
+const CHEM_HISTORY: Map<number, number[]> = new Map();
+const AMBIENT_HISTORY_MAX = 3600;
 type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history";
 // Rolling population history -- one sample per received snapshot, kept
 // for ~120s at 30 Hz. Drawn as a stacked sparkline overlay when the
@@ -679,6 +684,15 @@ function handle(msg: ServerMessage): void {
         mass: msg.mass?.total ?? 0,
       });
       if (POP_HISTORY.length > POP_HISTORY_MAX) POP_HISTORY.shift();
+      // Per-chem rolling buffer for the chem-detail modal.
+      if (msg.ambient_chems) {
+        for (let i = 0; i < msg.ambient_chems.length; i++) {
+          let buf = CHEM_HISTORY.get(i);
+          if (!buf) { buf = []; CHEM_HISTORY.set(i, buf); }
+          buf.push(msg.ambient_chems[i]);
+          if (buf.length > AMBIENT_HISTORY_MAX) buf.shift();
+        }
+      }
       if (now - snapWindowStart > 1000) {
         snapsPerSec = snapAccum * 1000 / (now - snapWindowStart);
         snapAccum = 0;
@@ -972,11 +986,89 @@ function renderAmbientPanel(stocks: number[]): void {
     if (row.v <= 0) continue;
     const li = document.createElement("li");
     li.style.padding = "1px 0";
+    li.style.cursor = "pointer";
+    li.title = "click for time-series detail";
     const name = chemNames[row.id] ?? `chem ${row.id}`;
     const color = chemColors[row.id] ?? "#9ee";
     li.innerHTML = `<span style="display:inline-block;width:8px;height:8px;background:${color};margin-right:4px;vertical-align:-1px"></span>${name}: ${row.v.toFixed(1)}`;
+    li.onclick = () => openChemDetail(row.id);
     ambientList.appendChild(li);
   }
+}
+
+function openChemDetail(chemId: number): void {
+  const dlg = document.getElementById("chem-dialog") as HTMLDialogElement | null;
+  const title = document.getElementById("chem-title");
+  const meta = document.getElementById("chem-meta");
+  const canvas = document.getElementById("chem-graph") as HTMLCanvasElement | null;
+  if (!dlg || !title || !meta || !canvas) return;
+  const name = chemNames[chemId] ?? `chem ${chemId}`;
+  const color = chemColors[chemId] ?? "#9ee";
+  title.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${color};margin-right:6px;vertical-align:-1px"></span>${name}`;
+  const buf = CHEM_HISTORY.get(chemId) ?? [];
+  const last = buf.length > 0 ? buf[buf.length - 1] : 0;
+  let peak = 0; for (const v of buf) if (v > peak) peak = v;
+  meta.textContent = `id ${chemId} · now ${last.toFixed(1)} · peak ${peak.toFixed(1)} · samples ${buf.length}`;
+  drawChemGraph(canvas, buf, color);
+  dlg.showModal();
+}
+
+function drawChemGraph(canvas: HTMLCanvasElement, buf: number[], color: string): void {
+  const c = canvas.getContext("2d");
+  if (!c) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  c.clearRect(0, 0, w, h);
+  c.fillStyle = "#07111a";
+  c.fillRect(0, 0, w, h);
+  if (buf.length < 2) {
+    c.fillStyle = "#789";
+    c.font = "11px ui-monospace, monospace";
+    c.fillText("(no samples yet)", 8, 16);
+    return;
+  }
+  let max = 1;
+  for (const v of buf) if (v > max) max = v;
+  c.strokeStyle = "#1a3340";
+  c.lineWidth = 1;
+  c.beginPath();
+  c.moveTo(0, h - 0.5);
+  c.lineTo(w, h - 0.5);
+  c.stroke();
+  c.strokeStyle = color;
+  c.lineWidth = 1.5;
+  c.beginPath();
+  for (let i = 0; i < buf.length; i++) {
+    const x = (i / (buf.length - 1)) * w;
+    const y = h - 4 - (buf[i] / max) * (h - 12);
+    if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+  }
+  c.stroke();
+}
+
+/// Build an inline-SVG histogram for a small set of integers. Used by
+/// the species panel to expose genome-size distribution without
+/// introducing a charting dep.
+function buildHistogramHTML(values: number[]): string {
+  const bins = 8;
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (!isFinite(lo)) return "";
+  if (hi === lo) hi = lo + 1;
+  const step = (hi - lo) / bins;
+  const counts = new Array(bins).fill(0);
+  for (const v of values) {
+    const i = Math.min(bins - 1, Math.floor((v - lo) / step));
+    counts[i]++;
+  }
+  const maxC = counts.reduce((a, b) => Math.max(a, b), 1);
+  const w = 200, h = 36, barW = w / bins;
+  let bars = "";
+  for (let i = 0; i < bins; i++) {
+    const bh = (counts[i] / maxC) * (h - 4);
+    bars += `<rect x="${i * barW + 1}" y="${h - bh}" width="${barW - 2}" height="${bh}" fill="#9efba8" />`;
+  }
+  return `<svg width="${w}" height="${h}" style="display:block;">${bars}</svg><div style="color:#9ab;">${lo}…${hi} B · ${values.length} species</div>`;
 }
 
 function renderSpeciesPanel(top: SpeciesSummary[]): void {
@@ -1020,6 +1112,20 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
   }
   speciesPanel.style.display = "block";
   speciesList.innerHTML = "";
+  // Genome-size histogram across the live top-N. Cheap to compute,
+  // and a quick visual cue when the run drifts toward bloated or
+  // streamlined genomes. Skipped if the snapshot didn't carry any
+  // genome bytes (older builds).
+  const sizes: number[] = [];
+  for (const s of top) {
+    if (s.genome && s.genome.length > 0) sizes.push(s.genome.length);
+  }
+  if (sizes.length >= 2) {
+    const header = document.createElement("li");
+    header.style.cssText = "list-style:none; margin:0 0 6px -16px; padding:0 0 6px 16px; border-bottom:1px solid #1a3340;";
+    header.innerHTML = `<div style="color:#789; font-weight:bold; margin-bottom:2px;">genome size · top-${sizes.length}</div>` + buildHistogramHTML(sizes);
+    speciesList.appendChild(header);
+  }
   // Pinned first.
   const topKeys = new Set(top.map((s) => s.coding_key));
   for (const s of pinnedSpecies.values()) {
