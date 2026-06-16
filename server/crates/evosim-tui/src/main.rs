@@ -201,6 +201,19 @@ async fn main() -> Result<()> {
                         u.save_list = Some(parse_json_string_array(&body));
                         u.save_selected = 0;
                         u.status_line = format!("saves ({})", u.save_list.as_ref().map(|v| v.len()).unwrap_or(0));
+                    } else if command == "export" && !body.is_empty() {
+                        // Write the world JSON to the cwd so the
+                        // operator can grab it. Filename is timestamped
+                        // so repeated exports don't overwrite.
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let path = format!("evosim-{ts}.json");
+                        match std::fs::write(&path, &body) {
+                            Ok(_) => u.status_line = format!("export -> {path} ({} bytes)", body.len()),
+                            Err(e) => u.status_line = format!("export write failed: {e}"),
+                        }
                     } else {
                         u.status_line = format!("ack[{command}] {body}");
                     }
@@ -419,6 +432,18 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         let mut u = ui.lock().await;
                         u.show_help = !u.show_help;
                     }
+                    KeyCode::Char('E') => {
+                        // Admin: export the world JSON. The AdminAck
+                        // reply carries the body; the handler writes
+                        // it to ./evosim-<ts>.json next to the cwd.
+                        send_msg(
+                            &writer,
+                            &ClientMessage::Admin {
+                                command: AdminCommand::Export,
+                            },
+                        )
+                        .await?;
+                    }
                     KeyCode::Char('X') => {
                         // Kill a cell of the currently-selected species
                         // (admin only). Looks up the first cell in the
@@ -600,6 +625,7 @@ fn render_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
         Line::raw("L             list / load saves"),
         Line::raw("x             admin: reset world"),
         Line::raw("X             admin: kill selected species cell"),
+        Line::raw("E             admin: export world JSON to cwd"),
         Line::raw("?             show this help"),
     ];
     f.render_widget(Paragraph::new(lines), inner);
@@ -1033,7 +1059,7 @@ fn colour_for_glyph(i: u8) -> Color {
 fn render_help(f: &mut ratatui::Frame<'_>, area: Rect, _u: &UiView) {
     let block = Block::default().borders(Borders::ALL).title("keys");
     let text =
-        "q quit  space pause  . step  ]/[ rate  M max  j/k species  m perf  s save  L load  X kill  x reset";
+        "q quit  space pause  . step  ]/[ rate  M max  j/k species  m perf  s save  L load  E export  X kill  x reset";
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, area);
 }
