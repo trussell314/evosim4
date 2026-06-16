@@ -18,6 +18,10 @@ interface SpeciesSummary {
   description?: string;
   biomass?: number;
   atp?: number;
+  /// Parent species this lineage most recently descended from (engine
+  /// majority vote across live cells), or `null` for founders / pure
+  /// intra-species reproduction. Used to render a phylogenetic tree.
+  parent_key?: string | null;
 }
 // Op-name lookup mirrors `crates/evosim-engine/src/genome.rs` byte-for-
 // byte. Keep these in sync when ops are added or shuffled, otherwise
@@ -206,14 +210,17 @@ const helpBtn = document.getElementById("help") as HTMLButtonElement;
 const helpDialog = document.getElementById("help-dialog") as HTMLDialogElement;
 const openLedgerBtn = document.getElementById("open-ledger") as HTMLButtonElement;
 const openReactionsBtn = document.getElementById("open-reactions") as HTMLButtonElement;
+const openTreeBtn = document.getElementById("open-tree") as HTMLButtonElement;
 helpBtn.onclick = () => helpDialog.showModal();
 openLedgerBtn.onclick = () => openLedger();
 openReactionsBtn.onclick = () => openReactions();
+openTreeBtn.onclick = () => openPhyloTree();
 window.addEventListener("keydown", (ev) => {
   if (ev.target instanceof HTMLInputElement) return;
   if (ev.key === "?") helpDialog.showModal();
   else if (ev.key === "c" || ev.key === "C") openLedger();
   else if (ev.key === "r" || ev.key === "R") openReactions();
+  else if (ev.key === "t" || ev.key === "T") openPhyloTree();
 });
 loadBtn.onclick = async () => {
   loadList.innerHTML = "<div class='dim'>loading…</div>";
@@ -1252,6 +1259,52 @@ function renderReactionsTable(filter: string): string {
   }
   html += "</tbody></table>";
   return html;
+}
+
+function openPhyloTree(): void {
+  const dlg = document.getElementById("tree-dialog") as HTMLDialogElement | null;
+  const body = document.getElementById("tree-body");
+  if (!dlg || !body) return;
+  const species = snapshot?.top_species ?? [];
+  if (species.length === 0) {
+    body.innerHTML = `<div class='dim'>(no species in this snapshot yet)</div>`;
+    dlg.showModal();
+    return;
+  }
+  // Index by key + build child lists.
+  const byKey = new Map<string, SpeciesSummary>();
+  const children = new Map<string, SpeciesSummary[]>();
+  for (const sp of species) byKey.set(sp.coding_key, sp);
+  const roots: SpeciesSummary[] = [];
+  for (const sp of species) {
+    const pk = sp.parent_key;
+    if (pk && byKey.has(pk) && pk !== sp.coding_key) {
+      const list = children.get(pk) ?? [];
+      list.push(sp);
+      children.set(pk, list);
+    } else {
+      roots.push(sp);
+    }
+  }
+  // Render recursively. Tree is at most 16 levels deep (TOP_SPECIES_MAX)
+  // so a simple recursion is safe.
+  const renderNode = (sp: SpeciesSummary, depth: number): string => {
+    const indent = "  ".repeat(depth);
+    const swatch = `<span style="display:inline-block;width:10px;height:10px;background:${sp.color};border:1px solid #333;margin-right:4px;vertical-align:-1px;"></span>`;
+    const ancestry = sp.parent_key && byKey.has(sp.parent_key) && sp.parent_key !== sp.coding_key
+      ? `<span class="dim"> ← ${sp.parent_key.slice(0, 12)}</span>`
+      : "";
+    let html = `<div style="white-space:pre;">${indent}${swatch}<b>${sp.coding_key.slice(0, 16)}</b>  n=${sp.count}${ancestry}</div>`;
+    const kids = children.get(sp.coding_key) ?? [];
+    kids.sort((a, b) => b.count - a.count);
+    for (const k of kids) html += renderNode(k, depth + 1);
+    return html;
+  };
+  roots.sort((a, b) => b.count - a.count);
+  let html = "";
+  for (const root of roots) html += renderNode(root, 0);
+  body.innerHTML = html || `<div class='dim'>(every species roots itself -- no detectable lineage edges yet)</div>`;
+  dlg.showModal();
 }
 
 function openReactions(): void {

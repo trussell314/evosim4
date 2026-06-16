@@ -91,6 +91,7 @@
         <button id="toggle-ambient" title="Show/hide the ambient chems panel (key A)">A</button>
         <button id="open-ledger" title="Chemistry ledger -- per-chem dissolved + visible mass (key C)">C</button>
         <button id="open-reactions" title="Reactions catalogue (key R)">R</button>
+        <button id="open-tree" title="Phylogeny tree (key T)">T</button>
         <button id="toggle-species" title="Show/hide the species panel (key S)">S</button>
         <label style="display:inline-flex; align-items:center; gap:4px;">overlay
           <select id="overlay-mode" style="background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px; font:inherit;">
@@ -158,6 +159,16 @@
           </div>
         </form>
       </dialog>
+      <dialog id="tree-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:420px; max-width:92vw; max-height:80vh; overflow:auto; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Phylogeny — current top species</div>
+          <div style="color:#789; margin-bottom:8px;">Edges from each species' majority parent. Roots are founders or whose parent has dropped out of the top-N.</div>
+          <div id="tree-body"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="reactions-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:480px; max-width:92vw; max-height:80vh; overflow:auto; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
         <form method="dialog">
           <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Reactions catalogue</div>
@@ -190,6 +201,7 @@
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">A / S</td><td>toggle Ambient / Species panel</td></tr>
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">C</td><td>open chemistry ledger (per-chem mass)</td></tr>
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">R</td><td>open reactions catalogue</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">T</td><td>open phylogeny tree</td></tr>
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">I</td><td>dismiss inspector</td></tr>
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">P / R</td><td>pause / resume (server-wide)</td></tr>
             <tr><td style="padding:2px 12px 2px 0;color:#9ab;">.</td><td>single-tick step (while paused)</td></tr>
