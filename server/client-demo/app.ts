@@ -1775,14 +1775,29 @@ function frame(): void {
             }).join("");
             parts.push(`<details open style="margin-top:6px;"><summary>chems (top ${ranked.length})</summary><div style="margin-top:4px;">${rows}</div></details>`);
           }
-          // Catalyst + inhibitor pools that are non-zero. Compact
-          // because most reaction slots are zero for any one cell.
+          // Catalyst + inhibitor pools that are non-zero. Reactions
+          // table from Hello lets us label each slot by name rather
+          // than bare index.
+          const labelForSlot = (slot: number): string => {
+            const r = reactions[slot];
+            if (!r) return `slot ${slot}`;
+            if (r.name) return r.name;
+            if (r.transport_chem != null) return `transport ${chemNames[r.transport_chem] ?? `c${r.transport_chem}`}`;
+            return `slot ${slot}`;
+          };
           const cats = ci.catalysts
             .map((v, i) => ({ i, v }))
             .filter((r) => r.v > 0.01);
           if (cats.length > 0) {
-            const rows = cats.map((r) => `slot ${r.i}: ${r.v.toFixed(2)}`).join("<br>");
+            const rows = cats.map((r) => `<div style="display:flex; justify-content:space-between;"><span>${labelForSlot(r.i)}</span><b>${r.v.toFixed(2)}</b></div>`).join("");
             parts.push(`<details style="margin-top:6px;"><summary>catalysts (${cats.length})</summary><div style="margin-top:4px;">${rows}</div></details>`);
+          }
+          const inhs = ci.inhibitors
+            .map((v, i) => ({ i, v }))
+            .filter((r) => r.v > 0.01);
+          if (inhs.length > 0) {
+            const rows = inhs.map((r) => `<div style="display:flex; justify-content:space-between;"><span>${labelForSlot(r.i)}</span><b>${r.v.toFixed(2)}</b></div>`).join("");
+            parts.push(`<details style="margin-top:6px;"><summary>inhibitors (${inhs.length})</summary><div style="margin-top:4px;">${rows}</div></details>`);
           }
         }
         inspectorBody.innerHTML = parts.join("");
