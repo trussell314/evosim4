@@ -98,6 +98,9 @@ struct UiState {
     /// KillCell admin command targeting a cell of that species; the
     /// status bar reports the outcome.
     pending_kill_species: Option<usize>,
+    /// Whether the help popup is open. Toggled by `?` and dismissed
+    /// by any other key.
+    show_help: bool,
 }
 
 impl UiState {
@@ -409,6 +412,10 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         )
                         .await?;
                     }
+                    KeyCode::Char('?') => {
+                        let mut u = ui.lock().await;
+                        u.show_help = !u.show_help;
+                    }
                     KeyCode::Char('X') => {
                         // Kill a cell of the currently-selected species
                         // (admin only). Looks up the first cell in the
@@ -487,6 +494,7 @@ struct UiView {
     perf_view: bool,
     save_list: Option<Vec<String>>,
     save_selected: usize,
+    show_help: bool,
 }
 
 impl UiState {
@@ -510,6 +518,7 @@ impl UiState {
             perf_view: self.perf_view,
             save_list: self.save_list.clone(),
             save_selected: self.save_selected,
+            show_help: self.show_help,
         }
     }
 }
@@ -556,7 +565,41 @@ fn render(f: &mut ratatui::Frame<'_>, u: &UiView) {
     // Pop-up renders last so it covers everything underneath.
     if u.save_list.is_some() {
         render_save_popup(f, chunks[1], u);
+    } else if u.show_help {
+        render_help_popup(f, chunks[1]);
     }
+}
+
+fn render_help_popup(f: &mut ratatui::Frame<'_>, area: Rect) {
+    let w = 56.min(area.width.saturating_sub(4));
+    let h = 20.min(area.height.saturating_sub(4));
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(ratatui::widgets::Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("keys -- ? closes");
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    let lines: Vec<Line<'static>> = vec![
+        Line::raw("q / Esc       quit"),
+        Line::raw("space / p     pause / resume"),
+        Line::raw(".             single-tick step (while paused)"),
+        Line::raw("] [ + -       sim rate × / ÷ 2"),
+        Line::raw("M             snap sim rate to max (32x)"),
+        Line::raw("j k ↑ ↓       species roster cursor"),
+        Line::raw("m             toggle perf / history view"),
+        Line::raw("s             save snapshot"),
+        Line::raw("L             list / load saves"),
+        Line::raw("x             admin: reset world"),
+        Line::raw("X             admin: kill selected species cell"),
+        Line::raw("?             show this help"),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_history(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
@@ -719,12 +762,17 @@ fn render_status(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
         let bonds = s.bonds.len() / 2;
         let admin = if u.admin { " [admin]" } else { "" };
         let running = if u.running { " >" } else { " ||" };
+        let reseeded = if s.auto_reseeds > 0 {
+            format!(" reseeds={}", s.auto_reseeds)
+        } else {
+            String::new()
+        };
         let lag = u
             .last_snapshot_at
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
         format!(
-            "t={t:.0}s tick={tick} {day} light={light:.2} | cells={cells} species={species} bonds={bonds} parts={parts} mass={mass:.0} | rate={rate:.2}x{running}{admin} | lag={lag}ms",
+            "t={t:.0}s tick={tick} {day} light={light:.2} | cells={cells} species={species} bonds={bonds} parts={parts} mass={mass:.0} | rate={rate:.2}x{running}{admin}{reseeded} | lag={lag}ms",
             t = s.t,
             tick = s.tick,
             day = day_phase,
