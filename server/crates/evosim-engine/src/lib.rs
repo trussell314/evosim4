@@ -69,6 +69,22 @@ const DEFAULT_HEIGHT: f32 = 1200.0;
 /// from this; later commits make it configurable per session.
 const DEFAULT_SEED: u32 = 0x1B57E5;
 
+/// Snapshot of one cell's pools, returned by
+/// [`Engine::cell_pools_nearest`]. Plain owned data so the WS layer
+/// can serialise without re-touching the engine.
+#[derive(Debug, Clone)]
+pub struct CellPools {
+    pub tick: u64,
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+    pub mass: f32,
+    pub atp: f32,
+    pub chems: Vec<f32>,
+    pub catalysts: Vec<f32>,
+    pub inhibitors: Vec<f32>,
+}
+
 /// Owns the simulation state. Single-threaded today; rayon and wgpu
 /// arrive as the kernels land.
 pub struct Engine {
@@ -402,6 +418,54 @@ impl Engine {
     /// and force-kill it by zeroing its membrane chem. Death pass
     /// culls it next tick. Returns the SoA index of the killed cell
     /// (for diagnostics) or None when nothing was close enough.
+    /// Dump the pools of the cell nearest (x, y) within `max_d`. Used
+    /// by the WS layer for the inspector's "show me this cell's
+    /// chemistry" query; intentionally a fresh allocation per call so
+    /// the snapshot hot path stays untouched.
+    pub fn cell_pools_nearest(&self, x: f32, y: f32, max_d: f32) -> Option<CellPools> {
+        let store = &self.world.creature_store;
+        let n = store.n;
+        if n == 0 {
+            return None;
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for i in 0..n {
+            let dx = store.x[i] - x;
+            let dy = store.y[i] - y;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > max_d { continue; }
+            if best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+        let (idx, _) = best?;
+        let cap_n = crate::chem_ids::NAMED_CHEMICAL_COUNT;
+        let mut chems = Vec::with_capacity(cap_n);
+        for k in 0..cap_n {
+            let col = store.chems.get(k);
+            chems.push(col.and_then(|c| c.get(idx)).copied().unwrap_or(0.0));
+        }
+        let mut catalysts = Vec::with_capacity(store.catalyst.len());
+        for col in &store.catalyst {
+            catalysts.push(col.get(idx).copied().unwrap_or(0.0));
+        }
+        let mut inhibitors = Vec::with_capacity(store.inhibitor.len());
+        for col in &store.inhibitor {
+            inhibitors.push(col.get(idx).copied().unwrap_or(0.0));
+        }
+        Some(CellPools {
+            tick: self.tick,
+            x: store.x[idx],
+            y: store.y[idx],
+            r: store.r[idx],
+            mass: store.total_mass(idx),
+            atp: store.energy(idx),
+            chems,
+            catalysts,
+            inhibitors,
+        })
+    }
+
     pub fn kill_cell_nearest(&mut self, x: f32, y: f32, max_d: f32) -> Option<usize> {
         let store = &mut self.world.creature_store;
         let n = store.n;

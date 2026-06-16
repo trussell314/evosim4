@@ -77,6 +77,10 @@ pub enum EngineCmd {
     /// handler to populate the Hello frame so the client can render
     /// the terrain silhouette.
     GetTerrain(oneshot::Sender<Vec<Vec<f32>>>),
+    /// Snapshot the engine's reaction table for shipping in Hello.
+    /// Cheap (one table() lookup) but routed through the engine task
+    /// to keep all engine reads on the same thread.
+    GetReactions(oneshot::Sender<Vec<evosim_protocol::ReactionInfo>>),
     /// Mark the cell nearest (x, y) as unviable. Replies with the SoA
     /// index of the killed cell, or None if no cell was close enough.
     KillCell {
@@ -84,6 +88,30 @@ pub enum EngineCmd {
         y: f32,
         reply: oneshot::Sender<Option<usize>>,
     },
+    /// Return the chem / catalyst pools of the cell nearest (x, y).
+    /// `None` means "no cell within reach"; the WS layer turns that
+    /// into a `found: false` CellInfo reply.
+    CellQuery {
+        x: f32,
+        y: f32,
+        reply: oneshot::Sender<Option<CellQueryReply>>,
+    },
+}
+
+/// Snapshot of a single cell's pools, returned to the WS layer in
+/// response to [`EngineCmd::CellQuery`]. Sized for one inspector tap
+/// at a time -- not used in the hot snapshot path.
+#[derive(Debug, Clone)]
+pub struct CellQueryReply {
+    pub tick: u64,
+    pub cell_x: f32,
+    pub cell_y: f32,
+    pub cell_r: f32,
+    pub mass: f32,
+    pub atp: f32,
+    pub chems: Vec<f32>,
+    pub catalysts: Vec<f32>,
+    pub inhibitors: Vec<f32>,
 }
 
 pub struct EngineHandle {
@@ -254,6 +282,24 @@ async fn run(
                         let idx = engine.kill_cell_nearest(x, y, 60.0);
                         let _ = reply.send(idx);
                     }
+                    Some(EngineCmd::CellQuery { x, y, reply }) => {
+                        let r = engine.cell_pools_nearest(x, y, 60.0).map(|p| CellQueryReply {
+                            tick: p.tick,
+                            cell_x: p.x,
+                            cell_y: p.y,
+                            cell_r: p.r,
+                            mass: p.mass,
+                            atp: p.atp,
+                            chems: p.chems,
+                            catalysts: p.catalysts,
+                            inhibitors: p.inhibitors,
+                        });
+                        let _ = reply.send(r);
+                    }
+                    Some(EngineCmd::GetReactions(reply)) => {
+                        let info = build_reaction_info();
+                        let _ = reply.send(info);
+                    }
                     Some(EngineCmd::GetTerrain(reply)) => {
                         // Flatten polygons to alternating (x, y) pairs
                         // so the wire shape is one Vec<f32> per rock.
@@ -282,6 +328,52 @@ async fn run(
             }
         }
     }
+}
+
+/// Build the reaction-info wire payload from the engine's table().
+/// Named reactions (slots < NAMED_REACTION_COUNT) get a stable human
+/// label; generic and transporter slots use the empty string + the
+/// `transport_chem` field. Ships once per Hello so the cost doesn't
+/// matter; clones into owned Vec<u8> / Vec<f32>.
+fn build_reaction_info() -> Vec<evosim_protocol::ReactionInfo> {
+    // Named slot labels mirror evosim_engine::reactions::RX_SLOT_*
+    // constants. Anything beyond NAMED_REACTION_COUNT is generic.
+    const NAMED: [&str; 26] = [
+        "respiration", "ferment", "beta_ox", "photosynth",
+        "synth_aa", "synth_fa", "synth_chl", "synth_enz",
+        "synth_mrna", "synth_mem_aafa", "digest_biop", "synth_mem_fa",
+        "synth_photo_v", "synth_photo_l", "synth_photo_s",
+        "synth_electro", "synth_vibro", "synth_phreceptor",
+        "", "synth_mech", "synth_thermo", "synth_magneto",
+        "synth_bond", "synth_repair", "", "",
+    ];
+    let table = evosim_engine::reactions::table();
+    let mut out = Vec::with_capacity(table.len());
+    for (i, r) in table.iter().enumerate() {
+        let name = if i < NAMED.len() { NAMED[i] } else { "" };
+        let substrates: Vec<(u8, f32)> = r.s_chem
+            .iter()
+            .zip(r.s_count.iter())
+            .map(|(c, n)| (*c, *n))
+            .collect();
+        let products: Vec<(u8, f32)> = r.p_chem
+            .iter()
+            .zip(r.p_count.iter())
+            .map(|(c, n)| (*c, *n))
+            .collect();
+        out.push(evosim_protocol::ReactionInfo {
+            idx: i as u16,
+            name: name.to_string(),
+            substrates,
+            products,
+            atp_delta: r.atp_delta,
+            light_in: r.light_in,
+            vmax: r.vmax,
+            uncat_rate: r.uncat_rate,
+            transport_chem: r.transport,
+        });
+    }
+    out
 }
 
 /// Build a fresh tick `Interval` for the given rate. We can't change

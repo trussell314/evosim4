@@ -27,7 +27,12 @@ use serde::{Deserialize, Serialize};
 ///        Save semantics are real (the engine ports save/load JSON)
 ///   4 -- AdminCommand grows Configure { ... }; SpeciesSummary adds
 ///        biomass + atp fields (serde default so older clients OK)
-pub const PROTOCOL_VERSION: u32 = 4;
+///   5 -- Hello carries a static `reactions` table so the client can
+///        show every reaction the engine knows (name, stoichiometry,
+///        ATP delta) without round-tripping. ClientMessage grows
+///        CellQuery / ServerMessage grows CellInfo for the cell
+///        inspector's chem dump.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Lightweight build identity sent in [`ServerMessage::Hello`]. The
 /// client surfaces these in the bottom HUD so it's obvious which
@@ -324,6 +329,37 @@ pub enum ServerMessage {
         /// installed; clients should render nothing in that case.
         #[serde(default)]
         terrain: Vec<Vec<f32>>,
+        /// Static reaction table the engine is currently running. One
+        /// entry per slot; named reactions (slots < NAMED_REACTION_COUNT)
+        /// carry a human label, generic and transporter slots get a
+        /// blank name + the relevant fields. Shipped once at handshake
+        /// so the client can show a reaction list without polling.
+        #[serde(default)]
+        reactions: Vec<ReactionInfo>,
+    },
+    /// Reply to [`ClientMessage::CellQuery`]; carries the chem and
+    /// catalyst pools for the cell nearest the query point. `chems`
+    /// is indexed by chem id, length = chem table size; `catalysts` /
+    /// `inhibitors` are indexed by reaction slot.
+    CellInfo {
+        /// Echoed query position so a stale reply is ignorable.
+        qx: f32,
+        qy: f32,
+        /// Snapshot tick the engine was on when the query was answered;
+        /// older replies can be discarded by the client.
+        tick: u64,
+        /// True if a cell was within range and the rest of the payload
+        /// is meaningful; false means "no cell here" and the client
+        /// should drop the request.
+        found: bool,
+        cell_x: f32,
+        cell_y: f32,
+        cell_r: f32,
+        mass: f32,
+        atp: f32,
+        chems: Vec<f32>,
+        catalysts: Vec<f32>,
+        inhibitors: Vec<f32>,
     },
     /// Recurring snapshot. Push cadence ~10 Hz, matches TS sim worker.
     Snapshot(Box<Snapshot>),
@@ -367,6 +403,31 @@ pub enum ClientMessage {
     /// server rejects with [`ServerMessage::AdminNack`] when the
     /// connection isn't authorised.
     Admin { command: AdminCommand },
+    /// Ask the engine for the chem / catalyst pools of the cell
+    /// nearest to (x, y). Reply lands on this connection as a
+    /// [`ServerMessage::CellInfo`]. The query echoes (x, y) back so
+    /// stale replies are easy to drop.
+    CellQuery { x: f32, y: f32 },
+}
+
+/// One reaction slot as shipped in the Hello frame. Substrate /
+/// product pairs are sent as parallel vectors so msgpack stays
+/// compact; clients zip them back into objects on receipt. Generic
+/// reactions and transporter slots use empty substrate / product
+/// vectors -- only `transport` is meaningful for the latter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionInfo {
+    pub idx: u16,
+    pub name: String,
+    pub substrates: Vec<(u8, f32)>,
+    pub products: Vec<(u8, f32)>,
+    pub atp_delta: f32,
+    pub light_in: f32,
+    pub vmax: f32,
+    pub uncat_rate: f32,
+    /// `Some(chemId)` iff this slot is a transporter for that chem.
+    #[serde(default)]
+    pub transport_chem: Option<u8>,
 }
 
 /// Privileged commands the server only honours from an authenticated
@@ -469,6 +530,7 @@ mod tests {
             chem_colors: vec!["#ff0000".into()],
             chem_names: vec!["test".into()],
             terrain: Vec::new(),
+            reactions: Vec::new(),
         };
         let bytes = encode_server(&msg).unwrap();
         let back: ServerMessage = rmp_serde::from_slice(&bytes).unwrap();

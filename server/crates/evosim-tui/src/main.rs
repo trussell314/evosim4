@@ -215,6 +215,9 @@ async fn main() -> Result<()> {
                     u.status_line = format!("server goodbye: {reason}");
                     break;
                 }
+                // TUI doesn't show per-cell chems yet; the message is
+                // accepted to satisfy the match and silently dropped.
+                ServerMessage::CellInfo { .. } => {}
             }
         }
         let mut u = read_ui.lock().await;

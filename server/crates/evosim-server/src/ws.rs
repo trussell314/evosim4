@@ -67,6 +67,18 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
     } else {
         Vec::new()
     };
+    // Static reaction table for the Hello frame; lets the client
+    // render the reactions catalogue without an extra round-trip.
+    let reactions = if let Some(ec) = engine_cmd.as_ref() {
+        let (tx_r, rx_r) = oneshot::channel();
+        if ec.send(EngineCmd::GetReactions(tx_r)).await.is_ok() {
+            rx_r.await.unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     // Send Hello before anything else.
     let hello = ServerMessage::Hello {
@@ -76,6 +88,7 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
         chem_colors: chem_colors(),
         chem_names: chem_names(),
         terrain,
+        reactions,
     };
     if !send_frame(&mut tx, &hello).await {
         return;
@@ -188,6 +201,10 @@ async fn handle_client_message(
                     chem_colors: chem_colors(),
                     chem_names: chem_names(),
                     terrain: Vec::new(),
+                    // Reactions are static; the client kept the list
+                    // from the initial Hello, so ship an empty Vec on
+                    // re-issue.
+                    reactions: Vec::new(),
                 })
                 .await;
         }
@@ -217,6 +234,59 @@ async fn handle_client_message(
                 return;
             };
             admin::save_to_disk(name, state.clone(), engine_cmd.clone(), reply_tx.clone()).await;
+        }
+        ClientMessage::CellQuery { x, y } => {
+            // Forward to the engine; reply lands on this connection
+            // via reply_tx so other clients don't see the spam. We
+            // intentionally don't await here on the engine reply -- if
+            // the engine is overloaded, the inspector simply doesn't
+            // refresh. A separate task ferries the result back so the
+            // WS reader loop keeps draining.
+            let Some(engine_cmd) = engine_cmd else { return };
+            let engine_cmd = engine_cmd.clone();
+            let reply_tx = reply_tx.clone();
+            tokio::spawn(async move {
+                let (tx_q, rx_q) = oneshot::channel();
+                if engine_cmd
+                    .send(EngineCmd::CellQuery { x, y, reply: tx_q })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let Ok(reply) = rx_q.await else { return };
+                let msg = match reply {
+                    Some(p) => ServerMessage::CellInfo {
+                        qx: x,
+                        qy: y,
+                        tick: p.tick,
+                        found: true,
+                        cell_x: p.cell_x,
+                        cell_y: p.cell_y,
+                        cell_r: p.cell_r,
+                        mass: p.mass,
+                        atp: p.atp,
+                        chems: p.chems,
+                        catalysts: p.catalysts,
+                        inhibitors: p.inhibitors,
+                    },
+                    None => ServerMessage::CellInfo {
+                        qx: x,
+                        qy: y,
+                        tick: 0,
+                        found: false,
+                        cell_x: 0.0,
+                        cell_y: 0.0,
+                        cell_r: 0.0,
+                        mass: 0.0,
+                        atp: 0.0,
+                        chems: Vec::new(),
+                        catalysts: Vec::new(),
+                        inhibitors: Vec::new(),
+                    },
+                };
+                let _ = reply_tx.send(msg).await;
+            });
         }
         ClientMessage::Admin { command } => {
             if !*is_admin {

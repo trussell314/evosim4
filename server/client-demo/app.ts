@@ -118,12 +118,40 @@ interface Snapshot {
   ambient_chems?: number[];
   mass?: { cell_chems: number; cell_catalysts: number; particles: number; ambient: number; total: number };
 }
+interface ReactionInfo {
+  idx: number;
+  name: string;
+  substrates: Array<[number, number]>;
+  products: Array<[number, number]>;
+  atp_delta: number;
+  light_in: number;
+  vmax: number;
+  uncat_rate: number;
+  transport_chem?: number | null;
+}
+interface CellInfoPayload {
+  type: "cell-info";
+  qx: number;
+  qy: number;
+  tick: number;
+  found: boolean;
+  cell_x: number;
+  cell_y: number;
+  cell_r: number;
+  mass: number;
+  atp: number;
+  chems: number[];
+  catalysts: number[];
+  inhibitors: number[];
+}
 type ServerMessage =
   | { type: "hello"; protocol: number; build: BuildInfo; capabilities: ServerCaps;
       chem_colors: string[]; chem_names: string[];
       // Each inner array is one rock as alternating x,y pairs flattened.
-      terrain?: number[][] }
+      terrain?: number[][];
+      reactions?: ReactionInfo[] }
   | ({ type: "snapshot" } & Snapshot)
+  | CellInfoPayload
   | { type: "error"; code: string; message: string }
   | { type: "goodbye"; reason: string }
   | { type: "admin-ack"; command: string; message: string | null }
@@ -158,12 +186,15 @@ const loadList = document.getElementById("load-list") as HTMLDivElement;
 const helpBtn = document.getElementById("help") as HTMLButtonElement;
 const helpDialog = document.getElementById("help-dialog") as HTMLDialogElement;
 const openLedgerBtn = document.getElementById("open-ledger") as HTMLButtonElement;
+const openReactionsBtn = document.getElementById("open-reactions") as HTMLButtonElement;
 helpBtn.onclick = () => helpDialog.showModal();
 openLedgerBtn.onclick = () => openLedger();
+openReactionsBtn.onclick = () => openReactions();
 window.addEventListener("keydown", (ev) => {
   if (ev.target instanceof HTMLInputElement) return;
   if (ev.key === "?") helpDialog.showModal();
   else if (ev.key === "c" || ev.key === "C") openLedger();
+  else if (ev.key === "r" || ev.key === "R") openReactions();
 });
 loadBtn.onclick = async () => {
   loadList.innerHTML = "<div class='dim'>loading…</div>";
@@ -310,6 +341,15 @@ let isAdmin = false;
 let build: BuildInfo | null = null;
 let chemColors: string[] = [];
 let chemNames: string[] = [];
+// Static reactions table from Hello. Empty on older protocols. Used
+// by the Reactions modal to render the engine's catalogue.
+let reactions: ReactionInfo[] = [];
+// Latest CellInfo reply for the inspector; cleared when the selection
+// changes. Carries the cell's chem / catalyst pools so the inspector
+// can render a per-chem breakdown.
+let cellInfoLatest: CellInfoPayload | null = null;
+let cellQueryLastSent = 0;
+const CELL_QUERY_MIN_MS = 250;
 // Static terrain polygons from the Hello frame. One Float32Array per
 // rock, alternating x,y. Empty until Hello lands; rendered every frame.
 let terrain: Float32Array[] = [];
@@ -671,6 +711,12 @@ function handle(msg: ServerMessage): void {
       if (msg.terrain && msg.terrain.length > 0) {
         terrain = msg.terrain.map((flat) => Float32Array.from(flat));
       }
+      // Reactions table: server ships this on the initial Hello only.
+      // The post-auth re-Hello sends [] so we keep what we already
+      // have. Used by the Reactions modal.
+      if (msg.reactions && msg.reactions.length > 0) {
+        reactions = msg.reactions;
+      }
       pauseBtn.disabled = false;
       resumeBtn.disabled = false;
       stepBtn.disabled = false;
@@ -748,6 +794,16 @@ function handle(msg: ServerMessage): void {
         pauseBtn.disabled = !msg.running;
         resumeBtn.disabled = msg.running;
         stepBtn.disabled = msg.running;
+      }
+      break;
+    case "cell-info":
+      // Drop replies that don't match the current selection -- the
+      // user may have clicked elsewhere by the time the engine got
+      // back to us.
+      if (selectedCell &&
+          Math.abs(msg.qx - selectedCell.x) < SELECT_FOLLOW_R &&
+          Math.abs(msg.qy - selectedCell.y) < SELECT_FOLLOW_R) {
+        cellInfoLatest = msg;
       }
       break;
     case "error":
@@ -881,11 +937,21 @@ function tapHitTest(ev: PointerEvent): void {
   if (best >= 0) {
     selectedCell = { x: cx[best], y: cy[best], r: cr[best] };
     selectedTrail.length = 0;
+    cellInfoLatest = null;
+    requestCellQuery(selectedCell.x, selectedCell.y);
   } else {
     selectedCell = null;
     selectedTrail.length = 0;
+    cellInfoLatest = null;
     inspectorPanel.style.display = "none";
   }
+}
+
+function requestCellQuery(x: number, y: number): void {
+  const now = performance.now();
+  if (now - cellQueryLastSent < CELL_QUERY_MIN_MS) return;
+  cellQueryLastSent = now;
+  send({ type: "cell-query", x, y });
 }
 
 canvas.addEventListener("pointerdown", (ev) => {
@@ -1034,6 +1100,64 @@ function particleMassByChem(snap: Snapshot): Map<number, number> {
     out.set(id, (out.get(id) ?? 0) + m);
   }
   return out;
+}
+
+function chemSpan(id: number, n: number): string {
+  const name = chemNames[id] ?? `c${id}`;
+  const col = chemColors[id] ?? "#9ee";
+  const stoich = n === 1 ? "" : `${n.toFixed(n % 1 === 0 ? 0 : 2)} `;
+  return `<span style="white-space:nowrap;">${stoich}<span style="display:inline-block;width:8px;height:8px;background:${col};vertical-align:-1px;margin-right:2px;"></span>${name}</span>`;
+}
+
+function renderReactionsTable(filter: string): string {
+  const f = filter.trim().toLowerCase();
+  const passes = (r: ReactionInfo) => {
+    if (!f) return true;
+    if (r.name.toLowerCase().includes(f)) return true;
+    for (const [c] of r.substrates) if ((chemNames[c] ?? "").toLowerCase().includes(f)) return true;
+    for (const [c] of r.products) if ((chemNames[c] ?? "").toLowerCase().includes(f)) return true;
+    return false;
+  };
+  const filtered = reactions.filter(passes);
+  if (filtered.length === 0) return `<div class="dim">no matches</div>`;
+  let html = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="text-align:left; color:#789; border-bottom:1px solid #1a3340;">
+    <th style="padding:2px 6px 4px 0;">#</th>
+    <th style="padding:2px 6px 4px 0;">name</th>
+    <th style="padding:2px 6px 4px 0;">substrates</th>
+    <th style="padding:2px 6px 4px 0;">products</th>
+    <th style="padding:2px 0 4px 0; text-align:right;">ΔATP</th></tr></thead><tbody>`;
+  for (const r of filtered) {
+    const subs = r.substrates.map(([c, n]) => chemSpan(c, n)).join(" + ") || "<span class='dim'>·</span>";
+    const prods = r.products.map(([c, n]) => chemSpan(c, n)).join(" + ") || "<span class='dim'>·</span>";
+    let name = r.name;
+    if (r.transport_chem != null) {
+      name = `transport ${chemNames[r.transport_chem] ?? `c${r.transport_chem}`}`;
+    } else if (!name) {
+      name = `<span class="dim">generic</span>`;
+    }
+    const light = r.light_in > 0 ? `<span class="dim" style="margin-left:6px;">+light</span>` : "";
+    html += `<tr><td style="padding:1px 6px 1px 0; color:#789;">${r.idx}</td>
+      <td style="padding:1px 6px 1px 0;">${name}${light}</td>
+      <td style="padding:1px 6px 1px 0;">${subs}</td>
+      <td style="padding:1px 6px 1px 0;">${prods}</td>
+      <td style="padding:1px 0 1px 0; text-align:right;">${r.atp_delta.toFixed(2)}</td></tr>`;
+  }
+  html += "</tbody></table>";
+  return html;
+}
+
+function openReactions(): void {
+  const dlg = document.getElementById("reactions-dialog") as HTMLDialogElement | null;
+  const body = document.getElementById("rx-body");
+  const filter = document.getElementById("rx-filter") as HTMLInputElement | null;
+  if (!dlg || !body || !filter) return;
+  if (reactions.length === 0) {
+    body.innerHTML = `<div class='dim'>(server didn't ship a reactions table -- check protocol version)</div>`;
+  } else {
+    body.innerHTML = renderReactionsTable(filter.value);
+    filter.oninput = () => { body.innerHTML = renderReactionsTable(filter.value); };
+  }
+  dlg.showModal();
 }
 
 function openLedger(): void {
@@ -1515,6 +1639,10 @@ function frame(): void {
         }
         if (selectedIdx >= 0) {
           selectedCell = { x: cx[selectedIdx], y: cy[selectedIdx], r: cr[selectedIdx] };
+          // Refresh the cell-info pools at the throttled cadence so
+          // the inspector stays current as the cell's chemistry
+          // shifts. requestCellQuery rate-limits to CELL_QUERY_MIN_MS.
+          requestCellQuery(selectedCell.x, selectedCell.y);
           // Append to the rolling trail so the operator sees the
           // selected cell's recent path. De-dupe identical samples
           // (paused world) so we don't waste buffer slots.
@@ -1625,6 +1753,34 @@ function frame(): void {
           }
         } else if (sidVal !== 0xFF) {
           parts.push(`<div class="dim" style="margin-top:6px;">species idx ${sidVal} -- outside top-N roster</div>`);
+        }
+        // Per-cell chems from the latest CellInfo reply, if any. The
+        // server side responds within a tick so this is at most one
+        // snapshot stale.
+        if (cellInfoLatest && cellInfoLatest.found) {
+          const ci = cellInfoLatest;
+          const ranked = ci.chems
+            .map((v, i) => ({ id: i, v }))
+            .filter((r) => r.v > 0.01)
+            .sort((a, b) => b.v - a.v)
+            .slice(0, 8);
+          if (ranked.length > 0) {
+            const rows = ranked.map((r) => {
+              const name = chemNames[r.id] ?? `chem ${r.id}`;
+              const col = chemColors[r.id] ?? "#9ee";
+              return `<div style="display:flex; justify-content:space-between;"><span><span style="display:inline-block;width:8px;height:8px;background:${col};margin-right:4px;vertical-align:-1px"></span>${name}</span><b>${r.v.toFixed(2)}</b></div>`;
+            }).join("");
+            parts.push(`<details open style="margin-top:6px;"><summary>chems (top ${ranked.length})</summary><div style="margin-top:4px;">${rows}</div></details>`);
+          }
+          // Catalyst + inhibitor pools that are non-zero. Compact
+          // because most reaction slots are zero for any one cell.
+          const cats = ci.catalysts
+            .map((v, i) => ({ i, v }))
+            .filter((r) => r.v > 0.01);
+          if (cats.length > 0) {
+            const rows = cats.map((r) => `slot ${r.i}: ${r.v.toFixed(2)}`).join("<br>");
+            parts.push(`<details style="margin-top:6px;"><summary>catalysts (${cats.length})</summary><div style="margin-top:4px;">${rows}</div></details>`);
+          }
         }
         inspectorBody.innerHTML = parts.join("");
         inspectorPanel.style.display = "block";
