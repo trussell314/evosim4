@@ -328,6 +328,7 @@ fn admin_command_label(cmd: &evosim_protocol::AdminCommand) -> &'static str {
         KillCell { .. } => "kill-cell",
         SetParticleCap { .. } => "set-particle-cap",
         Export => "export",
+        Import { .. } => "import",
     }
 }
 

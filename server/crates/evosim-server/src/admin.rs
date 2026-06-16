@@ -53,6 +53,7 @@ pub async fn handle(
             set_particle_cap(engine_cmd, cap.map(|n| n as usize)).await
         }
         AdminCommand::Export => export_world(engine_cmd).await,
+        AdminCommand::Import { json } => import_world(engine_cmd, json).await,
     };
     let msg = match result {
         Ok(ack) => ServerMessage::AdminAck { command: label.into(), message: ack },
@@ -75,7 +76,23 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Configure { .. } => "configure",
         AdminCommand::SetParticleCap { .. } => "set-particle-cap",
         AdminCommand::Export => "export",
+        AdminCommand::Import { .. } => "import",
     }
+}
+
+async fn import_world(
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    json: String,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::LoadJson(json, tx))
+        .await
+        .map_err(|e| anyhow::anyhow!("engine offline: {e}"))?;
+    rx.await
+        .map_err(|e| anyhow::anyhow!("engine reply lost: {e}"))?
+        .map_err(|e| anyhow::anyhow!("load_json failed: {e}"))?;
+    Ok(Some("imported".into()))
 }
 
 async fn export_world(

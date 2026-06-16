@@ -84,6 +84,8 @@
         <button id="configure" disabled title="Admin only -- reseed with custom world parameters">Configure…</button>
         <button id="settings" disabled title="Admin only -- runtime knobs (particle cap)">Settings…</button>
         <button id="export" disabled title="Admin only -- download the current world as JSON">Export</button>
+        <button id="import" disabled title="Admin only -- load a JSON world file from your device">Import</button>
+        <input id="import-file" type="file" accept="application/json,.json" style="display:none;" />
         <button id="update-server" class="update" disabled title="Admin only -- git pull + cargo build + restart (~1-2 min). Client auto-reconnects.">Update server</button>
         <button id="update-client" class="update" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
         <button id="toggle-ambient" title="Show/hide the ambient chems panel (key A)">A</button>

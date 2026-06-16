@@ -499,6 +499,10 @@ pub enum AdminCommand {
     /// AdminAck message field so the client can offer a download.
     /// Distinct from `Save` (which writes to disk on the server).
     Export,
+    /// Load a world from a JSON blob shipped by the client (e.g. a
+    /// previously-exported state opened from local disk). Distinct
+    /// from `Load` which reads from the server's save directory.
+    Import { json: String },
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame

@@ -184,6 +184,8 @@ const configureBtn = document.getElementById("configure") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings") as HTMLButtonElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const exportBtn = document.getElementById("export") as HTMLButtonElement;
+const importBtn = document.getElementById("import") as HTMLButtonElement;
+const importFileInput = document.getElementById("import-file") as HTMLInputElement;
 const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
 const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
 const loadBtn = document.getElementById("load") as HTMLButtonElement;
@@ -574,6 +576,30 @@ resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
 resetViewBtn.onclick = () => resetView();
 configureBtn.onclick = () => configureDialog.showModal();
 settingsBtn.onclick = () => settingsDialog.showModal();
+importBtn.onclick = () => importFileInput.click();
+importFileInput.onchange = async () => {
+  const file = importFileInput.files?.[0];
+  if (!file) return;
+  if (file.size > 32 * 1024 * 1024) {
+    alert("file too large (>32 MiB)");
+    importFileInput.value = "";
+    return;
+  }
+  const oldLabel = importBtn.textContent;
+  importBtn.disabled = true;
+  importBtn.textContent = "Importing…";
+  try {
+    const json = await file.text();
+    const reply = await sendAdminAwait({ kind: "import", json });
+    if (!reply || reply.type === "admin-nack") {
+      alert(`import failed: ${reply ? reply.reason : "no reply"}`);
+    }
+  } finally {
+    importBtn.textContent = oldLabel;
+    importBtn.disabled = !isAdmin;
+    importFileInput.value = "";
+  }
+};
 exportBtn.onclick = async () => {
   exportBtn.disabled = true;
   const oldLabel = exportBtn.textContent;
@@ -736,6 +762,7 @@ function connect(url: string, token: string | null): void {
     configureBtn.disabled = true;
     settingsBtn.disabled = true;
     exportBtn.disabled = true;
+    importBtn.disabled = true;
     updateServerBtn.disabled = true;
     updateClientBtn.disabled = true;
     pausedOverlay.style.display = "none";
@@ -788,6 +815,7 @@ function handle(msg: ServerMessage): void {
       configureBtn.disabled = !isAdmin;
       settingsBtn.disabled = !isAdmin;
       exportBtn.disabled = !isAdmin;
+      importBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
       updateClientBtn.disabled = !isAdmin;
       updateHeaderStatus();
