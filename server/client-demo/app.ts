@@ -125,6 +125,12 @@ interface Snapshot {
   /// (mean, min, max) °C across the region grid; absent on older
   /// servers, zeros when the field hasn't been initialised yet.
   temp_stats?: [number, number, number];
+  ambient_grid?: {
+    cols: number; rows: number;
+    totals: number[];
+    dominant_chem: number[];
+    solid_mask: number[];
+  };
 }
 interface ReactionInfo {
   idx: number;
@@ -304,7 +310,7 @@ const NOTABLE_KEEP = 8;
 // don't grow unbounded across a multi-hour session.
 const CHEM_HISTORY: Map<number, number[]> = new Map();
 const AMBIENT_HISTORY_MAX = 3600;
-type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history" | "phylo";
+type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history" | "phylo" | "regions";
 // Per-species rolling count history for the 'phylo' overlay. Keyed
 // by coding_key; one entry per received snapshot. Species seen at
 // least once stay in the map even when their count drops to zero so
@@ -2136,6 +2142,42 @@ function frame(): void {
         ctx.fillStyle = "rgba(204, 224, 240, 0.85)";
         ctx.textBaseline = "top";
         ctx.fillText(`phylo · ${aligned.length} lineages · peak total ${peakTotal}`, x0 + 4, y0 + 2);
+      }
+    }
+
+    // Regions overlay: per-region heatmap of total dissolved mass
+    // tinted by the dominant chem's color. Cheap rectangle pass
+    // sized to the world rect. Solid regions render as opaque rock
+    // colour so they're visibly distinct from low-mass water.
+    if (overlayMode === "regions" && snapshot.ambient_grid && snapshot.ambient_grid.cols > 0) {
+      const g = snapshot.ambient_grid;
+      const cw = g.cols, ch_g = g.rows;
+      const rw = (wW * scale) / cw;
+      const rh = (wH * scale) / ch_g;
+      let peak = 1;
+      for (const v of g.totals) if (v > peak) peak = v;
+      for (let ry = 0; ry < ch_g; ry++) {
+        for (let rx = 0; rx < cw; rx++) {
+          const i = ry * cw + rx;
+          const x = offX + rx * rw;
+          const y = offY + ry * rh;
+          if (g.solid_mask[i]) {
+            ctx.fillStyle = "rgba(70, 50, 40, 0.55)";
+          } else {
+            const a = Math.min(0.7, 0.05 + 0.65 * (g.totals[i] / peak));
+            const cid = g.dominant_chem[i];
+            const col = cid !== 0xFF ? (chemColors[cid] ?? "#9ee") : "#234";
+            // Parse hex into rgb so we can apply alpha; fall back
+            // to the raw hex when parsing fails.
+            const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(col);
+            if (m) {
+              ctx.fillStyle = `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${a})`;
+            } else {
+              ctx.fillStyle = col;
+            }
+          }
+          ctx.fillRect(x, y, rw + 1, rh + 1);
+        }
       }
     }
 

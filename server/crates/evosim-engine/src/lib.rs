@@ -765,7 +765,50 @@ impl Engine {
                     ((sum / f.len() as f64) as f32, min, max)
                 }
             },
+            ambient_grid: build_ambient_grid(&self.world.ambient),
         }
+    }
+}
+
+/// Pack the per-region ambient field into the wire shape: total
+/// dissolved mass plus the dominant chem id per region. Skips
+/// signal chems (consistent with mass accounting) and reuses the
+/// solid_mask the engine already maintains.
+fn build_ambient_grid(ambient: &crate::ambient::AmbientField) -> evosim_protocol::AmbientGrid {
+    let cols = ambient.cols;
+    let rows = ambient.rows;
+    if cols == 0 || rows == 0 || ambient.dissolved.is_empty() {
+        return evosim_protocol::AmbientGrid::default();
+    }
+    let n = cols * rows;
+    let chems = crate::chem_ids::CHEMICAL_COUNT;
+    let mut totals = Vec::with_capacity(n);
+    let mut dominant = Vec::with_capacity(n);
+    for region in 0..n {
+        let base = region * chems;
+        let mut total = 0.0f32;
+        let mut best_id = 0xFFu8;
+        let mut best_val = 0.0f32;
+        for chem in 0..chems {
+            if crate::chem_ids::is_signal(chem) {
+                continue;
+            }
+            let v = ambient.dissolved[base + chem];
+            total += v;
+            if v > best_val {
+                best_val = v;
+                best_id = chem as u8;
+            }
+        }
+        totals.push(total);
+        dominant.push(best_id);
+    }
+    evosim_protocol::AmbientGrid {
+        cols: cols as u32,
+        rows: rows as u32,
+        totals,
+        dominant_chem: dominant,
+        solid_mask: ambient.solid_mask.clone(),
     }
 }
 

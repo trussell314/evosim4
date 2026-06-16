@@ -163,6 +163,31 @@ pub struct Snapshot {
     /// field hasn't been initialised yet.
     #[serde(default)]
     pub temp_stats: (f32, f32, f32),
+    /// Coarse per-region ambient grid. Lets the client paint a
+    /// regional heatmap / dominant-chem overlay without re-deriving
+    /// from the world-wide totals. Always-on; small enough not to
+    /// move the wire-size needle (cols*rows is typically 768 cells
+    /// in a 1600x1200 world). When the field is uninitialised
+    /// (`cols == 0`), the vectors are empty and clients should
+    /// render nothing.
+    #[serde(default)]
+    pub ambient_grid: AmbientGrid,
+}
+
+/// Per-region ambient summary. `cols * rows` cells; row-major
+/// `[row * cols + col]` indexing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AmbientGrid {
+    pub cols: u32,
+    pub rows: u32,
+    /// Total dissolved mass per region (sum across non-signal chems).
+    pub totals: Vec<f32>,
+    /// Dominant chem id per region; `0xFF` when the region is empty.
+    pub dominant_chem: Vec<u8>,
+    /// 1 if the region center sits inside rock; 0 otherwise. Mirrors
+    /// AmbientField.solid_mask so the client can mask solid cells in
+    /// the overlay without re-reading terrain polygons.
+    pub solid_mask: Vec<u8>,
 }
 
 fn default_sim_rate() -> f32 {
