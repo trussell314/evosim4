@@ -282,6 +282,12 @@ overlaySelect.onchange = () => {
 interface SelectedCellMemo { x: number; y: number; r: number }
 let selectedCell: SelectedCellMemo | null = null;
 const SELECT_FOLLOW_R = 30;
+// Rolling trail buffer for the currently-selected cell. One (x, y)
+// per re-resolved snapshot; capped to TRAIL_MAX so the line doesn't
+// build up forever on a long observation. Cleared when the
+// selection changes or the cell dies.
+const TRAIL_MAX = 240;
+const selectedTrail: Array<{ x: number; y: number }> = [];
 const statusEl = document.getElementById("status") as HTMLDivElement;
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d");
@@ -845,8 +851,10 @@ function tapHitTest(ev: PointerEvent): void {
   }
   if (best >= 0) {
     selectedCell = { x: cx[best], y: cy[best], r: cr[best] };
+    selectedTrail.length = 0;
   } else {
     selectedCell = null;
+    selectedTrail.length = 0;
     inspectorPanel.style.display = "none";
   }
 }
@@ -1478,6 +1486,14 @@ function frame(): void {
         }
         if (selectedIdx >= 0) {
           selectedCell = { x: cx[selectedIdx], y: cy[selectedIdx], r: cr[selectedIdx] };
+          // Append to the rolling trail so the operator sees the
+          // selected cell's recent path. De-dupe identical samples
+          // (paused world) so we don't waste buffer slots.
+          const last = selectedTrail[selectedTrail.length - 1];
+          if (!last || last.x !== selectedCell.x || last.y !== selectedCell.y) {
+            selectedTrail.push({ x: selectedCell.x, y: selectedCell.y });
+            if (selectedTrail.length > TRAIL_MAX) selectedTrail.shift();
+          }
           // Follow: lerp the pan so the cell stays near the canvas
           // center. Smooth rather than snap so the user can still
           // pinch + drag without fighting the camera.
@@ -1491,6 +1507,7 @@ function frame(): void {
         } else {
           selectedCell = null;
           followSelectedCell = false;
+          selectedTrail.length = 0;
         }
       }
       for (let i = 0; i < cN; i++) {
@@ -1533,6 +1550,19 @@ function frame(): void {
         const px = offX + cx[i] * scale;
         const py = offY + cy[i] * scale;
         const pr = Math.max(2, cr[i] * scale);
+        // Trail of the last TRAIL_MAX positions. Drawn under the
+        // pulse so the live cell stays the brightest feature.
+        if (selectedTrail.length > 1) {
+          ctx.strokeStyle = "rgba(255, 240, 140, 0.5)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let t = 0; t < selectedTrail.length; t++) {
+            const xv = offX + selectedTrail[t].x * scale;
+            const yv = offY + selectedTrail[t].y * scale;
+            if (t === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+          }
+          ctx.stroke();
+        }
         const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 250);
         ctx.beginPath();
         ctx.arc(px, py, pr + 4, 0, Math.PI * 2);
