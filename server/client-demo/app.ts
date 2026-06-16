@@ -260,7 +260,13 @@ const NOTABLE_KEEP = 8;
 // don't grow unbounded across a multi-hour session.
 const CHEM_HISTORY: Map<number, number[]> = new Map();
 const AMBIENT_HISTORY_MAX = 3600;
-type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history";
+type OverlayMode = "none" | "density" | "light" | "mass" | "perf" | "history" | "phylo";
+// Per-species rolling count history for the 'phylo' overlay. Keyed
+// by coding_key; one entry per received snapshot. Species seen at
+// least once stay in the map even when their count drops to zero so
+// the area chart shows extinctions explicitly.
+const SPECIES_HISTORY: Map<string, { color: string; counts: number[] }> = new Map();
+const SPECIES_HISTORY_MAX = 1800;
 // Rolling population history -- one sample per received snapshot, kept
 // for ~120s at 30 Hz. Drawn as a stacked sparkline overlay when the
 // 'history' mode is active so the operator can see the population
@@ -693,6 +699,29 @@ function handle(msg: ServerMessage): void {
         mass: msg.mass?.total ?? 0,
       });
       if (POP_HISTORY.length > POP_HISTORY_MAX) POP_HISTORY.shift();
+      // Per-species rolling count history for the phylo overlay.
+      // Any species not in this snapshot's top_species gets a 0
+      // appended so the area chart shows the extinction.
+      const presentKeys = new Set<string>();
+      for (const sp of msg.top_species ?? []) {
+        presentKeys.add(sp.coding_key);
+        let h = SPECIES_HISTORY.get(sp.coding_key);
+        if (!h) {
+          // Backfill with zeros so the area chart aligns horizontally
+          // even for late-joining species.
+          const pad = POP_HISTORY.length > 0 ? Math.max(0, POP_HISTORY.length - 1) : 0;
+          h = { color: sp.color, counts: new Array(pad).fill(0) };
+          SPECIES_HISTORY.set(sp.coding_key, h);
+        }
+        h.counts.push(sp.count);
+        if (h.counts.length > SPECIES_HISTORY_MAX) h.counts.shift();
+      }
+      for (const [key, h] of SPECIES_HISTORY) {
+        if (!presentKeys.has(key)) {
+          h.counts.push(0);
+          if (h.counts.length > SPECIES_HISTORY_MAX) h.counts.shift();
+        }
+      }
       // Per-chem rolling buffer for the chem-detail modal.
       if (msg.ambient_chems) {
         for (let i = 0; i < msg.ambient_chems.length; i++) {
@@ -1716,6 +1745,82 @@ function frame(): void {
       drawSpark("cells", maxCells, "#9efba8", 0, "cells");
       drawSpark("species", maxSpecies, "#9ee", 1, "species");
       drawSpark("mass", maxMass, "#fc6", 2, "mass");
+    }
+
+    // Phylo overlay: stacked-area chart of per-species count over
+    // time. Each species is a horizontal band coloured by its
+    // species.color; the height of the band at timestep t is its
+    // count at that snapshot. Lets the operator see lineage rises
+    // and crashes without reading numbers.
+    if (overlayMode === "phylo" && SPECIES_HISTORY.size > 0) {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const pad = 8 * dpr;
+      const stripH = Math.round(180 * dpr);
+      const stripW = cw - 2 * pad;
+      const x0 = pad;
+      const y0 = ch - stripH - pad;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.7)";
+      ctx.fillRect(x0 - 4, y0 - 4, stripW + 8, stripH + 8);
+      // Align all per-species arrays on the longest one; pad shorter
+      // arrays with zeros at the left so timestep i corresponds to
+      // the same column for every species.
+      let maxLen = 0;
+      for (const h of SPECIES_HISTORY.values()) if (h.counts.length > maxLen) maxLen = h.counts.length;
+      if (maxLen < 2) {
+        ctx.fillStyle = "#789";
+        ctx.font = `${Math.round(11 * dpr)}px ui-monospace, monospace`;
+        ctx.fillText("(not enough samples yet)", x0 + 4, y0 + 16);
+      } else {
+        const aligned: Array<{ color: string; counts: number[] }> = [];
+        for (const h of SPECIES_HISTORY.values()) {
+          if (h.counts.length === 0) continue;
+          const pad0 = maxLen - h.counts.length;
+          const counts = pad0 > 0 ? new Array(pad0).fill(0).concat(h.counts) : h.counts;
+          aligned.push({ color: h.color, counts });
+        }
+        // Sort by peak count descending so loud lineages render
+        // first; subsequent bands stack on top. Stable z-order
+        // keeps the area chart legible.
+        aligned.sort((a, b) => {
+          const ap = a.counts.reduce((m, v) => Math.max(m, v), 0);
+          const bp = b.counts.reduce((m, v) => Math.max(m, v), 0);
+          return bp - ap;
+        });
+        // Compute per-timestep total to normalise band height to
+        // the maximum total population seen.
+        let peakTotal = 1;
+        for (let t = 0; t < maxLen; t++) {
+          let s = 0;
+          for (const a of aligned) s += a.counts[t];
+          if (s > peakTotal) peakTotal = s;
+        }
+        const baselineAt = new Float32Array(maxLen);
+        for (const a of aligned) {
+          ctx.beginPath();
+          for (let t = 0; t < maxLen; t++) {
+            const xv = x0 + (t / (maxLen - 1)) * stripW;
+            const yv = y0 + stripH - (baselineAt[t] / peakTotal) * stripH;
+            if (t === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+          }
+          for (let t = maxLen - 1; t >= 0; t--) {
+            const xv = x0 + (t / (maxLen - 1)) * stripW;
+            const stacked = baselineAt[t] + a.counts[t];
+            const yv = y0 + stripH - (stacked / peakTotal) * stripH;
+            ctx.lineTo(xv, yv);
+          }
+          ctx.closePath();
+          ctx.fillStyle = a.color;
+          ctx.globalAlpha = 0.78;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          for (let t = 0; t < maxLen; t++) baselineAt[t] += a.counts[t];
+        }
+        const fs = Math.round(10 * dpr);
+        ctx.font = `${fs}px ui-monospace, monospace`;
+        ctx.fillStyle = "rgba(204, 224, 240, 0.85)";
+        ctx.textBaseline = "top";
+        ctx.fillText(`phylo · ${aligned.length} lineages · peak total ${peakTotal}`, x0 + 4, y0 + 2);
+      }
     }
 
     // Mass overlay: render the snapshot.mass ledger as bottom-left
