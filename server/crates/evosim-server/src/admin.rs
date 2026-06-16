@@ -49,6 +49,9 @@ pub async fn handle(
             day_period_s,
             founders_per_strategy,
         } => configure(width, height, seed, day_period_s, founders_per_strategy, engine_cmd).await,
+        AdminCommand::SetParticleCap { cap } => {
+            set_particle_cap(engine_cmd, cap.map(|n| n as usize)).await
+        }
     };
     let msg = match result {
         Ok(ack) => ServerMessage::AdminAck { command: label.into(), message: ack },
@@ -69,7 +72,24 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Load { .. } => "load",
         AdminCommand::Saves => "saves",
         AdminCommand::Configure { .. } => "configure",
+        AdminCommand::SetParticleCap { .. } => "set-particle-cap",
     }
+}
+
+async fn set_particle_cap(
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    cap: Option<usize>,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::SetParticleCap { cap, reply: tx })
+        .await
+        .map_err(|e| anyhow::anyhow!("engine offline: {e}"))?;
+    rx.await.map_err(|e| anyhow::anyhow!("engine reply lost: {e}"))?;
+    Ok(Some(match cap {
+        Some(n) => format!("particle_cap={n}"),
+        None => "particle_cap=unbounded".to_string(),
+    }))
 }
 
 async fn configure(

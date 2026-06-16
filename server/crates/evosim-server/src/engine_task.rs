@@ -77,6 +77,11 @@ pub enum EngineCmd {
     /// handler to populate the Hello frame so the client can render
     /// the terrain silhouette.
     GetTerrain(oneshot::Sender<Vec<Vec<f32>>>),
+    /// Apply a runtime particle cap. `None` removes the cap entirely.
+    SetParticleCap {
+        cap: Option<usize>,
+        reply: oneshot::Sender<()>,
+    },
     /// Snapshot the engine's reaction table for shipping in Hello.
     /// Cheap (one table() lookup) but routed through the engine task
     /// to keep all engine reads on the same thread.
@@ -295,6 +300,10 @@ async fn run(
                             inhibitors: p.inhibitors,
                         });
                         let _ = reply.send(r);
+                    }
+                    Some(EngineCmd::SetParticleCap { cap, reply }) => {
+                        engine.set_particle_cap(cap);
+                        let _ = reply.send(());
                     }
                     Some(EngineCmd::GetReactions(reply)) => {
                         let info = build_reaction_info();

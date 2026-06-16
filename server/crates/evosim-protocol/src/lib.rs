@@ -491,6 +491,10 @@ pub enum AdminCommand {
         day_period_s: Option<f64>,
         founders_per_strategy: Option<u32>,
     },
+    /// Set the runtime particle cap. `None` removes the cap entirely;
+    /// `Some(n)` clamps spawn passes to no more than n live particles.
+    /// Affects the next tick; doesn't cull existing particles.
+    SetParticleCap { cap: Option<u32> },
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame

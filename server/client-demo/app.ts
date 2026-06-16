@@ -181,6 +181,8 @@ const stepBtn = document.getElementById("step") as HTMLButtonElement;
 const speedMaxBtn = document.getElementById("speedMax") as HTMLButtonElement;
 const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElement;
 const configureBtn = document.getElementById("configure") as HTMLButtonElement;
+const settingsBtn = document.getElementById("settings") as HTMLButtonElement;
+const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
 const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
 const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
 const loadBtn = document.getElementById("load") as HTMLButtonElement;
@@ -570,6 +572,33 @@ saveBtn.onclick = () => {
 resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
 resetViewBtn.onclick = () => resetView();
 configureBtn.onclick = () => configureDialog.showModal();
+settingsBtn.onclick = () => settingsDialog.showModal();
+const pcapInput = document.getElementById("set-pcap") as HTMLInputElement | null;
+const pcapClearBtn = document.getElementById("set-pcap-clear") as HTMLButtonElement | null;
+let pcapClearPending = false;
+if (pcapClearBtn) pcapClearBtn.onclick = () => {
+  // Mark "unbounded" sticky on this dialog session; the close
+  // listener picks it up when the user hits Apply.
+  pcapClearPending = true;
+  if (pcapInput) pcapInput.value = "";
+  pcapClearBtn.textContent = "Unbounded ✓";
+};
+settingsDialog.addEventListener("close", () => {
+  if (pcapClearBtn) pcapClearBtn.textContent = "Unbounded";
+  if (settingsDialog.returnValue !== "apply") {
+    pcapClearPending = false;
+    return;
+  }
+  if (pcapClearPending) {
+    send({ type: "admin", command: { kind: "set-particle-cap", cap: null } });
+  } else if (pcapInput && pcapInput.value.trim() !== "") {
+    const n = parseInt(pcapInput.value, 10);
+    if (Number.isFinite(n) && n >= 0) {
+      send({ type: "admin", command: { kind: "set-particle-cap", cap: n } });
+    }
+  }
+  pcapClearPending = false;
+});
 configureDialog.addEventListener("close", () => {
   if (configureDialog.returnValue !== "apply") return;
   // Build the AdminCommand::Configure payload. Empty fields stay
@@ -679,6 +708,7 @@ function connect(url: string, token: string | null): void {
     loadBtn.disabled = true;
     resetBtn.disabled = true;
     configureBtn.disabled = true;
+    settingsBtn.disabled = true;
     updateServerBtn.disabled = true;
     updateClientBtn.disabled = true;
     pausedOverlay.style.display = "none";
@@ -729,6 +759,7 @@ function handle(msg: ServerMessage): void {
       loadBtn.disabled = !isAdmin;
       resetBtn.disabled = !isAdmin;
       configureBtn.disabled = !isAdmin;
+      settingsBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
       updateClientBtn.disabled = !isAdmin;
       updateHeaderStatus();
