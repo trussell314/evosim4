@@ -117,6 +117,9 @@ interface Snapshot {
   bonds?: number[];
   ambient_chems?: number[];
   mass?: { cell_chems: number; cell_catalysts: number; particles: number; ambient: number; total: number };
+  /// (mean, min, max) °C across the region grid; absent on older
+  /// servers, zeros when the field hasn't been initialised yet.
+  temp_stats?: [number, number, number];
 }
 interface ReactionInfo {
   idx: number;
@@ -2044,7 +2047,11 @@ function frame(): void {
     const species = (snapshot as { species_count?: number }).species_count ?? 0;
     const deaths = (snapshot as { deaths_this_window?: number }).deaths_this_window ?? 0;
     const massStr = snapshot.mass ? ` mass=${snapshot.mass.total.toFixed(0)}` : "";
-    if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths}${massStr})`;
+    const ts = snapshot.temp_stats;
+    const tempStr = ts && (ts[0] !== 0 || ts[1] !== 0 || ts[2] !== 0)
+      ? ` T=${ts[0].toFixed(1)}°C [${ts[1].toFixed(0)}..${ts[2].toFixed(0)}]`
+      : "";
+    if (el) el.textContent = `${sps} (tick ${snapshot.tick}, particles=${n}, creatures=${cN}, species=${species}, deaths/window=${deaths}${massStr}${tempStr})`;
     renderSpeciesPanel(snapshot.top_species ?? []);
     renderAmbientPanel(snapshot.ambient_chems ?? []);
   }

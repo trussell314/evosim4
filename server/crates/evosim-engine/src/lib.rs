@@ -719,6 +719,22 @@ impl Engine {
                 &self.world.ambient,
             ),
             perf: self.perf.report(),
+            temp_stats: {
+                let f = &self.world.region_temp.field;
+                if f.is_empty() {
+                    (0.0, 0.0, 0.0)
+                } else {
+                    let mut min = f32::INFINITY;
+                    let mut max = f32::NEG_INFINITY;
+                    let mut sum = 0.0f64;
+                    for &v in f {
+                        if v < min { min = v; }
+                        if v > max { max = v; }
+                        sum += v as f64;
+                    }
+                    ((sum / f.len() as f64) as f32, min, max)
+                }
+            },
         }
     }
 }

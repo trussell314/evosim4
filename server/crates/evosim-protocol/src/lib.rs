@@ -157,6 +157,12 @@ pub struct Snapshot {
     /// chart per-pass cost over time and spot regressions.
     #[serde(default)]
     pub perf: PerfReport,
+    /// Global temperature stats sampled across the region grid:
+    /// (mean, min, max). Lets the client show a "current weather"
+    /// readout without shipping the full field. Zeroed when the
+    /// field hasn't been initialised yet.
+    #[serde(default)]
+    pub temp_stats: (f32, f32, f32),
 }
 
 fn default_sim_rate() -> f32 {

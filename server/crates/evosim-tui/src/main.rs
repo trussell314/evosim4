@@ -770,12 +770,20 @@ fn render_status(f: &mut ratatui::Frame<'_>, area: Rect, u: &UiView) {
         } else {
             String::new()
         };
+        let temp = {
+            let (mean, lo, hi) = s.temp_stats;
+            if mean == 0.0 && lo == 0.0 && hi == 0.0 {
+                String::new()
+            } else {
+                format!(" T={mean:.1}°C[{lo:.0}..{hi:.0}]")
+            }
+        };
         let lag = u
             .last_snapshot_at
             .map(|t| t.elapsed().as_millis() as u64)
             .unwrap_or(0);
         format!(
-            "t={t:.0}s tick={tick} {day} light={light:.2} | cells={cells} species={species} bonds={bonds} parts={parts} mass={mass:.0} | rate={rate:.2}x{running}{admin}{reseeded} | lag={lag}ms",
+            "t={t:.0}s tick={tick} {day} light={light:.2}{temp} | cells={cells} species={species} bonds={bonds} parts={parts} mass={mass:.0} | rate={rate:.2}x{running}{admin}{reseeded} | lag={lag}ms",
             t = s.t,
             tick = s.tick,
             day = day_phase,
