@@ -1470,8 +1470,51 @@ function renderSpeciesPanel(top: SpeciesSummary[]): void {
   }
 }
 
+// Optional render-rate cap. "max" = unthrottled; otherwise the value
+// is the target frames-per-second and a fixed step delay is enforced.
+// Persisted to localStorage. Lower caps free the main thread for the
+// websocket reader on weak / battery-saving devices.
+type RenderFpsCap = "max" | 60 | 30 | 15;
+const RENDER_FPS_CYCLE: RenderFpsCap[] = ["max", 60, 30, 15];
+let renderFpsCap: RenderFpsCap = (() => {
+  const stored = localStorage.getItem("evosim:renderFps");
+  if (stored === "max" || stored === "60" || stored === "30" || stored === "15") {
+    return stored === "max" ? "max" : (parseInt(stored, 10) as RenderFpsCap);
+  }
+  return "max";
+})();
+const renderFpsBtn = (() => {
+  const btn = document.createElement("button");
+  btn.id = "render-fps";
+  btn.style.cssText = "background:#07111a; border:1px solid #1a3340; color:#9ee; padding:3px 8px; cursor:pointer; font:inherit; flex:0 0 auto;";
+  btn.title = "Render-rate cap (max / 60 / 30 / 15). Lower frees the main thread for the websocket on weak devices.";
+  document.querySelector("header")?.appendChild(btn);
+  return btn;
+})();
+function syncRenderFpsBtn(): void {
+  renderFpsBtn.textContent = `fps: ${renderFpsCap}`;
+}
+syncRenderFpsBtn();
+renderFpsBtn.onclick = () => {
+  const i = RENDER_FPS_CYCLE.indexOf(renderFpsCap);
+  renderFpsCap = RENDER_FPS_CYCLE[(i + 1) % RENDER_FPS_CYCLE.length];
+  localStorage.setItem("evosim:renderFps", String(renderFpsCap));
+  syncRenderFpsBtn();
+};
+let lastFrameAt = 0;
 function frame(): void {
   if (!ctx) return;
+  if (renderFpsCap !== "max") {
+    const now = performance.now();
+    const minDt = 1000 / renderFpsCap;
+    if (now - lastFrameAt < minDt - 0.5) {
+      // Sleep until the next slot; setTimeout is good enough for
+      // 15..60 fps targets.
+      setTimeout(() => requestAnimationFrame(frame), Math.max(1, minDt - (now - lastFrameAt)));
+      return;
+    }
+    lastFrameAt = now;
+  }
   // Defensive: catch any size change the observer missed (e.g. iOS
   // Safari's first frame after the address-bar height changes).
   resize();
