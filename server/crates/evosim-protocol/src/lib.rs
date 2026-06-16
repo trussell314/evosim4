@@ -495,6 +495,10 @@ pub enum AdminCommand {
     /// `Some(n)` clamps spawn passes to no more than n live particles.
     /// Affects the next tick; doesn't cull existing particles.
     SetParticleCap { cap: Option<u32> },
+    /// Serialise the current world to JSON and return it in the
+    /// AdminAck message field so the client can offer a download.
+    /// Distinct from `Save` (which writes to disk on the server).
+    Export,
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame

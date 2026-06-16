@@ -183,6 +183,7 @@ const pausedOverlay = document.getElementById("paused-overlay") as HTMLDivElemen
 const configureBtn = document.getElementById("configure") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings") as HTMLButtonElement;
 const settingsDialog = document.getElementById("settings-dialog") as HTMLDialogElement;
+const exportBtn = document.getElementById("export") as HTMLButtonElement;
 const resetViewBtn = document.getElementById("reset-view") as HTMLButtonElement;
 const configureDialog = document.getElementById("configure-dialog") as HTMLDialogElement;
 const loadBtn = document.getElementById("load") as HTMLButtonElement;
@@ -573,6 +574,31 @@ resetBtn.onclick = () => send({ type: "admin", command: { kind: "reset" } });
 resetViewBtn.onclick = () => resetView();
 configureBtn.onclick = () => configureDialog.showModal();
 settingsBtn.onclick = () => settingsDialog.showModal();
+exportBtn.onclick = async () => {
+  exportBtn.disabled = true;
+  const oldLabel = exportBtn.textContent;
+  exportBtn.textContent = "Exporting…";
+  try {
+    const reply = await sendAdminAwait({ kind: "export" });
+    if (!reply || reply.type === "admin-nack") {
+      alert(`export failed: ${reply ? reply.reason : "no reply"}`);
+      return;
+    }
+    const json = reply.message ?? "";
+    const blob = new Blob([json], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    a.download = `evosim-${ts}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } finally {
+    exportBtn.textContent = oldLabel;
+    exportBtn.disabled = !isAdmin;
+  }
+};
 const pcapInput = document.getElementById("set-pcap") as HTMLInputElement | null;
 const pcapClearBtn = document.getElementById("set-pcap-clear") as HTMLButtonElement | null;
 let pcapClearPending = false;
@@ -709,6 +735,7 @@ function connect(url: string, token: string | null): void {
     resetBtn.disabled = true;
     configureBtn.disabled = true;
     settingsBtn.disabled = true;
+    exportBtn.disabled = true;
     updateServerBtn.disabled = true;
     updateClientBtn.disabled = true;
     pausedOverlay.style.display = "none";
@@ -760,6 +787,7 @@ function handle(msg: ServerMessage): void {
       resetBtn.disabled = !isAdmin;
       configureBtn.disabled = !isAdmin;
       settingsBtn.disabled = !isAdmin;
+      exportBtn.disabled = !isAdmin;
       updateServerBtn.disabled = !isAdmin;
       updateClientBtn.disabled = !isAdmin;
       updateHeaderStatus();
