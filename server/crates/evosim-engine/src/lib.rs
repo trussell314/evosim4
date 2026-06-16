@@ -122,6 +122,11 @@ pub struct Engine {
     /// to debounce the reseed (a transient blip during reset
     /// shouldn't trigger a respawn).
     extinction_for_s: f64,
+    /// Operator-tunable scale on the fission point-mutation rate.
+    /// 1.0 = engine default; 0.0 disables drift entirely; >1.0
+    /// accelerates evolution at the cost of higher inviability.
+    /// Clamped server-side; here we just multiply.
+    pub mutation_rate_scale: f64,
 }
 
 impl Engine {
@@ -140,6 +145,7 @@ impl Engine {
             mirror_running: true,
             auto_reseeds: 0,
             extinction_for_s: 0.0,
+            mutation_rate_scale: 1.0,
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -328,6 +334,7 @@ impl Engine {
             &mut self.world.creature_store,
             &mut self.world.sim_rng,
             self.world.t,
+            self.mutation_rate_scale,
         );
         self.perf.add_since(Pass::Reproduction, t);
         let t = Instant::now();
@@ -633,6 +640,12 @@ impl Engine {
         // Track per-species aggregates: total biomass and ATP.
         let mut biomass_by_key: HashMap<String, f32> = HashMap::new();
         let mut atp_by_key: HashMap<String, f32> = HashMap::new();
+        // For each (child_key, parent_key) edge seen in the live
+        // population, tally how many cells of this species came from
+        // that parent. The per-species `parent_key` is the majority
+        // vote; ties broken by lexicographic order so the wire shape
+        // is deterministic.
+        let mut parent_votes: HashMap<String, HashMap<String, u32>> = HashMap::new();
         let cs = &self.world.creature_store;
         for (i, g) in cs.genome.iter().enumerate() {
             let k = genome::coding_key(g);
@@ -640,6 +653,14 @@ impl Engine {
             representative_genome.entry(k.clone()).or_insert_with(|| g.clone());
             *biomass_by_key.entry(k.clone()).or_insert(0.0) += cs.total_mass(i);
             *atp_by_key.entry(k.clone()).or_insert(0.0) += cs.energy(i);
+            let pk = cs.parent_coding_key.get(i).cloned().unwrap_or_default();
+            if !pk.is_empty() && pk != k {
+                *parent_votes
+                    .entry(k.clone())
+                    .or_default()
+                    .entry(pk)
+                    .or_insert(0) += 1;
+            }
             keys.push(k);
         }
         // Top species rows, sorted by population descending. Cap at
@@ -653,6 +674,14 @@ impl Engine {
             .map(|(key, count)| {
                 let genome = representative_genome.get(key).cloned().unwrap_or_default();
                 let description = describe::describe(&genome);
+                // Majority vote on the parent species. Ties broken
+                // by lexicographic key so the wire shape is stable
+                // tick-to-tick.
+                let parent_key = parent_votes.get(key).and_then(|votes| {
+                    let mut entries: Vec<(&String, &u32)> = votes.iter().collect();
+                    entries.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                    entries.first().map(|(k, _)| (*k).clone())
+                });
                 evosim_protocol::SpeciesSummary {
                     coding_key: key.clone(),
                     count: *count,
@@ -661,6 +690,7 @@ impl Engine {
                     description,
                     biomass: biomass_by_key.get(key).copied().unwrap_or(0.0),
                     atp: atp_by_key.get(key).copied().unwrap_or(0.0),
+                    parent_key,
                 }
             })
             .collect();

@@ -52,6 +52,7 @@ pub async fn handle(
         AdminCommand::SetParticleCap { cap } => {
             set_particle_cap(engine_cmd, cap.map(|n| n as usize)).await
         }
+        AdminCommand::SetMutationRate { scale } => set_mutation_rate(engine_cmd, scale).await,
         AdminCommand::Export => export_world(engine_cmd).await,
         AdminCommand::Import { json } => import_world(engine_cmd, json).await,
     };
@@ -75,9 +76,24 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Saves => "saves",
         AdminCommand::Configure { .. } => "configure",
         AdminCommand::SetParticleCap { .. } => "set-particle-cap",
+        AdminCommand::SetMutationRate { .. } => "set-mutation-rate",
         AdminCommand::Export => "export",
         AdminCommand::Import { .. } => "import",
     }
+}
+
+async fn set_mutation_rate(
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    scale: f32,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::SetMutationRate { scale, reply: tx })
+        .await
+        .map_err(|e| anyhow::anyhow!("engine offline: {e}"))?;
+    rx.await
+        .map_err(|e| anyhow::anyhow!("engine reply lost: {e}"))?;
+    Ok(Some(format!("mutation_rate_scale={:.3}", scale.clamp(0.0, 16.0))))
 }
 
 async fn import_world(

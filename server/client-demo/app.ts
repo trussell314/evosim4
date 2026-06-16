@@ -19,8 +19,9 @@ interface SpeciesSummary {
   biomass?: number;
   atp?: number;
 }
-// Minimal op-name lookup so the client can render a basic disasm. Not
-// exhaustive -- enough for the demo. Mirrors src/genome.rs.
+// Op-name lookup mirrors `crates/evosim-engine/src/genome.rs` byte-for-
+// byte. Keep these in sync when ops are added or shuffled, otherwise
+// the inspector disassembler displays the wrong name for every cell.
 const OP_NAMES: Record<number, string> = {
   0x00: "NOP",
   0x01: "PUSH8",
@@ -50,32 +51,36 @@ const OP_NAMES: Record<number, string> = {
   0x30: "JMP",
   0x31: "JZ",
   0x32: "JNZ",
-  0x40: "SELF_ENERGY",
-  0x41: "SELF_MASS",
-  0x42: "SELF_MEMBRANE",
-  0x43: "SENSE_CHEMICAL",
-  0x44: "SENSE_OUT",
-  0x45: "SYNTH",
-  0x46: "SENSE_AMP",
-  0x47: "POKE_BYTE",
-  0x48: "PEEK_BYTE",
-  0x49: "SPLICE_DUP",
-  0x4a: "SPLICE_DEL",
-  0x4b: "PARTITION",
+  0x43: "SELF_ENERGY",
+  0x4B: "SELF_MASS",
+  0x4D: "SELF_MEMBRANE",
   0x50: "THRUST",
-  0x51: "EMIT",
-  0x52: "EXCRETE",
-  0x53: "TRANSPORT",
-  0x54: "REPRODUCE",
-  0x55: "PREDATE",
-  0x56: "ENGULF",
-  0x57: "INGEST",
-  0x58: "TURN",
-  0x6a: "GENE",
-  0x6b: "END",
+  0x51: "EXCRETE",
+  0x52: "REPRODUCE",
+  0x53: "PREDATE",
+  0x54: "TURN",
+  0x55: "ENGULF",
+  0x56: "TRANSPORT",
+  0x5E: "INGEST",
+  0x60: "EMIT",
+  0x64: "SENSE_AMP",
+  0x65: "POKE_BYTE",
+  0x66: "SPLICE_DUP",
+  0x67: "SPLICE_DEL",
+  0x68: "PARTITION",
+  0x69: "SYNTH",
+  0x6A: "GENE",
+  0x6B: "END",
+  0x6E: "SENSE_OUT",
+  0x6F: "SENSE_CHEMICAL",
 };
-const OPS_WITH_OPERAND = new Set([0x01, 0x07, 0x08, 0x30, 0x31, 0x32, 0x43, 0x44, 0x46, 0x4b, 0x51, 0x52, 0x53]);
-const OPS_WITH_TWO_OPERANDS = new Set([0x45]); // SYNTH
+// Mirrors `OPERANDS[]` in genome.rs: ops listed here have one
+// operand byte; SYNTH (0x69) has two.
+const OPS_WITH_OPERAND = new Set([
+  0x01, 0x07, 0x08, 0x30, 0x31, 0x32,
+  0x51, 0x56, 0x60, 0x68, 0x6E, 0x6F,
+]);
+const OPS_WITH_TWO_OPERANDS = new Set([0x69]); // SYNTH
 
 function disassemble(genome: Uint8Array): string {
   const lines: string[] = [];
@@ -647,6 +652,13 @@ settingsDialog.addEventListener("close", () => {
     const n = parseInt(pcapInput.value, 10);
     if (Number.isFinite(n) && n >= 0) {
       send({ type: "admin", command: { kind: "set-particle-cap", cap: n } });
+    }
+  }
+  const mutInput = document.getElementById("set-mut") as HTMLInputElement | null;
+  if (mutInput && mutInput.value.trim() !== "") {
+    const f = parseFloat(mutInput.value);
+    if (Number.isFinite(f) && f >= 0) {
+      send({ type: "admin", command: { kind: "set-mutation-rate", scale: f } });
     }
   }
   pcapClearPending = false;

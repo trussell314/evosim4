@@ -279,6 +279,14 @@ pub struct SpeciesSummary {
     /// energetic well-being of the lineage.
     #[serde(default)]
     pub atp: f32,
+    /// Coding key of the majority parent for this species: most
+    /// living cells in this row trace to that species at the
+    /// previous fission. `None` for founders (no parent) and for
+    /// species where every live cell's parent is the same species
+    /// (intra-species reproduction, no useful edge). Lets the
+    /// client render a phylogenetic tree without a separate query.
+    #[serde(default)]
+    pub parent_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -495,6 +503,11 @@ pub enum AdminCommand {
     /// `Some(n)` clamps spawn passes to no more than n live particles.
     /// Affects the next tick; doesn't cull existing particles.
     SetParticleCap { cap: Option<u32> },
+    /// Multiplier on the fission point-mutation probability. 1.0 =
+    /// engine default; 0.0 disables drift entirely. Clamped 0..16
+    /// server-side. Lives on the engine task (not the world state),
+    /// so a save / load resets it back to 1.0.
+    SetMutationRate { scale: f32 },
     /// Serialise the current world to JSON and return it in the
     /// AdminAck message field so the client can offer a download.
     /// Distinct from `Save` (which writes to disk on the server).

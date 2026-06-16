@@ -82,6 +82,11 @@ pub enum EngineCmd {
         cap: Option<usize>,
         reply: oneshot::Sender<()>,
     },
+    /// Set the global mutation-rate scale (clamped to [0, 16]).
+    SetMutationRate {
+        scale: f32,
+        reply: oneshot::Sender<()>,
+    },
     /// Snapshot the engine's reaction table for shipping in Hello.
     /// Cheap (one table() lookup) but routed through the engine task
     /// to keep all engine reads on the same thread.
@@ -303,6 +308,10 @@ async fn run(
                     }
                     Some(EngineCmd::SetParticleCap { cap, reply }) => {
                         engine.set_particle_cap(cap);
+                        let _ = reply.send(());
+                    }
+                    Some(EngineCmd::SetMutationRate { scale, reply }) => {
+                        engine.mutation_rate_scale = scale.clamp(0.0, 16.0) as f64;
                         let _ = reply.send(());
                     }
                     Some(EngineCmd::GetReactions(reply)) => {

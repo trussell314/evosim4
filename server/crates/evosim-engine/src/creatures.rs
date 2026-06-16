@@ -78,6 +78,13 @@ pub struct CreatureStore {
     /// applied at push and refreshed on genome mutations). Read by
     /// the Sensors trait at VM dispatch.
     pub sense_range: Vec<f32>,
+
+    // ----- Lineage.
+    /// Coding-key fingerprint of the parent at fission time. Empty
+    /// string for founders. Lets the species summary builder
+    /// reconstruct parent->child edges without an extra scan over
+    /// the whole world's genealogy table.
+    pub parent_coding_key: Vec<String>,
 }
 
 /// Initial state for `push`. Named fields mirror the ergonomic shape
@@ -100,6 +107,10 @@ pub struct CreatureInit {
     /// all named chems at zero. Length must be `NAMED_CHEMICAL_COUNT`
     /// when supplied.
     pub chems: Option<Vec<f32>>,
+    /// Parent's coding-key fingerprint at fission time, or empty
+    /// string for founders / hand-spawned cells. Drives the
+    /// species summary's `parent_key` field.
+    pub parent_coding_key: String,
 }
 
 impl CreatureStore {
@@ -171,6 +182,7 @@ impl CreatureStore {
         self.vm_state.push(VmState::new());
         self.vm_out.push(VmOutputs::new());
         self.sense_range.push(sense_range);
+        self.parent_coding_key.push(init.parent_coding_key);
 
         self.n += 1;
         i
@@ -231,6 +243,7 @@ impl CreatureStore {
         self.genome.swap_remove(idx);
         self.vm_state.swap_remove(idx);
         self.vm_out.swap_remove(idx); self.sense_range.swap_remove(idx);
+        self.parent_coding_key.swap_remove(idx);
         self.n -= 1;
         Some(idx)
     }
@@ -259,6 +272,7 @@ impl CreatureStore {
         self.genome.clear();
         self.vm_state.clear();
         self.vm_out.clear(); self.sense_range.clear();
+        self.parent_coding_key.clear();
         self.n = 0;
     }
 }

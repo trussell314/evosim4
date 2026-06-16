@@ -50,7 +50,12 @@ const MAX_POPULATION: usize = 4096;
 /// inline against the store, which is sound because we only ever
 /// PUSH new cells (no swap-remove); existing indices stay valid for
 /// the rest of the tick.
-pub fn run_reproduction(store: &mut CreatureStore, rng: &mut Mulberry32, t: f64) -> usize {
+pub fn run_reproduction(
+    store: &mut CreatureStore,
+    rng: &mut Mulberry32,
+    t: f64,
+    mutation_rate_scale: f64,
+) -> usize {
     let parent_count = store.n;
     let mut spawned = 0;
     for i in 0..parent_count {
@@ -107,9 +112,14 @@ pub fn run_reproduction(store: &mut CreatureStore, rng: &mut Mulberry32, t: f64)
             daughter_inhibitor[k] = give;
         }
 
-        // Genome copy + optional point mutation.
+        // Genome copy + optional point mutation. The parent's coding
+        // key is recorded BEFORE the mutation so the daughter knows
+        // who spawned her, regardless of whether mutation produced a
+        // new species.
+        let parent_key = crate::genome::coding_key(&store.genome[i]);
         let mut daughter_genome = store.genome[i].clone();
-        if rng.next_f64() < FISSION_MUTATION_RATE && !daughter_genome.is_empty() {
+        let effective_rate = (FISSION_MUTATION_RATE * mutation_rate_scale).clamp(0.0, 1.0);
+        if rng.next_f64() < effective_rate && !daughter_genome.is_empty() {
             let l = daughter_genome.len();
             let idx = (rng.next_f64() * l as f64) as usize;
             let bit = 1u8 << ((rng.next_f64() * 8.0) as usize & 7);
@@ -144,6 +154,7 @@ pub fn run_reproduction(store: &mut CreatureStore, rng: &mut Mulberry32, t: f64)
             born_at: t,
             genome: daughter_genome,
             chems: Some(daughter_chems),
+            parent_coding_key: parent_key,
             ..CreatureInit::default()
         });
         // Post-push writes: copy the daughter's catalyst and inhibitor
@@ -189,7 +200,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        let spawned = run_reproduction(&mut store, &mut rng, 5.0);
+        let spawned = run_reproduction(&mut store, &mut rng, 5.0, 1.0);
         assert_eq!(spawned, 1);
         assert_eq!(store.len(), 2);
         // Each half should get ~ half the glucose pool.
@@ -208,7 +219,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.7); // parent keeps 70%
         let mut rng = Mulberry32::new(1);
-        let n = run_reproduction(&mut store, &mut rng, 1.0);
+        let n = run_reproduction(&mut store, &mut rng, 1.0, 1.0);
         assert_eq!(n, 1);
         // Glucose split: 7.0 parent / 3.0 daughter.
         assert!((store.chems[CHEM_GLU][0] - 7.0).abs() < 1e-3);
@@ -220,7 +231,7 @@ mod tests {
         let mut store = make_parent(1.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        let n = run_reproduction(&mut store, &mut rng, 1.0);
+        let n = run_reproduction(&mut store, &mut rng, 1.0, 1.0);
         assert_eq!(n, 0);
         assert_eq!(store.len(), 1);
     }
@@ -230,10 +241,10 @@ mod tests {
         let mut store = make_parent(50.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        run_reproduction(&mut store, &mut rng, 1.0);
+        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
         // Re-run without firing reproduce again -- no new daughter.
         let len_after = store.len();
-        run_reproduction(&mut store, &mut rng, 2.0);
+        run_reproduction(&mut store, &mut rng, 2.0, 1.0);
         assert_eq!(store.len(), len_after);
     }
 
@@ -243,7 +254,7 @@ mod tests {
         store.catalyst[42][0] = 2.0;
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        run_reproduction(&mut store, &mut rng, 1.0);
+        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
         // Each daughter pool ~ 1.0.
         assert!((store.catalyst[42][0] - 1.0).abs() < 1e-3);
         assert!((store.catalyst[42][1] - 1.0).abs() < 1e-3);
@@ -256,7 +267,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(0xCAFE_F00D);
-        run_reproduction(&mut store, &mut rng, 1.0);
+        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
         let parent_g = &store.genome[0];
         let daughter_g = &store.genome[1];
         // Either identical (no mutation that draw) or differs in
