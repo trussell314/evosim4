@@ -157,10 +157,13 @@ const loadDialog = document.getElementById("load-dialog") as HTMLDialogElement;
 const loadList = document.getElementById("load-list") as HTMLDivElement;
 const helpBtn = document.getElementById("help") as HTMLButtonElement;
 const helpDialog = document.getElementById("help-dialog") as HTMLDialogElement;
+const openLedgerBtn = document.getElementById("open-ledger") as HTMLButtonElement;
 helpBtn.onclick = () => helpDialog.showModal();
+openLedgerBtn.onclick = () => openLedger();
 window.addEventListener("keydown", (ev) => {
   if (ev.target instanceof HTMLInputElement) return;
   if (ev.key === "?") helpDialog.showModal();
+  else if (ev.key === "c" || ev.key === "C") openLedger();
 });
 loadBtn.onclick = async () => {
   loadList.innerHTML = "<div class='dim'>loading…</div>";
@@ -969,6 +972,80 @@ if (typeof ResizeObserver !== "undefined") {
   new ResizeObserver(resize).observe(canvas);
 }
 resize();
+
+/// Sum particle mass per chem id. Particle mass = density · 4/3 · π r³;
+/// when the per-particle density is zero the renderer falls back to
+/// the chem-table density which we don't ship to the client, so we
+/// approximate with 1.0 in that case. Cheap enough to recompute every
+/// frame the ambient panel is open.
+function particleMassByChem(snap: Snapshot): Map<number, number> {
+  const out: Map<number, number> = new Map();
+  const cBlobs: Record<string, NamedBlob> = {};
+  for (const b of snap.particles.blobs) cBlobs[b.name] = b;
+  if (!cBlobs.chemId || !cBlobs.r) return out;
+  const n = snap.particles.count;
+  const r = f32(cBlobs.r.data, n);
+  const d = cBlobs.density ? f32(cBlobs.density.data, n) : null;
+  const cid = cBlobs.chemId.data;
+  const k = (4 / 3) * Math.PI;
+  for (let i = 0; i < n; i++) {
+    const ri = r[i];
+    const di = d ? d[i] : 0;
+    const dens = di > 0 ? di : 1.0;
+    const m = dens * k * ri * ri * ri;
+    const id = cid[i];
+    out.set(id, (out.get(id) ?? 0) + m);
+  }
+  return out;
+}
+
+function openLedger(): void {
+  const dlg = document.getElementById("ledger-dialog") as HTMLDialogElement | null;
+  const body = document.getElementById("ledger-body");
+  if (!dlg || !body || !snapshot) return;
+  const dissolved = snapshot.ambient_chems ?? [];
+  const visible = particleMassByChem(snapshot);
+  type Row = { id: number; name: string; color: string; dissolved: number; visible: number; total: number };
+  const rows: Row[] = [];
+  const n = Math.max(dissolved.length, chemNames.length);
+  for (let i = 0; i < n; i++) {
+    const d = dissolved[i] ?? 0;
+    const v = visible.get(i) ?? 0;
+    const total = d + v;
+    if (total <= 0.01) continue;
+    rows.push({
+      id: i,
+      name: chemNames[i] ?? `chem ${i}`,
+      color: chemColors[i] ?? "#9ee",
+      dissolved: d,
+      visible: v,
+      total,
+    });
+  }
+  rows.sort((a, b) => b.total - a.total);
+  let html = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="text-align:left; color:#789; border-bottom:1px solid #1a3340;">
+    <th style="padding:2px 8px 4px 0;">chem</th>
+    <th style="padding:2px 8px 4px 0; text-align:right;">dissolved</th>
+    <th style="padding:2px 8px 4px 0; text-align:right;">visible</th>
+    <th style="padding:2px 0 4px 0; text-align:right;">total</th></tr></thead><tbody>`;
+  for (const r of rows) {
+    html += `<tr style="cursor:pointer;" data-chem="${r.id}"><td style="padding:1px 8px 1px 0;"><span style="display:inline-block;width:8px;height:8px;background:${r.color};margin-right:4px;vertical-align:-1px"></span>${r.name}</td>
+      <td style="padding:1px 8px 1px 0; text-align:right;">${r.dissolved.toFixed(1)}</td>
+      <td style="padding:1px 8px 1px 0; text-align:right;">${r.visible.toFixed(1)}</td>
+      <td style="padding:1px 0 1px 0; text-align:right;"><b>${r.total.toFixed(1)}</b></td></tr>`;
+  }
+  html += "</tbody></table>";
+  if (rows.length === 0) html = `<div style="color:#789;">(no chems with mass &gt; 0)</div>`;
+  body.innerHTML = html;
+  body.querySelectorAll<HTMLElement>("tr[data-chem]").forEach((row) => {
+    row.onclick = () => {
+      dlg.close();
+      const id = parseInt(row.getAttribute("data-chem") || "0", 10);
+      openChemDetail(id);
+    };
+  });
+  dlg.showModal();
+}
 
 function renderAmbientPanel(stocks: number[]): void {
   if (stocks.length === 0 || !showAmbient) {
