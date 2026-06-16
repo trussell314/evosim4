@@ -5,6 +5,7 @@ members = [
     "crates/evosim-engine",
     "crates/evosim-server",
     "crates/evosim-tui",
+    "crates/evosim-headless",
 ]
 
 [workspace.package]

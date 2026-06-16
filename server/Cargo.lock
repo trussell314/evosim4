@@ -607,6 +607,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "evosim-headless"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "evosim-engine",
+]
+
+[[package]]
 name = "evosim-protocol"
 version = "0.1.0"
 dependencies = [
