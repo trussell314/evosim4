@@ -21,6 +21,7 @@ pub mod creatures;
 pub mod denature;
 pub mod dissolve;
 pub mod gas_escape;
+pub mod replenish;
 pub mod sterile_cull;
 pub mod wind;
 pub mod day_cycle;
@@ -421,6 +422,11 @@ impl Engine {
             dt as f32,
         );
         self.perf.add_since(Pass::ParticleDecay, t);
+        // Food replenishment: keep the particle store topped up so
+        // the demo's chemistry / food web sustains itself instead of
+        // collapsing once the founder cohort exhausts the initial
+        // particle field.
+        replenish::run_replenish(&mut self.world, dt as f32);
         // Gas escape at the surface. Without this, O2 / CO2 bubbles
         // that float up clamp at the surface line and accumulate
         // forever -- the row-of-bubbles artifact from the live demo.
