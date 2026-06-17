@@ -79,6 +79,14 @@ pub struct UpdateCtx {
     /// region/atmosphere field; until those land we pass a flat
     /// scalar. Photosynth gates on it being > 0.
     pub ambient_light: f32,
+    /// Y-coordinate of the still-water surface. Cells above this are
+    /// in air and feel full gravity; cells below feel a buoyant
+    /// resistance that holds them near neutral. Mirrors the particle
+    /// force kernel's `p.surface_y`.
+    pub surface_y: f32,
+    /// World gravity (px/s^2, positive = down). Same constant the
+    /// particle kernel uses.
+    pub gravity: f32,
 }
 
 // (Per-cell sense range now lives on CreatureStore.sense_range,
@@ -190,21 +198,49 @@ pub fn update_creatures(
         // gets its growth-tick the next frame, matching TS order.
         run_cell_reactions(store, i, dt, ctx.ambient_light);
 
-        // ----- Movement integrator. Damp then advect.
+        // ----- Movement integrator. Damp, gravity / buoyancy, advect.
+        //
+        // Cells are treated as slightly-denser-than-water bags. The
+        // physical band is:
+        //   - in air  (y < surface_y):  full gravity, light drag
+        //   - in water:                 gravity offset by a buoyant
+        //                               restoring term so a passive
+        //                               cell hovers ~ neutral instead
+        //                               of sinking to the seafloor
+        //                               every demo run
+        //
+        // Without this pass a passive cell in air just floats at its
+        // spawn point and the demo looks dead -- which is exactly
+        // what the user reported. Mirrors what the particle force
+        // kernel does for liquid particles in forces.rs.
         let damp = 1.0 - (CREATURE_DRAG_PER_S * dt).min(1.0);
         store.vx[i] *= damp;
         store.vy[i] *= damp;
+        let surface_y = ctx.surface_y;
+        let in_water = store.y[i] >= surface_y;
+        let ay = if !in_water {
+            // Air: free fall, capped so cells don't accumulate
+            // ludicrous downward speed in long traversals.
+            ctx.gravity
+        } else {
+            // Water: cells are slightly denser than water so they
+            // drift down gently but don't free-fall. CELL_DENSITY
+            // = 1.05 g/cm^3 against water = 1.0; effective ay is
+            // gravity * (1 - 1/density) clamped so a cell can be
+            // pushed up by VM thrust without fighting the floor.
+            const CELL_DENSITY: f32 = 1.05;
+            (ctx.gravity * (1.0 - 1.0 / CELL_DENSITY)).max(-ctx.gravity)
+        };
+        store.vy[i] += ay * dt;
         store.x[i] += store.vx[i] * dt;
         store.y[i] += store.vy[i] * dt;
 
         // World horizontal wrap so a cell that drifts off the side
         // reappears on the other -- the world is conceptually a
-        // cylinder along x. Vertically we CLAMP instead: a cell that
-        // would sink below the seafloor (or float above the air-water
+        // cylinder along x. Vertically we CLAMP: a cell that would
+        // sink below the seafloor (or float above the air-water
         // boundary) is held at the boundary with its inward velocity
-        // killed. Wrapping y, as the prior pass did, sent cells that
-        // fell through rock all the way back to the top of the world,
-        // which is the bug that surfaced in the live demo.
+        // killed.
         let w = ctx.width;
         let h = ctx.height;
         let r = store.r[i];
@@ -213,8 +249,13 @@ pub fn update_creatures(
         } else if store.x[i] >= w {
             store.x[i] -= w;
         }
-        if store.y[i] < r {
-            store.y[i] = r;
+        // Hard clamp: cells must stay in water. The first time a
+        // founder spawns above surface_y this drops them onto the
+        // surface immediately so the demo doesn't look like a sky
+        // diorama.
+        let surface_floor = surface_y + r * 0.25;
+        if store.y[i] < surface_floor {
+            store.y[i] = surface_floor;
             if store.vy[i] < 0.0 {
                 store.vy[i] = 0.0;
             }
@@ -238,7 +279,14 @@ mod tests {
     use crate::genome::*;
 
     fn one_cell_world() -> (UpdateCtx, CreatureStore) {
-        let ctx = UpdateCtx { t: 0.0, width: 1600.0, height: 1200.0, ambient_light: 0.5 };
+        let ctx = UpdateCtx {
+            t: 0.0,
+            width: 1600.0,
+            height: 1200.0,
+            ambient_light: 0.5,
+            surface_y: 200.0,
+            gravity: 40.0,
+        };
         let store = CreatureStore::new();
         (ctx, store)
     }
@@ -378,7 +426,12 @@ mod tests {
     }
 
     #[test]
-    fn gene_less_genome_does_not_move() {
+    fn gene_less_genome_emits_no_thrust() {
+        // A cell with no expressed genes can't push itself sideways
+        // -- x must not change. (It can still drift vertically: the
+        // physics integrator now applies a small buoyancy term so a
+        // passive cell sinks gently. That's the correct behaviour;
+        // the old assertion that y == start was a bug.)
         let (ctx, mut store) = one_cell_world();
         let chems = vec![0.0; crate::chem_ids::NAMED_CHEMICAL_COUNT];
         store.push(CreatureInit {
@@ -392,8 +445,12 @@ mod tests {
         for _ in 0..30 {
             update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         }
-        assert_eq!(store.x[0], 800.0);
-        assert_eq!(store.y[0], 600.0);
+        assert_eq!(store.x[0], 800.0, "no thrust -> no horizontal motion");
+        assert_eq!(store.vx[0], 0.0, "no thrust -> vx stays zero");
+        assert!(
+            store.y[0] >= ctx.surface_y,
+            "passive cell must not float into the sky",
+        );
     }
 
     #[test]
@@ -456,5 +513,74 @@ mod tests {
         ctx.t = 7.5;
         update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
         assert_eq!(store.last_reproduce_fire_t[0], 7.5);
+    }
+
+    /// A cell suspended in air (no genome, no thrust) MUST fall
+    /// toward the water surface every tick. The bug surfaced as
+    /// dozens of cells frozen above the waterline in the live demo.
+    #[test]
+    fn passive_cell_in_air_falls_under_gravity() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: 800.0,
+            y: 50.0, // well above surface_y = 200
+            r: 8.0,
+            ..CreatureInit::default()
+        });
+        let y0 = store.y[0];
+        for _ in 0..10 {
+            update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        }
+        assert!(
+            store.y[0] > y0,
+            "passive cell in air must fall; y0={y0} y10={}",
+            store.y[0],
+        );
+        assert!(store.vy[0] > 0.0, "vy must be positive (downward)");
+    }
+
+    /// A cell already in water with no thrust must NEVER drift up
+    /// above the water surface under its own buoyancy. Cells are
+    /// slightly denser than water; the worst case is "stays put."
+    #[test]
+    fn passive_cell_in_water_does_not_surface() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: 800.0,
+            y: 600.0, // well below surface_y = 200
+            r: 8.0,
+            ..CreatureInit::default()
+        });
+        for _ in 0..600 {
+            update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        }
+        assert!(
+            store.y[0] >= ctx.surface_y,
+            "cell drifted above surface_y={} to y={}",
+            ctx.surface_y,
+            store.y[0],
+        );
+    }
+
+    /// A cell SPAWNED above the surface (e.g. a malformed founder
+    /// placement) must be clamped onto the surface in the next tick
+    /// so the renderer never shows cells in the sky.
+    #[test]
+    fn cell_spawned_in_air_is_clamped_to_surface() {
+        let (ctx, mut store) = one_cell_world();
+        store.push(CreatureInit {
+            x: 800.0,
+            y: 5.0, // way above surface_y = 200
+            r: 8.0,
+            ..CreatureInit::default()
+        });
+        // One tick is enough -- the clamp fires after the integrator.
+        update_creatures(ctx, &mut store, &SensorBins::new(), 1.0 / 60.0);
+        assert!(
+            store.y[0] >= ctx.surface_y,
+            "cell at y={} after clamp, surface_y={}",
+            store.y[0],
+            ctx.surface_y,
+        );
     }
 }

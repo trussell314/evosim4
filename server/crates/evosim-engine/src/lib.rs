@@ -190,6 +190,7 @@ impl Engine {
             &mut self.world.sim_rng,
             self.world.width,
             self.world.height,
+            self.world.surface_y,
             self.founders_per_strategy,
             &self.world.obstacles,
         );
@@ -225,6 +226,8 @@ impl Engine {
             // the diurnal rhythm. ambient_light is 0 at dawn/dusk
             // and 1 at noon.
             ambient_light: day_cycle::ambient_light_at(self.world.t, self.world.day_period_s),
+            surface_y: self.world.surface_y,
+            gravity: self.world.gravity,
         };
         // Baseline metabolic drain BEFORE update_creatures so a cell
         // that scrapes by on reaction output gets credited the same

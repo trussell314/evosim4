@@ -207,6 +207,7 @@ pub fn seed_founders(
     rng: &mut Mulberry32,
     width: f32,
     height: f32,
+    surface_y: f32,
     n_per_strategy: usize,
     obstacles: &[crate::terrain::Obstacle],
 ) -> usize {
@@ -218,8 +219,13 @@ pub fn seed_founders(
         // Last strategy (bonder) -> cluster spawn around a fixed
         // center so cells meet and bond.
         let cluster = i == n_strategies - 1;
+        // Cluster + uniform spawns must both land in WATER. The
+        // legal y range is [water_top, height]; before this gate
+        // landed, founders spawned uniformly across the whole world
+        // and rendered as cells floating in the sky.
+        let water_top = surface_y.max(0.0) + 8.0;
         let cluster_cx = width * 0.5;
-        let cluster_cy = height * 0.5;
+        let cluster_cy = (water_top + height) * 0.5;
         let cluster_r = 40.0;
         for _ in 0..n_per_strategy {
             let mut g = base_genome.clone();
@@ -248,8 +254,11 @@ pub fn seed_founders(
                     y = cluster_cy + theta.sin() * r;
                 } else {
                     x = rng.next_f64() as f32 * width;
-                    y = rng.next_f64() as f32 * height;
+                    // Uniform over water column only.
+                    let span = (height - water_top).max(1.0);
+                    y = water_top + rng.next_f64() as f32 * span;
                 }
+                y = y.clamp(water_top, height - body_r);
                 attempts += 1;
                 if attempts >= 24
                     || !crate::terrain::founder_terrain_blocked(obstacles, x, y, body_r + 4.0)
@@ -279,7 +288,7 @@ mod tests {
     fn seeds_expected_count() {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
-        let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 5, &[]);
+        let n = seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 200.0, 5, &[]);
         assert_eq!(n, 45); // 9 strategies x 5 each
         assert_eq!(store.len(), 45);
     }
@@ -288,7 +297,7 @@ mod tests {
     fn founders_carry_viable_pools() {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
-        seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 2, &[]);
+        seed_founders(&mut store, &mut rng, 1600.0, 1200.0, 200.0, 2, &[]);
         for i in 0..store.len() {
             assert!(
                 store.chems[CHEM_MEMBRANE][i] >= 20.0,
@@ -305,11 +314,30 @@ mod tests {
     fn placement_is_within_world() {
         let mut store = CreatureStore::new();
         let mut rng = Mulberry32::new(1);
-        let (w, h) = (1600.0_f32, 1200.0_f32);
-        seed_founders(&mut store, &mut rng, w, h, 5, &[]);
+        let (w, h, sy) = (1600.0_f32, 1200.0_f32, 200.0_f32);
+        seed_founders(&mut store, &mut rng, w, h, sy, 5, &[]);
         for i in 0..store.len() {
             assert!(store.x[i] >= 0.0 && store.x[i] <= w);
             assert!(store.y[i] >= 0.0 && store.y[i] <= h);
+        }
+    }
+
+    /// All founders must spawn underwater. Before this gate landed
+    /// they sprayed uniformly across the world rect and rendered as
+    /// rows of cells frozen in the sky.
+    #[test]
+    fn founders_spawn_below_water_surface() {
+        let mut store = CreatureStore::new();
+        let mut rng = Mulberry32::new(7);
+        let (w, h, sy) = (1600.0_f32, 1200.0_f32, 320.0_f32);
+        seed_founders(&mut store, &mut rng, w, h, sy, 6, &[]);
+        for i in 0..store.len() {
+            assert!(
+                store.y[i] >= sy,
+                "founder {i} spawned in air: y={} surface_y={}",
+                store.y[i],
+                sy,
+            );
         }
     }
 }
