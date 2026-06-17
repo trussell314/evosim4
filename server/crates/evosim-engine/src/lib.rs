@@ -20,6 +20,7 @@ pub mod creature_update;
 pub mod creatures;
 pub mod denature;
 pub mod dissolve;
+pub mod gas_escape;
 pub mod sterile_cull;
 pub mod wind;
 pub mod day_cycle;
@@ -420,6 +421,15 @@ impl Engine {
             dt as f32,
         );
         self.perf.add_since(Pass::ParticleDecay, t);
+        // Gas escape at the surface. Without this, O2 / CO2 bubbles
+        // that float up clamp at the surface line and accumulate
+        // forever -- the row-of-bubbles artifact from the live demo.
+        gas_escape::run_gas_escape(
+            &mut self.world.particle_store,
+            self.world.surface_y,
+            &mut self.world.sim_rng,
+            dt as f32,
+        );
         // Surface aeration: trickle dissolved O2 into the top row of
         // the regional ambient field. Without it the only O2 source
         // is photosynthesis and the ecosystem starves overnight.
