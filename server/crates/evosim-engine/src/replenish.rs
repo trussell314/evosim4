@@ -14,7 +14,7 @@
 
 use crate::chem_ids::{CHEM_ADP, CHEM_BIOPOLYMER, CHEM_FA, CHEM_GLU, CHEM_MIN};
 use crate::chemistry::table as chem_table;
-use crate::particles::{ParticleInit, ParticleStore};
+use crate::particles::ParticleInit;
 use crate::rng::Mulberry32;
 use crate::world::World;
 
@@ -53,7 +53,12 @@ pub fn run_replenish(world: &mut World, dt: f32) -> usize {
     if dt <= 0.0 {
         return 0;
     }
-    let cap = world.particle_cap.unwrap_or(usize::MAX);
+    // When cap is unbounded, target a reasonable floor so we don't
+    // hand the food faucet a usize::MAX bucket -- the inevitable
+    // result is a particle-count explosion. Use 2000 as the implicit
+    // target which matches the default `particle_cap * 0.7` for
+    // World::new's default cap (3000).
+    let cap = world.particle_cap.unwrap_or(2000);
     if cap == 0 {
         return 0;
     }

@@ -91,7 +91,14 @@ fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("load: {e}"))?;
     }
     engine.mutation_rate_scale = cli.mutation_rate.clamp(0.0, 16.0) as f64;
-    engine.set_particle_cap(cli.particle_cap);
+    // Only override the engine's default cap when explicitly asked
+    // for one. Passing `None` unconditionally (the previous bug) made
+    // every smoke run unbounded which let replenish + dissolve +
+    // precipitation spiral the particle count into the tens of
+    // thousands.
+    if let Some(c) = cli.particle_cap {
+        engine.set_particle_cap(Some(c));
+    }
 
     let started = Instant::now();
     let mut last_report = Instant::now();
