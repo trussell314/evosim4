@@ -14,8 +14,11 @@ pub mod chemistry;
 pub mod chemolith;
 pub mod collision;
 pub mod creature_collision;
+pub mod creature_sediment_collision;
 pub mod creature_update;
 pub mod creatures;
+pub mod dissolve;
+pub mod wind;
 pub mod day_cycle;
 pub mod death;
 pub mod describe;
@@ -204,6 +207,12 @@ impl Engine {
         self.perf.tick_start();
         self.tick += 1;
         self.world.t += dt;
+        // Advance surface wind + apply its drift to creatures and
+        // particles. Cheap; without it the water reads as completely
+        // static which was the user's "nothing moves" complaint.
+        wind::advance_wind(&mut self.world, dt);
+        wind::apply_wind_to_creatures(&mut self.world, dt as f32);
+        wind::apply_wind_to_particles(&mut self.world, dt as f32);
         let t = Instant::now();
         forces::apply_forces(&mut self.world, dt as f32);
         self.perf.add_since(Pass::Forces, t);
@@ -294,6 +303,18 @@ impl Engine {
         let t = Instant::now();
         creature_collision::run_creature_collisions(&mut self.world.creature_store);
         self.perf.add_since(Pass::CreatureCollision, t);
+        // Creature-vs-mineral collisions. Without this, cells would
+        // ghost through settled sediment instead of nudging it. Runs
+        // after creature-vs-creature so the per-particle pushback
+        // can react to the freshly-resolved cell positions.
+        let t = Instant::now();
+        creature_sediment_collision::run_creature_sediment_collisions(
+            &mut self.world.creature_store,
+            &mut self.world.particle_store,
+            self.world.width,
+            self.world.height,
+        );
+        self.perf.add_since(Pass::CreatureCollision, t);
         let t = Instant::now();
         obstacle_collision::resolve_obstacle_collisions(
             &self.world.obstacles,
@@ -353,6 +374,20 @@ impl Engine {
         self.pending_deaths = self.pending_deaths.saturating_add(n_deaths as u32);
         let t = Instant::now();
         particle_decay::run_particle_decay(&mut self.world.particle_store, &mut self.world.ambient, dt as f32);
+        self.perf.add_since(Pass::ParticleDecay, t);
+        // Dissolve liquid / gas particles into the regional ambient
+        // field. Runs after decay so the residual mass goes into the
+        // correct sink in one tick. Tracked under the same perf
+        // bucket as decay since the two are conceptually one pipeline.
+        let t = Instant::now();
+        dissolve::run_dissolve_particles(
+            &mut self.world.particle_store,
+            &mut self.world.ambient,
+            &self.world.region_temp,
+            self.world.surface_y,
+            self.world.height,
+            dt as f32,
+        );
         self.perf.add_since(Pass::ParticleDecay, t);
         let t = Instant::now();
         ambient::run_ambient_exchange(

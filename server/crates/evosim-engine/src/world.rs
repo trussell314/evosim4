@@ -119,6 +119,16 @@ pub struct World {
     /// helper samples ambient light against this; 0 disables the
     /// cycle (constant daylight).
     pub day_period_s: f64,
+    /// Surface wind speed (px/s). Positive = blowing right. Drives a
+    /// gentle horizontal current on particles and cells so the water
+    /// isn't a static aquarium. Stepped by `wind::advance_wind`.
+    pub wind: f32,
+    /// Wind drift target; the live `wind` value relaxes toward this.
+    pub wind_target: f32,
+    /// Last time the drift target was re-sampled (seconds). Lets the
+    /// step function discretise sampling onto a fixed-cadence grid
+    /// so the schedule is deterministic at any dt.
+    pub wind_last_step_t: f64,
 }
 
 impl World {
@@ -184,6 +194,9 @@ impl World {
             collision_iters: 2,
             restitution: 0.8,
             day_period_s: crate::day_cycle::DEFAULT_DAY_PERIOD_S,
+            wind: 0.0,
+            wind_target: 0.0,
+            wind_last_step_t: 0.0,
         }
     }
 
