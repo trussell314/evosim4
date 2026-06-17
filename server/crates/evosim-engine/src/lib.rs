@@ -17,7 +17,9 @@ pub mod creature_collision;
 pub mod creature_sediment_collision;
 pub mod creature_update;
 pub mod creatures;
+pub mod denature;
 pub mod dissolve;
+pub mod sterile_cull;
 pub mod wind;
 pub mod day_cycle;
 pub mod death;
@@ -130,6 +132,9 @@ pub struct Engine {
     /// accelerates evolution at the cost of higher inviability.
     /// Clamped server-side; here we just multiply.
     pub mutation_rate_scale: f64,
+    /// Sterile-cell cull state. Defaults to enabled; the death pass
+    /// picks up the membrane-zero marker the cull writes.
+    pub sterile_cull: sterile_cull::SterileCull,
 }
 
 impl Engine {
@@ -149,6 +154,7 @@ impl Engine {
             auto_reseeds: 0,
             extinction_for_s: 0.0,
             mutation_rate_scale: 1.0,
+            sterile_cull: sterile_cull::SterileCull::default(),
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -361,6 +367,15 @@ impl Engine {
             self.mutation_rate_scale,
         );
         self.perf.add_since(Pass::Reproduction, t);
+        // Sterile-cell auto-cull: every interval_s sim-seconds, mark
+        // cells that haven't fired REPRODUCE for sterile_age_s as
+        // unviable. The death pass below then clears them. Cheap
+        // (one pass over creatures, throttled by interval_s).
+        sterile_cull::maybe_cull_sterile(
+            &mut self.sterile_cull,
+            &mut self.world.creature_store,
+            self.world.t,
+        );
         let t = Instant::now();
         let n_deaths = death::run_death(
             &mut self.world.creature_store,
@@ -386,6 +401,21 @@ impl Engine {
             &self.world.region_temp,
             self.world.surface_y,
             self.world.height,
+            dt as f32,
+        );
+        self.perf.add_since(Pass::ParticleDecay, t);
+        // Waste -> CO2 + mineral weathering. Without these the
+        // ledger has no return path so excretion accumulates
+        // monotonically until the population stalls.
+        let t = Instant::now();
+        denature::run_denature_waste(
+            &mut self.world.particle_store,
+            &mut self.world.ambient,
+            dt as f32,
+        );
+        denature::run_weather_minerals(
+            &mut self.world.particle_store,
+            &mut self.world.ambient,
             dt as f32,
         );
         self.perf.add_since(Pass::ParticleDecay, t);
