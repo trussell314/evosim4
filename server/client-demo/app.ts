@@ -1445,6 +1445,118 @@ function drawChemGraph(canvas: HTMLCanvasElement, buf: number[], color: string):
   c.stroke();
 }
 
+/// Emit a Catmull-Rom-smoothed closed path along `poly`'s vertices
+/// (alternating x, y in world coordinates) into the supplied 2D
+/// context. Tension parameter is baked in; the curve passes through
+/// every vertex which keeps small features readable while erasing
+/// the saw-tooth chatter on long edges.
+function smoothClosedPolygon(
+  c: CanvasRenderingContext2D,
+  poly: ArrayLike<number>,
+  offX: number,
+  offY: number,
+  scale: number,
+): void {
+  const n = poly.length >> 1;
+  if (n < 3) return;
+  const px = (i: number) => offX + poly[(((i % n) + n) % n) * 2] * scale;
+  const py = (i: number) => offY + poly[(((i % n) + n) % n) * 2 + 1] * scale;
+  // Catmull-Rom -> cubic Bezier with tension 0.5. For each edge i->i+1,
+  // control points come from the neighbour-vertex difference.
+  const tension = 0.5;
+  c.moveTo(px(0), py(0));
+  for (let i = 0; i < n; i++) {
+    const x0 = px(i - 1), y0 = py(i - 1);
+    const x1 = px(i),     y1 = py(i);
+    const x2 = px(i + 1), y2 = py(i + 1);
+    const x3 = px(i + 2), y3 = py(i + 2);
+    const cp1x = x1 + (x2 - x0) * tension / 3;
+    const cp1y = y1 + (y2 - y0) * tension / 3;
+    const cp2x = x2 - (x3 - x1) * tension / 3;
+    const cp2y = y2 - (y3 - y1) * tension / 3;
+    c.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
+  }
+  c.closePath();
+}
+
+/// Cached procedural rock-texture pattern. Built lazily on first use,
+/// kept around for the rest of the session. A simple value-noise mix
+/// with a slate-grey palette + speckle gives the rocks a stony look
+/// that's pleasant at any zoom level without shipping a binary asset.
+let _rockPattern: CanvasPattern | null = null;
+function getRockPattern(c: CanvasRenderingContext2D): CanvasPattern | null {
+  if (_rockPattern) return _rockPattern;
+  const tile = document.createElement("canvas");
+  const TILE = 192;
+  tile.width = TILE;
+  tile.height = TILE;
+  const tc = tile.getContext("2d");
+  if (!tc) return null;
+  // Base slate fill.
+  tc.fillStyle = "#3c2a20";
+  tc.fillRect(0, 0, TILE, TILE);
+  // Layered noise: large blobs (vein structure) + medium grain +
+  // fine speckle. RNG is deterministic so the tile looks the same
+  // across reloads.
+  let seed = 0x9E3779B1;
+  const rand = () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  // Large vein-like blobs.
+  for (let i = 0; i < 18; i++) {
+    const x = rand() * TILE;
+    const y = rand() * TILE;
+    const r = 18 + rand() * 36;
+    const g = tc.createRadialGradient(x, y, 1, x, y, r);
+    const tint = Math.floor(rand() * 40);
+    g.addColorStop(0, `rgba(${70 + tint}, ${50 + tint}, ${38 + tint}, 0.55)`);
+    g.addColorStop(1, "rgba(0, 0, 0, 0)");
+    tc.fillStyle = g;
+    tc.beginPath();
+    tc.arc(x, y, r, 0, Math.PI * 2);
+    tc.fill();
+  }
+  // Medium dark patches -- crevices, micro-shadows.
+  for (let i = 0; i < 28; i++) {
+    const x = rand() * TILE;
+    const y = rand() * TILE;
+    const r = 6 + rand() * 16;
+    const g = tc.createRadialGradient(x, y, 1, x, y, r);
+    g.addColorStop(0, `rgba(0, 0, 0, ${0.18 + rand() * 0.22})`);
+    g.addColorStop(1, "rgba(0, 0, 0, 0)");
+    tc.fillStyle = g;
+    tc.beginPath();
+    tc.arc(x, y, r, 0, Math.PI * 2);
+    tc.fill();
+  }
+  // Fine speckle.
+  const img = tc.getImageData(0, 0, TILE, TILE);
+  const data = img.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (rand() - 0.5) * 28;
+    data[i]     = Math.max(0, Math.min(255, data[i]     + noise));
+    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
+    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise));
+  }
+  tc.putImageData(img, 0, 0);
+  // A few highlight nicks so the tile reads as 3D rock face.
+  for (let i = 0; i < 9; i++) {
+    const x = rand() * TILE;
+    const y = rand() * TILE;
+    const r = 2 + rand() * 4;
+    tc.fillStyle = `rgba(160, 130, 100, ${0.18 + rand() * 0.15})`;
+    tc.beginPath();
+    tc.arc(x, y, r, 0, Math.PI * 2);
+    tc.fill();
+  }
+  _rockPattern = c.createPattern(tile, "repeat");
+  return _rockPattern;
+}
+
 /// Build an inline-SVG histogram for a small set of integers. Used by
 /// the species panel to expose genome-size distribution without
 /// introducing a charting dep.
@@ -1692,43 +1804,84 @@ function frame(): void {
     ctx.fillStyle = `rgb(${wR}, ${wG}, ${wB})`;
     ctx.fillRect(0, Math.max(0, surfaceCanvasY), cw, ch - Math.max(0, surfaceCanvasY));
 
-    // Static terrain. Each rock is drawn as a vertical gradient with
-    // a darker base and a slightly-lit crown so the silhouette has
-    // some depth even at small scales. Mineral-blue rim stroke gives
-    // a visible edge in dim light. Drawn AFTER the water tint and
-    // BEFORE particles + cells so cells visually sit in the open
-    // water above rock.
+    // Static terrain. Drawn AFTER the water tint and BEFORE
+    // particles + cells so cells visually sit in the open water
+    // above rock. Each rock:
+    //  - the polygon outline is Catmull-Rom smoothed so the silhouette
+    //    reads as a weathered boulder, not a saw-toothed paper cut-out;
+    //  - the body is filled with a cached procedural rock texture
+    //    (offscreen canvas, generated once);
+    //  - a vertical gradient is layered on top with multiply so the
+    //    crown picks up the ambient light and the underside stays in
+    //    deep shadow;
+    //  - a subtle rim stroke gives a readable edge in dim light.
     if (terrain.length > 0) {
       ctx.lineWidth = 1;
       for (const poly of terrain) {
         if (poly.length < 6) continue;
-        // Build the path once + reuse for fill + stroke.
-        ctx.beginPath();
-        ctx.moveTo(offX + poly[0] * scale, offY + poly[1] * scale);
-        let minY = poly[1], maxY = poly[1];
-        for (let i = 2; i < poly.length; i += 2) {
-          const px = offX + poly[i] * scale;
-          const py = offY + poly[i + 1] * scale;
-          ctx.lineTo(px, py);
+        // Cap the smoothing tension on small rocks so the outline
+        // doesn't bow out past where the polygon vertices live.
+        let minY = Infinity, maxY = -Infinity;
+        let minX = Infinity, maxX = -Infinity;
+        for (let i = 0; i < poly.length; i += 2) {
+          if (poly[i] < minX) minX = poly[i];
+          if (poly[i] > maxX) maxX = poly[i];
           if (poly[i + 1] < minY) minY = poly[i + 1];
           if (poly[i + 1] > maxY) maxY = poly[i + 1];
         }
-        ctx.closePath();
-        // Vertical gradient: lighter at the top, darker at the
-        // bottom. Light multiplies the highlight so daytime rocks
-        // read warm and nighttime rocks read cool.
+        // Build the smoothed path. Catmull-Rom -> cubic-Bezier
+        // interpolation; tension 0.5 reads as a natural rock curl.
+        ctx.beginPath();
+        smoothClosedPolygon(ctx, poly, offX, offY, scale);
+
+        // Texture fill via the cached pattern. Translate the pattern
+        // so adjacent rocks don't visibly share a seam.
+        const pat = getRockPattern(ctx);
+        if (pat) {
+          ctx.save();
+          ctx.fillStyle = pat;
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Vertical gradient overlay (multiply) so the top of the rock
+        // catches the ambient light and the underside stays dark.
         const yTop = offY + minY * scale;
         const yBot = offY + maxY * scale;
         const grd = ctx.createLinearGradient(0, yTop, 0, yBot);
-        const tR = Math.round(40 + 40 * light);
-        const tG = Math.round(28 + 22 * light);
-        const tB = Math.round(20 + 16 * light);
-        grd.addColorStop(0, `rgb(${tR}, ${tG}, ${tB})`);
-        grd.addColorStop(0.4, "#241612");
-        grd.addColorStop(1, "#100805");
+        const tR = Math.round(60 + 60 * light);
+        const tG = Math.round(45 + 35 * light);
+        const tB = Math.round(35 + 25 * light);
+        grd.addColorStop(0, `rgba(${tR}, ${tG}, ${tB}, 0.85)`);
+        grd.addColorStop(0.45, "rgba(60, 42, 32, 0.55)");
+        grd.addColorStop(1, "rgba(8, 5, 4, 0.85)");
+        ctx.save();
+        ctx.globalCompositeOperation = "multiply";
         ctx.fillStyle = grd;
         ctx.fill();
-        ctx.strokeStyle = light > 0.05 ? "#4a382a" : "#234055";
+        ctx.restore();
+
+        // Crown highlight: a narrow lit band on the top quarter of the
+        // rock so the upper edge reads as catching the light without
+        // washing out the texture.
+        const yMid = yTop + (yBot - yTop) * 0.28;
+        const hi = ctx.createLinearGradient(0, yTop, 0, yMid);
+        const hR = Math.round(120 + 70 * light);
+        const hG = Math.round(90 + 50 * light);
+        const hB = Math.round(70 + 35 * light);
+        hi.addColorStop(0, `rgba(${hR}, ${hG}, ${hB}, ${0.18 + 0.22 * light})`);
+        hi.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.save();
+        ctx.globalCompositeOperation = "overlay";
+        ctx.fillStyle = hi;
+        ctx.fill();
+        ctx.restore();
+
+        // Rim stroke last so it stays crisp against everything below.
+        ctx.lineWidth = Math.max(1, 1.25 * (window.devicePixelRatio || 1));
+        ctx.strokeStyle = light > 0.05
+          ? `rgba(74, 56, 42, ${0.55 + 0.3 * light})`
+          : "rgba(35, 64, 85, 0.55)";
         ctx.stroke();
       }
     }
