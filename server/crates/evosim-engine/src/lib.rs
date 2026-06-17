@@ -13,6 +13,7 @@ pub mod chem_ids;
 pub mod chemistry;
 pub mod chemolith;
 pub mod collision;
+pub mod aerate;
 pub mod creature_collision;
 pub mod creature_sediment_collision;
 pub mod creature_update;
@@ -419,6 +420,16 @@ impl Engine {
             dt as f32,
         );
         self.perf.add_since(Pass::ParticleDecay, t);
+        // Surface aeration: trickle dissolved O2 into the top row of
+        // the regional ambient field. Without it the only O2 source
+        // is photosynthesis and the ecosystem starves overnight.
+        aerate::run_aerate(
+            &mut self.world.ambient,
+            &self.world.region_temp,
+            self.world.height,
+            self.world.wind,
+            dt as f32,
+        );
         let t = Instant::now();
         ambient::run_ambient_exchange(
             &mut self.world.creature_store,
