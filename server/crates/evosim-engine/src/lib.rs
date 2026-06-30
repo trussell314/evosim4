@@ -376,6 +376,7 @@ impl Engine {
         let t = Instant::now();
         reproduction::run_reproduction(
             &mut self.world.creature_store,
+            &self.bonds,
             &mut self.world.sim_rng,
             self.world.t,
             self.mutation_rate_scale,

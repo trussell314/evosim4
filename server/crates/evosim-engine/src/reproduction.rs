@@ -1,12 +1,11 @@
-//! Minimal reproduction (fission) pass. When a cell fires REPRODUCE
-//! and meets the viability gates, we split it into parent + daughter:
-//! the daughter takes `(1 - parent_fraction)` of every chem, catalyst,
-//! and inhibitor pool; the parent keeps the rest; the daughter's
-//! genome is a copy of the parent's with a single point mutation.
+//! Reproduction (fission) pass. When a cell fires REPRODUCE and meets
+//! the viability gates, we split it into parent + daughter: the
+//! daughter takes `(1 - parent_fraction)` of every chem, catalyst, and
+//! inhibitor pool; the parent keeps the rest. The daughter's genome is
+//! the parent's (or a bonded-crossover recombinant when the parent has
+//! bonds) with an optional single point mutation.
 //!
 //! What's NOT here yet (kept honest):
-//!   - bonded crossover (the TS sexual path that recombines a parent's
-//!     genome with a bond partner's)
 //!   - REPRODUCE attempt-cost ATP tax: we charge a flat ATP cost on
 //!     SUCCESSFUL fission only. The TS charges on every attempt so
 //!     spamming the op is self-throttling; we'll bring that across
@@ -52,6 +51,7 @@ const MAX_POPULATION: usize = 4096;
 /// the rest of the tick.
 pub fn run_reproduction(
     store: &mut CreatureStore,
+    bonds: &crate::bonding::BondList,
     rng: &mut Mulberry32,
     t: f64,
     mutation_rate_scale: f64,
@@ -112,12 +112,34 @@ pub fn run_reproduction(
             daughter_inhibitor[k] = give;
         }
 
-        // Genome copy + optional point mutation. The parent's coding
-        // key is recorded BEFORE the mutation so the daughter knows
-        // who spawned her, regardless of whether mutation produced a
-        // new species.
+        // Genome inheritance. The parent's coding key is recorded
+        // BEFORE any crossover / mutation so the daughter's lineage
+        // edge points at who actually spawned her.
         let parent_key = crate::genome::coding_key(&store.genome[i]);
-        let mut daughter_genome = store.genome[i].clone();
+
+        // Sexual reproduction (bonded crossover): when the parent is
+        // bonded to a neighbour, the daughter's PRE-mutation genome is
+        // a single-crossover recombinant of the parent and a random
+        // bond partner -- useful subprograms flow between adjacent
+        // lineages. Falls through to a plain clone when unbonded.
+        let mut daughter_genome = if let Some(partner_list) = bonds.get(i) {
+            if partner_list.is_empty() {
+                store.genome[i].clone()
+            } else {
+                let pick = (rng.next_f64() * partner_list.len() as f64) as usize;
+                let partner = partner_list[pick.min(partner_list.len() - 1)] as usize;
+                if partner < store.n {
+                    crossover_genomes(&store.genome[i], &store.genome[partner], rng)
+                } else {
+                    store.genome[i].clone()
+                }
+            }
+        } else {
+            store.genome[i].clone()
+        };
+
+        // Optional point mutation on top of the (possibly recombined)
+        // daughter genome.
         let effective_rate = (FISSION_MUTATION_RATE * mutation_rate_scale).clamp(0.0, 1.0);
         if rng.next_f64() < effective_rate && !daughter_genome.is_empty() {
             let l = daughter_genome.len();
@@ -168,11 +190,31 @@ pub fn run_reproduction(
     spawned
 }
 
+/// Single-crossover recombination of two genomes. The result has the
+/// FIRST parent's length (so genome-size-based costs stay stable):
+/// bytes `[0, k)` come from `a`, bytes `[k, len_a)` come from `b`
+/// (falling back to `a`'s tail when `b` is shorter). `k` is uniform
+/// in `[0, len_a]`. Mirrors the TS `crossoverGenomes`.
+fn crossover_genomes(a: &[u8], b: &[u8], rng: &mut Mulberry32) -> Vec<u8> {
+    let len = a.len();
+    if len == 0 {
+        return b.to_vec();
+    }
+    let k = (rng.next_f64() * (len as f64 + 1.0)) as usize;
+    let k = k.min(len);
+    let mut out = Vec::with_capacity(len);
+    out.extend_from_slice(&a[..k]);
+    for i in k..len {
+        out.push(if i < b.len() { b[i] } else { a[i] });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chem_ids::CHEM_GLU;
-    use crate::genome::OP_NOP;
+    use crate::genome::{OP_END, OP_GENE, OP_NOP, OP_REPRODUCE};
     use crate::vm::VmOutputs;
 
     fn make_parent(atp: f32, glu: f32) -> CreatureStore {
@@ -200,7 +242,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        let spawned = run_reproduction(&mut store, &mut rng, 5.0, 1.0);
+        let spawned = run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 5.0, 1.0);
         assert_eq!(spawned, 1);
         assert_eq!(store.len(), 2);
         // Each half should get ~ half the glucose pool.
@@ -219,7 +261,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.7); // parent keeps 70%
         let mut rng = Mulberry32::new(1);
-        let n = run_reproduction(&mut store, &mut rng, 1.0, 1.0);
+        let n = run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 1.0, 1.0);
         assert_eq!(n, 1);
         // Glucose split: 7.0 parent / 3.0 daughter.
         assert!((store.chems[CHEM_GLU][0] - 7.0).abs() < 1e-3);
@@ -231,7 +273,7 @@ mod tests {
         let mut store = make_parent(1.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        let n = run_reproduction(&mut store, &mut rng, 1.0, 1.0);
+        let n = run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 1.0, 1.0);
         assert_eq!(n, 0);
         assert_eq!(store.len(), 1);
     }
@@ -241,10 +283,10 @@ mod tests {
         let mut store = make_parent(50.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
+        run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 1.0, 1.0);
         // Re-run without firing reproduce again -- no new daughter.
         let len_after = store.len();
-        run_reproduction(&mut store, &mut rng, 2.0, 1.0);
+        run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 2.0, 1.0);
         assert_eq!(store.len(), len_after);
     }
 
@@ -254,7 +296,7 @@ mod tests {
         store.catalyst[42][0] = 2.0;
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(1);
-        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
+        run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 1.0, 1.0);
         // Each daughter pool ~ 1.0.
         assert!((store.catalyst[42][0] - 1.0).abs() < 1e-3);
         assert!((store.catalyst[42][1] - 1.0).abs() < 1e-3);
@@ -267,7 +309,7 @@ mod tests {
         let mut store = make_parent(20.0, 10.0);
         fire_reproduce(&mut store, 0, 0.5);
         let mut rng = Mulberry32::new(0xCAFE_F00D);
-        run_reproduction(&mut store, &mut rng, 1.0, 1.0);
+        run_reproduction(&mut store, &crate::bonding::make_bonds(0), &mut rng, 1.0, 1.0);
         let parent_g = &store.genome[0];
         let daughter_g = &store.genome[1];
         // Either identical (no mutation that draw) or differs in
@@ -278,5 +320,101 @@ mod tests {
             diff_bits += (p ^ d).count_ones();
         }
         assert!(diff_bits <= 1, "expected 0 or 1 bit difference, got {diff_bits}");
+    }
+
+    #[test]
+    fn crossover_takes_prefix_from_a_suffix_from_b() {
+        // Deterministic check across many rng draws: every output byte
+        // must come from `a` (prefix) or `b` (suffix), and the result
+        // keeps a's length.
+        let a = vec![1u8, 2, 3, 4, 5, 6];
+        let b = vec![10u8, 20, 30, 40, 50, 60];
+        let mut rng = Mulberry32::new(99);
+        for _ in 0..200 {
+            let out = crossover_genomes(&a, &b, &mut rng);
+            assert_eq!(out.len(), a.len());
+            // There must be a single crossover point k: out[..k]==a[..k]
+            // and out[k..]==b[k..].
+            let mut k = a.len();
+            for i in 0..a.len() {
+                if out[i] != a[i] {
+                    k = i;
+                    break;
+                }
+            }
+            for (i, &v) in out.iter().enumerate() {
+                if i < k {
+                    assert_eq!(v, a[i], "prefix mismatch at {i}");
+                } else {
+                    assert_eq!(v, b[i], "suffix mismatch at {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crossover_handles_shorter_partner() {
+        // When b is shorter, the tail beyond b falls back to a.
+        let a = vec![1u8, 2, 3, 4, 5];
+        let b = vec![9u8, 9];
+        let mut rng = Mulberry32::new(7);
+        let out = crossover_genomes(&a, &b, &mut rng);
+        assert_eq!(out.len(), a.len());
+        // Any position >= b.len() that came from the suffix must equal a.
+        for i in b.len()..a.len() {
+            // It's either a's value (prefix) or a's fallback (suffix) --
+            // both are a[i].
+            assert_eq!(out[i], a[i]);
+        }
+    }
+
+    #[test]
+    fn bonded_parent_produces_recombinant_daughter() {
+        // Two bonded cells with distinct genomes; the daughter's genome
+        // should contain bytes from BOTH parents (with overwhelming
+        // probability across the crossover point).
+        let mut store = CreatureStore::new();
+        let mut chems_a = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems_a[CHEM_ATP] = 50.0;
+        chems_a[CHEM_GLU] = 50.0;
+        // Parent A genome: all 0x01 ops (NOPs are 0x00; use distinct
+        // marker bytes inside a gene so crossover is observable).
+        let genome_a = vec![OP_GENE, 0x10, 0x10, 0x10, 0x10, OP_REPRODUCE, OP_END];
+        store.push(CreatureInit {
+            x: 100.0, y: 100.0, r: 8.0,
+            genome: genome_a.clone(),
+            chems: Some(chems_a),
+            ..CreatureInit::default()
+        });
+        let mut chems_b = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems_b[CHEM_ATP] = 50.0;
+        let genome_b = vec![OP_GENE, 0x20, 0x20, 0x20, 0x20, OP_NOP, OP_END];
+        store.push(CreatureInit {
+            x: 110.0, y: 100.0, r: 8.0,
+            genome: genome_b.clone(),
+            chems: Some(chems_b),
+            ..CreatureInit::default()
+        });
+        // Bond them: cell 0 <-> cell 1.
+        let mut bonds = crate::bonding::make_bonds(2);
+        bonds[0].push(1);
+        bonds[1].push(0);
+        // Cell 0 fires REPRODUCE.
+        store.vm_out[0].reproduce = true;
+        store.vm_out[0].reproduce_fraction = 0.5;
+        // Mutation off so the only genome change is crossover.
+        let mut rng = Mulberry32::new(3);
+        let spawned = run_reproduction(&mut store, &bonds, &mut rng, 1.0, 0.0);
+        assert_eq!(spawned, 1);
+        // The daughter is the last-pushed cell.
+        let d = store.genome[store.n - 1].clone();
+        assert_eq!(d.len(), genome_a.len(), "daughter keeps parent A length");
+        // Daughter must be a prefix of A + suffix of B; assert it isn't
+        // byte-identical to A (crossover actually mixed in B). With
+        // seed 3 the crossover point lands inside the gene body.
+        assert!(
+            d != genome_a,
+            "bonded daughter should differ from pure parent-A clone",
+        );
     }
 }
