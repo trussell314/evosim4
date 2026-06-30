@@ -674,6 +674,21 @@ settingsDialog.addEventListener("close", () => {
       send({ type: "admin", command: { kind: "set-mutation-rate", scale: f } });
     }
   }
+  // Ecology toggles. Always sent (checkboxes always have a definite
+  // state); the target-species field is omitted when left blank.
+  const immChk = document.getElementById("set-immigration") as HTMLInputElement | null;
+  const cullChk = document.getElementById("set-cull") as HTMLInputElement | null;
+  const replChk = document.getElementById("set-replenish") as HTMLInputElement | null;
+  const immTarget = document.getElementById("set-imm-target") as HTMLInputElement | null;
+  const eco: Record<string, unknown> = { kind: "set-ecology" };
+  if (immChk) eco.immigration_enabled = immChk.checked;
+  if (cullChk) eco.sterile_cull_enabled = cullChk.checked;
+  if (replChk) eco.replenish_enabled = replChk.checked;
+  if (immTarget && immTarget.value.trim() !== "") {
+    const t = parseInt(immTarget.value, 10);
+    if (Number.isFinite(t) && t >= 0) eco.immigration_target_species = t;
+  }
+  send({ type: "admin", command: eco });
   pcapClearPending = false;
 });
 configureDialog.addEventListener("close", () => {

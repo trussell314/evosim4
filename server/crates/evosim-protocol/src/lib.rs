@@ -541,6 +541,20 @@ pub enum AdminCommand {
     /// previously-exported state opened from local disk). Distinct
     /// from `Load` which reads from the server's save directory.
     Import { json: String },
+    /// Tune the population-management passes live. Every field is
+    /// optional; `None` leaves that knob unchanged. Lets an operator
+    /// study the world under different ecological regimes (closed vs
+    /// open, immigration on/off, cull on/off) without a rebuild.
+    SetEcology {
+        /// Toggle continuous founder immigration.
+        immigration_enabled: Option<bool>,
+        /// Distinct-lineage floor immigration tries to maintain.
+        immigration_target_species: Option<u32>,
+        /// Toggle the sterile-cell auto-cull.
+        sterile_cull_enabled: Option<bool>,
+        /// Toggle food-particle replenishment (off => closed system).
+        replenish_enabled: Option<bool>,
+    },
 }
 
 /// Helper: encode a server message as msgpack. Keeps the binary frame

@@ -53,6 +53,21 @@ pub async fn handle(
             set_particle_cap(engine_cmd, cap.map(|n| n as usize)).await
         }
         AdminCommand::SetMutationRate { scale } => set_mutation_rate(engine_cmd, scale).await,
+        AdminCommand::SetEcology {
+            immigration_enabled,
+            immigration_target_species,
+            sterile_cull_enabled,
+            replenish_enabled,
+        } => {
+            set_ecology(
+                engine_cmd,
+                immigration_enabled,
+                immigration_target_species,
+                sterile_cull_enabled,
+                replenish_enabled,
+            )
+            .await
+        }
         AdminCommand::Export => export_world(engine_cmd).await,
         AdminCommand::Import { json } => import_world(engine_cmd, json).await,
     };
@@ -77,9 +92,35 @@ fn command_label(cmd: &AdminCommand) -> &'static str {
         AdminCommand::Configure { .. } => "configure",
         AdminCommand::SetParticleCap { .. } => "set-particle-cap",
         AdminCommand::SetMutationRate { .. } => "set-mutation-rate",
+        AdminCommand::SetEcology { .. } => "set-ecology",
         AdminCommand::Export => "export",
         AdminCommand::Import { .. } => "import",
     }
+}
+
+async fn set_ecology(
+    engine_cmd: mpsc::Sender<EngineCmd>,
+    immigration_enabled: Option<bool>,
+    immigration_target_species: Option<u32>,
+    sterile_cull_enabled: Option<bool>,
+    replenish_enabled: Option<bool>,
+) -> anyhow::Result<Option<String>> {
+    let (tx, rx) = oneshot::channel();
+    engine_cmd
+        .send(EngineCmd::SetEcology {
+            immigration_enabled,
+            immigration_target_species,
+            sterile_cull_enabled,
+            replenish_enabled,
+            reply: tx,
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("engine offline: {e}"))?;
+    rx.await
+        .map_err(|e| anyhow::anyhow!("engine reply lost: {e}"))?;
+    Ok(Some(format!(
+        "ecology updated: immigration={immigration_enabled:?} target={immigration_target_species:?} cull={sterile_cull_enabled:?} replenish={replenish_enabled:?}"
+    )))
 }
 
 async fn set_mutation_rate(

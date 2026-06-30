@@ -143,6 +143,10 @@ pub struct Engine {
     /// diversity so the world doesn't bleed to extinction between
     /// full-on extinction-reseeds.
     pub immigration: immigration::Immigration,
+    /// Whether the food-replenish pass runs. Off => the world is a
+    /// closed system (cells live only on the starting particle field
+    /// and what they recycle). Lets an operator study a sealed world.
+    pub replenish_enabled: bool,
 }
 
 impl Engine {
@@ -164,6 +168,7 @@ impl Engine {
             mutation_rate_scale: 1.0,
             sterile_cull: sterile_cull::SterileCull::default(),
             immigration: immigration::Immigration::default(),
+            replenish_enabled: true,
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -443,8 +448,10 @@ impl Engine {
         // Food replenishment: keep the particle store topped up so
         // the demo's chemistry / food web sustains itself instead of
         // collapsing once the founder cohort exhausts the initial
-        // particle field.
-        replenish::run_replenish(&mut self.world, dt as f32);
+        // particle field. Operator-disableable to study a closed world.
+        if self.replenish_enabled {
+            replenish::run_replenish(&mut self.world, dt as f32);
+        }
         // Gas escape at the surface. Without this, O2 / CO2 bubbles
         // that float up clamp at the surface line and accumulate
         // forever -- the row-of-bubbles artifact from the live demo.
@@ -532,6 +539,31 @@ impl Engine {
     /// particles freely). Pass-through to `world.particle_cap`.
     pub fn set_particle_cap(&mut self, cap: Option<usize>) {
         self.world.particle_cap = cap;
+    }
+
+    /// Live-tune the population-management passes. Any `None` leaves
+    /// that knob untouched. Backs the admin `SetEcology` command so an
+    /// operator can flip the world between ecological regimes (open /
+    /// closed, immigration on / off, cull on / off) without a restart.
+    pub fn apply_ecology(
+        &mut self,
+        immigration_enabled: Option<bool>,
+        immigration_target_species: Option<u32>,
+        sterile_cull_enabled: Option<bool>,
+        replenish_enabled: Option<bool>,
+    ) {
+        if let Some(e) = immigration_enabled {
+            self.immigration.enabled = e;
+        }
+        if let Some(t) = immigration_target_species {
+            self.immigration.target_species = (t as usize).min(64);
+        }
+        if let Some(e) = sterile_cull_enabled {
+            self.sterile_cull.enabled = e;
+        }
+        if let Some(e) = replenish_enabled {
+            self.replenish_enabled = e;
+        }
     }
 
     /// Find the closest live cell to (x, y) within `max_d` world px

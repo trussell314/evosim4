@@ -87,6 +87,15 @@ pub enum EngineCmd {
         scale: f32,
         reply: oneshot::Sender<()>,
     },
+    /// Live-tune the population-management passes. Each field is
+    /// optional; `None` leaves that knob unchanged.
+    SetEcology {
+        immigration_enabled: Option<bool>,
+        immigration_target_species: Option<u32>,
+        sterile_cull_enabled: Option<bool>,
+        replenish_enabled: Option<bool>,
+        reply: oneshot::Sender<()>,
+    },
     /// Snapshot the engine's reaction table for shipping in Hello.
     /// Cheap (one table() lookup) but routed through the engine task
     /// to keep all engine reads on the same thread.
@@ -312,6 +321,21 @@ async fn run(
                     }
                     Some(EngineCmd::SetMutationRate { scale, reply }) => {
                         engine.mutation_rate_scale = scale.clamp(0.0, 16.0) as f64;
+                        let _ = reply.send(());
+                    }
+                    Some(EngineCmd::SetEcology {
+                        immigration_enabled,
+                        immigration_target_species,
+                        sterile_cull_enabled,
+                        replenish_enabled,
+                        reply,
+                    }) => {
+                        engine.apply_ecology(
+                            immigration_enabled,
+                            immigration_target_species,
+                            sterile_cull_enabled,
+                            replenish_enabled,
+                        );
                         let _ = reply.send(());
                     }
                     Some(EngineCmd::GetReactions(reply)) => {
