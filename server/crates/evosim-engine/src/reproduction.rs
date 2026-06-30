@@ -89,12 +89,31 @@ pub fn run_reproduction(
         // proportional share of the *remaining* ATP.
         store.chems[CHEM_ATP][i] = (atp - FISSION_ATP_COST).max(0.0);
 
-        // Build the daughter's chems, catalysts, inhibitors as the
-        // child_share slice of the parent's pools.
+        // Snapshot the parent's PARTITION list before we touch the
+        // chem columns (the vm_out borrow would otherwise alias the
+        // mutable store.chems borrow below). The genome's OP_PARTITION
+        // op lets a cell skew the per-chem split -- e.g. keep all its
+        // ATP but hand the daughter extra membrane -- which is how
+        // asymmetric division becomes an evolvable strategy.
+        let pcount = store.vm_out[i].partition_count;
+        let partition: Vec<(usize, f64)> = (0..pcount)
+            .map(|q| {
+                (
+                    store.vm_out[i].partition_chem[q] as usize,
+                    store.vm_out[i].partition_bias[q],
+                )
+            })
+            .collect();
+
+        // Build the daughter's chems as the partitioned slice of the
+        // parent's pools. Named chems honour PARTITION bias; catalysts
+        // and inhibitors use the flat child_share (matches TS, which
+        // only partitions the molecule / generic pools).
         let mut daughter_chems = vec![0.0f32; NAMED_CHEMICAL_COUNT];
         for (k, slot) in daughter_chems.iter_mut().enumerate() {
             let v = store.chems[k][i];
-            let give = v * child_share;
+            let frac = partition_frac(&partition, child_share, k);
+            let give = v * frac;
             store.chems[k][i] = v - give;
             *slot = give;
         }
@@ -188,6 +207,21 @@ pub fn run_reproduction(
         spawned += 1;
     }
     spawned
+}
+
+/// Child's share of a given chem after applying any PARTITION bias.
+/// `base` is the default proportional split (`1 - parent_fraction`);
+/// when the genome set a bias `v` for this chem, the share shifts by
+/// `v / (1 + |v|)` (squashed to (-1, 1)) and clamps to `[0, 1]`.
+/// Mirrors the TS `partitionFrac`.
+fn partition_frac(partition: &[(usize, f64)], base: f32, chem: usize) -> f32 {
+    for &(c, v) in partition {
+        if c == chem {
+            let shift = v / (1.0 + v.abs());
+            return (base as f64 + shift).clamp(0.0, 1.0) as f32;
+        }
+    }
+    base
 }
 
 /// Single-crossover recombination of two genomes. The result has the
@@ -320,6 +354,56 @@ mod tests {
             diff_bits += (p ^ d).count_ones();
         }
         assert!(diff_bits <= 1, "expected 0 or 1 bit difference, got {diff_bits}");
+    }
+
+    #[test]
+    fn partition_frac_shifts_and_clamps() {
+        // No entry -> base.
+        assert_eq!(partition_frac(&[], 0.5, 2), 0.5);
+        // Positive bias pushes the child's share up.
+        let up = partition_frac(&[(2, 4.0)], 0.5, 2);
+        assert!(up > 0.5 && up <= 1.0, "got {up}");
+        // Negative bias pulls it down.
+        let down = partition_frac(&[(2, -4.0)], 0.5, 2);
+        assert!((0.0..0.5).contains(&down), "got {down}");
+        // Extreme bias clamps to [0,1].
+        assert!(partition_frac(&[(2, 1e6)], 0.9, 2) <= 1.0);
+        assert!(partition_frac(&[(2, -1e6)], 0.1, 2) >= 0.0);
+    }
+
+    #[test]
+    fn partition_skews_named_chem_split() {
+        // A cell biases CHEM_GLU strongly toward the daughter; after
+        // fission the daughter should hold a larger glucose share than
+        // the default 0.5 split would give.
+        let mut store = CreatureStore::new();
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_ATP] = 50.0;
+        chems[CHEM_GLU] = 100.0;
+        store.push(CreatureInit {
+            x: 50.0, y: 50.0, r: 8.0,
+            genome: vec![OP_GENE, OP_REPRODUCE, OP_END],
+            chems: Some(chems),
+            ..CreatureInit::default()
+        });
+        store.vm_out[0].reproduce = true;
+        store.vm_out[0].reproduce_fraction = 0.5; // default split 0.5
+        // Bias glucose hard toward the child.
+        store.vm_out[0].partition_count = 1;
+        store.vm_out[0].partition_chem[0] = CHEM_GLU as i16;
+        store.vm_out[0].partition_bias[0] = 8.0;
+        let mut rng = Mulberry32::new(1);
+        let spawned = run_reproduction(
+            &mut store, &crate::bonding::make_bonds(1), &mut rng, 1.0, 0.0,
+        );
+        assert_eq!(spawned, 1);
+        let daughter_glu = store.chems[CHEM_GLU][store.n - 1];
+        // With base 0.5 + 8/(1+8)=0.89 share, the daughter should get
+        // well over half the 100 glucose.
+        assert!(
+            daughter_glu > 60.0,
+            "partition should skew glucose to daughter, got {daughter_glu}",
+        );
     }
 
     #[test]
