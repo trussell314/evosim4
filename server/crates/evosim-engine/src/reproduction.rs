@@ -1,25 +1,23 @@
-//! Reproduction (fission) pass. When a cell fires REPRODUCE and meets
-//! the viability gates, we split it into parent + daughter: the
-//! daughter takes `(1 - parent_fraction)` of every chem, catalyst, and
-//! inhibitor pool; the parent keeps the rest. The daughter's genome is
-//! the parent's (or a bonded-crossover recombinant when the parent has
-//! bonds) with an optional single point mutation.
+//! Reproduction (fission) pass. When a cell fires REPRODUCE it pays an
+//! attempt-cost ATP tax (success or not); if it then clears the
+//! viability gates it splits into parent + daughter. The daughter's
+//! share of each named chem is `(1 - parent_fraction)` skewed by any
+//! PARTITION bias the genome set; catalysts / inhibitors split at the
+//! flat ratio. The daughter's genome is the parent's -- or a bonded-
+//! crossover recombinant when the parent has bonds -- with an optional
+//! single point mutation, and the parent pays a genome-replication
+//! material tax (AA + MIN -> waste) proportional to the daughter's
+//! genome length.
 //!
-//! What's NOT here yet (kept honest):
-//!   - REPRODUCE attempt-cost ATP tax: we charge a flat ATP cost on
-//!     SUCCESSFUL fission only. The TS charges on every attempt so
-//!     spamming the op is self-throttling; we'll bring that across
-//!     with the per-cell ATP-spend ledger
-//!   - genome-replication material tax (parent pays a small chem
-//!     cost proportional to childGenome length)
-//!   - PARTITION op respect: TS lets a cell skew the per-chem split
-//!     via the partition list; we do a flat proportional split for
-//!     now. partition list still serialises through the VM, just
-//!     isn't read here yet
+//! What's still simplified vs TS (kept honest):
+//!   - no `division` in-flight state machine: fission resolves in the
+//!     same tick the op fires, so there's no multi-tick mitosis window
+//!   - molecule-pool / generic-chem split: we only carry named chems +
+//!     catalysts + inhibitors, so there's no separate molecule path
 //!
-//! Determinism: mutation needs a per-tick PRNG. We take a `&mut
-//! Mulberry32` so the engine task's `sim_rng` is the single source
-//! and a save/load round-trip preserves the future mutation stream.
+//! Determinism: mutation + crossover need a per-tick PRNG. We take a
+//! `&mut Mulberry32` so the engine task's `sim_rng` is the single
+//! source and a save/load round-trip preserves the future draw stream.
 
 use crate::chem_ids::{CHEM_ADP, CHEM_ATP, NAMED_CHEMICAL_COUNT};
 use crate::creatures::{CreatureInit, CreatureStore};
