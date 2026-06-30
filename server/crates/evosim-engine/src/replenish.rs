@@ -12,11 +12,39 @@
 //! basket of food chems, picked weighted by `SPAWN_WEIGHTS`. Mass
 //! injected via this pass is bounded by the per-tick spawn rate.
 
+use crate::ambient::AMBIENT_STRIDE;
 use crate::chem_ids::{CHEM_ADP, CHEM_BIOPOLYMER, CHEM_FA, CHEM_GLU, CHEM_MIN};
 use crate::chemistry::table as chem_table;
 use crate::particles::ParticleInit;
 use crate::rng::Mulberry32;
 use crate::world::World;
+
+/// Dissolved organic carbon (glucose + fatty acids) summed across the
+/// whole regional field. The replenish scarcity gate compares this to
+/// `organic_satiation_ceiling`.
+fn dissolved_organic_total(world: &World) -> f32 {
+    let d = &world.ambient.dissolved;
+    if d.is_empty() {
+        return 0.0;
+    }
+    let n = d.len() / AMBIENT_STRIDE;
+    let mut sum = 0.0;
+    for ri in 0..n {
+        let base = ri * AMBIENT_STRIDE;
+        sum += d[base + CHEM_GLU] + d[base + CHEM_FA];
+    }
+    sum
+}
+
+/// Per-region organic-carbon ceiling, scaled by region count so the
+/// gate works at any world size. ~40 units/region of dissolved
+/// glucose+FA is comfortably food-rich; above it the world is sated
+/// and replenish backs off.
+fn organic_satiation_ceiling(world: &World) -> f32 {
+    let d = &world.ambient.dissolved;
+    let regions = (d.len() / AMBIENT_STRIDE).max(1) as f32;
+    40.0 * regions
+}
 
 /// Pairs of (chem_id, weight). Sample with cumulative weighted roll;
 /// the weights are the spawn frequency the TS demo uses with a few
@@ -68,6 +96,16 @@ pub fn run_replenish(world: &mut World, dt: f32) -> usize {
     let target = ((cap as f32) * PARTICLE_TARGET_FRACTION) as usize;
     let cur = world.particle_store.len();
     if cur >= target {
+        return 0;
+    }
+    // Scarcity gate: resources upwell when the food web is HUNGRY,
+    // not unconditionally. If the dissolved field is already rich in
+    // organic carbon (glucose + fatty acids), the world doesn't need
+    // more material -- replenishing anyway just inflates total world
+    // mass without feeding anyone (the surplus the cells can't eat
+    // ends up dissolved). Sum the two organic chems across the field
+    // and skip when above a per-region-scaled ceiling.
+    if dissolved_organic_total(world) > organic_satiation_ceiling(world) {
         return 0;
     }
     let gap = target - cur;
