@@ -167,6 +167,14 @@ pub fn run_reproduction(
             daughter_genome[idx] ^= bit;
         }
 
+        // Genome-replication material tax. Copying the daughter's
+        // DNA consumes AA + MIN proportional to its length (the
+        // monomers a real cell spends building a second genome). The
+        // consumed mass becomes waste, so it's mass-conserving and
+        // gives genome BLOAT a metabolic price -- the selection
+        // pressure that keeps genomes from growing without bound.
+        charge_genome_replication(store, i, daughter_genome.len());
+
         // Place the daughter half a radius away from the parent so
         // they don't share a slot. Direction chosen from the rng so
         // siblings spread out over time.
@@ -207,6 +215,35 @@ pub fn run_reproduction(
         spawned += 1;
     }
     spawned
+}
+
+/// Per-genome-byte material cost charged at replication. Mirrors the
+/// TS `GENOME_MASS_PER_BYTE`.
+const GENOME_MASS_PER_BYTE: f32 = 0.01;
+
+/// Charge the parent cell `i` the material cost of copying a genome
+/// of `genome_len` bytes: half the demand from amino acids, half from
+/// minerals, each capped at what the parent actually holds. The
+/// consumed monomers convert to waste so the pass is mass-conserving
+/// and genome length carries a real metabolic price.
+fn charge_genome_replication(store: &mut CreatureStore, i: usize, genome_len: usize) {
+    use crate::chem_ids::{CHEM_AA, CHEM_MIN, CHEM_WASTE};
+    let half_demand = 0.5 * GENOME_MASS_PER_BYTE * genome_len as f32;
+    if half_demand <= 0.0 {
+        return;
+    }
+    let took_aa = store.chems[CHEM_AA][i].min(half_demand);
+    let took_min = store.chems[CHEM_MIN][i].min(half_demand);
+    if took_aa > 0.0 {
+        store.chems[CHEM_AA][i] -= took_aa;
+    }
+    if took_min > 0.0 {
+        store.chems[CHEM_MIN][i] -= took_min;
+    }
+    let consumed = took_aa + took_min;
+    if consumed > 0.0 {
+        store.chems[CHEM_WASTE][i] += consumed;
+    }
 }
 
 /// Child's share of a given chem after applying any PARTITION bias.
@@ -354,6 +391,45 @@ mod tests {
             diff_bits += (p ^ d).count_ones();
         }
         assert!(diff_bits <= 1, "expected 0 or 1 bit difference, got {diff_bits}");
+    }
+
+    #[test]
+    fn genome_replication_taxes_aa_and_min_into_waste() {
+        use crate::chem_ids::{CHEM_AA, CHEM_MIN, CHEM_WASTE};
+        let mut store = CreatureStore::new();
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_AA] = 10.0;
+        chems[CHEM_MIN] = 10.0;
+        store.push(CreatureInit {
+            r: 8.0, chems: Some(chems), ..CreatureInit::default()
+        });
+        let aa0 = store.chems[CHEM_AA][0];
+        let min0 = store.chems[CHEM_MIN][0];
+        // 100-byte genome -> half_demand = 0.5 * 0.01 * 100 = 0.5 each.
+        charge_genome_replication(&mut store, 0, 100);
+        let aa_spent = aa0 - store.chems[CHEM_AA][0];
+        let min_spent = min0 - store.chems[CHEM_MIN][0];
+        assert!((aa_spent - 0.5).abs() < 1e-5, "aa spent {aa_spent}");
+        assert!((min_spent - 0.5).abs() < 1e-5, "min spent {min_spent}");
+        // Consumed mass becomes waste (mass-conserving).
+        assert!((store.chems[CHEM_WASTE][0] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn genome_tax_capped_at_available() {
+        use crate::chem_ids::{CHEM_AA, CHEM_MIN};
+        let mut store = CreatureStore::new();
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_AA] = 0.1; // less than the 0.5 demand
+        chems[CHEM_MIN] = 0.1;
+        store.push(CreatureInit {
+            r: 8.0, chems: Some(chems), ..CreatureInit::default()
+        });
+        charge_genome_replication(&mut store, 0, 100);
+        // Can't go negative; takes only what's there.
+        assert!(store.chems[CHEM_AA][0] >= 0.0);
+        assert!(store.chems[CHEM_MIN][0] >= 0.0);
+        assert!((store.chems[CHEM_AA][0]).abs() < 1e-6);
     }
 
     #[test]
