@@ -217,9 +217,14 @@ impl Default for AmbientField {
 /// per second. Small enough that a healthy cell barely notices.
 const LEAK_PER_S: f32 = 0.005;
 /// Fraction of the ambient stock a cell pulls inward per second.
-/// Symmetric with leak so a cell at ambient equilibrium doesn't
-/// drift.
-const UPTAKE_PER_S: f32 = 0.005;
+/// Passive uptake rate. Bumped 0.005 -> 0.02: at the old rate a cell
+/// sitting in a glucose-rich region pulled only 0.5%/s, so even when
+/// the dissolved field was flooded with food the non-osmotroph
+/// founders couldn't draw enough to cover metabolism and starved.
+/// 2%/s gives every cell a usable passive feeding path while still
+/// being far slower than active TRANSPORT (the osmotroph advantage
+/// survives).
+const UPTAKE_PER_S: f32 = 0.02;
 
 /// Run leak + uptake against every cell at its local region.
 /// Mass-conservingly. Skips signal chems (activation pool slots that

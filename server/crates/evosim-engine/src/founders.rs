@@ -280,6 +280,72 @@ pub fn seed_founders(
     spawned
 }
 
+/// Spawn `count` founders of randomly-chosen strategies. Unlike
+/// `seed_founders` (which seeds the whole cohort at once), this is the
+/// per-tick immigration drip used by `immigration::run_immigration` to
+/// keep the world from bleeding to extinction when viable lineages
+/// are slow to reproduce. Each cell gets the strategy's deterministic
+/// starter genome + chems with the same point-mutation jitter the
+/// cohort seed uses, so immigrants aren't byte-identical clones.
+///
+/// Returns the number actually spawned (may be < count if every
+/// reroll lands in rock, which is vanishingly rare).
+pub fn seed_random_founders(
+    store: &mut CreatureStore,
+    rng: &mut Mulberry32,
+    width: f32,
+    height: f32,
+    surface_y: f32,
+    count: usize,
+    obstacles: &[crate::terrain::Obstacle],
+) -> usize {
+    let genomes = founder_genomes();
+    let chems = founder_chems();
+    let n_strategies = genomes.len();
+    if n_strategies == 0 {
+        return 0;
+    }
+    let water_top = surface_y.max(0.0) + 8.0;
+    let body_r = 8.0_f32;
+    let mut spawned = 0;
+    for _ in 0..count {
+        let strat = (rng.next_f64() as f32 * n_strategies as f32) as usize % n_strategies;
+        let mut g = genomes[strat].clone();
+        if !g.is_empty() {
+            for byte in g.iter_mut() {
+                if rng.next_f64() < FOUNDER_MUTATION_RATE {
+                    let bit = 1u8 << ((rng.next_f64() * 8.0) as usize & 7);
+                    *byte ^= bit;
+                }
+            }
+        }
+        let mut x;
+        let mut y;
+        let mut attempts = 0;
+        loop {
+            x = rng.next_f64() as f32 * width;
+            let span = (height - water_top).max(1.0);
+            y = (water_top + rng.next_f64() as f32 * span).clamp(water_top, height - body_r);
+            attempts += 1;
+            if attempts >= 24
+                || !crate::terrain::founder_terrain_blocked(obstacles, x, y, body_r + 4.0)
+            {
+                break;
+            }
+        }
+        store.push(CreatureInit {
+            x,
+            y,
+            r: 8.0,
+            genome: g,
+            chems: Some(chems[strat].clone()),
+            ..CreatureInit::default()
+        });
+        spawned += 1;
+    }
+    spawned
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

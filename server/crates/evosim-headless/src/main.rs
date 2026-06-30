@@ -156,16 +156,23 @@ fn main() -> Result<()> {
 
 fn print_header() {
     println!(
-        "{:>8}  {:>6}  {:>5}  {:>6}  {:>9}  {:>7}  {:>7}",
+        "{:>8}  {:>6}  {:>5}  {:>6}  {:>9}  {:>7}  {:>7}  {:>8}  {:>8}  {:>8}",
         "tick", "cells", "spec", "parts", "mass", "ms/tick", "atp_tot",
+        "amb_o2", "amb_glu", "amb_co2",
     );
 }
 
 fn print_row(engine: &mut Engine, tick: u64, ms_per_tick: f64) {
     let snap = engine.snapshot();
     let atp_total: f64 = snap.top_species.iter().map(|s| s.atp as f64).sum();
+    // Ambient field totals for the key metabolic chems so a declining
+    // population can be diagnosed as "no food" vs "can't process it".
+    let amb = &snap.ambient_chems;
+    let o2 = amb.first().copied().unwrap_or(0.0);
+    let glu = amb.get(2).copied().unwrap_or(0.0);
+    let co2 = amb.get(1).copied().unwrap_or(0.0);
     println!(
-        "{:>8}  {:>6}  {:>5}  {:>6}  {:>9.0}  {:>7.3}  {:>7.0}",
+        "{:>8}  {:>6}  {:>5}  {:>6}  {:>9.0}  {:>7.3}  {:>7.0}  {:>8.0}  {:>8.0}  {:>8.0}",
         tick,
         snap.creatures.count,
         snap.top_species.len(),
@@ -173,6 +180,9 @@ fn print_row(engine: &mut Engine, tick: u64, ms_per_tick: f64) {
         snap.mass.total,
         ms_per_tick,
         atp_total,
+        o2,
+        glu,
+        co2,
     );
 }
 

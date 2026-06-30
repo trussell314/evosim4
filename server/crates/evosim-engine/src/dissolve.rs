@@ -32,7 +32,14 @@ use crate::region_temp::RegionTempField;
 /// `DISSOLVE_RATE_PER_AREA`. Empirically tuned to be visible but slow
 /// enough that a busy region stays in the dissolve / precipitate
 /// deadband for tens of seconds.
-const DISSOLVE_RATE_PER_AREA: f32 = 0.05;
+/// Lowered 0.05 -> 0.012: at the old rate, food particles dissolved
+/// into the ambient field faster than the particle-eating founders
+/// (seeker / ingester) could reach them, so glucose piled up in the
+/// dissolved field where only osmotrophs could access it and the
+/// rest of the population starved. Slower dissolve lets food pellets
+/// persist long enough to be eaten; the surplus still dissolves so
+/// the field-feeding path stays open.
+const DISSOLVE_RATE_PER_AREA: f32 = 0.012;
 /// Particle radius below which we just remove + dump the residual.
 /// Below this the surface-area math underflows and the particle
 /// would hang around as a sub-pixel speck forever.

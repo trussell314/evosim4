@@ -21,6 +21,7 @@ pub mod creatures;
 pub mod denature;
 pub mod dissolve;
 pub mod gas_escape;
+pub mod immigration;
 pub mod replenish;
 pub mod sterile_cull;
 pub mod wind;
@@ -138,6 +139,10 @@ pub struct Engine {
     /// Sterile-cell cull state. Defaults to enabled; the death pass
     /// picks up the membrane-zero marker the cull writes.
     pub sterile_cull: sterile_cull::SterileCull,
+    /// Founder immigration state. Continuously refills lineage
+    /// diversity so the world doesn't bleed to extinction between
+    /// full-on extinction-reseeds.
+    pub immigration: immigration::Immigration,
 }
 
 impl Engine {
@@ -158,6 +163,7 @@ impl Engine {
             extinction_for_s: 0.0,
             mutation_rate_scale: 1.0,
             sterile_cull: sterile_cull::SterileCull::default(),
+            immigration: immigration::Immigration::default(),
         };
         // Install the default terrain scene + vent BEFORE seeding
         // founders so cells don't materialise inside rock. Geology
@@ -377,6 +383,18 @@ impl Engine {
         sterile_cull::maybe_cull_sterile(
             &mut self.sterile_cull,
             &mut self.world.creature_store,
+            self.world.t,
+        );
+        // Founder immigration: continuously refill lineage diversity
+        // so the world stays alive between extinction-reseeds.
+        immigration::run_immigration(
+            &mut self.immigration,
+            &mut self.world.creature_store,
+            &mut self.world.sim_rng,
+            self.world.width,
+            self.world.height,
+            self.world.surface_y,
+            &self.world.obstacles,
             self.world.t,
         );
         let t = Instant::now();

@@ -29,14 +29,17 @@ const SPAWN_WEIGHTS: &[(usize, f32)] = &[
     (CHEM_ADP, 2.0),
 ];
 
-/// Fraction of `particle_cap` we aim to keep populated. 0.7 leaves
-/// headroom for excrete / aerate spawns and avoids saturating the
-/// renderer.
-const PARTICLE_TARGET_FRACTION: f32 = 0.7;
-/// Spawn budget per sim second when the world is empty. Modulated by
-/// the gap between current count and target so we don't slam the
-/// particle store back to target in one tick.
-const SPAWN_RATE_PER_SEC: f32 = 25.0;
+/// Fraction of `particle_cap` we aim to keep populated as FOOD.
+/// Deliberately low (0.25) -- the cap budgets ALL particles (food,
+/// bubbles, corpses, precipitate), and food should be a modest
+/// fraction. The previous 0.7 dumped ~10x the world's starting mass
+/// into the demo and the cells couldn't consume it fast enough, so
+/// glucose piled up in the dissolved field while the particle-eating
+/// founders starved.
+const PARTICLE_TARGET_FRACTION: f32 = 0.25;
+/// Spawn budget per sim second. Low enough that the inflow tracks
+/// consumption rather than flooding the world.
+const SPAWN_RATE_PER_SEC: f32 = 8.0;
 /// Don't replenish during the warmup window -- gives the chemistry
 /// pipeline a beat to find equilibrium first, and lets the
 /// mass-conservation invariant in `common_sense.rs` ignore the
@@ -117,13 +120,15 @@ pub fn run_replenish(world: &mut World, dt: f32) -> usize {
 }
 
 fn spawn_radius(rng: &mut Mulberry32, chem: usize) -> f32 {
-    // Visible-but-not-massive radii: small for food, slightly bigger
-    // for minerals so they're recognisable as sediment.
+    // Small radii: particle mass scales with r^3, so a 2.5px food
+    // pellet already carries ~100 mass for dense chems. Keep food
+    // pellets small (1.2-2.0px) so replenish doesn't balloon world
+    // mass; minerals slightly bigger so they read as sediment.
     let base = match chem {
-        c if c == CHEM_MIN => 3.0,
-        _ => 2.0,
+        c if c == CHEM_MIN => 2.0,
+        _ => 1.2,
     };
-    base + (rng.next_f64() as f32) * 1.5
+    base + (rng.next_f64() as f32) * 0.8
 }
 
 fn spawn_density(chem: usize) -> f32 {
