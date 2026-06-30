@@ -21,7 +21,7 @@
 //! Mulberry32` so the engine task's `sim_rng` is the single source
 //! and a save/load round-trip preserves the future mutation stream.
 
-use crate::chem_ids::{CHEM_ATP, NAMED_CHEMICAL_COUNT};
+use crate::chem_ids::{CHEM_ADP, CHEM_ATP, NAMED_CHEMICAL_COUNT};
 use crate::creatures::{CreatureInit, CreatureStore};
 use crate::genome_consts::CATALYST_COUNT;
 use crate::rng::Mulberry32;
@@ -32,6 +32,10 @@ const MIN_FISSION_ATP: f32 = 8.0;
 /// Flat ATP cost charged on every SUCCESSFUL fission. Crude but
 /// honest until the per-cell spend ledger lands.
 const FISSION_ATP_COST: f32 = 4.0;
+/// Attempt-cost charged on every REPRODUCE fire, success or not.
+/// Self-throttles op-spamming genomes. Mirrors the TS constants.
+const REPRODUCE_ATTEMPT_ATP_BASE: f32 = 0.4;
+const REPRODUCE_ATTEMPT_ATP_PER_MASS: f32 = 0.01;
 /// Minimum total mass a cell needs before it's allowed to divide.
 /// Below this its daughter would be vanishingly small.
 const MIN_FISSION_MASS: f32 = 4.0;
@@ -66,6 +70,28 @@ pub fn run_reproduction(
         // before the next tick resets it.
         store.vm_out[i].reproduce = false;
 
+        // Parent fraction clamped to a sane band so the daughter
+        // gets a real share but the parent isn't gutted.
+        let parent_fraction = (store.vm_out[i].reproduce_fraction as f32).clamp(0.1, 0.9);
+        let child_share = 1.0 - parent_fraction;
+
+        // Attempt cost: initiating mitosis spends ATP whether or not
+        // the attempt commits. This is the rate-limit on REPRODUCE --
+        // a cell can't fire it every tick for free; spamming the op
+        // burns ATP on failed cycles and starves the cell. The
+        // per-mass term scales with material MOVED (childShare *
+        // parentMass), so a big mother shedding a small seed pays
+        // proportionally less than a 50/50 fission. ATP -> ADP keeps
+        // it mass-conserving.
+        let total_mass: f32 = store.chems.iter().map(|c| c[i]).sum();
+        let attempt_cost =
+            REPRODUCE_ATTEMPT_ATP_BASE + REPRODUCE_ATTEMPT_ATP_PER_MASS * child_share * total_mass;
+        let paid = store.chems[CHEM_ATP][i].min(attempt_cost);
+        if paid > 0.0 {
+            store.chems[CHEM_ATP][i] -= paid;
+            store.chems[CHEM_ADP][i] += paid;
+        }
+
         if store.n >= MAX_POPULATION {
             continue;
         }
@@ -74,15 +100,9 @@ pub fn run_reproduction(
         if atp < MIN_FISSION_ATP {
             continue;
         }
-        let total_mass: f32 = store.chems.iter().map(|c| c[i]).sum();
         if total_mass < MIN_FISSION_MASS {
             continue;
         }
-
-        // Parent fraction clamped to a sane band so the daughter
-        // gets a real share but the parent isn't gutted.
-        let parent_fraction = (store.vm_out[i].reproduce_fraction as f32).clamp(0.1, 0.9);
-        let child_share = 1.0 - parent_fraction;
 
         // Charge the fission ATP cost on the parent before the split
         // so the parent eats the cost and the daughter inherits a
@@ -319,10 +339,11 @@ mod tests {
         // Each half should get ~ half the glucose pool.
         assert!((store.chems[CHEM_GLU][0] - 5.0).abs() < 1e-3);
         assert!((store.chems[CHEM_GLU][1] - 5.0).abs() < 1e-3);
-        // Parent ATP: started 20, charged 4 -> 16, then split 50/50
-        // -> 8 left.
-        assert!((store.chems[CHEM_ATP][0] - 8.0).abs() < 1e-3);
-        assert!((store.chems[CHEM_ATP][1] - 8.0).abs() < 1e-3);
+        // Parent ATP: started 20. Attempt cost = 0.4 + 0.01*0.5*30 =
+        // 0.55 -> 19.45. Fission cost 4 -> 15.45. Split 50/50 -> 7.725
+        // each.
+        assert!((store.chems[CHEM_ATP][0] - 7.725).abs() < 1e-3, "got {}", store.chems[CHEM_ATP][0]);
+        assert!((store.chems[CHEM_ATP][1] - 7.725).abs() < 1e-3, "got {}", store.chems[CHEM_ATP][1]);
         // child_count stamped on the parent.
         assert_eq!(store.child_count[0], 1);
     }
@@ -391,6 +412,35 @@ mod tests {
             diff_bits += (p ^ d).count_ones();
         }
         assert!(diff_bits <= 1, "expected 0 or 1 bit difference, got {diff_bits}");
+    }
+
+    #[test]
+    fn failed_reproduce_attempt_still_costs_atp() {
+        // A cell below the fission ATP threshold that fires REPRODUCE
+        // must STILL pay the attempt cost (ATP -> ADP), so spamming the
+        // op isn't free. With 5 ATP it can't divide (needs 8) but the
+        // attempt drains a little.
+        let mut store = CreatureStore::new();
+        let mut chems = vec![0.0; NAMED_CHEMICAL_COUNT];
+        chems[CHEM_ATP] = 5.0;
+        chems[CHEM_GLU] = 20.0;
+        store.push(CreatureInit {
+            r: 8.0, chems: Some(chems), ..CreatureInit::default()
+        });
+        store.vm_out[0].reproduce = true;
+        store.vm_out[0].reproduce_fraction = 0.5;
+        let atp0 = store.chems[CHEM_ATP][0];
+        let adp0 = store.chems[CHEM_ADP][0];
+        let mut rng = Mulberry32::new(1);
+        let spawned = run_reproduction(
+            &mut store, &crate::bonding::make_bonds(1), &mut rng, 1.0, 0.0,
+        );
+        assert_eq!(spawned, 0, "5 ATP is below the fission threshold");
+        let atp1 = store.chems[CHEM_ATP][0];
+        let adp1 = store.chems[CHEM_ADP][0];
+        assert!(atp1 < atp0, "failed attempt must still spend ATP");
+        // Mass-conserving: ATP lost == ADP gained.
+        assert!(((atp0 - atp1) - (adp1 - adp0)).abs() < 1e-5);
     }
 
     #[test]
