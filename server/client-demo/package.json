@@ -1,0 +1,18 @@
+{
+  "name": "evosim-client-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tiny WebSocket+msgpack client that renders particles from the evosim-server. Proves the wire end-to-end while the full TS app integration lives on its own branch.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0-beta2"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}

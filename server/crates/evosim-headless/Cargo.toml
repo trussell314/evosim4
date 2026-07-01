@@ -1,0 +1,16 @@
+[package]
+name = "evosim-headless"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "evosim-headless"
+path = "src/main.rs"
+
+[dependencies]
+evosim-engine.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive", "env"] }

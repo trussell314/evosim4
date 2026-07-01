@@ -4,3 +4,8 @@ dist
 *.log
 .vite
 *.tsbuildinfo
+# Throwaway investigation probes (CLAUDE.md: not part of shipped surface)
+scripts/probe_*.ts
+# Rust workspace artifacts
+server/target/
+server/**/target/

@@ -1,0 +1,504 @@
+# Native engine port: progress log
+
+Tracks the state of the TS -> Rust port. Each entry lists what's
+*done* (with parity tests / commit hashes you can pull up) and what
+remains. Read this when picking the port back up after a break.
+
+The TS app on `claude/develop` is unaffected; the port lives only
+under `server/`.
+
+## Done
+
+### Foundation (`f95c438`)
+Cargo workspace, three crates, axum WebSocket binary, admin bearer
+token, supervisor wrapper script.
+
+### Cloudflare Tunnel (`8bd3f8f`)
+`tunnel.sh` glue, quick + named modes, Cloudflare Access walkthrough.
+
+### RNG + chem-ids (`2fafd12`)
+Mulberry32 + mixHash with goldens; 96-slot chemical id space.
+
+### Chemistry table (`4b74d20`)
+Full 96-chem ChemTable behind a OnceLock. Generic chems generated
+deterministically; goldens captured from TS pin generic 46, generic
+95, bond potential math, spawn-order first/last 5.
+
+### Genome-ABI constants (`48b4228`)
+CATALYST_COUNT, N_REACTIONS, NAMED_REACTION_COUNT, etc.
+
+### Reaction table (`626f8ee`)
+Full 256-slot REACTIONS port. Procedural region from
+`mulberry32(0xE2C4_BEEF)`, named head (respiration, photosynth,
+synth-*, digest, photophos at slot 25), carbon-fix overlay at the
+lowest-interest 8 generic slots, transport band at the tail.
+Goldens for slots 100, 150, carbon-fix 39, transport layout.
+
+### ParticleStore (`171edc3`)
+SoA over Vec columns: x/y/z/vx/vy/vz/r/density/age (f32), chem_id
+(u8), quiet_ticks (i32), sparse molecules + generic_chem payloads.
+push / remove_swap_pop / clear with handle-fixup return value.
+
+### World + force kernel (`43ad02a`)
+World skeleton owning particles + ambient params + sim RNG.
+`apply_particle_forces_range` over &mut slices, line-for-line with
+TS `applyParticleForcesRange`. Buoyancy, waves, splash, updraft,
+current, brownian, drag, velocity cap, integrator. Tests cover
+buoyancy direction, sink direction, velocity cap.
+
+### Engine ticks real particles (`43ad02a`)
+Engine::step calls forces::apply_forces. Snapshot packs the live
+SoA columns as little-endian f32 / raw u8 blobs the client decodes
+via TypedArray views.
+
+### Controller commands (`429c6cb`)
+SetRunning / SetSimRate wired through to the engine task; sim rate
+clamped [0.05, 8.0]. Save still nacks as unimplemented (waits on
+save/load port).
+
+### Collision pass (`8ead336`)
+Particle-particle Jacobi sweeps over a GRID_CELL_SIZE=12 spatial
+hash. CollisionScratch owns per-tick buffers on the Engine so the
+hot path doesn't allocate. Sleep heuristic (< sqrt(25) px/s for >= 30
+ticks). Tests cover overlap separation, head-on bounce, asleep
+skip. Parallel two-phase row-parity dispatcher not ported (waits
+on the population that warrants the rayon dispatch overhead).
+
+### Standalone demo client (`39af532`)
+`server/client-demo/`: Vite + TS app, msgpack decode, canvas
+renderer. End-to-end smoke verified: Hello, auth re-Hello with
+admin flag, Snapshot at tick 73 with 200 particles, AdminAck for
+the status command. 25 KB JS bundle, 7.7 KB gzip. Independent
+from `src/` so it ships before the main-app adapter.
+
+### Protocol v2: chem colors (`ecd5a0c`)
+Hello frame carries chem_colors + chem_names (96 each) so the
+client renders particles with the real chemistry palette.
+
+### Genome VM scaffold (`9e06c81`)
+Opcode constants, the const [u8; 256] OPERANDS table, walk_genome
+(full + expressed-only), coding_key / species_key / coding_bytes.
+
+### Genome VM interpreter (`a4f857d`)
+run_tick ported in full: all 256 opcodes, gene framing, per-gene
+stack isolation, f64 stack (bounded-32, drops oldest), f32
+registers, in-place POKE, ECMAScript ToInt32 semantics, floored
+MOD. Sensors trait for world coupling. VmOutputs carries the full
+per-tick output surface (thrust/turn/excrete/transport/reproduce/
+predate/engulf/ingest/synth masks/bond/splice/poke/partition/emit).
+11 unit tests + a TS golden captured from the identical genome.
+
+### Minimal CreatureStore + creature_update (`22593f6`)
+First end-to-end VM-driven creatures. SoA columns for kinematics +
+named-chem pool + catalyst/inhibitor + genome + VmState. Per-tick
+pass runs run_tick, applies thrust/turn/cat_synth_list to the cell,
+movement integrator with damping + world-wrap. The minimal output
+surface the engine can act on today; growing as more subsystems
+land.
+
+### Demo client renders creatures (`37829c4`)
+The standalone demo decodes the creature SoA columns and draws
+cells on top of the particle field, colored by energy.
+
+### Cell reaction driver (`5974552`)
+runGenericReactions ported. Cells now metabolise: substrate ->
+product under MM saturation, ATP credit/debit, machinery
+multipliers, the lot. Demo seeds reshuffled: metabolizers carry
+GLU+O2+ADP for aerobic respiration; photoautotrophs carry chl +
+mRNA + CO2 + ADP for photosynth + photophosphorylation. Live
+smoke shows ATP rising in both lines.
+
+### Save/load (`fc2ab95`)
+Rust-native JSON save schema. World dims, RNG state, particle SoA,
+creature SoA (incl genome + VmState + sparse catalyst/inhibitor),
+schema fingerprint. Wire commands Save / Load / Saves over the
+WebSocket with constant-time admin auth + path sanitisation. Atomic
+disk writes. Engine save_json / load_json round-trips byte-for-byte.
+
+### Spatial sensor bins -- SENSE_OUT real (`6ed019e`, `08f4a46`)
+chemGradient ported. 40px bin grid, per-chem centroid sums, rebuilt
+every tick after physics. SENSE_OUT now returns a real gradient
+vector. Live demo cells with [GENE SENSE_OUT <c> THRUST END] swim
+up the chem-c gradient.
+
+### Minimal fission (`4e4cc0d`)
+reproduce_op produces a daughter: parent_fraction proportional
+split of chems + catalyst + inhibitor, ATP cost on parent,
+point-mutated genome copy. Reproducer demo cells visibly multiply.
+
+### Death + autolysis (`fe3ff4b`)
+Cells below MIN_VIABLE_MEMBRANE get culled; their chem mass releases
+as particles, closing mass conservation across fission and death.
+
+### Baseline metabolic drain (`b75119b`)
+Per-second ATP + membrane tax. The slow clock that makes selection
+bite: unfed cells starve.
+
+### Species count + per-window deaths (`3901c38`)
+Snapshot grows species_count (distinct coding-key) + deaths_this_window
+fields. Live smoke confirms emergent evolutionary dynamics:
+extinctions, mass conservation, equilibria.
+
+### Viable founder seeding (`f5efc75`)
+16 founders across 4 trophic strategies (photoautotroph, aerobic
+metabolizer, glucose seeker, reproducer). Starter pools tuned to
+outlive baseline drain; per-byte point mutation seeds genetic
+diversity. Sim self-sustains for at least 4+ sim-minutes; selection
+visibly culls unfit reproducer lines from 12 species down to 3.
+
+### Day / night cycle + particle decay (`a5b... e0c2789`)
+The world breathes. Multiple substantial passes landed in a single
+session:
+  - day_cycle: ambient_light_at(t, period) -- sin curve over the
+    daylight half, flat zero through night. Photoautotrophs gain
+    glucose only during daylight
+  - particle_decay: per-tick aging + radius shrink; particles past
+    MAX_AGE_S (120) or below MIN_RADIUS (0.3) get culled. Without
+    this autolysis grows the particle field monotonically forever
+  - ambient: AmbientField (per-chem world-wide stock) with passive
+    cell <-> ambient leak/uptake. Death pass dissolves 40% of each
+    cell's emitted chems into ambient
+  - excrete_transport: wires the VM's EXCRETE / TRANSPORT ops to
+    actually move chems between cells and ambient
+  - cell biosynth: catalyst growth is now real biosynth (consumes
+    AA+MIN+ATP, gated by mRNA), not a placeholder linear bump
+  - top_species + per-cell speciesIdx: the snapshot tells the
+    client which species each cell belongs to, with deterministic
+    HSL colors from a FNV-1a hash of the coding key
+  - client species inspector: clickable species list with a tiny
+    in-browser disassembler
+  - ingest: cells absorb particles whose bond-potential clears
+    their VM-set ingest threshold. Mass-conserving deposit into
+    chem pool. New ingester founder line
+  - growth: cell radius now tracks membrane chem (r ~ sqrt(mem)),
+    so cells visibly grow when they synthesise membrane and shrink
+    when they fission and halve it
+
+Live smoke at the end of this session shows a stable food web at
+48 cells / 13 species across 4 sim-minutes, with mass moving
+through 6 trophic strategies (photo / metab / seeker / reproducer
+/ osmotroph / ingester).
+
+### Apex predation + cell-cell physics
+PREDATE op closes the apex predator loop -- cells eat smaller cells,
+absorb chem + catalyst pools wholesale, prey dies next tick. Cell-
+vs-cell collisions resolve overlap with mass-weighted Jacobi sweeps
+so predators can corner prey instead of phasing through them.
+Mass-scaled metabolic drain (per-mass ATP per-tick term) creates
+selection pressure against unbounded size accumulation.
+
+### Genome describer + interactive inspector
+describe.rs walks the genome's expressed code and produces an
+English summary: which ops fire, which chems are sensed/excreted,
+which catalyst slots are boosted, whether control flow is
+conditional or linear. Demo client clicks species -> shows
+description above the disassembler.
+
+### Catalyst-gated transport reactions
+The reaction table's tail slots (231..256) come alive: cells with
+non-zero catalyst pool at a transport slot facilitate the chem
+flux through their membrane. Mass-conserving, bounded by source
+availability. Combined with biosynth_catalyst this is how cells
+SPECIALISE -- you choose what transporters to build by what
+catalysts you express.
+
+### Bonding (cell-cell adhesion + multicellularity)
+bonding.rs lets cells form persistent connections when their VM
+bond markers match within tolerance and their CHEM_BOND pool is
+above threshold. Bonded cells experience a soft Hooke spring
+keeping them clustered. Bond marker is genome-encoded
+(greenbeard recognition). Bonded clusters resist drift past
+viability -- they're a real selective advantage.
+
+### Per-cell sense range from SENSE_AMP
+Cells now derive their sense range from a count of SENSE_AMP
+bytes in their genome (sqrt scaling). Sensor breadth is an
+evolvable trait paying a real cost in genome length.
+
+### Somatic mutation + REPAIR
+somatic.rs gives every cell a per-tick mutation probability
+scaling with age^2; CHEM_REPAIR above threshold refreshes a
+suppression window. Long-lived cells drift; repair-investing
+cells stay stable. Third evolvable axis for selection.
+
+### Top-species summary + species inspector
+Snapshot ships up to 16 species summaries (coding_key, count,
+HSL color from FNV hash, representative genome bytes, English
+description). Per-cell speciesIdx column for client coloring.
+Client roster + disassembler + describer all wired together.
+
+### Day/night cycle + particle decay + ambient field + transport
+- Day/night ambient_light cycles between 0 and 1 over 60-sec
+  default period; photosynth tracks it. Sun indicator in client
+- Particle decay: per-tick age + radius shrink; particles past
+  MAX_AGE_S (120) or below MIN_RADIUS (0.3) removed. Bounds
+  the autolysis chem field
+- AmbientField: per-chem world-wide stock with cell <-> ambient
+  passive leak/uptake. Death pass dissolves 40% of each chem.
+  Client shows top 10 dissolved chems in a left-side panel
+- VM's EXCRETE / TRANSPORT ops drain into / pull from ambient
+
+### Founder seeding -- 8 trophic strategies, clustered bonder spawn
+Founders: photoautotroph, metabolizer, seeker, reproducer,
+osmotroph, ingester, predator, bonder. 4 each = 32 founders.
+Bonder spawns as a tight cluster so the cohort actually meets.
+
+### eDNA / horizontal gene transfer
+edna.rs: dying cells release their genome into a world-wide eDNA
+pool with position and age. COMPETENCE-expressing cells absorb the
+nearest in-range carrier, splicing one byte into their own genome.
+Third evolutionary mechanism alongside fission inheritance and
+somatic mutation. SaveSchema bumped to v3.
+
+## Three independent evolutionary mechanisms now active
+
+1. **Fission inheritance + point mutation**: reproduction::run_reproduction
+   halves the parent's chems for the daughter, then optionally flips
+   one bit in the genome at FISSION_MUTATION_RATE = 0.4
+2. **Age-driven somatic mutation, repair-suppressed**: somatic.rs --
+   cells drift at age^2 * SOMATIC_MUTATION_AGE_COEF unless they
+   invest in CHEM_REPAIR
+3. **Horizontal gene transfer**: edna.rs -- dying cells leak genome
+   fragments; COMPETENCE cells in range pick up + splice one byte
+
+Combined these produce real evolutionary dynamics: lineages split
+through fission, drift through age, and exchange code laterally.
+The native engine has parity (in mechanism, if not in calibration)
+with the TS implementation's evolvability.
+
+### Sensor activation pass
+activation.rs: receptor_pool * stimulus -> activated chem signal.
+Three sensor modalities wired:
+  - Photoreceptors (visible / long / surface bands) read
+    ambient_light from the day cycle
+  - Electroreceptors sum nearby cells' ATP weighted by 1/dsq +
+    direction. Cells feel each other's metabolism
+  - Vibroreceptors sum nearby particles' speed^2 weighted by
+    1/dsq + direction. Cells feel motion in the particle field
+
+SENSE_CHEMICAL on the CHEM_ACT_* slots is now a real sensor,
+not a no-op.
+
+### Mass conservation + accounting
+mass.rs: total-mass report shipped in every snapshot. Surfaced
+two real bugs while wiring:
+  - maintenance.rs: ATP spent on upkeep used to vanish. Fixed
+    via ATP -> ADP swap (mass-conserving). Membrane drain now
+    deposits into ambient WASTE
+  - particle_decay.rs + death.rs: autolysed particles used to
+    be fixed-radius regardless of carried mass. Fixed: particle
+    radius sized so volume*density = remaining chem mass
+
+Live smoke now shows total mass invariant across 5+ sim-minutes
+(0.004% drift = float-rounding only).
+
+## Engine status: SUBSTANTIVELY COMPLETE
+
+The native Rust engine has all the biological/evolutionary
+features of the TS engine. What remains is performance work
+(rayon for the parallel loops, wgpu for the GPU force kernel)
+and spatial localization (the region grid). The base substrate
+is done; further work is optimisation + UI rather than missing
+biology.
+
+Live smoke after this session's commits:
+  t=1s:    cells=86 species=28 bonds=6 mass=23026
+  t=61s:   cells=50 species=22 bonds=6 mass=22508
+  t=181s:  cells=50 species=22 bonds=6 mass=22508
+  t=301s:  cells=50 species=22 bonds=6 mass=22507
+
+Five sim-minutes of stable evolutionary equilibrium with mass
+conservation provable from a snapshot.
+
+### Sensor activation pass -- ALL 7 modalities
+
+The activation pass now covers every receptor/activation chem pair
+the chemistry table defines:
+
+  - photo (visible/long/surface bands) -- ambient_light from day
+    cycle PLUS bioluminescence (EMIT[1] from nearby cells via
+    1/dsq weighting)
+  - electric (xy) -- nearby cells' ATP + EMIT[0]
+  - vibration (xy) -- particle motion + nearby cells' EMIT[2]
+  - pH (scalar) -- local + ambient CO2
+  - magnetic (xy) -- uniform world compass (+y)
+  - thermal (scalar) -- linear depth gradient TEMP_TOP -> TEMP_BOTTOM
+  - mechanical (xy) -- cell's own velocity
+
+That's 13 activation channels across 9 receptor chems. The VM's
+SENSE_CHEMICAL on every CHEM_ACT_* slot is a real environmental
+signal.
+
+### EMIT op consumption
+
+The VM's EMIT op was inert. Now active emission feeds the
+activation pass:
+  - EMIT[0] electric    -> electroreceptor source (500x stronger
+                          than passive ATP per unit)
+  - EMIT[1] light       -> photoreceptor bioluminescence
+  - EMIT[2] vibration   -> cell-to-cell vibration signalling
+  - EMIT[3] magnetic    -> no receiver (no biological analog)
+
+### Colony predation refuge (COLONY_GAPS #3)
+
+predate.rs's size gate now compares against the prey's full bonded
+cluster's effective radius (sqrt of sum-of-squared-radii across the
+connected bond component), not the prey cell's own. Because r scales
+as sqrt(membrane mass), this aggregates membrane mass additively, so
+a predator must out-size the *colony* to clear the gate. Adhesion
+now pays selection rent twice: cross-feeding (shared diffusion) AND
+predation refuge -- a real evolvable defense rather than just
+co-localization. Substrate addition, not scripted behavior; closes
+COLONY_GAPS.md GAP #3 in the native engine.
+
+### Per-species biomass + ATP
+
+Snapshot summaries grow biomass and atp fields. The client roster
+shows count + mass + ATP per species, surfacing ecological insight
+the count column alone misses.
+
+### Configure admin command
+
+Admin can reset the engine with custom world parameters (width,
+height, seed, day_period_s, founders_per_strategy). Resizes without
+restarting the binary.
+
+### Phototactic founder
+
+New 9th founder strategy uses the activation pass end-to-end:
+  GENE SYNTH CAT 12 SENSE_CHEMICAL 16 PUSH8 0 SWAP THRUST END
+Synthesizes its own photoreceptors, reads the activated chem,
+swims based on the signal. Demonstrates that the receptor ->
+activation -> behaviour loop is complete and live in the demo.
+
+## Engine status: feature-complete for the substrate
+
+Every behaviour loop the VM was capable of expressing now closes:
+  - 256 opcodes including all sensors and effectors
+  - All 7 sensor modalities active
+  - All 3 EMIT channels with receivers
+  - Three evolutionary mechanisms (fission, somatic, HGT)
+  - Mass-conserving (verifiable from a snapshot)
+  - Self-sustaining demo with 9 trophic strategies
+  - Bonded prey gets predation refuge (COLONY_GAPS #3 closed)
+
+## Up next -- finish parity with the TS substrate
+
+The native engine has every loop the TS VM exposes, but a handful of
+*world*-side TS modules are not yet ported. They're all live in TS
+production today, so this is closing the parity gap, not exploring
+new biology.
+
+### 1. Region grid + regional dissolved/reserve (`src/sim/regions.ts`)
+~534 lines TS. **Phases 0, 1, 3 shipped; rock-aware diffusion +
+precipitation also shipped**. Phase 4 (reserve bucket + anisotropic
+vertical diffusion) and the regional temperature field + vent
+heat injection are the remaining sub-pieces.
+
+- **Phase 0 (`c2cb99d`)** -- grid geometry + solubility table
+  + Henry's-law temperature factor + capacity formula
+- **Phase 1 (`11f2974`)** -- per-region dissolved field replaces the
+  global stock; every consumer (excrete/transport, autolysis, leak/
+  uptake, maintenance, transport reactions, pH activation) acts on
+  the LOCAL region; mass-conserving Jacobi cross-region diffusion
+  with a 60s half-life; SAVE_SCHEMA bumped 3 -> 4
+- **Phase 3 (`adfbbd3`)** -- supersaturated regions precipitate the
+  excess back into 2px particles, closing the dissolve <-> precipitate
+  loop so the dissolved field is bounded
+- **Solid-mask integration (`8be9f91`)** -- diffusion and precipitation
+  honor the per-region rock mask once obstacles are populated;
+  caves / overhangs become genuinely isolated micro-environments
+
+Still open: Phase 4 (reserve bucket with anisotropic vertical
+drift) and the regional temperature field stepper that wires up
+`vent::vent_heat_at` as a source term.
+
+### 2. Static terrain (`src/sim/terrain.ts`, partial geology.ts)
+~600 lines TS. **Substrate shipped (`09c7516`)** -- Obstacle /
+ObstacleLobe / PolygonPoint types, point-in-polygon, lobe packing,
+heightmap, founder-blocked spawn test, nearest-edge query. Empty
+obstacles list by default; the hand-authored Inkscape polygons
+from `terrain-shapes.ts` are content (~265 lines of raw vertex
+data) and live in a future scene / world-config port, not the
+engine substrate.
+
+### 3. Obstacle collision (`src/sim/obstacle-collision.ts`)
+~512 lines TS. **Shipped (`09c7516`)** -- ObstacleIndex (cell bitmap
++ per-cell lobe lists) built once per world via rebuild();
+resolve_obstacle_collisions per-tick polygon-edge push-out for
+particles + creatures with iteration order preserved bit-for-bit;
+evacuate_rocks safety net dissolves stuck particles into the
+nearest water region; deposit_region_base rock-aware ambient redirect.
+
+### 4. Hydrothermal vent (`src/sim/vent.ts`)
+~262 lines TS. **Shipped (`f1619ae`)** -- VentState on World as
+`Option<VentState>`, dormant/warmup/main/cooldown phase machine,
+weighted 10-chem cocktail emissions ramped by intensity^2,
+vent_heat_at Gaussian heat field. No-op when no vent is installed
+so existing demo runs unchanged. Skipped: global-saturation gate
+(needs per-chem capacity accumulator) and generic-molecules
+particle content tag.
+
+### 5. Chemolith derivation (`src/sim/chemolith.ts`)
+~78 lines TS. **Shipped (`<this>`)** -- `energy_slot()` /
+`carbon_slot()` / `vent_fuel_chems()` derived once from the
+seeded reaction table. The vent's fuel cocktail and a
+chemolithoautotroph archetype's `SYNTH CAT` targets now agree
+by construction -- the seeded chemistry picks the niche, no
+hand-tuning.
+
+## Substrate parity status
+
+The TS engine's substrate is now ported. Open piece in the regional
+layer (Phase 4 reserve bucket + regional temperature stepper) is
+non-blocking -- the world ticks correctly without it; reserve adds
+heavy-chem sedimentation and regionTemp wires vent heat into
+solubility. Hand-authored terrain polygons and the
+chemolithoautotroph founder archetype are content / world-config,
+not substrate.
+
+## After substrate parity -- backlog (not blocking)
+
+These are perf / product surface, not biology. Recorded here so the
+list above stays substrate-only.
+
+- Force kernel rayon (`par_chunks_mut` with per-chunk PCG for
+  parallel-safe Brownian noise)
+- wgpu compute force kernel (direct WGSL port of `gpu-forces-shader.ts`)
+- Cell-cell collision rayon (row-parity two-phase dispatch; serial
+  path already written for it)
+- Main TS app adapter (swap `new Worker(...)` in `src/main.ts` for a
+  WebSocket proxy via `?server=wss://host` URL param; the demo
+  client + TUI both prove the wire shape works)
+- Multi-client + persistence (session model, controller/observer
+  roles, periodic persistence, observability endpoints)
+
+## Operator notes
+
+- `cargo test` from `server/` runs 47+ Rust tests; `cargo clippy
+  --all-targets -- -D warnings` is the project lint gate
+- The TS app on `claude/develop` is unaffected. Bring the server
+  up alongside and use `client-demo/` to view the Rust engine
+  while the main app continues to run its in-browser sim
+- `EVOSIM_BUILD_COMMIT` ends up in every Hello frame so the
+  client UI can show which engine commit it's talking to. After
+  `AdminCommand::Update` succeeds + the supervisor relaunches,
+  the new commit hash is observable from the client
+- Determinism: serial CPU path is byte-deterministic per seed
+  (verified by RNG and chemistry/reaction tests). Parallel /
+  GPU paths are not (matches the TS behaviour: pool workers and
+  GPU PCG diverge from the serial RNG draw order). Goldens
+  belong on the serial path
+
+## Conventions for the port
+
+- Every port commit leaves `cargo test`, `cargo clippy
+  --all-targets -- -D warnings` clean
+- Constants and enum variants keep TS spelling where it doesn't
+  fight Rust style (e.g. `CHEM_O2` stays uppercase). Function
+  names go to snake_case
+- Goldens captured from the running TS implementation -- never
+  guessed. The capture commands live in commit messages so they
+  can be re-run if the TS source moves
+- Tests pin against the strict-serial path; parallel paths get
+  their own per-mode goldens later when they land

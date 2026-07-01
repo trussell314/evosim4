@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>evosim — remote</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; background: #02060c; color: #aac; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        row-gap: 4px;
+        column-gap: 12px;
+        align-items: center;
+        padding: 6px 10px;
+        background: rgba(2,12,18,0.96);
+        border-bottom: 1px solid #1a3340;
+      }
+      header label { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+      header input {
+        background: #07111a; border: 1px solid #1a3340; color: #cef;
+        padding: 3px 6px;
+        min-width: 0;
+        max-width: 100%;
+        flex: 0 1 220px;
+        font: inherit;
+      }
+      header input[type="range"] { flex: 0 1 120px; }
+      header button { background: #07111a; border: 1px solid #1a3340; color: #9ee; padding: 3px 8px; cursor: pointer; font: inherit; flex: 0 0 auto; }
+      header button:hover { background: #0d1c26; }
+      header .sep { flex: 1 0 0; min-width: 0; }
+      /* On narrow viewports (phones, portrait) drop the spacer so wrap
+         is consistent, hide the long Update buttons by default, and
+         shrink the species + ambient panels into collapsed cards
+         (the operator can toggle them via the show/hide buttons). */
+      @media (max-width: 700px) {
+        header .sep { display: none; }
+        header label { flex: 1 1 auto; }
+        header button.update { display: none; }
+        #ambient-panel, #species-panel {
+          max-width: 60vw !important;
+          max-height: 40vh !important;
+          font-size: 9px;
+        }
+      }
+      .panel-close {
+        position: absolute; top: 4px; right: 6px;
+        background: transparent; border: none; color: #9ee;
+        font: 12px/1 ui-monospace, monospace; cursor: pointer;
+        padding: 2px 4px;
+      }
+      .panel-close:hover { color: #cef; background: #0d1c26; }
+      #status { padding: 4px 10px; background: rgba(2,12,18,0.96); border-bottom: 1px solid #1a3340; }
+      #canvas-wrap { flex: 1; position: relative; background: #050b14; }
+      canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+      .dim { color: #678; }
+      .ok { color: #7cf07c; }
+      .err { color: #f08070; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <label>server <input id="url" /></label>
+        <label>token <input id="token" placeholder="(optional)" type="password" /></label>
+        <button id="connect">Connect</button>
+        <button id="disconnect" disabled>Disconnect</button>
+        <span class="sep"></span>
+        <button id="pause" disabled>Pause</button>
+        <button id="resume" disabled>Resume</button>
+        <button id="step" disabled title="Advance one tick (paused only)">Step</button>
+        <label>speed
+          <input id="speed" type="range" min="0.25" max="32" step="0.25" value="1" disabled />
+          <span id="speedReadout">1x</span>
+        </label>
+        <button id="speedMax" disabled title="Snap to max sim rate (32x)">Max</button>
+        <button id="save" disabled title="Admin only -- writes to EVOSIM_SAVE_DIR">Save</button>
+        <button id="load" disabled title="Admin only -- list saves and reload one">Load…</button>
+        <button id="reset" disabled title="Admin only">Reset</button>
+        <button id="help" title="Show keyboard shortcuts (key ?)">?</button>
+        <button id="configure" disabled title="Admin only -- reseed with custom world parameters">Configure…</button>
+        <button id="settings" disabled title="Admin only -- runtime knobs (particle cap)">Settings…</button>
+        <button id="export" disabled title="Admin only -- download the current world as JSON">Export</button>
+        <button id="import" disabled title="Admin only -- load a JSON world file from your device">Import</button>
+        <input id="import-file" type="file" accept="application/json,.json" style="display:none;" />
+        <button id="update-server" class="update" disabled title="Admin only -- git pull + cargo build + restart (~1-2 min). Client auto-reconnects.">Update server</button>
+        <button id="update-client" class="update" disabled title="Admin only -- git pull + npm ci + npm run build for client-demo. Page reloads on success.">Update client</button>
+        <button id="toggle-ambient" title="Show/hide the ambient chems panel (key A)">A</button>
+        <button id="open-ledger" title="Chemistry ledger -- per-chem dissolved + visible mass (key C)">C</button>
+        <button id="open-reactions" title="Reactions catalogue (key R)">R</button>
+        <button id="open-tree" title="Phylogeny tree (key T)">T</button>
+        <button id="toggle-species" title="Show/hide the species panel (key S)">S</button>
+        <label style="display:inline-flex; align-items:center; gap:4px;">overlay
+          <select id="overlay-mode" style="background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px; font:inherit;">
+            <option value="none">none</option>
+            <option value="density">density</option>
+            <option value="light">light</option>
+            <option value="mass">mass</option>
+            <option value="perf">perf</option>
+            <option value="history">history</option>
+            <option value="phylo">phylo</option>
+            <option value="regions">regions</option>
+          </select>
+        </label>
+        <button id="reset-view" title="Reset zoom + pan (double-click on canvas)">⌖</button>
+      </header>
+      <dialog id="configure-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Configure world</div>
+          <div style="color:#789; margin-bottom:10px;">Empty fields leave the current value. Submitting resets the world.</div>
+          <label style="display:block; margin-bottom:6px;">width <input id="cfg-width" type="number" min="200" max="6400" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1600" /></label>
+          <label style="display:block; margin-bottom:6px;">height <input id="cfg-height" type="number" min="200" max="6400" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1200" /></label>
+          <label style="display:block; margin-bottom:6px;">seed <input id="cfg-seed" type="number" min="0" max="2147483647" step="1" style="width:120px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1791989" /></label>
+          <label style="display:block; margin-bottom:6px;">day period (s) <input id="cfg-day" type="number" min="0" max="3600" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="300" /></label>
+          <label style="display:block; margin-bottom:10px;">founders / strategy <input id="cfg-founders" type="number" min="0" max="200" step="1" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="4" /></label>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Cancel</button>
+            <button id="cfg-apply" value="apply" type="submit" style="background:#0d1c26; border:1px solid #2a4d62; color:#cef; padding:4px 10px; cursor:pointer; font:inherit;">Apply</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="settings-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Runtime settings (admin)</div>
+          <div style="color:#789; margin-bottom:10px;">Tunes the live engine without a Reset. Blank = leave unchanged.</div>
+          <label style="display:block; margin-bottom:8px;">particle cap
+            <input id="set-pcap" type="number" min="0" max="200000" step="100" style="width:100px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="e.g. 8000" />
+            <button id="set-pcap-clear" type="button" style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:2px 8px; cursor:pointer; font:inherit;">Unbounded</button>
+          </label>
+          <label style="display:block; margin-bottom:8px;">mutation rate ×
+            <input id="set-mut" type="number" min="0" max="16" step="0.05" style="width:80px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="1.0" />
+            <span style="color:#789;">0 disables drift; 1 is engine default; 16 is the cap.</span>
+          </label>
+          <div style="font-weight:bold; color:#cef; margin:12px 0 6px;">Ecology</div>
+          <div style="color:#789; margin-bottom:8px;">Population-management passes. Turn these off to watch raw extinction dynamics.</div>
+          <label style="display:block; margin-bottom:6px;"><input id="set-immigration" type="checkbox" checked /> founder immigration (refills lineage diversity)</label>
+          <label style="display:block; margin-bottom:6px;">&nbsp;&nbsp;target species <input id="set-imm-target" type="number" min="0" max="64" step="1" style="width:60px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:2px 4px;" placeholder="14" /></label>
+          <label style="display:block; margin-bottom:6px;"><input id="set-cull" type="checkbox" checked /> sterile-cell cull (retire non-reproducers)</label>
+          <label style="display:block; margin-bottom:8px;"><input id="set-replenish" type="checkbox" checked /> food replenishment (off = closed system)</label>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+            <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Cancel</button>
+            <button value="apply" type="submit" style="background:#0d1c26; border:1px solid #2a4d62; color:#cef; padding:4px 10px; cursor:pointer; font:inherit;">Apply</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="load-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:280px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Load saved world</div>
+          <div id="load-list" style="margin-bottom:10px; max-height:50vh; overflow:auto;"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="cancel" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="ledger-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:420px; max-width:90vw; max-height:80vh; overflow:auto; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Chemistry ledger</div>
+          <div style="color:#789; margin-bottom:8px;">Dissolved (ambient field) and visible (particle bodies) mass per chem. Click a row for the time-series.</div>
+          <div id="ledger-body" style="margin-bottom:10px;"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="tree-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:420px; max-width:92vw; max-height:80vh; overflow:auto; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Phylogeny — current top species</div>
+          <div style="color:#789; margin-bottom:8px;">Edges from each species' majority parent. Roots are founders or whose parent has dropped out of the top-N.</div>
+          <div id="tree-body"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="reactions-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:480px; max-width:92vw; max-height:80vh; overflow:auto; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:6px;">Reactions catalogue</div>
+          <div style="color:#789; margin-bottom:8px;">Static reaction table the engine ships at handshake.</div>
+          <input id="rx-filter" placeholder="filter by name / chem" style="width:100%; margin-bottom:8px; background:#07111a; border:1px solid #1a3340; color:#cef; padding:3px 6px; font:inherit;" />
+          <div id="rx-body"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="chem-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:340px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div id="chem-title" style="font-weight:bold; color:#cef; margin-bottom:6px;">chem</div>
+          <div id="chem-meta" style="color:#789; margin-bottom:8px;"></div>
+          <canvas id="chem-graph" width="320" height="120" style="display:block; background:#07111a; border:1px solid #1a3340; margin-bottom:8px;"></canvas>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="help-dialog" style="background:#02060c; color:#9ee; border:1px solid #2a4d62; padding:14px; min-width:340px; max-width:90vw; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;">
+        <form method="dialog">
+          <div style="font-weight:bold; color:#cef; margin-bottom:8px;">Shortcuts &amp; controls</div>
+          <table style="border-collapse:collapse;">
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Tap / click</td><td>select cell under pointer</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Drag</td><td>pan</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Pinch / wheel</td><td>zoom (0.25× to 16×)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">Double click</td><td>reset view</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">A / S</td><td>toggle Ambient / Species panel</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">C</td><td>open chemistry ledger (per-chem mass)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">R</td><td>open reactions catalogue</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">T</td><td>open phylogeny tree</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">I</td><td>dismiss inspector</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">P / R</td><td>pause / resume (server-wide)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">.</td><td>single-tick step (while paused)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">+ / -</td><td>sim rate × / ÷ 2</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">M</td><td>snap sim rate to max (32×)</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#9ab;">?</td><td>show this help</td></tr>
+          </table>
+          <div style="margin-top:10px; color:#789;">Admin features (Save / Load / Reset / Configure / Update / Kill) appear once the token is accepted.</div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+            <button value="close" type="submit" formnovalidate style="background:#07111a; border:1px solid #1a3340; color:#9ee; padding:4px 10px; cursor:pointer; font:inherit;">Close</button>
+          </div>
+        </form>
+      </dialog>
+      <div id="status"><span class="dim">disconnected</span></div>
+      <div id="canvas-wrap">
+        <canvas id="canvas"></canvas>
+        <div id="paused-overlay" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; pointer-events:none; background:rgba(2,8,14,0.35); font:bold 32px ui-monospace, SFMono-Regular, Menlo, monospace; color:rgba(204,224,240,0.9); text-shadow: 0 1px 2px #000, 0 0 18px rgba(2,8,14,0.6); letter-spacing: 4px;">PAUSED</div>
+      </div>
+      <aside id="inspector-panel" style="position:fixed; left:50%; transform:translateX(-50%); top:60px; max-width:340px; min-width:240px; max-height:70vh; overflow:auto; background:rgba(2,12,18,0.95); border:1px solid #2a4d62; padding:8px 18px 8px 8px; font:10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:#9ee; display:none;">
+        <button id="inspector-close" class="panel-close" title="Hide (toggle with I)">×</button>
+        <div style="font-weight:bold; color:#cef;">Cell inspector</div>
+        <div id="inspector-body" style="margin-top:6px;"></div>
+      </aside>
+      <aside id="ambient-panel" style="position:fixed; left:8px; top:60px; max-width:200px; max-height:60vh; overflow:auto; background:rgba(2,12,18,0.93); border:1px solid #1a3340; padding:8px 18px 8px 8px; font:10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:#9ee; display:none;">
+        <button id="ambient-close" class="panel-close" title="Hide (toggle with A)">×</button>
+        <div style="font-weight:bold; color:#cef;">Ambient (top 10)</div>
+        <ol id="ambient-list" style="padding:0 0 0 16px; margin:6px 0 0 0;"></ol>
+      </aside>
+      <aside id="species-panel" style="position:fixed; right:8px; top:60px; max-width:280px; max-height:60vh; overflow:auto; background:rgba(2,12,18,0.93); border:1px solid #1a3340; padding:8px 18px 8px 8px; font:10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color:#9ee; display:none;">
+        <button id="species-close" class="panel-close" title="Hide (toggle with S)">×</button>
+        <div style="font-weight:bold; color:#cef;">Top species</div>
+        <ol id="species-list" style="padding:0 0 0 16px; margin:6px 0 0 0;"></ol>
+        <div id="disasm" style="white-space:pre; margin-top:8px; padding-top:8px; border-top:1px solid #1a3340; max-height:30vh; overflow:auto;"></div>
+      </aside>
+    </div>
+    <script type="module" src="/app.ts"></script>
+  </body>
+</html>

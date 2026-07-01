@@ -1,0 +1,58 @@
+# Cloudflare Tunnel config for evosim-server.
+#
+# This is the NAMED-TUNNEL form: persistent identity, custom domain,
+# survives reboots. For a one-off public URL (no Cloudflare account,
+# no DNS) see `server/scripts/tunnel.sh quick` instead.
+#
+# Bootstrap once on the home box:
+#
+#   cloudflared tunnel login                # browser OAuth
+#   cloudflared tunnel create evosim         # creates UUID + credentials json
+#   cloudflared tunnel route dns evosim sim.example.com
+#   cp credentials JSON path into the `credentials-file` line below
+#
+# Then run:
+#
+#   cloudflared tunnel --config server/cloudflared/config.example.yml run evosim
+#
+# Layer Cloudflare Access in the Zero Trust dashboard with an "Allow
+# only my email" rule on the hostname so connections must clear an
+# auth gate BEFORE they reach the evosim-server bearer-token check.
+
+tunnel: evosim
+credentials-file: /etc/cloudflared/evosim.json
+
+# loglevel: info  -- bump to "debug" when diagnosing reconnects
+loglevel: info
+
+# Optional: tighten TLS / set keepalive. Defaults are fine for most
+# home links; uncomment if you see frequent reconnects.
+# protocol: http2
+# retries: 8
+
+ingress:
+  # WebSocket endpoint -- the actual sim transport.
+  - hostname: sim.example.com
+    path: ^/sim$
+    service: http://127.0.0.1:8080
+    originRequest:
+      # Long-lived websockets; bump the no-TLS-verify since origin is loopback
+      noTLSVerify: true
+      # WebSocket is enabled by default on /ws routes; explicit anyway.
+      connectTimeout: 10s
+      tlsTimeout: 10s
+      tcpKeepAlive: 30s
+      # Don't auto-close idle websockets quickly: sim pushes 10 Hz so
+      # it shouldn't be needed, but a stricter middlebox might confuse
+      # short pauses for idle.
+      keepAliveTimeout: 90s
+
+  # Health probe (so Cloudflare Access can health-check the origin if you
+  # configure it to).
+  - hostname: sim.example.com
+    path: ^/health$
+    service: http://127.0.0.1:8080
+
+  # Default rule -- everything else is rejected. The evosim-server binary
+  # only serves /sim and /health; nothing else should slip through.
+  - service: http_status:404
