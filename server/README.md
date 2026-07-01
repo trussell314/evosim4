@@ -1,8 +1,71 @@
 # evosim native server
 
-Rust port of the evosim4 engine, served over WebSocket to the existing
-TypeScript client. This directory is a Cargo workspace; the rest of
-the repository is unchanged today.
+Rust port of the evosim4 engine, served over WebSocket to a browser
+client (and a terminal client). This directory is a Cargo workspace.
+
+## Quickstart
+
+All commands run from this `server/` directory.
+
+### One-shot launcher (recommended)
+
+```sh
+./scripts/up.sh
+```
+
+Builds the server + web client, launches both detached (bound to
+`0.0.0.0`, lowest CPU/IO priority), and prints every LAN URL plus the
+admin-token path and log files. Survives closing the shell. Stop with:
+
+```sh
+./scripts/down.sh
+```
+
+Common overrides (env prefix on the same command):
+
+| example                                   | effect |
+|-------------------------------------------|--------|
+| `EVOSIM_SKIP_PULL=1 ./scripts/up.sh`      | don't `git reset` — keep local edits |
+| `EVOSIM_SKIP_BUILD=1 ./scripts/up.sh`     | skip rebuild, just relaunch |
+| `./scripts/up.sh --tmux`                  | run under tmux so you can attach |
+| `EVOSIM_PARTICLE_CAP=8000 ./scripts/up.sh`| override the particle cap |
+
+> `up.sh` does a `git fetch + reset --hard` to `EVOSIM_UPDATE_REF`
+> **only when the working tree is clean**. With uncommitted edits it
+> skips the reset; use `EVOSIM_SKIP_PULL=1` to be sure.
+
+### Manual (foreground)
+
+```sh
+# terminal 1 — server on ws://<host>:8080/sim
+cargo run --release -p evosim-server
+
+# terminal 2 — web client (default http://<host>:5174)
+cd client-demo && npm install && npm run dev -- --host 0.0.0.0
+```
+
+In the client, set the **server** field to `ws://<host>:8080/sim`. The
+admin token (needed for Reset / Configure / Settings / Ecology) is
+written to `/tmp/evosim-token` by `up.sh`; paste it into the **token**
+field. Running the server manually sets no token unless you pass
+`EVOSIM_ADMIN_TOKEN` (see [Build / run](#build--run) below).
+
+### Terminal client (no browser)
+
+```sh
+./scripts/tui.sh            # auto-connects to the running server
+```
+
+### Headless (no UI — quick behavior checks)
+
+```sh
+cargo run --release -p evosim-headless -- --ticks 36000 --report-every 3000
+```
+
+Runs the engine in-process and prints periodic population / chemistry
+stats. Flags: `--load`/`--out` (save round-trip), `--mutation-rate`,
+`--particle-cap`, `--width`/`--height`/`--seed`/`--day-period-s`,
+`--quiet`.
 
 ## Layout
 
